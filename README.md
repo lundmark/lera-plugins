@@ -1,6 +1,6 @@
 # Lera Plugins
 
-Plugin collection for the [Lera MUD client](https://github.com/yourusername/lera).
+Plugin collection for the Lera MUD client.
 
 ## Structure
 
