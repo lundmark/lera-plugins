@@ -297,6 +297,7 @@ end
 
 function M.on_load()
   -- Load saved config
+  store.load()
   local data = store.get() or {}
   if data.config then
     -- Merge saved config
