@@ -11,46 +11,60 @@ local password = nil
 local logged_in = false
 local on_login_hook = nil
 
+-- Show help
+local function show_help()
+  print("[autologin] Commands:")
+  print("  /autologin set <user> <pass>  - Set credentials")
+  print("  /autologin show               - Show current username")
+  print("  /autologin clear              - Remove stored credentials")
+end
+
 -- Load stored credentials
 function M.on_load()
+  store.load()
   local data = store.get()
   if data then
     username = data.username
     password = data.password
   end
 
-  -- Register alias for /autologin command
-  alias.add("^/autologin%s+set%s+(%S+)%s+(.+)$", function(user, pass)
-    M.set_credentials(user, pass)
-    print("[autologin] Credentials saved for: " .. user)
-    return nil
-  end)
+  -- Single alias catches all /autologin commands
+  alias.add("^/autologin(.*)$", function(_, rest)
+    -- rest is everything after "/autologin" (from capture group)
+    rest = rest:match("^%s*(.*)$") or ""  -- trim leading whitespace
 
-  alias.add("^/autologin%s+show$", function()
-    if username then
-      print("[autologin] Username: " .. username)
-      print("[autologin] Password: " .. string.rep("*", password and #password or 0))
+    -- Parse subcommand and arguments
+    local cmd, args = rest:match("^(%S+)%s*(.*)$")
+
+    if not cmd or cmd == "" then
+      show_help()
+    elseif cmd == "set" then
+      local user, pass = args:match("^(%S+)%s+(.+)$")
+      if user and pass then
+        M.set_credentials(user, pass)
+        print("[autologin] Credentials saved for: " .. user)
+      else
+        print("[autologin] Usage: /autologin set <username> <password>")
+      end
+    elseif cmd == "show" then
+      if username then
+        print("[autologin] Username: " .. username)
+        print("[autologin] Password: " .. string.rep("*", password and #password or 0))
+      else
+        print("[autologin] No credentials configured")
+        print("[autologin] Use: /autologin set <username> <password>")
+      end
+    elseif cmd == "clear" then
+      username = nil
+      password = nil
+      store.set(nil)
+      store.save()
+      print("[autologin] Credentials cleared")
     else
-      print("[autologin] No credentials configured")
-      print("[autologin] Use: /autologin set <username> <password>")
+      print("[autologin] Unknown command: " .. cmd)
+      show_help()
     end
-    return nil
-  end)
 
-  alias.add("^/autologin%s+clear$", function()
-    username = nil
-    password = nil
-    store.set(nil)
-    store.save()
-    print("[autologin] Credentials cleared")
-    return nil
-  end)
-
-  alias.add("^/autologin$", function()
-    print("[autologin] Commands:")
-    print("  /autologin set <user> <pass>  - Set credentials")
-    print("  /autologin show               - Show current username")
-    print("  /autologin clear              - Remove stored credentials")
     return nil
   end)
 end
