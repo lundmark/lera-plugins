@@ -26,9 +26,6 @@ local data = {
 
   -- Is the trigger system enabled?
   enabled = true,
-
-  -- Use command queue (if available) vs send immediately
-  use_queue = true,
 }
 
 -- Last kill info for other plugins
@@ -69,6 +66,16 @@ local colors = {
 -- Helpers
 --------------------------------------------------------------------------------
 
+local function save_data()
+  store.set({
+    killers = data.killers,
+    commands = data.commands,
+    other_commands = data.other_commands,
+    enabled = data.enabled,
+  })
+  store.save()
+end
+
 local function print_colored(...)
   local parts = {...}
   local text = ""
@@ -91,8 +98,6 @@ end
 --------------------------------------------------------------------------------
 
 local function send_command(cmd)
-  -- For now, just use mud.send directly
-  -- Could integrate with a command queue plugin later
   mud.send(cmd)
 end
 
@@ -133,7 +138,7 @@ local function on_killing_blow(line, killer, victim)
   -- Check if we should execute commands
   if not data.enabled then
     last_kill.was_our_kill = false
-    return nil  -- Gag original line
+    return
   end
 
   local killer_lower = killer:lower()
@@ -150,10 +155,7 @@ local function on_killing_blow(line, killer, victim)
     send_all_commands()
   else
     send_all_other_commands()
-    -- Could add push notification here for non-killer kills
   end
-
-  return nil  -- Gag original line
 end
 
 --------------------------------------------------------------------------------
@@ -163,11 +165,13 @@ end
 -- Enable/disable the trigger system
 function M.enable()
   data.enabled = true
+  save_data()
   print("[killers] Enabled")
 end
 
 function M.disable()
   data.enabled = false
+  save_data()
   print("[killers] Disabled")
 end
 
@@ -192,6 +196,7 @@ function M.add_killer(name)
     return false
   end
   data.killers[lower] = true
+  save_data()
   print("[killers] Added '" .. lower .. "'")
   return true
 end
@@ -203,6 +208,7 @@ function M.remove_killer(name)
     return false
   end
   data.killers[lower] = nil
+  save_data()
   print("[killers] Removed '" .. lower .. "'")
   return true
 end
@@ -223,6 +229,7 @@ end
 -- Command management
 function M.add_command(cmd)
   table.insert(data.commands, cmd)
+  save_data()
   print("[killers] Added command: " .. cmd)
 end
 
@@ -232,6 +239,7 @@ function M.remove_command(index)
     return false
   end
   local removed = table.remove(data.commands, index)
+  save_data()
   print("[killers] Removed command: " .. removed)
   return true
 end
@@ -245,14 +253,17 @@ function M.swap_commands(idx1, idx2)
     print("[killers] Index out of range")
     return false
   end
-  data.commands[idx1], data.commands[idx2] = data.commands[idx2], data.commands[idx1]
-  print("[killers] Swapped " .. data.commands[idx2] .. " with " .. data.commands[idx1])
+  local a, b = data.commands[idx1], data.commands[idx2]
+  data.commands[idx1], data.commands[idx2] = b, a
+  save_data()
+  print("[killers] Swapped " .. a .. " with " .. b)
   return true
 end
 
 -- Other command management (for non-killer kills)
 function M.add_other_command(cmd)
   table.insert(data.other_commands, cmd)
+  save_data()
   print("[killers] Added other-command: " .. cmd)
 end
 
@@ -262,6 +273,7 @@ function M.remove_other_command(index)
     return false
   end
   local removed = table.remove(data.other_commands, index)
+  save_data()
   print("[killers] Removed other-command: " .. removed)
   return true
 end
@@ -275,18 +287,11 @@ function M.swap_other_commands(idx1, idx2)
     print("[killers] Index out of range")
     return false
   end
-  data.other_commands[idx1], data.other_commands[idx2] = data.other_commands[idx2], data.other_commands[idx1]
+  local a, b = data.other_commands[idx1], data.other_commands[idx2]
+  data.other_commands[idx1], data.other_commands[idx2] = b, a
+  save_data()
+  print("[killers] Swapped " .. a .. " with " .. b)
   return true
-end
-
--- Queue mode
-function M.set_queue_mode(enabled)
-  data.use_queue = enabled
-  print("[killers] Queue mode: " .. (enabled and "ON" or "OFF"))
-end
-
-function M.get_queue_mode()
-  return data.use_queue
 end
 
 -- Last kill info
@@ -305,7 +310,7 @@ function M.clear()
   data.commands = { "sl", "dg", "wrap" }
   data.other_commands = {}
   data.enabled = true
-  data.use_queue = true
+  save_data()
   print("[killers] Reset to defaults")
 end
 
@@ -415,13 +420,11 @@ local function show_help()
   print("  /killers addocmd <cmd> - Add other-command")
   print("  /killers delocmd <#>  - Remove other-command")
   print("  /killers swapocmd <#> <#> - Swap other-command order")
-  print("  /killers queue on/off - Toggle queue mode")
   print("  /killers clear        - Reset to defaults")
 end
 
 local function show_status()
   print("[killers] Status: " .. (data.enabled and "ENABLED" or "DISABLED"))
-  print("[killers] Queue mode: " .. (data.use_queue and "ON" or "OFF"))
 
   -- List killers
   local killers = M.get_killers()
@@ -550,12 +553,6 @@ local function register_aliases()
     return nil
   end)
 
-  -- /killers queue on/off
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+queue\\s+(on|off)$", function(_, mode)
-    M.set_queue_mode(mode == "on")
-    return nil
-  end)
-
   -- /killers clear
   alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+clear$", function()
     M.clear()
@@ -583,7 +580,7 @@ end
 local function register_triggers()
   -- "X dealt the killing blow to Y."
   trigger_ids[#trigger_ids + 1] = trigger.add(
-    "^(.+) dealt the killing blow to (.+)\\.$",
+    "^(.+?) dealt the killing blow to (.+)\\.$",
     on_killing_blow,
     { omit_from_output = true }
   )
@@ -617,9 +614,6 @@ function M.on_load()
     if saved.enabled ~= nil then
       data.enabled = saved.enabled
     end
-    if saved.use_queue ~= nil then
-      data.use_queue = saved.use_queue
-    end
   end
 
   register_triggers()
@@ -633,14 +627,7 @@ function M.on_unload()
   unregister_aliases()
 
   -- Save data
-  store.set({
-    killers = data.killers,
-    commands = data.commands,
-    other_commands = data.other_commands,
-    enabled = data.enabled,
-    use_queue = data.use_queue,
-  })
-  store.save()
+  save_data()
 end
 
 return M
