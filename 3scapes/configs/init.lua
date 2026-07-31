@@ -95,57 +95,9 @@ local mud_port = 3200
 
 mud.connect(mud_host, mud_port)
 
--- Connection aliases
-alias.add("^/connect%s*(.*)$", function(args)
-  if args and args ~= "" then
-    local host, port = args:match("^(%S+)%s+(%d+)$")
-    if not host then
-      host, port = args:match("^(%S+):(%d+)$")
-    end
-    if host and port then
-      mud_host, mud_port = host, tonumber(port)
-    else
-      print("[connect] Usage: /connect host port  or  /connect host:port")
-      return nil
-    end
-  end
-  if mud.state() ~= "disconnected" then
-    print("[connect] Already connected, use /reconnect or /disconnect first")
-    return nil
-  end
-  print("[connect] Connecting to " .. mud_host .. ":" .. mud_port)
-  mud.connect(mud_host, mud_port)
-  return nil
-end)
-
-alias.add("^/disconnect$", function()
-  if mud.state() == "disconnected" then
-    print("[disconnect] Not connected")
-  else
-    print("[disconnect] Disconnecting...")
-    mud.disconnect()
-  end
-  return nil
-end)
-
-alias.add("^/reconnect$", function()
-  if mud.state() ~= "disconnected" then
-    mud.disconnect()
-  end
-  print("[reconnect] Connecting to " .. mud_host .. ":" .. mud_port)
-  mud.connect(mud_host, mud_port)
-  return nil
-end)
-
-alias.add("^/echo$", function()
-  if input_echo then
-    local enabled = input_echo.toggle()
-    print("[echo] Input echo " .. (enabled and "enabled" or "disabled"))
-  else
-    print("[echo] input_echo plugin not loaded")
-  end
-  return nil
-end)
+-- Default commands (/connect, /disconnect, /reconnect, /quit, /echo, ...)
+-- Ships with lera (scripts/default/commands.lua); no-op if already loaded.
+require('commands')
 
 --------------------------------------------------------------------------------
 -- Window Manager Layout
@@ -184,10 +136,12 @@ end
 -- Output title shows connection status
 wm.set_output_title(function()
   local state = mud.state()
+  local host = mud.host() or mud_host
+  local port = mud.port() or mud_port
   if state == "connected" then
-    return mud_host .. ":" .. mud_port .. " | Lines: " .. buffer.line_count()
+    return host .. ":" .. port .. " | Lines: " .. buffer.line_count()
   elseif state == "connecting" then
-    return "Connecting to " .. mud_host .. ":" .. mud_port .. "..."
+    return "Connecting to " .. host .. ":" .. port .. "..."
   elseif state == "error" then
     return "Connection error"
   else
