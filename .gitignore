@@ -1,0 +1,13 @@
+# Plugin runtime data. Never commit this: plugins persist state here, and
+# some of it is sensitive - autologin writes the MUD username and password
+# into .storage/autologin.json. A .storage/ directory appears next to any
+# profile lera runs, so it can show up here if a profile is run from this repo.
+.storage/
+
+# Editor files
+*.swp
+*~
+.vscode/
+
+# OS files
+.DS_Store
