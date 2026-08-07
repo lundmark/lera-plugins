@@ -8,26 +8,26 @@ The system must support strict feature parity, distinguish plugin implementation
 
 ## Repository Ownership
 
-The validator, manifest, documentation, and tests belong in the public `lera-plugins` repository because they describe and validate the reusable plugin collection.
+The validator, manifest, public reports, documentation, and tests belong in the public `lera-plugins` repository because they describe and validate the reusable plugin collection.
 
-The validator may read these sibling repositories when explicitly supplied:
+The validator may read these sibling repositories only when explicitly supplied:
 
 - `3s_scripts_old` — private legacy MUSHclient XML plugins and Lua helpers.
 - `lera` — the private Lera client repository, including its in-tree plugin mirror and locally built binary.
 
-The validator does not modify either sibling repository. Missing client capabilities are tracked as issues in the private `lundmark/lera` GitHub repository.
+The validator does not modify either sibling checkout. Missing client capabilities are tracked as issues in the private `lundmark/lera` GitHub repository.
 
 ## Scope Is an Explicit Allowlist
 
 The committed manifest is the complete public definition of validation scope. It is not a catalogue of everything present in the private legacy repository.
 
-Only user-approved conversion targets may appear in committed files. A legacy plugin that is omitted from scope must leave no committed name, path, reason, count, exclusion marker, or other identifying detail.
+Only user-approved conversion targets may appear in committed files. A legacy plugin omitted from scope must leave no committed name, path, reason, count, exclusion marker, fingerprint, or other identifying detail.
 
-Adding scope later requires an explicit manifest change. Full local discovery may inspect the private tree to prepare candidate lists for the user, but discovery output remains local until the user approves individual targets.
+Adding scope later requires an explicit manifest change. Full local discovery may inspect the private tree to prepare candidate lists for the user, but discovery output remains private until the user approves individual targets.
 
 ### Initial Current-Plugin Inventory
 
-The initial manifest includes all 17 current production plugins:
+The initial manifest includes all 17 current production plugins.
 
 Generic:
 
@@ -52,7 +52,7 @@ Generic:
 - `speedwalk`
 - `stats_window`
 
-Each current plugin is audited locally to identify all legacy XML and Lua sources that contribute to its behavior. A current-only plugin remains in the current-plugin inventory without inventing a legacy mapping.
+Each current plugin is audited locally to identify all approved legacy XML and Lua sources that contribute to its behavior. A current-only plugin remains in the current-plugin inventory without inventing a legacy mapping.
 
 After this baseline, the remaining legacy plugins are presented to the user in manageable categories. Only selected candidates are added to the public allowlist. Selected candidates with no current implementation appear in the `not converted yet` inventory.
 
@@ -62,24 +62,25 @@ The public repository may contain only information for approved targets:
 
 - approved legacy target name and source path;
 - current plugin mapping;
-- aggregate feature categories and status;
-- non-reversible evidence hashes;
-- public test and fixture identifiers;
-- linked Lera issue URLs;
-- concise, non-sensitive rationales.
+- safe feature keys and aggregate categories;
+- public fixture identifiers and current-code references;
+- parity status and non-sensitive summary;
+- linked private Lera issue URL for a client blocker;
+- explicit feature waiver metadata.
 
 The public repository must not contain:
 
 - copied legacy source;
 - full private trigger or alias patterns;
 - embedded legacy script bodies;
+- private repository commit identifiers or source digests;
 - detailed local discovery output;
-- any identifier for an unapproved or omitted legacy plugin;
+- any identifier or count for an unapproved legacy plugin;
 - credentials, stored runtime data, or MUD session data.
 
-Detailed comparison evidence is generated locally and is not committed by default.
+Detailed comparison evidence, legacy provenance, and omitted-candidate decisions are local-only.
 
-## Proposed Layout
+## Proposed Public Layout
 
 ```text
 lera-plugins/
@@ -93,9 +94,12 @@ lera-plugins/
 │       ├── current.py
 │       ├── compare.py
 │       ├── report.py
+│       ├── privacy.py
 │       └── issues.py
 ├── validation/
 │   ├── legacy-parity.toml
+│   ├── parity-report.md
+│   ├── not-converted.md
 │   └── README.md
 └── tests/
     └── legacy_parity/
@@ -105,58 +109,113 @@ lera-plugins/
 
 The implementation uses Python 3 standard-library modules only. XML parsing uses `xml.etree.ElementTree`; TOML reading uses `tomllib` on supported Python versions. If repository compatibility requires an older Python, the manifest format may use JSON instead, but it must remain human-reviewable and deterministic.
 
+## Private Local State
+
+Private state defaults to:
+
+```text
+${XDG_STATE_HOME:-~/.local/state}/lera-plugins/legacy-parity/
+├── selection.json
+├── provenance.json
+└── reports/
+```
+
+The directory is created with mode `0700` and files with mode `0600` where the platform supports POSIX permissions. It is outside the repository and must never be copied into public reports.
+
+`selection.json` remembers locally reviewed candidates. Included candidates are also represented publicly after approval. Omitted candidates remain only in this private registry so ordinary discovery does not repeatedly propose them. An explicit `discover --revisit-omitted` action may show them again.
+
+`provenance.json` records the private legacy Git commit, SHA-256 digests of the complete selected source files, local evidence records, and the last full verification time. Hashing whole source files is used only for local drift detection; no private source hash is committed publicly.
+
 ## Manifest Model
 
-The manifest contains two explicit inventories.
+The public manifest contains current plugins, approved legacy targets, feature records, and Lera capability records.
 
-### Current plugins
+### Current plugin records
 
-Each current plugin entry records:
+Each current plugin records:
 
-- stable plugin name;
+- stable plugin key;
 - current Lua path;
-- zero or more approved legacy targets;
-- current-source evidence hash;
-- fixture identifiers;
-- optional notes that contain no private source details.
+- zero or more approved legacy target keys;
+- public fixture identifiers;
+- optional non-sensitive notes.
 
-### Approved legacy targets
+Current-only plugins are valid and have no fabricated legacy target.
+
+### Approved legacy target records
 
 Each approved target records:
 
 - stable target key;
 - approved legacy XML path and relevant Lua helper paths;
-- mapped current plugin, or `not_converted` when no implementation exists;
-- aggregate feature categories;
-- parity status;
-- local evidence hash;
-- linked Lera issue for client blockers;
-- explicitly approved feature waiver, when applicable.
+- mapped current plugin key, or no mapping when not converted;
+- an ordered list of feature records.
 
-The manifest never stores unapproved discovery results.
+### Feature records
 
-## Status Model
+Each feature has:
 
-In-scope features use these statuses:
+- a stable, non-sensitive feature key;
+- category: alias, trigger, timer, callback, state, rendering, persistence, protocol, command, or public API;
+- status: `parity`, `plugin_gap`, `lera_blocker`, `not_converted`, or `waived`;
+- concise public summary;
+- zero or more current-code references;
+- one evidence record;
+- optional capability key for `lera_blocker`;
+- waiver approval metadata for `waived`.
+
+An evidence record has:
+
+- type: `public_fixture`, `local_behavior`, or `manual_private_review`;
+- public reference when safe, such as a fixture ID;
+- review date;
+- reviewed scope and result in non-sensitive terms;
+- optional opaque local evidence key whose detail exists only in `provenance.json`.
+
+`parity` requires passing evidence. `waived` requires explicit user approval, approval date, and a public rationale. A manual review without the required metadata is invalid.
+
+### Capability records
+
+Each distinct missing Lera capability has:
+
+- stable capability key;
+- concise public description;
+- exact `https://github.com/lundmark/lera/issues/<number>` URL;
+- affected approved feature keys derived by the validator.
+
+Features reference capability keys, allowing multiple blockers per target and multiple targets per capability while preserving one issue per capability.
+
+### Deterministic target aggregation
+
+Target status is derived rather than independently authored:
+
+1. `not_converted` when there is no mapped current plugin;
+2. `lera_blocker` when any feature is `lera_blocker`;
+3. `plugin_gap` when any feature is `plugin_gap` or `not_converted`;
+4. `parity` when every feature is `parity` or `waived`.
+
+Reports also show feature-status counts so aggregation never hides simultaneous blocker and plugin gaps.
+
+## Status Semantics
 
 - `parity` — current behavior is verified against the approved legacy behavior.
 - `plugin_gap` — required behavior can be implemented in a Lera plugin but is missing or incorrect.
 - `lera_blocker` — parity requires a missing or incompatible Lera client capability.
-- `not_converted` — the approved target has no current implementation.
+- `not_converted` — the approved feature or target has no current implementation.
 - `waived` — a feature difference was explicitly accepted by the user.
 
-Whole-plugin opt-outs are represented only by absence from the allowlist. There is no excluded status or excluded inventory.
+Whole-plugin opt-outs are represented only by absence from the public allowlist. There is no public excluded status or excluded inventory.
 
 Strict parity succeeds only when every in-scope feature is `parity` or explicitly `waived`, and no approved target is `not_converted`.
 
 ## Legacy Extraction
 
-For approved targets only, the local extractor collects:
+For approved targets only, the full local extractor collects:
 
 - plugin metadata and source identity;
-- aliases and their callback identities;
-- triggers and their callback identities;
-- timers and their callback identities;
+- aliases and callback identities;
+- triggers and callback identities;
+- timers and callback identities;
 - lifecycle and script callbacks;
 - Lua includes and helper dependencies;
 - saved variables and persistent state;
@@ -165,7 +224,7 @@ For approved targets only, the local extractor collects:
 - protocol and event handlers;
 - user-visible commands and information displays.
 
-The committed evidence stores aggregate categories and hashes rather than private patterns or bodies. A full local report may contain details but is written outside committed paths by default.
+The public manifest stores safe feature keys and categories rather than private patterns or bodies. The complete extraction and its provenance remain in private local state.
 
 ## Current Plugin Extraction
 
@@ -178,46 +237,50 @@ The current-side extractor records:
 - renderers and user-visible output;
 - relevant Lera APIs used.
 
-Static extraction is evidence, not proof of semantic parity. Every `parity` conclusion must also reference either a behavioral fixture or a documented manual comparison.
+Static extraction is evidence, not proof of semantic parity. Every `parity` conclusion must reference a passing public fixture, passing local behavior check, or complete manual private review record.
 
-## Validation Modes
+## Verification Levels and Exit Semantics
 
-### Baseline validation
+The tool exposes two verification levels that cannot be confused in output or reports.
 
-The normal command validates the approved baseline and fails when:
-
-- a committed current plugin disappears or changes without refreshed evidence;
-- an approved mapping is malformed;
-- a selected legacy source changes during a full local run without refreshed evidence;
-- a fixture fails;
-- an in-tree Lera plugin mirror differs when a Lera checkout is supplied;
-- a `lera_blocker` lacks a linked Lera issue;
-- generated public summaries are stale;
-- committed data violates the privacy boundary.
-
-Known, explicitly recorded gaps remain visible but do not make baseline CI permanently unusable.
-
-### Strict validation
-
-`--require-parity` performs baseline validation and also fails while any in-scope feature is `plugin_gap`, `lera_blocker`, or `not_converted`.
-
-### Refreshing legacy evidence
-
-`--refresh-legacy` requires an explicit private legacy root. It updates evidence only for already approved targets and records the legacy Git commit. It never discovers or adds new targets automatically.
-
-## Local and CI Operation
-
-A full local run accepts explicit paths, for example:
+### Public level
 
 ```text
-tools/legacy-parity validate \
+tools/legacy-parity validate --level public
+```
+
+This level requires only the public repository. It validates manifest schema, allowlist consistency, current plugin inventory, current-code references, public fixtures, generated public reports, and privacy rules.
+
+A passing report is headed `PUBLIC BASELINE VERIFIED — PRIVATE LEGACY SOURCES NOT RECHECKED`. It never claims fresh legacy parity.
+
+### Full-private level
+
+```text
+tools/legacy-parity validate --level full-private \
   --legacy-root ../3s_scripts_old \
   --lera-root ../lera
 ```
 
-The local run can parse approved private sources, compare the Lera mirror, use a locally built Lera binary, and generate a detailed uncommitted report.
+This level requires both private roots, private local state, and a built Lera binary. Missing inputs are invocation errors, not skipped checks. It revalidates approved legacy extraction, local provenance, mirror equality, isolated plugin loading, local behavior evidence, public fixtures, reports, and privacy filtering.
 
-Public CI does not receive automatic access to the private legacy or Lera repositories. It validates the manifest schema, current plugin inventory, current evidence, unit tests, public fixtures, and committed summaries. Full private-source validation remains a local command unless a cross-repository credential is configured later.
+A passing report is headed `FULL PRIVATE BASELINE VERIFIED` and includes the verification timestamp only in the private report.
+
+### Strict parity
+
+`--require-parity` is valid only with `--level full-private`. It performs the complete full-private validation and also fails while any in-scope feature is `plugin_gap`, `lera_blocker`, or `not_converted`.
+
+Exit codes:
+
+- `0` — all checks required by the requested level passed;
+- `1` — validation findings or strict-parity gaps;
+- `2` — invalid invocation, missing required inputs, or malformed state;
+- `3` — external GitHub synchronization failure.
+
+Every console summary and report states its verification level. A public-only pass cannot be presented as current private-source parity.
+
+## Refreshing Private Evidence
+
+`--refresh-legacy` is valid only with full-private validation and an explicit private legacy root. It updates `provenance.json` for already approved targets after review. It never discovers or adds new targets automatically and never writes private provenance into the public repository.
 
 ## Offline Behavioral Validation
 
@@ -225,73 +288,109 @@ Validation must not connect to the live MUD or use real profile storage.
 
 Current plugins are compiled or loaded through isolated temporary profiles. External APIs, plugin dependencies, timers, storage, and sends are stubbed or redirected to temporary state. Fixtures exercise selected behavior such as:
 
-- representative legacy input lines and expected state changes;
+- representative safe input lines and expected state changes;
 - alias inputs and resulting commands;
 - timer scheduling and cancellation;
 - MIP event parsing;
 - persistence round trips;
 - rendered information values and status transitions.
 
-Fixtures encode expected behavior derived from approved legacy targets without copying full private source into the public repository. When a safe public fixture cannot be written without revealing private content, the feature uses a local-only evidence check and is not claimed as automatically verified in CI.
+Fixtures encode approved behavior without copying private source. When a safe public fixture cannot be written without revealing private content, the feature uses local-only evidence and is not claimed as automatically verified by public CI.
 
-## Reports
+## Reports and Output Safety
 
-The validator produces two public views containing approved targets only:
+Public deterministic outputs are limited to:
 
-1. Parity report — each approved mapping and its aggregate current status.
-2. Not converted yet — approved targets whose status is `not_converted`.
+- `validation/parity-report.md` — approved targets and aggregate statuses;
+- `validation/not-converted.md` — approved targets with no implementation.
 
-A third detailed report is local-only. It may show feature-level evidence and private source references and must default to a path outside the repository or an ignored directory.
+They contain no omitted target names, counts, identifiers, or private provenance.
 
-No report mentions omitted targets.
+Private reports default to the local state `reports/` directory, never the repository. A user-supplied private report path must resolve outside the repository root. Temporary extraction directories use mode `0700` and are removed on success, failure, or interruption.
+
+`discover` is the only command allowed to display unapproved candidate names. It writes candidates to private `selection.json` and stdout for the explicit selection interaction. Ordinary validation, errors, logs, snapshots, cache keys, and public reports must not reveal omitted names or counts. `discover` stderr reports failures without echoing unapproved source paths unless `--verbose-private` is explicitly supplied.
+
+Privacy tests use synthetic included and omitted candidates to verify filtering across manifest generation, reports, stdout, stderr, exceptions, snapshots, caches, and temporary filenames. A full-private run also scans all proposed public outputs against the actual unapproved local catalogue before allowing public files to be refreshed.
 
 ## Lera Feature Requests
 
 A feature is a `lera_blocker` only after confirming that the required behavior cannot be implemented safely through existing public Lera Lua APIs.
 
-Issue synchronization is explicit, never part of ordinary CI:
+Issue synchronization is explicit and hard-coded to the exact repository `lundmark/lera`:
 
 ```text
-tools/legacy-parity sync-issues --lera-repo lundmark/lera
+tools/legacy-parity sync-issues
 ```
 
-For each blocker, the command:
+Before any mutation, the command uses authenticated GitHub CLI access to verify that `lundmark/lera` exists and is private. It refuses alternate slugs or a public destination.
 
-1. searches open and closed Lera issues for the stable capability key;
-2. reuses an existing matching issue when present;
-3. otherwise creates one issue for the missing capability, not one issue per affected plugin;
-4. lists all approved affected plugins and the parity requirement;
-5. records the resulting issue URL in the manifest.
+Every managed issue contains a machine-readable marker:
 
-The command requires authenticated GitHub CLI access and performs no writes without the explicit `sync-issues` action.
+```text
+<!-- legacy-parity-capability: <stable-capability-key> -->
+```
+
+For each blocker, synchronization:
+
+1. searches open and closed issues for the exact marker;
+2. reuses the single open match;
+3. stops for manual review when only a closed match exists;
+4. stops without mutation when multiple matches exist;
+5. rechecks immediately before creation;
+6. creates one issue for the capability, listing only approved affected plugins;
+7. rechecks afterward and reports any concurrent duplicate as an error rather than performing destructive cleanup;
+8. records the resulting exact issue URL in the public manifest.
+
+The command never creates or reopens issues during ordinary validation or CI.
 
 ## Initial Audit and Candidate Selection
 
 The first audit proceeds in two phases:
 
-1. Audit the 17 current plugins, establish verified legacy mappings, and record their actual parity status.
-2. Build a local-only catalogue of the remaining legacy plugins and present it to the user in categories. Add only approved candidates to the manifest; discard all omitted candidate data without committing it.
+1. Audit the 17 current plugins, establish approved legacy mappings, define per-feature evidence, and record their actual parity status.
+2. Run private `discover`, present remaining candidates to the user in manageable categories, and add only approved candidates to the public manifest.
 
-Selection is intentionally iterative. A later run may propose additional private candidates, but the validator never expands public scope on its own.
+When the user omits a candidate, its name is stored only in private `selection.json` to suppress future proposals. It is not written to the repository or public output. Selection is intentionally iterative; omitted candidates can be reconsidered only through the explicit revisit action.
 
 ## Error Handling
 
-- Missing private roots produce a clear explanation of which checks were skipped.
-- Malformed approved XML is a validation failure with its selected path identified.
-- Missing current files, invalid statuses, duplicate keys, or mappings to unknown entries are fatal.
-- Legacy hash drift is fatal until reviewed and refreshed.
-- GitHub lookup failure does not create duplicate issues; issue synchronization stops safely.
-- A plugin load or fixture failure reports the plugin and fixture without exposing credentials or private source bodies.
+- Missing roots or private state at full-private level return exit `2`; they are never silently skipped.
+- Malformed approved XML is a validation failure with details confined to the private report.
+- Missing current files, invalid statuses, duplicate keys, unknown mappings, missing evidence, and invalid waiver metadata are fatal.
+- Private legacy digest drift is fatal locally until reviewed and refreshed.
+- GitHub lookup failure or ambiguous issue matches stop synchronization without creating another issue.
+- A plugin load or fixture failure reports the approved plugin and fixture without exposing credentials or private source bodies.
+- Privacy-filter failure prevents generation or update of every public output.
+
+## Testing
+
+Tests cover:
+
+- manifest schema and reference integrity;
+- deterministic target-status aggregation;
+- required evidence for `parity` and approval metadata for `waived`;
+- multiple features and multiple capability blockers per target;
+- allowlist-only extraction;
+- private opt-out suppression and explicit revisit;
+- public/private verification-level exit semantics and report labels;
+- private provenance drift without public hash leakage;
+- public report generation and not-converted filtering;
+- stdout, stderr, cache, snapshot, and temporary-path privacy;
+- isolated plugin syntax/load behavior without network or real storage;
+- exact private Lera destination verification;
+- issue marker lookup, open reuse, closed/ambiguous refusal, pre-create recheck, and post-create duplicate detection.
 
 ## Success Criteria
 
 The initial system is complete when:
 
 - all 17 current plugins appear in the current inventory;
-- their approved legacy mappings and actual statuses have been reviewed;
+- their approved legacy mappings and feature-level statuses have been reviewed;
 - every committed target was explicitly selected;
-- baseline validation is reproducible with one local command;
+- omitted target identifiers and counts are absent from every committed file;
+- public verification is reproducible with one command and cannot be mistaken for private validation;
+- full-private baseline validation is reproducible with one local command;
 - strict mode accurately reports all remaining in-scope gaps;
-- the public reports contain no omitted target identifiers or private source bodies;
-- every confirmed Lera capability blocker has a deduplicated private Lera issue;
-- tests prove manifest validation, allowlist isolation, privacy filtering, drift detection, reporting, and issue-deduplication behavior.
+- every `parity` and `waived` feature has mechanically valid evidence metadata;
+- every confirmed Lera capability blocker has one deduplicated private Lera issue;
+- tests prove allowlist isolation, private decision memory, provenance handling, validation levels, privacy filtering, and safe issue synchronization.
