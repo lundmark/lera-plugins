@@ -149,7 +149,9 @@ Each approved target records:
 - stable target key;
 - approved legacy XML path and relevant Lua helper paths;
 - mapped current plugin key, or no mapping when not converted;
-- an ordered list of feature records.
+- a non-empty ordered list of reviewed feature records.
+
+An approved target with no mapped current plugin still requires at least one feature record with status `not_converted`. A mapped target with no reviewed features is invalid and can never aggregate to parity.
 
 ### Feature records
 
@@ -184,6 +186,8 @@ Each distinct missing Lera capability has:
 - affected approved feature keys derived by the validator.
 
 Features reference capability keys, allowing multiple blockers per target and multiple targets per capability while preserving one issue per capability.
+
+New blockers are staged only in private local state until issue synchronization completes. The private staged record contains the capability key, approved affected feature keys, and detailed evidence. `sync-issues` resolves or creates the issue first, then writes the complete capability record and affected `lera_blocker` feature records to a temporary public manifest, validates that manifest, and atomically replaces the public manifest. If lookup, creation, validation, or replacement fails, the public manifest remains unchanged. There is no public pending-capability form, and ordinary validation rejects every blocker without a complete capability record and exact issue URL.
 
 ### Deterministic target aggregation
 
@@ -368,6 +372,7 @@ Tests cover:
 
 - manifest schema and reference integrity;
 - deterministic target-status aggregation;
+- rejection of empty feature lists for mapped and unmapped approved targets;
 - required evidence for `parity` and approval metadata for `waived`;
 - multiple features and multiple capability blockers per target;
 - allowlist-only extraction;
@@ -378,6 +383,7 @@ Tests cover:
 - stdout, stderr, cache, snapshot, and temporary-path privacy;
 - isolated plugin syntax/load behavior without network or real storage;
 - exact private Lera destination verification;
+- private blocker staging, atomic complete-manifest publication, and rollback on synchronization failure;
 - issue marker lookup, open reuse, closed/ambiguous refusal, pre-create recheck, and post-create duplicate detection.
 
 ## Success Criteria
