@@ -62,17 +62,46 @@ Discovery and preliminary auditing produce a local-only proposed allowlist. Befo
 
 - every proposed current plugin;
 - every proposed approved legacy target name and source mapping;
-- mapped current plugin, when present;
+- mapped current plugin, including an explicit null mapping when absent;
 - preliminary aggregate status;
 - any already-confirmed Lera capability blocker.
 
 The proposal is not written to a tracked repository path until the user explicitly approves that exact scope. Omitted candidates remain only in private local state and never appear in a commit.
 
-The public manifest records a scope revision, approval date, and SHA-256 approval digest computed from a canonical serialization of public approved target keys, selected source paths, and current-plugin mappings. This digest contains only data already approved for publication. The validator recomputes it and rejects a manifest whose scope differs from the approved digest.
+The tool renders the canonical scope and its SHA-256 digest for review. After explicit user go-ahead, an `approve-scope` action writes the exact digest, scope revision, approval time, and canonical scope bytes to trusted private `approval.json`. The action is never inferred from a manifest edit and is never run by CI.
 
-Adding a target, removing a target, changing an approved source path, or changing a current-plugin mapping invalidates the approval digest and requires another explicit user go-ahead before commit. Feature status and evidence updates inside an already approved mapping do not change scope approval.
+The public manifest later records the matching scope revision, approval date, and digest. The public copy proves internal scope consistency; the private approval record is the authority proving that the exact scope received go-ahead. Full-private publication requires both to match.
+
+Adding or removing a current plugin, changing a current-plugin path, adding or removing a target, changing any selected XML or Lua helper path, or changing a target's mapped current plugin invalidates approval and requires another explicit go-ahead. Feature status and evidence changes inside an already approved mapping do not change scope approval.
 
 Approval applies to the exact allowlist, not merely to a category or discovery rule. The validator never auto-approves or auto-expands scope.
+
+## Canonical Scope Serialization
+
+Scope digest version 1 is the SHA-256 of UTF-8 JSON encoded with sorted object keys, compact separators `,` and `:`, no insignificant whitespace, and no trailing newline. Arrays use the deterministic order defined below; duplicate keys or paths are invalid rather than deduplicated.
+
+The canonical object contains exactly:
+
+```text
+{
+  "version": 1,
+  "current_plugins": [
+    {"key": <plugin-key>, "path": <repo-relative-posix-path>}
+  ],
+  "legacy_targets": [
+    {
+      "key": <target-key>,
+      "xml_paths": [<repo-relative-posix-path>...],
+      "lua_paths": [<repo-relative-posix-path>...],
+      "current_plugin": <plugin-key-or-null>
+    }
+  ]
+}
+```
+
+`current_plugins` is sorted by plugin key. `legacy_targets` is sorted by target key. XML and Lua path arrays are sorted bytewise after normalization to repository-relative POSIX paths. Null mappings are encoded as JSON `null`. Every current plugin key/path and every selected XML/helper path therefore participates in approval.
+
+Feature records, status, evidence, capabilities, issue URLs, reports, timestamps, and all private data are excluded from the scope digest.
 
 ## Public and Private Data Boundary
 
@@ -97,7 +126,7 @@ The public repository must not contain:
 - any identifier or count for an unapproved legacy plugin;
 - credentials, stored runtime data, or MUD session data.
 
-Detailed comparison evidence, legacy provenance, and omitted-candidate decisions are local-only.
+Detailed comparison evidence, legacy provenance, approval authority, and omitted-candidate decisions are local-only.
 
 ## Proposed Public Layout
 
@@ -135,29 +164,35 @@ Private state defaults to:
 ```text
 ${XDG_STATE_HOME:-~/.local/state}/lera-plugins/legacy-parity/
 ├── selection.json
+├── approval.json
 ├── provenance.json
+├── staged/
 └── reports/
 ```
 
 The directory is created with mode `0700` and files with mode `0600` where the platform supports POSIX permissions. It is outside the repository and must never be copied into public reports.
 
-`selection.json` remembers locally reviewed candidates. Included candidates are also represented publicly after approval. Omitted candidates remain only in this private registry so ordinary discovery does not repeatedly propose them. An explicit `discover --revisit-omitted` action may show them again.
+`selection.json` remembers locally reviewed candidates. Included candidates are represented publicly only after approval and complete validation. Omitted candidates remain only in this private registry so ordinary discovery does not repeatedly propose them. An explicit `discover --revisit-omitted` action may show them again.
 
-`provenance.json` records the private legacy Git commit, SHA-256 digests of the complete selected source files, local evidence records, proposed allowlist revisions awaiting approval, and the last full verification time. Hashing whole source files is used only for local drift detection; no private source hash is committed publicly.
+`approval.json` is the trusted local approval authority. It records the user-approved canonical scope bytes, digest, revision, and approval time. Recomputing the digest in a public manifest without a matching private approval record cannot publish or pass full-private validation.
+
+`provenance.json` records the private legacy Git commit, SHA-256 digests of the complete selected source files, local evidence records, and the last full verification time. Hashing whole source files is used only for local drift detection; no private source hash is committed publicly.
+
+`staged/` contains private candidate manifests, blocker records, and reports during a complete audit. Nothing in it is public or treated as approved output.
 
 ## Manifest Model
 
-The public manifest contains scope approval, current plugins, approved legacy targets, feature records, and Lera capability records.
+The public manifest contains scope approval metadata, current plugins, approved legacy targets, feature records, and Lera capability records.
 
 ### Scope approval record
 
-The scope record contains:
+The public scope record contains:
 
 - positive integer revision;
 - approval date;
-- SHA-256 digest of the canonical public scope fields.
+- SHA-256 digest of canonical public scope fields.
 
-The digest excludes feature statuses, evidence, reports, capability descriptions, and every private field. Its only purpose is to prove that the committed list and mappings are the exact list approved by the user.
+The validator checks public internal consistency at public level. Full-private validation and publication additionally require an exact match to trusted private `approval.json`.
 
 ### Current plugin records
 
@@ -216,7 +251,7 @@ Each distinct missing Lera capability has:
 
 Features reference capability keys, allowing multiple blockers per target and multiple targets per capability while preserving one issue per capability.
 
-New blockers are staged only in private local state until issue synchronization completes. The private staged record contains the capability key, approved affected feature keys, and detailed evidence. `sync-issues` resolves or creates the issue first, then writes the complete capability record and affected `lera_blocker` feature records to a temporary public manifest, validates that manifest, and atomically replaces the public manifest. If lookup, creation, validation, or replacement fails, the public manifest remains unchanged. There is no public pending-capability form, and ordinary validation rejects every blocker without a complete capability record and exact issue URL.
+New blockers are staged only in private local state until issue synchronization completes. The private staged record contains the capability key, approved affected feature keys, and detailed evidence. `sync-issues` resolves or creates the issue and records its URL in the staged private audit. It does not publish a partial manifest. Final publication assembles the complete capability and feature records with the rest of the fully audited manifest. If lookup, creation, complete validation, or publication fails, the existing public manifest remains unchanged. There is no public pending-capability form, and ordinary validation rejects every blocker without a complete capability record and exact issue URL.
 
 ### Deterministic target aggregation
 
@@ -292,9 +327,9 @@ The tool exposes two verification levels that cannot be confused in output or re
 tools/legacy-parity validate --level public
 ```
 
-This level requires only the public repository. It validates manifest schema, scope approval digest, allowlist consistency, current plugin inventory, current-code references, public fixtures, generated public reports, and privacy rules.
+This level requires only the public repository. It validates manifest schema, internal scope digest consistency, allowlist consistency, current plugin inventory, current-code references, public fixtures, generated public reports, and privacy rules. It cannot authenticate user approval without private state.
 
-A passing report is headed `PUBLIC BASELINE VERIFIED — PRIVATE LEGACY SOURCES NOT RECHECKED`. It never claims fresh legacy parity.
+A passing report is headed `PUBLIC BASELINE VERIFIED — PRIVATE APPROVAL AND LEGACY SOURCES NOT RECHECKED`. It never claims fresh approval or legacy parity.
 
 ### Full-private level
 
@@ -304,7 +339,7 @@ tools/legacy-parity validate --level full-private \
   --lera-root ../lera
 ```
 
-This level requires both private roots, private local state, and a built Lera binary. Missing inputs are invocation errors, not skipped checks. It revalidates approved legacy extraction, 100% construct coverage, local provenance, mirror equality, isolated plugin loading, local behavior evidence, public fixtures, reports, and privacy filtering.
+This level requires both private roots, private selection/provenance/approval state, and a built Lera binary. Missing inputs are invocation errors, not skipped checks. It authenticates scope against `approval.json` and revalidates approved legacy extraction, 100% construct coverage, local provenance, mirror equality, isolated plugin loading, local behavior evidence, public fixtures, reports, and privacy filtering.
 
 A passing report is headed `FULL PRIVATE BASELINE VERIFIED` and includes the verification timestamp only in the private report.
 
@@ -319,7 +354,7 @@ Exit codes:
 - `2` — invalid invocation, missing required inputs, malformed state, or unapproved scope change;
 - `3` — external GitHub synchronization failure.
 
-Every console summary and report states its verification level. A public-only pass cannot be presented as current private-source parity.
+Every console summary and report states its verification level. A public-only pass cannot be presented as current private-source parity or proof of user approval.
 
 ## Refreshing Private Evidence
 
@@ -340,10 +375,11 @@ Current plugins are compiled or loaded through isolated temporary profiles. Exte
 
 Fixtures encode approved behavior without copying private source. When a safe public fixture cannot be written without revealing private content, the feature uses local-only evidence and is not claimed as automatically verified by public CI.
 
-## Reports and Output Safety
+## Reports and Atomic Publication
 
 Public deterministic outputs are limited to:
 
+- `validation/legacy-parity.toml` — the complete approved manifest;
 - `validation/parity-report.md` — approved targets, aggregate statuses, and approved-target coverage;
 - `validation/not-converted.md` — approved targets with no implementation.
 
@@ -351,9 +387,11 @@ They contain no omitted target names, counts, identifiers, or private provenance
 
 Private reports default to the local state `reports/` directory, never the repository. A user-supplied private report path must resolve outside the repository root. Temporary extraction directories use mode `0700` and are removed on success, failure, or interruption.
 
+Initial and updated public outputs are assembled under private `staged/` only after scope approval. Publication is one operation that requires: matching `approval.json`; complete non-empty feature records; 100% construct coverage; complete blocker issue URLs; passing evidence; valid reports; and passing privacy scans. Only then are the manifest and both public reports atomically replaced as a set. Any failure leaves all existing public outputs unchanged; an initial failure publishes nothing.
+
 `discover` is the only command allowed to display unapproved candidate names. It writes candidates to private `selection.json` and stdout for the explicit selection interaction. Ordinary validation, errors, logs, snapshots, cache keys, and public reports must not reveal omitted names or counts. `discover` stderr reports failures without echoing unapproved source paths unless `--verbose-private` is explicitly supplied.
 
-Privacy tests use synthetic included and omitted candidates to verify filtering across manifest generation, reports, stdout, stderr, exceptions, snapshots, caches, and temporary filenames. A full-private run also scans all proposed public outputs against the actual unapproved local catalogue before allowing public files to be refreshed.
+Privacy tests use synthetic included and omitted candidates to verify filtering across manifest generation, reports, stdout, stderr, exceptions, snapshots, caches, and temporary filenames. A full-private run also scans all proposed public outputs against the actual unapproved local catalogue before allowing public files to be published.
 
 ## Lera Feature Requests
 
@@ -382,7 +420,7 @@ For each blocker, synchronization:
 5. rechecks immediately before creation;
 6. creates one issue for the capability, listing only approved affected plugins;
 7. rechecks afterward and reports any concurrent duplicate as an error rather than performing destructive cleanup;
-8. records the resulting exact issue URL in the public manifest.
+8. records the resulting exact issue URL in the private staged audit for final publication.
 
 The command never creates or reopens issues during ordinary validation or CI.
 
@@ -393,10 +431,10 @@ The first audit proceeds in explicit gates:
 1. Preliminarily audit the 17 current plugins, establish proposed legacy mappings, and determine preliminary status.
 2. Run private `discover`, present remaining candidates to the user in manageable categories, and record include/omit decisions only in private state.
 3. Produce the exact local-only proposed allowlist with mappings and preliminary statuses.
-4. Obtain explicit user go-ahead for that exact allowlist.
-5. Record the approved scope revision/digest and publish only the approved entries to the manifest.
-6. Perform complete feature extraction, classification, and evidence review for every approved target.
-7. Generate the public parity and not-converted reports only after 100% approved-target coverage succeeds.
+4. Obtain explicit user go-ahead for that exact allowlist and run `approve-scope` to record it privately.
+5. Perform complete feature extraction, classification, evidence review, and blocker issue synchronization for every approved target in private staged state.
+6. Assemble the complete manifest and reports privately, then require matching approval, 100% coverage, evidence, issue, runtime, and privacy validation.
+7. Atomically publish the manifest and reports only after every gate succeeds.
 
 When the user omits a candidate, its name is stored only in private `selection.json` to suppress future proposals. It is not written to the repository or public output. Selection is intentionally iterative; omitted candidates can be reconsidered only through the explicit revisit action.
 
@@ -405,7 +443,7 @@ When the user omits a candidate, its name is stored only in private `selection.j
 - Missing roots or private state at full-private level return exit `2`; they are never silently skipped.
 - Malformed approved XML is a validation failure with details confined to the private report.
 - Missing current files, invalid statuses, duplicate keys, unknown mappings, empty or incomplete feature inventories, missing evidence, and invalid waiver metadata are fatal.
-- A scope digest mismatch or newly added target without renewed approval is fatal and blocks public generation.
+- A scope digest mismatch, missing private approval, or newly added target without renewed approval is fatal and blocks publication.
 - Unclassified or multiply classified approved legacy constructs are fatal.
 - Private legacy digest drift is fatal locally until reviewed and refreshed.
 - GitHub lookup failure or ambiguous issue matches stop synchronization without creating another issue.
@@ -417,8 +455,9 @@ When the user omits a candidate, its name is stored only in private `selection.j
 Tests cover:
 
 - manifest schema and reference integrity;
-- canonical scope serialization, approval digest verification, and invalidation on every scope-changing field;
-- proof that status/evidence-only changes do not invalidate scope approval;
+- exact canonical scope serialization for current keys/paths, target keys, every XML/helper path, and null/current mappings;
+- private approval recording and rejection of a recomputed public digest without matching trusted approval;
+- approval invalidation on every scope-changing field and proof that status/evidence-only changes do not invalidate scope;
 - deterministic target-status aggregation;
 - rejection of empty feature lists for mapped and unmapped approved targets;
 - 100% extracted-construct classification, grouping coverage, and duplicate/unclassified rejection;
@@ -428,27 +467,27 @@ Tests cover:
 - private opt-out suppression and explicit revisit;
 - public/private verification-level exit semantics and report labels;
 - private provenance drift without public hash leakage;
+- complete atomic publication and rollback for initial and existing public outputs;
 - public report generation and not-converted filtering;
 - stdout, stderr, cache, snapshot, and temporary-path privacy;
 - isolated plugin syntax/load behavior without network or real storage;
 - exact private Lera destination verification;
-- private blocker staging, atomic complete-manifest publication, and rollback on synchronization failure;
-- issue marker lookup, open reuse, closed/ambiguous refusal, pre-create recheck, and post-create duplicate detection.
+- private blocker staging and issue marker lookup, open reuse, closed/ambiguous refusal, pre-create recheck, and post-create duplicate detection.
 
 ## Success Criteria
 
 The initial system is complete when:
 
-- the exact proposed allowlist has received explicit user go-ahead;
-- its scope approval digest matches the committed manifest;
+- the exact proposed allowlist has received explicit user go-ahead recorded in trusted private state;
+- its canonical scope digest matches both private approval and the committed manifest;
 - all 17 current plugins appear in the current inventory;
 - every committed legacy target was explicitly selected;
-- every approved target has 100% construct classification and feature-level evidence review;
+- every approved target has 100% construct classification and feature-level evidence review before publication;
 - their approved legacy mappings and actual feature-level statuses are recorded;
 - omitted target identifiers and counts are absent from every committed file;
-- public verification is reproducible with one command and cannot be mistaken for private validation;
+- public verification is reproducible with one command and cannot be mistaken for private validation or proof of approval;
 - full-private baseline validation is reproducible with one local command;
 - strict mode accurately reports all remaining in-scope gaps;
 - every `parity` and `waived` feature has mechanically valid evidence metadata;
 - every confirmed Lera capability blocker has one deduplicated private Lera issue;
-- tests prove allowlist approval, complete coverage, privacy, provenance, validation levels, and safe issue synchronization.
+- tests prove allowlist approval, canonical scope coverage, complete audit coverage, atomic publication, privacy, provenance, validation levels, and safe issue synchronization.
