@@ -23,7 +23,7 @@
 - Never commit the private binding digest, legacy commit ID, source digests, construct IDs, trigger patterns, script bodies, or local evidence.
 - A feature is `lera_blocker` only after confirming that supported Lua APIs cannot implement it. Otherwise classify the missing behavior as `plugin_gap`.
 - Do not use `waived` without a new explicit user decision naming the feature, rationale, and approval date.
-- Per-target audit fragments are private and are not committed. Public commits occur only for generic validator fixes, the Lera mirror correction, and the final three generated artifacts.
+- Per-target audit fragments are private and are not committed. Public commits occur only for generic validator fixes and the final three generated artifacts. The ignored Lera validation mirror is synchronized locally and never committed to Lera.
 
 ## File map
 
@@ -42,9 +42,9 @@ Public validator worktree:
 - Create: `validation/not-converted.md` — only approved targets without current mappings.
 - Existing: `validation/README.md` — recurring public/full-private commands; update only if the actual command sequence changes.
 
-Lera mirror repository:
+Local Lera validation mirror (ignored and untracked):
 
-- Modify: `/home/simon/code/lera/plugins/3scapes/chat_monitor.lua` — byte-identical mirror of the canonical approved current plugin.
+- Synchronize locally: `/home/simon/code/lera/plugins/3scapes/chat_monitor.lua` — byte-identical ignored mirror of the canonical approved current plugin; do not force-add or commit it in Lera.
 
 Private state, never committed:
 
@@ -78,11 +78,11 @@ Every target task below follows this protocol. Do not mark a target complete unt
 ### Task 1: Reconcile repositories and freeze execution inputs
 
 **Files:**
-- Modify: `/home/simon/code/lera/plugins/3scapes/chat_monitor.lua`
+- Synchronize locally only (ignored/untracked): `/home/simon/code/lera/plugins/3scapes/chat_monitor.lua`
 - Read: `/home/simon/code/lera-plugins/.worktrees/legacy-parity`
 - Read: `/home/simon/code/3s_scripts_old`
 
-- [ ] **Step 1: Verify all three repositories before mutation**
+- [ ] **Step 1: Verify all four repositories before mutation**
 
 Run `git status --short --branch` in the plugin worktree, canonical plugin checkout, legacy checkout, and Lera checkout. Preserve unrelated untracked Lera work and stop if either target file has overlapping edits.
 
@@ -95,25 +95,22 @@ Run `git merge master` in `/home/simon/code/lera-plugins/.worktrees/legacy-parit
 Run:
 
 ```bash
-mise exec python@3.12 -- -m unittest discover -s tests/legacy_parity -v
+mise exec python@3.12 -- python -m unittest discover -s tests/legacy_parity -v
 ```
 
 Expected: all tests pass.
 
 - [ ] **Step 4: Reconcile Lera's current plugin mirror**
 
-Confirm `compare_mirror()` reports only the already-recorded `chat_monitor.lua` drift. Mechanically copy the canonical worktree file to `/home/simon/code/lera/plugins/3scapes/chat_monitor.lua`, then rerun `compare_mirror()` and require an empty result.
+Confirm `compare_mirror()` reports only the already-recorded `chat_monitor.lua` drift. Mechanically copy the canonical worktree file to the ignored local validation mirror at `/home/simon/code/lera/plugins/3scapes/chat_monitor.lua`, then rerun `compare_mirror()` and require an empty result. The canonical source remains the tracked file in `lera-plugins`.
 
 - [ ] **Step 5: Validate the Lera mirror offline**
 
 Compile the mirrored Lua with an isolated temporary profile using `/home/simon/code/lera/build/lera`; do not call `mud.connect`. Run `/home/simon/code/lera/test.sh --no-deps`. Expected: syntax/load check and Lera tests pass.
 
-- [ ] **Step 6: Commit only the mirror correction in Lera**
+- [ ] **Step 6: Verify Lera's tracked state remains clean**
 
-```bash
-git add plugins/3scapes/chat_monitor.lua
-git commit -m "fix: sync chat monitor plugin mirror"
-```
+Confirm the synchronized local mirror remains byte-identical to the canonical worktree file and is still ignored/untracked by Lera. Do not force-add it or create a Lera commit. Require Lera's tracked diff to remain empty while preserving all unrelated pre-existing untracked work.
 
 - [ ] **Step 7: Reauthenticate the frozen scope**
 
@@ -732,7 +729,7 @@ Report which approved targets are parity, plugin gaps, Lera blockers with issue 
 - All 32 approved targets have individual, complete, private audit fragments.
 - Every in-scope construct is assigned exactly once and every feature has valid evidence.
 - Selected sources cover only their authenticated bindings; whole-file provenance still detects source drift.
-- Current plugin mirror bytes match Lera's bundled mirror.
+- Current plugin bytes match Lera's ignored local validation mirror, while Lera's tracked state remains unchanged.
 - Confirmed client blockers have one deduplicated private Lera issue each; plugin gaps do not create client issues.
 - All isolated runtime scenarios have immutable pass/fail results and no live side effects.
 - Full-private baseline validation passes; strict mode accurately passes or reports remaining approved gaps.
