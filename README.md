@@ -2,6 +2,14 @@
 
 Plugin collection for the Lera MUD client.
 
+## Legacy parity validation
+
+The repeatable validation workflow, its public/private trust boundary, and safe
+operating rules are documented in
+[validation/README.md](validation/README.md). Public CI verifies committed
+artifact consistency only; it cannot authenticate private approval or private
+legacy-source parity.
+
 ## Structure
 
 ```

@@ -1,0 +1,45 @@
+name: Legacy parity public baseline
+
+on:
+  push:
+    paths:
+      - "generic/**"
+      - "3scapes/**"
+      - "validation/**"
+      - "tools/**"
+      - "tests/**"
+      - "README.md"
+      - ".github/workflows/legacy-parity.yml"
+  pull_request:
+    paths:
+      - "generic/**"
+      - "3scapes/**"
+      - "validation/**"
+      - "tools/**"
+      - "tests/**"
+      - "README.md"
+      - ".github/workflows/legacy-parity.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  public-baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile validator
+        run: python -m compileall -q tools/legacy_parity tests/legacy_parity
+      - name: Run synthetic unit suite
+        run: python -m unittest discover -s tests/legacy_parity -p "test_*.py" -v
+      - name: Validate committed public artifacts when present
+        shell: bash
+        run: |
+          if [[ -f validation/legacy-parity.toml ]]; then
+            tools/legacy-parity validate --level public
+          else
+            echo "No public parity manifest has been published."
+          fi
