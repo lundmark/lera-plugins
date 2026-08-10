@@ -7,6 +7,8 @@ M.name = "chat_monitor"
 M.version = "1.1"
 M.priority = 50  -- Run before most plugins
 
+local wm = require("wm")
+
 -- Configuration
 local config = {
   max_lines = 32768,      -- Max lines to keep in scrollback (32k default)
@@ -58,11 +60,24 @@ local colors = {
 -- Chat message buffer
 -- Each entry: { type = "type_id", sender = "name", text = "message", seq = N }
 local messages = {}
-local scroll_offset = 0
 local message_seq = 0  -- Sequence number for ordering
 
 -- MIP handler refs for cleanup
 local mip_handlers = {}
+
+-- Wrapped-line cache: a deque so trimming old messages never shifts the array.
+-- Rebuilt in full when the render width changes; appended to incrementally.
+-- Entries: { text, color_code, is_continuation }
+local wrapped = { width = nil, lines = {}, first = 1, last = 0 }
+
+local sc = wm.make_scroller({
+  count = function() return wrapped.last - wrapped.first + 1 end,
+})
+
+-- Cache helpers are defined after word_wrap (which they use) but called from
+-- add_message above them; predeclare so those calls bind these locals, not
+-- accidental globals.
+local wrapped_reset, wrapped_append, wrapped_ensure, wrapped_trim_front
 
 --------------------------------------------------------------------------------
 -- Internal helpers
@@ -100,13 +115,18 @@ local function add_message(msg_type, sender, text)
     seq = message_seq,
   })
 
-  -- Trim buffer if too large
-  while #messages > config.max_lines do
-    table.remove(messages, 1)
+  -- Wrap into the cache at the current width (first render builds it otherwise)
+  -- and let the scroller hold a scrolled-back view still.
+  if wrapped.width then
+    local rows = wrapped_append(messages[#messages], wrapped.width)
+    sc.on_append(rows)
   end
 
-  -- Reset scroll to bottom when new message arrives
-  scroll_offset = 0
+  -- Trim buffer if too large
+  while #messages > config.max_lines do
+    local dead = table.remove(messages, 1)
+    wrapped_trim_front(dead)
+  end
 
   return true
 end
@@ -178,6 +198,63 @@ local function word_wrap(text, width)
   end
 
   return lines
+end
+
+function wrapped_reset()
+  wrapped.width = nil
+  wrapped.lines = {}
+  wrapped.first = 1
+  wrapped.last = 0
+end
+
+-- Wrap one message and append its rows to the cache. Returns the row count,
+-- which is also recorded on the message for trim accounting.
+function wrapped_append(msg, width)
+  local type_cfg = line_types[msg.type] or { color = config.default_color }
+  local prefix
+  if type_cfg.prefix then
+    prefix = type_cfg.prefix(type_cfg, msg.sender)
+  else
+    prefix = "[" .. (msg.sender or msg.type) .. "] "
+  end
+  local color_code = get_color(type_cfg.color)
+  local lines = word_wrap(prefix .. msg.text, width)
+  for j = 1, #lines do
+    wrapped.last = wrapped.last + 1
+    wrapped.lines[wrapped.last] = {
+      text = lines[j],
+      color_code = color_code,
+      is_continuation = (j > 1),
+    }
+  end
+  msg._rows = #lines
+  return #lines
+end
+
+function wrapped_ensure(width)
+  if wrapped.width == width then return end
+  wrapped_reset()
+  wrapped.width = width
+  for i = 1, #messages do
+    wrapped_append(messages[i], width)
+  end
+  sc.on_trim()  -- re-clamp: row count changed with the width
+end
+
+-- Drop the oldest message's rows off the front of the cache.
+function wrapped_trim_front(msg)
+  if not wrapped.width then return end
+  if not msg._rows then
+    -- A message the cache never saw (e.g. restored from store mid-session):
+    -- the bookkeeping is unknowable, rebuild lazily instead.
+    wrapped_reset()
+    return
+  end
+  for i = wrapped.first, wrapped.first + msg._rows - 1 do
+    wrapped.lines[i] = nil
+  end
+  wrapped.first = wrapped.first + msg._rows
+  sc.on_trim()
 end
 
 --------------------------------------------------------------------------------
@@ -371,7 +448,8 @@ end
 -- Clear all messages
 function M.clear()
   messages = {}
-  scroll_offset = 0
+  wrapped_reset()
+  sc.scroll_to_bottom()
 end
 
 -- Get message count
@@ -379,16 +457,18 @@ function M.count()
   return #messages
 end
 
--- Scroll the chat monitor
+-- Scroll the chat pane by wrapped rows. delta < 0 = up/older.
 function M.scroll(delta)
-  scroll_offset = scroll_offset + delta
-  if scroll_offset < 0 then scroll_offset = 0 end
-  if scroll_offset > #messages then scroll_offset = #messages end
+  sc.scroll(delta)
 end
 
--- Scroll to bottom
 function M.scroll_to_bottom()
-  scroll_offset = 0
+  sc.scroll_to_bottom()
+end
+
+-- True when the pane is showing the newest line.
+function M.following_tail()
+  return sc.following_tail()
 end
 
 -- List all configured line types
@@ -412,8 +492,8 @@ end
 function M.get_messages(limit)
   limit = limit or #messages
   local result = {}
-  local start = math.max(1, #messages - limit - scroll_offset + 1)
-  local stop = math.max(1, #messages - scroll_offset)
+  local start = math.max(1, #messages - limit + 1)
+  local stop = #messages
 
   for i = start, stop do
     local msg = messages[i]
@@ -464,60 +544,27 @@ function M.render(rect, opts)
 
   if w <= 0 or h <= 0 then return end
 
-  -- Get more messages than we need (for word wrapping)
-  local msgs = M.get_messages(h * 3)
+  wrapped_ensure(w)
 
-  -- Build wrapped lines from messages (newest first)
-  local wrapped_lines = {}
-  for i = #msgs, 1, -1 do
-    local msg = msgs[i]
-    -- Format: [Sender] text
-    local prefix = msg.prefix
-    local full_text = prefix .. msg.text
-
-    -- Wrap the text
-    local lines = word_wrap(full_text, w)
-
-    -- Add lines in reverse order (so first line of message is at top)
-    for j = #lines, 1, -1 do
-      table.insert(wrapped_lines, {
-        text = lines[j],
-        color_code = msg.color_code,
-        is_continuation = (j > 1),
-      })
-      -- Stop if we have enough lines
-      if #wrapped_lines >= h + scroll_offset then
-        break
-      end
-    end
-    if #wrapped_lines >= h + scroll_offset then
-      break
-    end
-  end
-
-  -- Render from bottom to top, skipping scroll_offset lines
-  local line_idx = 1 + scroll_offset
+  local offset = sc.offset()
   for screen_row = h, 1, -1 do
-    if line_idx <= #wrapped_lines then
-      local line = wrapped_lines[line_idx]
+    local idx = wrapped.last - offset - (h - screen_row)
+    if idx >= wrapped.first then
+      local line = wrapped.lines[idx]
       local line_y = y + screen_row - 1
-
-      -- Add continuation indicator for wrapped lines
       local display_text
       if line.is_continuation then
         display_text = line.color_code .. "  " .. line.text .. colors.reset
       else
         display_text = line.color_code .. line.text .. colors.reset
       end
-
       ui.text_ansi(ui.rect(x, line_y, w, 1), display_text, nil)
-      line_idx = line_idx + 1
     end
   end
 
   -- Show scroll indicator if not at bottom
-  if scroll_offset > 0 then
-    local indicator = string.format(" [+%d] ", scroll_offset)
+  if offset > 0 then
+    local indicator = string.format(" [+%d] ", offset)
     ui.text(ui.rect(x + w - #indicator - 1, y + h - 1, #indicator, 1), indicator)
   end
 end
@@ -527,7 +574,8 @@ function M.set_max_lines(n)
   config.max_lines = n or 32768
   -- Trim existing messages if needed
   while #messages > config.max_lines do
-    table.remove(messages, 1)
+    local dead = table.remove(messages, 1)
+    wrapped_trim_front(dead)
   end
 end
 
@@ -602,6 +650,9 @@ function M.on_load()
       messages = data.messages
       message_seq = data.message_seq or #messages
     end
+    -- Restored messages carry stale (or absent) _rows bookkeeping; force a
+    -- clean rebuild of the wrapped cache on first render.
+    wrapped_reset()
   end
 
   -- Register MIP handlers
