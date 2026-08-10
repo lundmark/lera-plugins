@@ -272,12 +272,12 @@ class ValidationTests(unittest.TestCase):
             provenance_digest=provenance_digest(self.provenance),
             runtime_scenarios=(
                 RuntimeScenario(
-                    "scenario", "sample_legacy", "sample-scenario", "4" * 64
+                    "scenario", "sample_legacy", "sample-scenario", "0" * 64
                 ),
             ),
             runtime_results=(
                 RuntimeResult(
-                    "scenario", "pass", "4" * 64, "Scenario passed."
+                    "scenario", "pass", "0" * 64, "Scenario passed."
                 ),
             ),
             artifact_hashes=tuple(
@@ -307,6 +307,57 @@ class ValidationTests(unittest.TestCase):
             legacy_root=self.legacy,
             lera_root=self.lera,
         )
+        scenario_path = (
+            self.state / "staged" / "runtime" / "sample-scenario.json"
+        )
+        scenario_path.parent.mkdir(mode=0o700)
+        scenario_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "key": "scenario",
+                    "target_key": "sample_legacy",
+                    "plugin": "generic/sample.lua",
+                    "clock_ms": 0,
+                    "store_seed": {},
+                    "dependencies": {},
+                    "operations": [],
+                    "expected": {
+                        "effects": [],
+                        "registrations": {
+                            "aliases": 0,
+                            "triggers": 0,
+                            "timers": 0,
+                            "mip": 0,
+                        },
+                    },
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        scenario_path.chmod(0o600)
+        fixture_digest = hashlib.sha256(
+            scenario_path.read_bytes()
+        ).hexdigest()
+        self.bundle = replace(
+            self.bundle,
+            runtime_scenarios=(
+                replace(
+                    self.bundle.runtime_scenarios[0],
+                    fixture_digest=fixture_digest,
+                ),
+            ),
+            runtime_results=(
+                replace(
+                    self.bundle.runtime_results[0],
+                    fixture_digest=fixture_digest,
+                ),
+            ),
+        )
+        write_staged_bundle(
+            self.state, self.bundle, public_repo=self.repo
+        )
 
     def tearDown(self):
         self.temp.cleanup()
@@ -320,6 +371,154 @@ class ValidationTests(unittest.TestCase):
             report_bytes=values["parity_report"],
             not_converted_bytes=values["not_converted"],
         )
+
+    def runtime_scenario_path(self):
+        return (
+            self.state / "staged" / "runtime" / "sample-scenario.json"
+        )
+
+    def restage_runtime_scenario(self, **changes):
+        path = self.runtime_scenario_path()
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value.update(changes)
+        path.write_text(
+            json.dumps(value, sort_keys=True), encoding="utf-8"
+        )
+        path.chmod(0o600)
+        fixture_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.bundle = replace(
+            self.bundle,
+            runtime_scenarios=(
+                replace(
+                    self.bundle.runtime_scenarios[0],
+                    fixture_digest=fixture_digest,
+                ),
+            ),
+            runtime_results=(
+                replace(
+                    self.bundle.runtime_results[0],
+                    fixture_digest=fixture_digest,
+                ),
+            ),
+        )
+        write_staged_bundle(
+            self.state, self.bundle, public_repo=self.repo
+        )
+        return path
+
+    def declare_runtime_fixture(self, fixture_key):
+        current = replace(
+            self.manifest.current_plugins[0],
+            fixtures=tuple(
+                sorted(
+                    set(self.manifest.current_plugins[0].fixtures)
+                    | {fixture_key}
+                )
+            ),
+        )
+        self.manifest = replace(
+            self.manifest, current_plugins=(current,)
+        )
+        self.artifacts = {
+            "manifest": render_manifest(self.manifest).encode(),
+            "not_converted": render_not_converted(self.manifest).encode(),
+            "parity_report": render_parity_report(self.manifest).encode(),
+        }
+        self.bundle = replace(
+            self.bundle,
+            runtime_scenarios=(
+                replace(
+                    self.bundle.runtime_scenarios[0],
+                    fixture_key=fixture_key,
+                ),
+            ),
+            artifact_hashes=tuple(
+                ArtifactHash(key, hashlib.sha256(value).hexdigest())
+                for key, value in sorted(self.artifacts.items())
+            ),
+        )
+        write_staged_bundle(
+            self.state, self.bundle, public_repo=self.repo
+        )
+        for key, relative in (
+            ("manifest", "legacy-parity.toml"),
+            ("not_converted", "not-converted.md"),
+            ("parity_report", "parity-report.md"),
+        ):
+            (self.repo / "validation" / relative).write_bytes(
+                self.artifacts[key]
+            )
+
+    def configure_blocked_feature(self):
+        blocked = replace(
+            self.bundle.targets[0].features[0],
+            status="plugin_gap",
+            evidence=replace(
+                self.bundle.targets[0].features[0].evidence,
+                outcome="fail",
+            ),
+        )
+        target = replace(
+            self.manifest.legacy_targets[0], features=(blocked,)
+        )
+        base_manifest = replace(
+            self.manifest,
+            scope=replace(self.manifest.scope, digest="0" * 64),
+            legacy_targets=(target,),
+        )
+        self.manifest = replace(
+            base_manifest,
+            scope=replace(
+                base_manifest.scope, digest=scope_digest(base_manifest)
+            ),
+        )
+        approve_scope(
+            self.state,
+            self.manifest,
+            self.bindings,
+            revision=1,
+            approved_on="2026-08-10",
+        )
+        self.provenance = replace(
+            self.provenance,
+            public_digest=self.manifest.scope.digest,
+        )
+        write_provenance(
+            self.state,
+            self.provenance,
+            approved_paths=("plugins/sample.xml",),
+        )
+        self.artifacts = {
+            "manifest": render_manifest(self.manifest).encode(),
+            "not_converted": render_not_converted(self.manifest).encode(),
+            "parity_report": render_parity_report(self.manifest).encode(),
+        }
+        self.bundle = replace(
+            self.bundle,
+            public_scope=canonical_scope(self.manifest).decode(),
+            public_digest=self.manifest.scope.digest,
+            targets=(
+                replace(self.bundle.targets[0], features=(blocked,)),
+            ),
+            provenance=self.provenance,
+            provenance_digest=provenance_digest(self.provenance),
+            artifact_hashes=tuple(
+                ArtifactHash(key, hashlib.sha256(value).hexdigest())
+                for key, value in sorted(self.artifacts.items())
+            ),
+        )
+        write_staged_bundle(
+            self.state, self.bundle, public_repo=self.repo
+        )
+        for key, relative in (
+            ("manifest", "legacy-parity.toml"),
+            ("not_converted", "not-converted.md"),
+            ("parity_report", "parity-report.md"),
+        ):
+            (self.repo / "validation" / relative).write_bytes(
+                self.artifacts[key]
+            )
+        return self.bundle
 
     def configure_source(
         self,
@@ -751,6 +950,17 @@ class ValidationTests(unittest.TestCase):
             ValueError, "require_parity_private_only"
         ):
             validate_public(self.repo, require_parity=True)
+        changed_bundle = self.configure_blocked_feature()
+        with self.assertRaisesRegex(ValidationFailure, "strict_parity_status"):
+            full_private_publication_gate(
+                self.candidate(),
+                changed_bundle,
+                self.roots,
+                self.lera_bin,
+                require_parity=True,
+            )
+
+    def test_strict_mode_reports_runtime_fixture_drift_before_status(self):
         blocked = replace(
             self.bundle.targets[0].features[0],
             status="plugin_gap",
@@ -759,16 +969,74 @@ class ValidationTests(unittest.TestCase):
                 outcome="fail",
             ),
         )
-        changed_target = replace(
-            self.bundle.targets[0], features=(blocked,)
+        target = replace(
+            self.manifest.legacy_targets[0], features=(blocked,)
         )
+        base_manifest = replace(
+            self.manifest,
+            scope=replace(self.manifest.scope, digest="0" * 64),
+            legacy_targets=(target,),
+        )
+        self.manifest = replace(
+            base_manifest,
+            scope=replace(
+                base_manifest.scope, digest=scope_digest(base_manifest)
+            ),
+        )
+        self.approval = approve_scope(
+            self.state,
+            self.manifest,
+            self.bindings,
+            revision=1,
+            approved_on="2026-08-10",
+        )
+        self.provenance = replace(
+            self.provenance,
+            public_digest=self.manifest.scope.digest,
+        )
+        write_provenance(
+            self.state,
+            self.provenance,
+            approved_paths=("plugins/sample.xml",),
+        )
+        self.artifacts = {
+            "manifest": render_manifest(self.manifest).encode(),
+            "not_converted": render_not_converted(self.manifest).encode(),
+            "parity_report": render_parity_report(self.manifest).encode(),
+        }
         changed_bundle = replace(
-            self.bundle, targets=(changed_target,)
+            self.bundle,
+            public_scope=canonical_scope(self.manifest).decode(),
+            public_digest=self.manifest.scope.digest,
+            targets=(
+                replace(self.bundle.targets[0], features=(blocked,)),
+            ),
+            provenance=self.provenance,
+            provenance_digest=provenance_digest(self.provenance),
+            artifact_hashes=tuple(
+                ArtifactHash(key, hashlib.sha256(value).hexdigest())
+                for key, value in sorted(self.artifacts.items())
+            ),
         )
         write_staged_bundle(
             self.state, changed_bundle, public_repo=self.repo
         )
-        with self.assertRaisesRegex(ValidationFailure, "strict_parity_status"):
+        for key, relative in (
+            ("manifest", "legacy-parity.toml"),
+            ("not_converted", "not-converted.md"),
+            ("parity_report", "parity-report.md"),
+        ):
+            (self.repo / "validation" / relative).write_bytes(
+                self.artifacts[key]
+            )
+        scenario = (
+            self.state / "staged" / "runtime" / "sample-scenario.json"
+        )
+        scenario.write_bytes(scenario.read_bytes() + b"\n")
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "runtime_fixture_mismatch"
+        ):
             full_private_publication_gate(
                 self.candidate(),
                 changed_bundle,
@@ -897,6 +1165,284 @@ class ValidationTests(unittest.TestCase):
         approved = load_approval(self.state)
         self.assertEqual(approved.public_digest, value["public_digest"])
         self.assertEqual(approved.binding_digest, value["binding_digest"])
+
+    def test_runtime_rerun_rejects_stale_stored_pass_after_plugin_drift(self):
+        self.lera_bin.write_text(
+            "#!/bin/sh\n"
+            "if grep -q runtime_drift \"$1/plugins/sample.lua\"; then\n"
+            "  exit 1\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        self.lera_bin.chmod(
+            self.lera_bin.stat().st_mode | stat.S_IXUSR
+        )
+        full_private_publication_gate(
+            self.candidate(),
+            self.bundle,
+            self.roots,
+            self.lera_bin,
+        )
+        for root in (self.repo, self.lera / "plugins"):
+            path = root / "generic" / "sample.lua"
+            path.write_text(
+                path.read_text(encoding="utf-8")
+                + "\n-- runtime_drift\n",
+                encoding="utf-8",
+            )
+
+        with self.assertRaisesRegex(ValidationFailure, "runtime_failure"):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_runtime_rejects_missing_scenario_file(self):
+        self.runtime_scenario_path().unlink()
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "runtime_fixture_mismatch"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_runtime_uses_only_supplied_state_root(self):
+        path = self.runtime_scenario_path()
+        decoy_root = self.state.parent / "decoy-state"
+        decoy_runtime = decoy_root / "staged" / "runtime"
+        decoy_runtime.mkdir(parents=True, mode=0o700)
+        decoy_path = decoy_runtime / path.name
+        decoy_path.write_bytes(path.read_bytes())
+        decoy_path.chmod(0o600)
+        path.unlink()
+        previous = os.environ.get("XDG_STATE_HOME")
+        os.environ["XDG_STATE_HOME"] = str(decoy_root)
+        try:
+            with self.assertRaisesRegex(
+                ValidationFailure, "runtime_fixture_mismatch"
+            ):
+                full_private_publication_gate(
+                    self.candidate(),
+                    self.bundle,
+                    self.roots,
+                    self.lera_bin,
+                )
+        finally:
+            if previous is None:
+                os.environ.pop("XDG_STATE_HOME", None)
+            else:
+                os.environ["XDG_STATE_HOME"] = previous
+
+    def test_runtime_rejects_scenario_byte_digest_mismatch(self):
+        path = self.runtime_scenario_path()
+        path.write_bytes(path.read_bytes() + b"\n")
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "runtime_fixture_mismatch"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_runtime_rejects_scenario_identity_mismatch(self):
+        self.restage_runtime_scenario(key="other-scenario")
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "runtime_fixture_mismatch"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_runtime_rejects_scenario_target_mismatch(self):
+        self.restage_runtime_scenario(target_key="other-target")
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "runtime_fixture_mismatch"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_runtime_rejects_plugin_outside_approved_target_mapping(self):
+        self.restage_runtime_scenario(plugin="generic/other.lua")
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "runtime_fixture_mismatch"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_runtime_rejects_unsafe_fixture_keys_and_alternate_roots(self):
+        for fixture_key in (
+            "../escape",
+            "nested/escape",
+            str(self.state / "alternate"),
+        ):
+            with self.subTest(fixture_key=fixture_key):
+                self.declare_runtime_fixture(fixture_key)
+                with self.assertRaisesRegex(
+                    ValidationFailure, "runtime_fixture_mismatch"
+                ):
+                    full_private_publication_gate(
+                        self.candidate(),
+                        self.bundle,
+                        self.roots,
+                        self.lera_bin,
+                    )
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permissions required")
+    def test_runtime_rejects_symlink_escape(self):
+        path = self.runtime_scenario_path()
+        outside = self.state / "outside-scenario.json"
+        outside.write_bytes(path.read_bytes())
+        outside.chmod(0o600)
+        path.unlink()
+        path.symlink_to(outside)
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "runtime_fixture_mismatch"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permissions required")
+    def test_runtime_rejects_group_accessible_fixture_directory(self):
+        self.runtime_scenario_path().parent.chmod(0o750)
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "runtime_fixture_mismatch"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permissions required")
+    def test_runtime_rejects_group_accessible_scenario_file(self):
+        self.runtime_scenario_path().chmod(0o640)
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "runtime_fixture_mismatch"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_runtime_rejects_nonzero_fresh_outcome(self):
+        self.lera_bin.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+        self.lera_bin.chmod(
+            self.lera_bin.stat().st_mode | stat.S_IXUSR
+        )
+
+        with self.assertRaisesRegex(ValidationFailure, "runtime_failure"):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_runtime_rejects_stored_result_summary_mismatch(self):
+        result = replace(
+            self.bundle.runtime_results[0], result="Stored pass."
+        )
+        self.bundle = replace(self.bundle, runtime_results=(result,))
+        write_staged_bundle(
+            self.state, self.bundle, public_repo=self.repo
+        )
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "runtime_result_mismatch"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_runtime_preserves_staged_key_set_and_digest_checks(self):
+        changes = (
+            replace(
+                self.bundle.runtime_results[0],
+                scenario_key="other-scenario",
+            ),
+            replace(
+                self.bundle.runtime_results[0],
+                fixture_digest="f" * 64,
+            ),
+        )
+        for changed in changes:
+            with self.subTest(changed=changed):
+                bundle = replace(
+                    self.bundle, runtime_results=(changed,)
+                )
+                write_staged_bundle(
+                    self.state, bundle, public_repo=self.repo
+                )
+                with self.assertRaisesRegex(
+                    ValidationFailure, "runtime_result_mismatch"
+                ):
+                    full_private_publication_gate(
+                        self.candidate(),
+                        bundle,
+                        self.roots,
+                        self.lera_bin,
+                    )
+
+    def test_refresh_strict_failure_writes_no_private_state(self):
+        self.configure_blocked_feature()
+        prior_provenance = (self.state / "provenance.json").read_bytes()
+        prior_bundle = (
+            self.state / "staged" / "audit-bundle.json"
+        ).read_bytes()
+
+        with self.assertRaisesRegex(ValidationFailure, "strict_parity_status"):
+            validate_full_private(
+                roots=self.roots,
+                lera_bin=self.lera_bin,
+                require_parity=True,
+                refresh_legacy=True,
+                verified_at="2026-08-10T15:30:00+00:00",
+            )
+        self.assertEqual(
+            (self.state / "provenance.json").read_bytes(),
+            prior_provenance,
+        )
+        self.assertEqual(
+            (self.state / "staged" / "audit-bundle.json").read_bytes(),
+            prior_bundle,
+        )
 
     def test_provenance_transaction_rolls_back_after_each_replace(self):
         prior_provenance = (self.state / "provenance.json").read_bytes()

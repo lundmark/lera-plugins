@@ -35,6 +35,7 @@ from .report import (
     render_private_report,
     resolve_private_report_path,
 )
+from .runtime import loads_scenario, run_scenario, valid_scenario_key
 from .scope import (
     binding_digest,
     canonical_bindings,
@@ -42,6 +43,7 @@ from .scope import (
     scope_digest,
 )
 from .staged import (
+    RuntimeResult,
     load_staged_bundle,
     provenance_digest,
     validate_staged_bundle,
@@ -316,24 +318,123 @@ def _validate_construct_snapshots(bundle, legacy_root, selection):
                 _fail("legacy_construct_drift")
 
 
-def _validate_runtime(bundle, manifest, lera_bin):
+def _runtime_scenario_path(state_root, fixture_key):
+    if not valid_scenario_key(fixture_key):
+        _fail("runtime_fixture_mismatch")
+    state = Path(state_root).resolve()
+    staged = state / "staged"
+    runtime = staged / "runtime"
+    candidate = runtime / f"{fixture_key}.json"
+    try:
+        if (
+            staged.is_symlink()
+            or runtime.is_symlink()
+            or candidate.is_symlink()
+        ):
+            raise ValueError("unsafe_runtime_fixture")
+        resolved_runtime = runtime.resolve(strict=True)
+        resolved_candidate = candidate.resolve(strict=True)
+        if resolved_runtime != runtime:
+            raise ValueError("unsafe_runtime_fixture")
+        resolved_candidate.relative_to(resolved_runtime)
+        if (
+            resolved_candidate.parent != resolved_runtime
+            or not resolved_candidate.is_file()
+        ):
+            raise ValueError("unsafe_runtime_fixture")
+        if os.name == "posix" and (
+            runtime.stat().st_mode & 0o077
+            or resolved_candidate.stat().st_mode & 0o077
+        ):
+            raise ValueError("unsafe_runtime_fixture")
+        content = resolved_candidate.read_bytes()
+    except (OSError, RuntimeError, ValueError) as error:
+        _fail("runtime_fixture_mismatch", error)
+    return content
+
+
+def _validate_runtime(bundle, manifest, selection, roots, lera_bin):
     binary = Path(lera_bin).resolve()
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise ValueError("missing_lera_binary")
-    fixtures = {
-        value
-        for current in manifest.current_plugins
-        for value in current.fixtures
+    manifest_targets = {
+        target.key: target for target in manifest.legacy_targets
     }
-    if any(
-        result.outcome != "pass" for result in bundle.runtime_results
-    ):
-        _fail("runtime_failure")
-    if any(
-        scenario.fixture_key not in fixtures
-        for scenario in bundle.runtime_scenarios
-    ):
-        _fail("runtime_fixture_mismatch")
+    selected_targets = {
+        target.key: target for target in selection.included_targets
+    }
+    bundle_targets = {target.key: target for target in bundle.targets}
+    current_plugins = {
+        current.key: current for current in manifest.current_plugins
+    }
+    stored_results = {
+        result.scenario_key: result for result in bundle.runtime_results
+    }
+    for staged_scenario in bundle.runtime_scenarios:
+        content = _runtime_scenario_path(
+            roots.state_root, staged_scenario.fixture_key
+        )
+        fixture_digest = hashlib.sha256(content).hexdigest()
+        if fixture_digest != staged_scenario.fixture_digest:
+            _fail("runtime_fixture_mismatch")
+        try:
+            scenario = loads_scenario(content)
+        except ValueError as error:
+            _fail("runtime_fixture_mismatch", error)
+        if (
+            scenario.key != staged_scenario.key
+            or scenario.target_key != staged_scenario.target_key
+        ):
+            _fail("runtime_fixture_mismatch")
+
+        manifest_target = manifest_targets.get(staged_scenario.target_key)
+        selected_target = selected_targets.get(staged_scenario.target_key)
+        bundle_target = bundle_targets.get(staged_scenario.target_key)
+        if (
+            manifest_target is None
+            or selected_target is None
+            or bundle_target is None
+        ):
+            _fail("runtime_fixture_mismatch")
+        approved_keys = tuple(sorted(manifest_target.current_plugins))
+        if (
+            approved_keys
+            != tuple(sorted(selected_target.current_plugins))
+            or approved_keys != tuple(sorted(bundle_target.current_plugins))
+        ):
+            _fail("runtime_fixture_mismatch")
+        try:
+            approved_current = tuple(
+                current_plugins[key] for key in approved_keys
+            )
+        except KeyError as error:
+            _fail("runtime_fixture_mismatch", error)
+        matching_current = tuple(
+            current
+            for current in approved_current
+            if current.path == scenario.plugin
+            and staged_scenario.target_key in current.target_keys
+            and staged_scenario.fixture_key in current.fixtures
+        )
+        if not matching_current:
+            _fail("runtime_fixture_mismatch")
+
+        try:
+            outcome = run_scenario(
+                binary, roots.repo_root, scenario
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            _fail("runtime_failure", error)
+        if outcome.exit_code != 0:
+            _fail("runtime_failure")
+        fresh_result = RuntimeResult(
+            scenario_key=staged_scenario.key,
+            outcome="pass",
+            fixture_digest=fixture_digest,
+            result="Scenario passed.",
+        )
+        if stored_results.get(staged_scenario.key) != fresh_result:
+            _fail("runtime_result_mismatch")
 
 
 def _validate_issue_links(bundle, manifest):
@@ -404,14 +505,6 @@ def _validate_private(
         bundle = loaded_bundle
     elif bundle != loaded_bundle:
         _fail("staged_bundle_mismatch")
-    if require_parity:
-        strict = strict_parity_findings(
-            target
-            for target in bundle.targets
-        )
-        if strict:
-            _fail(strict[0].code)
-
     _validate_construct_snapshots(
         bundle, roots.legacy_root, selection
     )
@@ -464,7 +557,9 @@ def _validate_private(
         _fail("legacy_source_drift")
     if compare_mirror(roots.repo_root, roots.lera_root / "plugins"):
         _fail("current_mirror_mismatch")
-    _validate_runtime(bundle, manifest, lera_bin)
+    _validate_runtime(
+        bundle, manifest, selection, roots, lera_bin
+    )
     _validate_issue_links(bundle, manifest)
     deny_tokens = build_private_deny_tokens(
         selection,
@@ -484,6 +579,13 @@ def _validate_private(
         )
     except ValueError as error:
         _fail("privacy_violation", error)
+    if require_parity:
+        strict = strict_parity_findings(
+            target
+            for target in bundle.targets
+        )
+        if strict:
+            _fail(strict[0].code)
     if refresh_legacy:
         write_provenance_transaction(
             roots.state_root, separate_provenance, bundle

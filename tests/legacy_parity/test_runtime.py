@@ -7,6 +7,7 @@ from pathlib import Path
 
 from tools.legacy_parity.runtime import (
     load_scenario,
+    loads_scenario,
     render_harness,
     run_scenario,
 )
@@ -23,6 +24,50 @@ class RuntimeHarnessTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_schema_binds_safe_scenario_and_target_identity(self):
+        self.assertEqual(self.scenario.key, "sample-runtime")
+        self.assertEqual(self.scenario.target_key, "sample-target")
+        base = json.loads(
+            (FIXTURE / "sample_scenario.json").read_text(encoding="utf-8")
+        )
+        cases = (
+            ("key", None),
+            ("key", ""),
+            ("key", "../escape"),
+            ("key", "nested/escape"),
+            ("target_key", None),
+            ("target_key", ""),
+            ("target_key", "/alternate"),
+            ("target_key", "nested\\escape"),
+        )
+        for index, (field, value) in enumerate(cases):
+            with self.subTest(field=field, value=value):
+                changed = dict(base)
+                if value is None:
+                    changed.pop(field)
+                else:
+                    changed[field] = value
+                path = self.root / f"identity-{index}.json"
+                path.write_text(json.dumps(changed), encoding="utf-8")
+                with self.assertRaisesRegex(
+                    ValueError, "invalid_runtime_scenario"
+                ):
+                    load_scenario(path)
+
+    def test_bytes_loader_parses_the_exact_captured_scenario(self):
+        path = self.root / "mutable-scenario.json"
+        path.write_bytes(
+            (FIXTURE / "sample_scenario.json").read_bytes()
+        )
+        captured = path.read_bytes()
+        path.write_text("{}", encoding="utf-8")
+
+        self.assertEqual(loads_scenario(captured), self.scenario)
+        with self.assertRaisesRegex(
+            ValueError, "invalid_runtime_scenario"
+        ):
+            load_scenario(path)
 
     def fake_lera(self, *, sleeping=False):
         executable = self.root / ("sleeping-lera" if sleeping else "fake-lera")

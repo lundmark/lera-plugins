@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 
 
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SCENARIO_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
 _EFFECT_KINDS = frozenset(
     {
         "alias.add",
@@ -57,6 +58,8 @@ _UNSAFE_TEXT = (
 @dataclass(frozen=True)
 class Scenario:
     version: int
+    key: str
+    target_key: str
     plugin: str
     clock_ms: int
     store_seed: dict
@@ -72,6 +75,13 @@ class RuntimeOutcome:
     stdout: str
     stderr: str
     harness: str
+
+
+def valid_scenario_key(value):
+    return (
+        isinstance(value, str)
+        and _SCENARIO_KEY_RE.fullmatch(value) is not None
+    )
 
 
 def _json_data(value):
@@ -149,11 +159,23 @@ def _operation(value):
 
 def load_scenario(path) -> Scenario:
     try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        content = Path(path).read_bytes()
+    except OSError as error:
+        raise ValueError("invalid_runtime_scenario") from error
+    return loads_scenario(content)
+
+
+def loads_scenario(content) -> Scenario:
+    try:
+        if not isinstance(content, bytes):
+            raise TypeError("scenario_bytes_required")
+        value = json.loads(content.decode("utf-8"))
+    except (TypeError, UnicodeError, json.JSONDecodeError) as error:
         raise ValueError("invalid_runtime_scenario") from error
     required = {
         "version",
+        "key",
+        "target_key",
         "plugin",
         "clock_ms",
         "store_seed",
@@ -166,6 +188,8 @@ def load_scenario(path) -> Scenario:
     plugin = value["plugin"]
     if (
         value["version"] != 1
+        or not valid_scenario_key(value["key"])
+        or not valid_scenario_key(value["target_key"])
         or not isinstance(plugin, str)
         or not plugin.endswith(".lua")
         or plugin.startswith("/")
@@ -214,6 +238,8 @@ def load_scenario(path) -> Scenario:
         raise ValueError("invalid_runtime_scenario")
     return Scenario(
         version=1,
+        key=value["key"],
+        target_key=value["target_key"],
         plugin=plugin,
         clock_ms=value["clock_ms"],
         store_seed=dict(value["store_seed"]),

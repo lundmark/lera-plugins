@@ -1,5 +1,7 @@
 {
   "version": 1,
+  "key": "sample-runtime",
+  "target_key": "sample-target",
   "plugin": "sample_plugin.lua",
   "clock_ms": 1000,
   "store_seed": {"count": 4},

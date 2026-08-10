@@ -78,7 +78,13 @@ class AcceptanceWorkflow:
             FIXTURE / "current", self.lera / "plugins"
         )
         self.lera_bin = root / "lera-bin"
-        self.lera_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        self.lera_log = root / "lera-run.log"
+        self.lera_bin.write_text(
+            "#!/bin/sh\n"
+            f"printf 'run\\n' >> '{self.lera_log}'\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
         self.lera_bin.chmod(
             self.lera_bin.stat().st_mode | stat.S_IXUSR
         )
@@ -372,6 +378,39 @@ class AcceptanceWorkflow:
             provenance,
             approved_paths=("plugins/orbit.xml",),
         )
+        runtime = self.state / "staged" / "runtime"
+        runtime.mkdir(parents=True, exist_ok=True, mode=0o700)
+        runtime.chmod(0o700)
+        scenario = runtime / "orbit-scenario.json"
+        scenario.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "key": "orbit-runtime",
+                    "target_key": "orbit_legacy",
+                    "plugin": "generic/orbit.lua",
+                    "clock_ms": 0,
+                    "store_seed": {},
+                    "dependencies": {},
+                    "operations": [],
+                    "expected": {
+                        "effects": [],
+                        "registrations": {
+                            "aliases": 0,
+                            "triggers": 0,
+                            "timers": 0,
+                            "mip": 0,
+                        },
+                    },
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        scenario.chmod(0o600)
+        fixture_digest = hashlib.sha256(
+            scenario.read_bytes()
+        ).hexdigest()
         bundle = StagedAuditBundle(
             version=1,
             scope_revision=approval.revision,
@@ -418,14 +457,14 @@ class AcceptanceWorkflow:
                     "orbit-runtime",
                     "orbit_legacy",
                     "orbit-scenario",
-                    "4" * 64,
+                    fixture_digest,
                 ),
             ),
             runtime_results=(
                 RuntimeResult(
                     "orbit-runtime",
                     "pass",
-                    "4" * 64,
+                    fixture_digest,
                     "Scenario passed.",
                 ),
             ),
@@ -553,6 +592,9 @@ class WholeValidatorAcceptanceTests(unittest.TestCase):
         self.assertEqual(workflow.publish()[0], 0)
         self.assertEqual(workflow.validate("full-private")[0], 0)
         self.assertEqual(workflow.validate("public")[0], 0)
+
+        runs = workflow.lera_log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(runs, ["run", "run"])
 
         public = b"".join(workflow.public_bytes().values())
         ordinary_output = "".join(workflow.outputs)
