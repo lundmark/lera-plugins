@@ -340,6 +340,14 @@ local function default_chat_prefix(cfg, who)
   return "[" .. (cfg.label or cfg.command or "Chat") .. "] " .. (who or "") .. ": "
 end
 
+local function formatting_options_changed(opts)
+  return opts.color ~= nil or opts.label ~= nil or opts.prefix ~= nil
+end
+
+local function invalidate_wrapped_formatting()
+  wrapped.width = nil
+end
+
 -- Configure any line type (built-in or chat)
 -- type_id: "tell_in", "tell_out", "emote_in", "emote_out", or "chat_<command>"
 -- opts: { color = "color_name", label = "Display Name", prefix = function, enabled = true/false }
@@ -352,6 +360,7 @@ function M.configure(type_id, opts)
   if opts.label then line_types[type_id].label = opts.label end
   if opts.prefix then line_types[type_id].prefix = opts.prefix end
   if opts.enabled ~= nil then line_types[type_id].enabled = opts.enabled end
+  if formatting_options_changed(opts) then invalidate_wrapped_formatting() end
   return true
 end
 
@@ -368,6 +377,7 @@ function M.add_chatline(id, opts)
     if opts.label then line_types[type_id].label = opts.label end
     if opts.prefix then line_types[type_id].prefix = opts.prefix end
     if opts.enabled ~= nil then line_types[type_id].enabled = opts.enabled end
+    if formatting_options_changed(opts) then invalidate_wrapped_formatting() end
   else
     -- Create new
     line_types[type_id] = {
@@ -417,6 +427,7 @@ end
 function M.set_color(type_id, color)
   if line_types[type_id] and colors[color] then
     line_types[type_id].color = color
+    invalidate_wrapped_formatting()
     return true
   end
   return false
@@ -595,9 +606,10 @@ function M.render(rect, opts)
 
   if w <= 0 or h <= 0 then return end
 
-  local offset = sc.offset()
+  local offset
 
   if lera.render_pass() == "remote" then
+    offset = sc.offset()
     -- The render callback runs a second time per dirty frame when a
     -- WebSocket client is connected, at the CLIENT screen's width. Mutating
     -- the local cache/scroller from here would thrash the width-keyed
@@ -612,6 +624,7 @@ function M.render(rect, opts)
     end)
   else
     wrapped_ensure(w)
+    offset = sc.offset()
     draw_rows(x, y, w, h, function(screen_row)
       local idx = wrapped.last - offset - (h - screen_row)
       if idx >= wrapped.first then return wrapped.lines[idx] end
