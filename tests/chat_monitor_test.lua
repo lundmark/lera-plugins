@@ -1,6 +1,8 @@
--- chat_monitor unit tests. Run from the lera-plugins repo root:
---   ../lera/external/luajit/src/luajit tests/chat_monitor_test.lua
-package.path = "3scapes/?.lua;../lera/scripts/default/?.lua;" .. package.path
+-- chat_monitor unit tests. Run from the lera-plugins repo root with LERA_ROOT
+-- pointing at a built Lera checkout.
+local lera_root = assert(os.getenv("LERA_ROOT"), "LERA_ROOT is required")
+lera_root = lera_root:gsub("/+$", "")
+package.path = "3scapes/?.lua;" .. lera_root .. "/scripts/default/?.lua;" .. package.path
 
 local failures = 0
 local function check(name, ok, detail)
@@ -66,11 +68,41 @@ check("tail_shows_newest", rows[4] and rows[4]:find("message 10", 1, true) ~= ni
       rows[4])
 check("starts_following_tail", chat.following_tail())
 
+-- ---- line-type formatting updates invalidate cached local rows ----------------
+check("set_color_accepts_public_chat_type", chat.set_color("chat_gossip", "red"))
+local recolored_local = render()
+render_pass = "remote"
+local recolored_remote = render()
+render_pass = "local"
+check("set_color_updates_cached_local_row",
+      recolored_local[4] and recolored_local[4]:find("\027[31m", 1, true) == 1,
+      recolored_local[4])
+check("set_color_keeps_local_remote_rows_equal",
+      recolored_local[4] == recolored_remote[4],
+      tostring(recolored_local[4]) .. " vs " .. tostring(recolored_remote[4]))
+chat.set_color("chat_gossip", "bright_cyan")
+render()
+
 -- ---- scrolled back: view holds when messages arrive ---------------------------
 chat.scroll(-2)
 render()
 local held = render()[4]
 check("scrolled_back", not chat.following_tail())
+
+check("scrolled_set_color_accepts_public_chat_type",
+      chat.set_color("chat_gossip", "yellow"))
+local styled_held = render()[4]
+local held_text = held and held:gsub("\027%[[0-9;]*m", "")
+local styled_held_text = styled_held and styled_held:gsub("\027%[[0-9;]*m", "")
+check("format_change_preserves_scrolled_state", not chat.following_tail())
+check("format_change_preserves_scrolled_viewport",
+      styled_held_text == held_text,
+      tostring(styled_held_text) .. " vs " .. tostring(held_text))
+check("format_change_restyles_scrolled_viewport",
+      styled_held and styled_held:find("\027[33m", 1, true) == 1,
+      styled_held)
+chat.set_color("chat_gossip", "bright_cyan")
+render()
 
 send_chat("Bob", "message 11")
 local after = render()
@@ -97,13 +129,38 @@ check("clamps_to_oldest", not chat.following_tail())
 chat.scroll(100000)
 check("clamps_to_tail", chat.following_tail())
 
--- ---- trim keeps the offset sane -------------------------------------------------
-chat.set_max_lines(5)
-send_chat("Bob", "trigger trim")
+-- ---- trim preserves a held viewport and clamps only when necessary ------------
+chat.clear()
+chat.set_max_lines(8)
+local TRIM_RECT = { x = 0, y = 0, w = 40, h = 2 }
+for i = 1, 8 do send_chat("Bob", "trim message " .. i) end
+render_at(TRIM_RECT)
+chat.scroll(-2)
+local trim_before = render_at(TRIM_RECT)
+check("trim_starts_scrolled_back", not chat.following_tail())
+
+chat.set_max_lines(7)  -- drops message 1, which is above the visible viewport
+local trim_after = render_at(TRIM_RECT)
+check("trim_preserves_visible_viewport",
+      trim_after[0] == trim_before[0] and trim_after[1] == trim_before[1],
+      tostring(trim_after[1]) .. " vs " .. tostring(trim_before[1]))
+check("trim_preserves_scrolled_state", not chat.following_tail())
+
 chat.scroll(-100000)
-local deep = chat  -- offset now at the clamp
+chat.set_max_lines(3)
+local trim_clamped = render_at(TRIM_RECT)
+check("trim_clamps_to_oldest_retained_row",
+      trim_clamped[1] and trim_clamped[1]:find("trim message 6", 1, true) ~= nil,
+      trim_clamped[1])
+check("trim_clamp_remains_scrolled_back", not chat.following_tail())
+
 chat.scroll_to_bottom()
-check("survives_trim", true)  -- reaching here without error is the assertion
+local trim_tail = render_at(TRIM_RECT)
+check("trim_tail_shows_retained_rows",
+      trim_tail[0] and trim_tail[0]:find("trim message 7", 1, true) ~= nil and
+      trim_tail[1] and trim_tail[1]:find("trim message 8", 1, true) ~= nil,
+      tostring(trim_tail[0]) .. " / " .. tostring(trim_tail[1]))
+check("trim_tail_resumes_following", chat.following_tail())
 
 -- ---- remote render pass draws wrapped content at its own width ----------------
 -- The render callback runs a second time per dirty frame when a WebSocket
