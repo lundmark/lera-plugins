@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from . import EXIT_INVALID, EXIT_OK
+from .audit import stage_preliminary_audit, validate_preliminary_audits
 from .legacy import (
     SelectionState,
     discover,
@@ -32,6 +33,16 @@ def build_parser():
     selection = select_parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--omit")
     selection.add_argument("--include-target-record")
+
+    stage_parser = commands.add_parser("stage-preliminary")
+    stage_parser.add_argument("--plugin-root", required=True)
+    stage_parser.add_argument("--state-root", required=True)
+    stage_parser.add_argument("--record", required=True)
+
+    check_parser = commands.add_parser("check-preliminary")
+    check_parser.add_argument("--plugin-root", required=True)
+    check_parser.add_argument("--legacy-root", required=True)
+    check_parser.add_argument("--state-root", required=True)
 
     return parser
 
@@ -95,6 +106,29 @@ def main(argv=None):
             public_repo=args.public_repo,
         )
         print("Selection updated.")
+        return EXIT_OK
+
+    if args.command == "stage-preliminary":
+        selection = load_selection(args.state_root)
+        stage_preliminary_audit(
+            args.state_root,
+            args.record,
+            plugin_root=args.plugin_root,
+            selection=selection,
+        )
+        print("Preliminary audit staged.")
+        return EXIT_OK
+
+    if args.command == "check-preliminary":
+        if not Path(args.legacy_root).is_dir():
+            raise ValueError("missing_legacy_root")
+        selection = load_selection(args.state_root)
+        validate_preliminary_audits(
+            args.state_root,
+            args.plugin_root,
+            selection,
+        )
+        print("Preliminary audits valid.")
         return EXIT_OK
 
     return EXIT_INVALID
