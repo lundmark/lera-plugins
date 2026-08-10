@@ -469,6 +469,7 @@ def _validate_private(
     deny_tokens = build_private_deny_tokens(
         selection,
         separate_provenance,
+        approved_public_scope=approval.public_scope,
         private_roots=(
             roots.state_root,
             roots.legacy_root,

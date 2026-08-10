@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,17 +27,96 @@ _SOURCE_BODY_RE = re.compile(
 _SAFE_DIAGNOSTIC_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 
 
+def _approved_public_scope_tokens(encoded):
+    if not isinstance(encoded, str):
+        raise ValueError("invalid_approved_public_scope")
+    try:
+        scope = json.loads(encoded)
+    except json.JSONDecodeError as error:
+        raise ValueError("invalid_approved_public_scope") from error
+    canonical = json.dumps(
+        scope,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if (
+        not isinstance(scope, dict)
+        or set(scope) != {"version", "current_plugins", "legacy_targets"}
+        or type(scope["version"]) is not int
+        or scope["version"] != 1
+        or not isinstance(scope["current_plugins"], list)
+        or not isinstance(scope["legacy_targets"], list)
+        or canonical != encoded
+    ):
+        raise ValueError("invalid_approved_public_scope")
+
+    tokens = set()
+    for current in scope["current_plugins"]:
+        if (
+            not isinstance(current, dict)
+            or set(current) != {"key", "path"}
+            or not all(
+                isinstance(current[field], str) and current[field]
+                for field in ("key", "path")
+            )
+        ):
+            raise ValueError("invalid_approved_public_scope")
+        tokens.add(current["key"])
+        tokens.add(PurePosixPath(current["path"]).stem)
+
+    for target in scope["legacy_targets"]:
+        if (
+            not isinstance(target, dict)
+            or set(target) != {"key", "sources", "current_plugins"}
+            or not isinstance(target["key"], str)
+            or not target["key"]
+            or not isinstance(target["sources"], list)
+            or not isinstance(target["current_plugins"], list)
+            or not all(
+                isinstance(value, str) and value
+                for value in target["current_plugins"]
+            )
+        ):
+            raise ValueError("invalid_approved_public_scope")
+        tokens.add(target["key"])
+        tokens.update(target["current_plugins"])
+        for source in target["sources"]:
+            if (
+                not isinstance(source, dict)
+                or set(source)
+                != {"kind", "path", "coverage", "feature_keys"}
+                or not isinstance(source["path"], str)
+                or not source["path"]
+                or not isinstance(source["feature_keys"], list)
+                or not all(
+                    isinstance(value, str) and value
+                    for value in source["feature_keys"]
+                )
+            ):
+                raise ValueError("invalid_approved_public_scope")
+            tokens.add(PurePosixPath(source["path"]).stem)
+            tokens.update(source["feature_keys"])
+    return frozenset(tokens)
+
+
 def build_private_deny_tokens(
     selection,
     provenance,
     *,
+    approved_public_scope,
     private_roots=(),
     private_text=(),
 ) -> tuple[str, ...]:
+    approved_tokens = _approved_public_scope_tokens(
+        approved_public_scope
+    )
     tokens = set()
     for candidate in selection.omitted_candidates:
         tokens.add(candidate)
-        tokens.add(Path(candidate).stem)
+        stem = Path(candidate).stem
+        if stem not in approved_tokens:
+            tokens.add(stem)
     for root in private_roots:
         tokens.add(str(Path(root)))
     if provenance.legacy_commit:

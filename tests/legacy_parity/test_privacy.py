@@ -17,6 +17,9 @@ class PrivacyTests(unittest.TestCase):
         self.commit = "a" * 40
         self.source_hash = "b" * 64
         self.root = Path("/home/example/private-legacy")
+        self.approved_scope = (
+            '{"current_plugins":[],"legacy_targets":[],"version":1}'
+        )
         self.selection = SelectionState(
             version=1,
             included_targets=(),
@@ -37,6 +40,7 @@ class PrivacyTests(unittest.TestCase):
         tokens = build_private_deny_tokens(
             self.selection,
             self.provenance,
+            approved_public_scope=self.approved_scope,
             private_roots=(self.root,),
             private_text=(
                 "secret trigger pattern",
@@ -56,10 +60,56 @@ class PrivacyTests(unittest.TestCase):
         ):
             self.assertIn(secret, tokens)
 
+    def test_approved_public_scope_does_not_trigger_ambiguous_bare_stems(self):
+        approved_scope = (
+            '{"current_plugins":[{"key":"current_shared",'
+            '"path":"generic/current_shared.lua"}],'
+            '"legacy_targets":[{"current_plugins":["current_shared"],'
+            '"key":"target_shared","sources":[{"coverage":"selected",'
+            '"feature_keys":["feature_shared"],"kind":"xml",'
+            '"path":"approved/source_shared.xml"}]}],"version":1}'
+        )
+        omitted = (
+            "omitted/target_shared.xml",
+            "omitted/source_shared.xml",
+            "omitted/current_shared.xml",
+            "omitted/feature_shared.xml",
+            "omitted/unrelated_hidden.xml",
+        )
+        selection = SelectionState(
+            version=1,
+            included_targets=(),
+            omitted_candidates=omitted,
+        )
+        tokens = build_private_deny_tokens(
+            selection,
+            self.provenance,
+            approved_public_scope=approved_scope,
+        )
+
+        for path in omitted:
+            self.assertIn(path, tokens)
+        self.assertIn("unrelated_hidden", tokens)
+        for approved_stem in (
+            "target_shared",
+            "source_shared",
+            "current_shared",
+            "feature_shared",
+        ):
+            self.assertNotIn(approved_stem, tokens)
+        self.assertEqual(
+            scan_public_bytes(
+                {"manifest": approved_scope.encode("utf-8")},
+                deny_tokens=tokens,
+            ),
+            (),
+        )
+
     def test_scanner_reports_only_sanitized_artifact_codes(self):
         tokens = build_private_deny_tokens(
             self.selection,
             self.provenance,
+            approved_public_scope=self.approved_scope,
             private_roots=(self.root,),
         )
         findings = scan_public_bytes(

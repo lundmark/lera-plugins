@@ -683,6 +683,69 @@ class ValidationTests(unittest.TestCase):
                 self.lera_bin,
             )
 
+    def test_full_private_privacy_authenticates_scope_before_stem_exceptions(self):
+        exact_omitted_path = "omitted/sample_legacy.xml"
+        self.selection = replace(
+            self.selection,
+            omitted_candidates=(
+                exact_omitted_path,
+                "omitted/unrelated_hidden.xml",
+            ),
+        )
+        write_selection(
+            self.state, self.selection, public_repo=self.repo
+        )
+
+        full_private_publication_gate(
+            self.candidate(),
+            self.bundle,
+            self.roots,
+            self.lera_bin,
+        )
+
+        leaked_feature = replace(
+            self.manifest.legacy_targets[0].features[0],
+            summary=f"Exposes {exact_omitted_path}.",
+        )
+        changed_manifest_target = replace(
+            self.manifest.legacy_targets[0],
+            features=(leaked_feature,),
+        )
+        self.manifest = replace(
+            self.manifest,
+            legacy_targets=(changed_manifest_target,),
+        )
+        self.artifacts = {
+            "manifest": render_manifest(self.manifest).encode(),
+            "not_converted": render_not_converted(self.manifest).encode(),
+            "parity_report": render_parity_report(self.manifest).encode(),
+        }
+        changed_audit_target = replace(
+            self.bundle.targets[0],
+            features=(leaked_feature,),
+        )
+        self.bundle = replace(
+            self.bundle,
+            targets=(changed_audit_target,),
+            artifact_hashes=tuple(
+                ArtifactHash(key, hashlib.sha256(value).hexdigest())
+                for key, value in sorted(self.artifacts.items())
+            ),
+        )
+        write_staged_bundle(
+            self.state, self.bundle, public_repo=self.repo
+        )
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "privacy_violation"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
     def test_validation_levels_enforce_strict_mode_and_private_roots(self):
         with self.assertRaisesRegex(
             ValueError, "require_parity_private_only"
