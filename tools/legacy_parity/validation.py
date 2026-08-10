@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass, replace
@@ -318,13 +319,66 @@ def _validate_construct_snapshots(bundle, legacy_root, selection):
                 _fail("legacy_construct_drift")
 
 
-def _runtime_scenario_path(state_root, fixture_key):
-    if not valid_scenario_key(fixture_key):
-        _fail("runtime_fixture_mismatch")
-    state = Path(state_root).resolve()
+def _read_descriptor(descriptor):
+    chunks = []
+    while True:
+        chunk = os.read(descriptor, 65536)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _private_directory(descriptor):
+    mode = os.fstat(descriptor).st_mode
+    if (
+        not stat.S_ISDIR(mode)
+        or stat.S_IMODE(mode) != 0o700
+    ):
+        raise ValueError("unsafe_runtime_fixture")
+
+
+def _read_runtime_scenario_posix(state, filename):
+    descriptors = []
+    try:
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        state_descriptor = os.open(state, directory_flags)
+        descriptors.append(state_descriptor)
+        _private_directory(state_descriptor)
+        staged_descriptor = os.open(
+            "staged", directory_flags, dir_fd=state_descriptor
+        )
+        descriptors.append(staged_descriptor)
+        _private_directory(staged_descriptor)
+        runtime_descriptor = os.open(
+            "runtime", directory_flags, dir_fd=staged_descriptor
+        )
+        descriptors.append(runtime_descriptor)
+        _private_directory(runtime_descriptor)
+        file_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        file_descriptor = os.open(
+            filename, file_flags, dir_fd=runtime_descriptor
+        )
+        descriptors.append(file_descriptor)
+        mode = os.fstat(file_descriptor).st_mode
+        if (
+            not stat.S_ISREG(mode)
+            or stat.S_IMODE(mode) != 0o600
+        ):
+            raise ValueError("unsafe_runtime_fixture")
+        return _read_descriptor(file_descriptor)
+    finally:
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _read_runtime_scenario_fallback(state, filename):
     staged = state / "staged"
-    runtime = staged / "runtime"
-    candidate = runtime / f"{fixture_key}.json"
+    runtime = state / "staged" / "runtime"
+    candidate = runtime / filename
+    descriptor = None
     try:
         if (
             staged.is_symlink()
@@ -334,23 +388,39 @@ def _runtime_scenario_path(state_root, fixture_key):
             raise ValueError("unsafe_runtime_fixture")
         resolved_runtime = runtime.resolve(strict=True)
         resolved_candidate = candidate.resolve(strict=True)
-        if resolved_runtime != runtime:
-            raise ValueError("unsafe_runtime_fixture")
         resolved_candidate.relative_to(resolved_runtime)
         if (
-            resolved_candidate.parent != resolved_runtime
+            resolved_runtime != runtime
+            or resolved_candidate.parent != resolved_runtime
             or not resolved_candidate.is_file()
         ):
             raise ValueError("unsafe_runtime_fixture")
-        if os.name == "posix" and (
-            runtime.stat().st_mode & 0o077
-            or resolved_candidate.stat().st_mode & 0o077
-        ):
+        descriptor = os.open(
+            resolved_candidate,
+            os.O_RDONLY | getattr(os, "O_BINARY", 0),
+        )
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise ValueError("unsafe_runtime_fixture")
-        content = resolved_candidate.read_bytes()
+        return _read_descriptor(descriptor)
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _runtime_scenario_bytes(state_root, fixture_key):
+    if not valid_scenario_key(fixture_key):
+        _fail("runtime_fixture_mismatch")
+    state = Path(state_root).resolve()
+    filename = f"{fixture_key}.json"
+    try:
+        if os.name == "posix":
+            return _read_runtime_scenario_posix(state, filename)
+        return _read_runtime_scenario_fallback(state, filename)
     except (OSError, RuntimeError, ValueError) as error:
         _fail("runtime_fixture_mismatch", error)
-    return content
 
 
 def _validate_runtime(bundle, manifest, selection, roots, lera_bin):
@@ -371,7 +441,7 @@ def _validate_runtime(bundle, manifest, selection, roots, lera_bin):
         result.scenario_key: result for result in bundle.runtime_results
     }
     for staged_scenario in bundle.runtime_scenarios:
-        content = _runtime_scenario_path(
+        content = _runtime_scenario_bytes(
             roots.state_root, staged_scenario.fixture_key
         )
         fixture_digest = hashlib.sha256(content).hexdigest()
@@ -379,7 +449,7 @@ def _validate_runtime(bundle, manifest, selection, roots, lera_bin):
             _fail("runtime_fixture_mismatch")
         try:
             scenario = loads_scenario(content)
-        except ValueError as error:
+        except (TypeError, ValueError) as error:
             _fail("runtime_fixture_mismatch", error)
         if (
             scenario.key != staged_scenario.key

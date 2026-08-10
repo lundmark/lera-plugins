@@ -119,7 +119,10 @@ def _operation(value):
     if operation in {"call", "hook"}:
         if set(value) != {"op", "name", "args", "expect"}:
             raise ValueError("invalid_runtime_scenario")
-        if not _NAME_RE.fullmatch(value["name"]):
+        if (
+            not isinstance(value["name"], str)
+            or not _NAME_RE.fullmatch(value["name"])
+        ):
             raise ValueError("invalid_runtime_scenario")
         if not isinstance(value["args"], list) or not _json_data(
             value["expect"]
@@ -211,10 +214,11 @@ def loads_scenario(content) -> Scenario:
     ):
         raise ValueError("invalid_runtime_scenario")
     expected = value["expected"]
-    if not isinstance(expected, dict) or set(expected) != {
-        "effects",
-        "registrations",
-    }:
+    if (
+        not isinstance(expected, dict)
+        or set(expected) != {"effects", "registrations"}
+        or not isinstance(expected["effects"], list)
+    ):
         raise ValueError("invalid_runtime_scenario")
     effects = []
     for effect in expected["effects"]:

@@ -69,6 +69,37 @@ class RuntimeHarnessTests(unittest.TestCase):
         ):
             load_scenario(path)
 
+    def test_bytes_loader_rejects_malformed_nested_types(self):
+        base = json.loads(
+            (FIXTURE / "sample_scenario.json").read_text(encoding="utf-8")
+        )
+        cases = (
+            {
+                **base,
+                "expected": {
+                    "effects": None,
+                    "registrations": base["expected"]["registrations"],
+                },
+            },
+            {
+                **base,
+                "operations": [
+                    {
+                        "op": "call",
+                        "name": None,
+                        "args": [],
+                        "expect": None,
+                    }
+                ],
+            },
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    ValueError, "invalid_runtime_scenario"
+                ):
+                    loads_scenario(json.dumps(value).encode("utf-8"))
+
     def fake_lera(self, *, sleeping=False):
         executable = self.root / ("sleeping-lera" if sleeping else "fake-lera")
         log = executable.with_suffix(".log")

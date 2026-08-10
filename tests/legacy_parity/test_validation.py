@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from dataclasses import asdict, replace
 from pathlib import Path
+from unittest import mock
 
 from tools.legacy_parity.audit import (
     PreliminaryAudit,
@@ -1247,6 +1248,47 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(
             ValidationFailure, "runtime_fixture_mismatch"
         ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_runtime_sanitizes_malformed_scenario_shape(self):
+        self.restage_runtime_scenario(
+            expected={
+                "effects": None,
+                "registrations": {
+                    "aliases": 0,
+                    "triggers": 0,
+                    "timers": 0,
+                    "mip": 0,
+                },
+            }
+        )
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "runtime_fixture_mismatch"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    @unittest.skipUnless(os.name == "posix", "POSIX descriptors required")
+    def test_runtime_fixture_is_not_reopened_after_authentication(self):
+        scenario_path = self.runtime_scenario_path()
+        original_read_bytes = Path.read_bytes
+
+        def fail_scenario_reopen(path):
+            if path == scenario_path:
+                raise AssertionError("runtime fixture reopened")
+            return original_read_bytes(path)
+
+        with mock.patch.object(Path, "read_bytes", fail_scenario_reopen):
             full_private_publication_gate(
                 self.candidate(),
                 self.bundle,
