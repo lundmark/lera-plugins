@@ -13,6 +13,7 @@ from .legacy import (
     record_omitted_candidate,
     write_selection,
 )
+from .staged import parse_staged_bundle, write_staged_bundle
 
 
 def build_parser():
@@ -43,6 +44,11 @@ def build_parser():
     check_parser.add_argument("--plugin-root", required=True)
     check_parser.add_argument("--legacy-root", required=True)
     check_parser.add_argument("--state-root", required=True)
+
+    stage_audit_parser = commands.add_parser("stage-audit")
+    stage_audit_parser.add_argument("--state-root", required=True)
+    stage_audit_parser.add_argument("--public-repo", required=True)
+    stage_audit_parser.add_argument("--input", required=True)
 
     return parser
 
@@ -129,6 +135,22 @@ def main(argv=None):
             selection,
         )
         print("Preliminary audits valid.")
+        return EXIT_OK
+
+    if args.command == "stage-audit":
+        state_root = Path(args.state_root).resolve()
+        input_path = Path(args.input).resolve()
+        try:
+            input_path.relative_to(state_root)
+        except ValueError as error:
+            raise ValueError("bundle_input_not_private") from error
+        bundle = parse_staged_bundle(input_path)
+        write_staged_bundle(
+            state_root,
+            bundle,
+            public_repo=args.public_repo,
+        )
+        print("Private audit bundle staged.")
         return EXIT_OK
 
     return EXIT_INVALID

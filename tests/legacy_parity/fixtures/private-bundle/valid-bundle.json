@@ -1,0 +1,27 @@
+{
+  "artifact_hashes": [
+    {"digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "key": "manifest"},
+    {"digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "key": "not_converted"},
+    {"digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "key": "parity_report"}
+  ],
+  "blockers": [],
+  "evidence": [],
+  "provenance": {
+    "binding_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+    "evidence": [],
+    "legacy_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "public_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "refreshed_at": "2026-08-10T12:00:00+00:00",
+    "scope_revision": 1,
+    "source_digests": [],
+    "version": 1
+  },
+  "provenance_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "public_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "public_scope": "{}",
+  "runtime_results": [],
+  "runtime_scenarios": [],
+  "scope_revision": 1,
+  "targets": [],
+  "version": 1
+}
