@@ -12,5 +12,9 @@
 *~
 .vscode/
 
+# Python bytecode
+__pycache__/
+*.py[cod]
+
 # OS files
 .DS_Store
