@@ -329,7 +329,12 @@ def executable_lua_lines(text):
 def extract_xml_constructs(path, relative_path):
     import xml.etree.ElementTree as element_tree
 
-    tree = element_tree.parse(path)
+    raw = Path(path).read_bytes()
+    normalized = raw.lstrip(b" \t\r\n")
+    if normalized != raw and normalized.startswith(b"<?xml"):
+        tree = element_tree.ElementTree(element_tree.fromstring(normalized))
+    else:
+        tree = element_tree.ElementTree(element_tree.fromstring(raw))
     constructs = []
     for index, element in enumerate(tree.getroot().iter(), start=1):
         text = element.text or ""

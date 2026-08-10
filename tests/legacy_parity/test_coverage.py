@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -27,6 +28,21 @@ class LegacyExtractionTests(unittest.TestCase):
         path = FIXTURE / "lua" / "coverage.lua"
         lines = executable_lua_lines(path.read_text(encoding="utf-8"))
         self.assertEqual(lines, (2, 6, 7, 8))
+
+    def test_accepts_whitespace_before_xml_declaration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "leading-whitespace.xml"
+            path.write_bytes(
+                b'\n\t<?xml version="1.0" encoding="iso-8859-1"?>\n'
+                b'<muclient><plugin name="sample"/></muclient>\n'
+            )
+            constructs = extract_xml_constructs(
+                path, "plugins/leading-whitespace.xml"
+            )
+        self.assertEqual(
+            tuple(item.id for item in constructs),
+            ("xml:plugins/leading-whitespace.xml:2",),
+        )
 
 
 class CoverageLedgerTests(unittest.TestCase):
