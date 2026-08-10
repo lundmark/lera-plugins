@@ -120,3 +120,94 @@ def approval_matches(state_root, manifest, bindings):
         and approval.private_bindings == binding_bytes.decode("utf-8")
         and approval.binding_digest == binding_digest(bindings)
     )
+
+@dataclass(frozen=True)
+class LocalEvidence:
+    key: str
+    target: str
+    feature: str
+    evidence_type: str
+    review_date: str
+    construct_scope: tuple[str, ...]
+    outcome: str
+    result: str
+
+
+@dataclass(frozen=True)
+class ProvenanceState:
+    version: int
+    scope_revision: int
+    public_digest: str
+    binding_digest: str
+    legacy_commit: str
+    source_digests: tuple[tuple[str, str], ...]
+    evidence: tuple[LocalEvidence, ...]
+    refreshed_at: str
+
+
+def _validate_provenance(provenance, approved_paths):
+    if provenance.version != 1:
+        raise ValueError("invalid_provenance_version")
+    source_paths = tuple(path for path, _ in provenance.source_digests)
+    if len(source_paths) != len(set(source_paths)):
+        raise ValueError("duplicate_provenance_source")
+    if set(source_paths) != set(approved_paths):
+        raise ValueError("provenance_source_set")
+    evidence_keys = tuple(item.key for item in provenance.evidence)
+    if len(evidence_keys) != len(set(evidence_keys)):
+        raise ValueError("duplicate_evidence_key")
+    if any(item.outcome not in {"pass", "fail"} for item in provenance.evidence):
+        raise ValueError("invalid_evidence_outcome")
+
+
+def write_provenance(state_root, provenance, *, approved_paths):
+    _validate_provenance(provenance, approved_paths)
+    root = _ensure_state_root(state_root)
+    _atomic_json(root / "provenance.json", asdict(provenance))
+
+
+def load_provenance(state_root):
+    path = Path(state_root) / "provenance.json"
+    if os.name == "posix":
+        if path.parent.stat().st_mode & 0o077:
+            raise ValueError("unsafe_state_permissions")
+        if path.stat().st_mode & 0o077:
+            raise ValueError("unsafe_provenance_permissions")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    required = {
+        "version",
+        "scope_revision",
+        "public_digest",
+        "binding_digest",
+        "legacy_commit",
+        "source_digests",
+        "evidence",
+        "refreshed_at",
+    }
+    if set(value) != required:
+        raise ValueError("invalid_provenance_schema")
+    evidence = tuple(
+        LocalEvidence(
+            key=item["key"],
+            target=item["target"],
+            feature=item["feature"],
+            evidence_type=item["evidence_type"],
+            review_date=item["review_date"],
+            construct_scope=tuple(item["construct_scope"]),
+            outcome=item["outcome"],
+            result=item["result"],
+        )
+        for item in value["evidence"]
+    )
+    return ProvenanceState(
+        version=value["version"],
+        scope_revision=value["scope_revision"],
+        public_digest=value["public_digest"],
+        binding_digest=value["binding_digest"],
+        legacy_commit=value["legacy_commit"],
+        source_digests=tuple(
+            (item[0], item[1]) for item in value["source_digests"]
+        ),
+        evidence=evidence,
+        refreshed_at=value["refreshed_at"],
+    )
