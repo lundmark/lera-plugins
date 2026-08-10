@@ -169,6 +169,12 @@ bind.add("alt+3", function()
   print("[Layout] Map top")
 end)
 
+-- Scroll the chat pane (ctrl+y up, ctrl+n down; works in GUI, kitty
+-- terminals, and legacy TTYs). The output pane keeps PageUp/PageDown, and in
+-- GUI mode the mouse wheel scrolls whichever pane is under the cursor.
+bind.add("ctrl+y", function() wm.scroll("chat", -5) end)
+bind.add("ctrl+n", function() wm.scroll("chat", 5) end)
+
 --------------------------------------------------------------------------------
 -- Speedwalks (load area definitions)
 --------------------------------------------------------------------------------
