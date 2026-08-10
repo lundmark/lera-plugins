@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "plugin": "sample_plugin.lua",
+  "clock_ms": 1000,
+  "store_seed": {"count": 4},
+  "dependencies": {
+    "declared_dep": {"value": "ready"}
+  },
+  "operations": [
+    {"op": "call", "name": "emit", "args": ["hello"], "expect": "done:hello"},
+    {"op": "invoke_alias", "index": 1, "args": ["sample", "world"], "expect": "alias:world"},
+    {"op": "advance", "ms": 1000}
+  ],
+  "expected": {
+    "effects": [
+      {"kind": "store.load"},
+      {"kind": "store.get"},
+      {"kind": "store.set"},
+      {"kind": "store.save"},
+      {"kind": "plugin.get"},
+      {"kind": "alias.add"},
+      {"kind": "timer.every"},
+      {"kind": "mud.send"},
+      {"kind": "push.send"},
+      {"kind": "ipc.broadcast"},
+      {"kind": "ui.text"},
+      {"kind": "print"},
+      {"kind": "mud.send"},
+      {"kind": "mud.send"}
+    ],
+    "registrations": {"aliases": 1, "triggers": 0, "timers": 1, "mip": 0}
+  }
+}
