@@ -1,8 +1,10 @@
+import hashlib
 import json
 import os
+import shutil
 import tempfile
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from .scope import (
@@ -75,6 +77,72 @@ def approve_scope(
         public_scope=public_bytes.decode("utf-8"),
         binding_digest=binding_digest(bindings),
         private_bindings=binding_bytes.decode("utf-8"),
+    )
+    root = _ensure_state_root(state_root)
+    _atomic_json(root / "approval.json", asdict(approval))
+    return approval
+
+
+def approve_canonical_scope(
+    state_root,
+    *,
+    public_scope,
+    private_bindings,
+    revision,
+    approved_on,
+    confirmed_public_digest,
+    confirmed_binding_digest,
+):
+    if (
+        not isinstance(public_scope, str)
+        or not isinstance(private_bindings, str)
+        or not isinstance(revision, int)
+        or revision < 1
+    ):
+        raise ValueError("invalid_scope_proposal")
+    try:
+        date.fromisoformat(approved_on)
+        public_value = json.loads(public_scope)
+        private_value = json.loads(private_bindings)
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("invalid_scope_proposal") from error
+    canonical_public = json.dumps(
+        public_value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    canonical_private = json.dumps(
+        private_value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if (
+        canonical_public != public_scope
+        or canonical_private != private_bindings
+    ):
+        raise ValueError("invalid_scope_proposal")
+    public_digest = hashlib.sha256(
+        public_scope.encode("utf-8")
+    ).hexdigest()
+    private_digest = hashlib.sha256(
+        private_bindings.encode("utf-8")
+    ).hexdigest()
+    if (
+        public_digest != confirmed_public_digest
+        or private_digest != confirmed_binding_digest
+    ):
+        raise ValueError("scope_confirmation_mismatch")
+    approval = Approval(
+        version=1,
+        revision=revision,
+        approved_on=approved_on,
+        approved_at=datetime.now(timezone.utc).isoformat(),
+        public_digest=public_digest,
+        public_scope=public_scope,
+        binding_digest=private_digest,
+        private_bindings=private_bindings,
     )
     root = _ensure_state_root(state_root)
     _atomic_json(root / "approval.json", asdict(approval))
@@ -199,7 +267,7 @@ def load_provenance(state_root):
         )
         for item in value["evidence"]
     )
-    return ProvenanceState(
+    provenance = ProvenanceState(
         version=value["version"],
         scope_revision=value["scope_revision"],
         public_digest=value["public_digest"],
@@ -211,3 +279,82 @@ def load_provenance(state_root):
         evidence=evidence,
         refreshed_at=value["refreshed_at"],
     )
+    _validate_provenance(
+        provenance, (path for path, _ in provenance.source_digests)
+    )
+    return provenance
+
+
+def _json_bytes(value):
+    return (
+        json.dumps(
+            value, ensure_ascii=False, sort_keys=True
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _write_bytes(path, content):
+    path = Path(path)
+    with path.open("wb") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    if os.name == "posix":
+        path.chmod(0o600)
+
+
+def write_provenance_transaction(
+    state_root,
+    provenance,
+    bundle,
+    *,
+    replace_operation=None,
+):
+    """Replace provenance and its staged snapshot as one rollback-safe unit."""
+
+    approved_paths = tuple(
+        path for path, _ in provenance.source_digests
+    )
+    _validate_provenance(provenance, approved_paths)
+    root = _ensure_state_root(state_root)
+    staged = root / "staged"
+    staged.mkdir(mode=0o700, exist_ok=True)
+    if os.name == "posix":
+        staged.chmod(0o700)
+    destinations = (
+        root / "provenance.json",
+        staged / "audit-bundle.json",
+    )
+    originals = tuple(
+        path.read_bytes() if path.is_file() else None
+        for path in destinations
+    )
+    directory = Path(tempfile.mkdtemp(prefix=".provenance-", dir=root))
+    replace = replace_operation or os.replace
+    try:
+        candidates = (
+            directory / "provenance.json",
+            directory / "audit-bundle.json",
+        )
+        _write_bytes(candidates[0], _json_bytes(asdict(provenance)))
+        _write_bytes(candidates[1], _json_bytes(asdict(bundle)))
+        try:
+            for source, destination in zip(candidates, destinations):
+                replace(source, destination)
+                if os.name == "posix":
+                    destination.chmod(0o600)
+        except BaseException:
+            for destination, original in zip(destinations, originals):
+                if original is None:
+                    try:
+                        destination.unlink()
+                    except FileNotFoundError:
+                        pass
+                else:
+                    restore = directory / f"restore-{destination.name}"
+                    _write_bytes(restore, original)
+                    os.replace(restore, destination)
+            raise
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)

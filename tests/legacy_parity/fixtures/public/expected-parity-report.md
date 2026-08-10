@@ -1,5 +1,12 @@
 PUBLIC BASELINE VERIFIED — PRIVATE APPROVAL AND LEGACY SOURCES NOT RECHECKED
 
+Not rechecked at the public validation level:
+- private scope approval
+- legacy provenance and construct coverage
+- current mirror parity
+- private leakage deny tokens
+- real Lera runtime
+
 # Legacy parity status
 
 ## Current plugins

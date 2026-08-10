@@ -13,6 +13,13 @@ PUBLIC_HEADING = (
     "LEGACY SOURCES NOT RECHECKED"
 )
 PRIVATE_HEADING = "FULL PRIVATE BASELINE VERIFIED"
+PUBLIC_UNCHECKED = (
+    "private scope approval",
+    "legacy provenance and construct coverage",
+    "current mirror parity",
+    "private leakage deny tokens",
+    "real Lera runtime",
+)
 
 
 def _quoted_list(values):
@@ -82,7 +89,14 @@ def _report_body(manifest):
 
 
 def render_parity_report(manifest) -> str:
-    return "\n".join([PUBLIC_HEADING, ""] + _report_body(manifest)) + "\n"
+    limitations = [
+        PUBLIC_HEADING,
+        "",
+        "Not rechecked at the public validation level:",
+        *(f"- {item}" for item in PUBLIC_UNCHECKED),
+        "",
+    ]
+    return "\n".join(limitations + _report_body(manifest)) + "\n"
 
 
 def render_not_converted(manifest) -> str:

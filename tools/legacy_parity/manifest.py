@@ -4,6 +4,7 @@ import tomllib
 from datetime import date
 from pathlib import Path
 
+from .scope import canonical_scope
 from .model import (
     CATEGORIES,
     COVERAGE_MODES,
@@ -165,8 +166,7 @@ def _feature(value):
     )
 
 
-def load_manifest(path):
-    data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+def _manifest_from_data(data):
     scope_data = data["scope"]
     manifest = Manifest(
         scope=ScopeApproval(
@@ -216,6 +216,25 @@ def load_manifest(path):
     if findings:
         raise ValueError(",".join(findings))
     return manifest
+
+
+def loads_manifest(content):
+    if isinstance(content, bytes):
+        try:
+            content = content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError("invalid_manifest_encoding") from error
+    if not isinstance(content, str):
+        raise ValueError("invalid_manifest_content")
+    try:
+        data = tomllib.loads(content)
+        return _manifest_from_data(data)
+    except (KeyError, TypeError, tomllib.TOMLDecodeError) as error:
+        raise ValueError("invalid_manifest") from error
+
+
+def load_manifest(path):
+    return loads_manifest(Path(path).read_bytes())
 
 
 def _quote(value):
@@ -321,3 +340,96 @@ def render_manifest(manifest):
         )
 
     return "\n".join(lines) + "\n"
+
+
+def manifest_from_staged(bundle, approval, selection):
+    """Derive the public manifest solely from approved private records."""
+
+    try:
+        public_scope = json.loads(bundle.public_scope)
+    except json.JSONDecodeError as error:
+        raise ValueError("invalid_staged_scope") from error
+    current_scope = public_scope.get("current_plugins")
+    if not isinstance(current_scope, list):
+        raise ValueError("invalid_staged_scope")
+    selected = {target.key: target for target in selection.included_targets}
+    audits = {target.key: target for target in bundle.targets}
+    if set(selected) != set(audits):
+        raise ValueError("staged_target_set")
+    runtime_by_target = {}
+    for scenario in bundle.runtime_scenarios:
+        runtime_by_target.setdefault(scenario.target_key, set()).add(
+            scenario.fixture_key
+        )
+    current_plugins = []
+    for item in current_scope:
+        key = item["key"]
+        mapped = tuple(
+            sorted(
+                target.key
+                for target in selection.included_targets
+                if key in target.current_plugins
+            )
+        )
+        fixtures = tuple(
+            sorted(
+                {
+                    fixture
+                    for target_key in mapped
+                    for fixture in runtime_by_target.get(target_key, ())
+                }
+            )
+        )
+        current_plugins.append(
+            CurrentPlugin(
+                key=key,
+                path=item["path"],
+                target_keys=mapped,
+                fixtures=fixtures,
+            )
+        )
+    targets = []
+    for key in sorted(audits):
+        audit = audits[key]
+        private = selected[key]
+        sources = tuple(
+            LegacySource(
+                kind=source.kind,
+                path=source.path,
+                coverage=source.coverage,
+                feature_keys=source.feature_keys,
+            )
+            for source in private.sources
+        )
+        targets.append(
+            LegacyTarget(
+                key=key,
+                sources=sources,
+                current_plugins=audit.current_plugins,
+                features=audit.features,
+            )
+        )
+    capabilities = tuple(
+        Capability(
+            key=blocker.key,
+            description=blocker.description,
+            issue_url=blocker.issue_url or "",
+        )
+        for blocker in bundle.blockers
+    )
+    manifest = Manifest(
+        scope=ScopeApproval(
+            revision=bundle.scope_revision,
+            approved_on=approval.approved_on,
+            digest=bundle.public_digest,
+        ),
+        current_plugins=tuple(current_plugins),
+        legacy_targets=tuple(targets),
+        capabilities=capabilities,
+    )
+    findings = validate_manifest(manifest)
+    if findings:
+        raise ValueError(",".join(findings))
+    if canonical_scope(manifest).decode("utf-8") != bundle.public_scope:
+        raise ValueError("staged_scope_mismatch")
+    return manifest
