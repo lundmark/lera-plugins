@@ -43,6 +43,7 @@ class TargetAudit:
     assignments: tuple[FeatureAssignment, ...]
     current_only_rationales: tuple[tuple[str, str], ...]
     features: tuple[Feature, ...]
+    current_plugins: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -256,6 +257,7 @@ def _bundle(value):
                 "assignments",
                 "current_only_rationales",
                 "features",
+                "current_plugins",
             },
             "invalid_staged_target",
         )
@@ -300,6 +302,7 @@ def _bundle(value):
                     for entry in item["current_only_rationales"]
                 ),
                 features=tuple(_feature(feature) for feature in item["features"]),
+                current_plugins=tuple(item["current_plugins"]),
             )
         )
     blockers = []
@@ -458,6 +461,7 @@ def _validate_targets(bundle, manifest, selection):
             or audit.source_paths != selected_sources
             or tuple(sorted(public.current_plugins))
             != tuple(sorted(selected.current_plugins))
+            or audit.current_plugins != tuple(sorted(public.current_plugins))
             or audit.features != public.features
         ):
             raise ValueError("staged_source_set")

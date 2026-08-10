@@ -231,6 +231,7 @@ class StagedBundleTests(unittest.TestCase):
             targets=(
                 TargetAudit(
                     key="target_one",
+                    current_plugins=("current_one",),
                     source_paths=("plugins/one.xml",),
                     dependency_closure=("plugins/one.xml",),
                     construct_inventory=(
@@ -259,6 +260,7 @@ class StagedBundleTests(unittest.TestCase):
                 ),
                 TargetAudit(
                     key="target_two",
+                    current_plugins=("current_two",),
                     source_paths=("plugins/two.xml",),
                     dependency_closure=("plugins/two.xml",),
                     construct_inventory=(
