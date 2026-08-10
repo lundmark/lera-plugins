@@ -4,6 +4,9 @@
 # profile lera runs, so it can show up here if a profile is run from this repo.
 .storage/
 
+# Isolated development worktrees
+.worktrees/
+
 # Editor files
 *.swp
 *~
