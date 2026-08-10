@@ -207,9 +207,10 @@ function wrapped_reset()
   wrapped.last = 0
 end
 
--- Wrap one message and append its rows to the cache. Returns the row count,
--- which is also recorded on the message for trim accounting.
-function wrapped_append(msg, width)
+-- Format + word-wrap one message at a given width. Shared by the local cache
+-- builder (wrapped_append) and the transient remote-pass builder below, so
+-- prefix/color formatting can't drift between the two.
+local function wrap_msg(msg, width)
   local type_cfg = line_types[msg.type] or { color = config.default_color }
   local prefix
   if type_cfg.prefix then
@@ -219,6 +220,13 @@ function wrapped_append(msg, width)
   end
   local color_code = get_color(type_cfg.color)
   local lines = word_wrap(prefix .. msg.text, width)
+  return color_code, lines
+end
+
+-- Wrap one message and append its rows to the cache. Returns the row count,
+-- which is also recorded on the message for trim accounting.
+function wrapped_append(msg, width)
+  local color_code, lines = wrap_msg(msg, width)
   for j = 1, #lines do
     wrapped.last = wrapped.last + 1
     wrapped.lines[wrapped.last] = {
@@ -520,6 +528,49 @@ function M.get_messages(limit)
   return result
 end
 
+-- Draw one already-wrapped row (or nothing, if line is nil) at screen row y.
+-- Shared by the local (cached) and remote (transient) render paths so the
+-- ANSI/indicator formatting can't drift between them.
+local function draw_row(x, y, w, line)
+  if not line then return end
+  local display_text
+  if line.is_continuation then
+    display_text = line.color_code .. "  " .. line.text .. colors.reset
+  else
+    display_text = line.color_code .. line.text .. colors.reset
+  end
+  ui.text_ansi(ui.rect(x, y, w, 1), display_text, nil)
+end
+
+-- Paint h rows bottom-up. get_row(screen_row) returns the wrapped-line entry
+-- (or nil) for that screen row; screen_row runs h..1 (h = bottom row).
+local function draw_rows(x, y, w, h, get_row)
+  for screen_row = h, 1, -1 do
+    draw_row(x, y + screen_row - 1, w, get_row(screen_row))
+  end
+end
+
+-- Build a disposable (non-cached) wrapped-line list at `width`, newest rows
+-- first, stopping once `need_rows` rows are collected. This mirrors the
+-- pre-cache render's early-exit shape and exists so the WebSocket remote
+-- render pass (which can run at a different width than the local screen)
+-- never touches the local `wrapped` cache or `sc` scroller state.
+local function build_transient(width, need_rows)
+  local list = {}
+  for i = #messages, 1, -1 do
+    local color_code, lines = wrap_msg(messages[i], width)
+    for j = #lines, 1, -1 do
+      list[#list + 1] = {
+        text = lines[j],
+        color_code = color_code,
+        is_continuation = (j > 1),
+      }
+      if #list >= need_rows then return list end
+    end
+  end
+  return list
+end
+
 -- Render the chat monitor in a given rect
 -- rect: { x, y, w, h } or rect object with :x(), :y(), :w(), :h() methods
 -- opts: { show_border = true, title = "Chat" }
@@ -544,22 +595,28 @@ function M.render(rect, opts)
 
   if w <= 0 or h <= 0 then return end
 
-  wrapped_ensure(w)
-
   local offset = sc.offset()
-  for screen_row = h, 1, -1 do
-    local idx = wrapped.last - offset - (h - screen_row)
-    if idx >= wrapped.first then
-      local line = wrapped.lines[idx]
-      local line_y = y + screen_row - 1
-      local display_text
-      if line.is_continuation then
-        display_text = line.color_code .. "  " .. line.text .. colors.reset
-      else
-        display_text = line.color_code .. line.text .. colors.reset
-      end
-      ui.text_ansi(ui.rect(x, line_y, w, 1), display_text, nil)
-    end
+
+  if lera.render_pass() == "remote" then
+    -- The render callback runs a second time per dirty frame when a
+    -- WebSocket client is connected, at the CLIENT screen's width. Mutating
+    -- the local cache/scroller from here would thrash the width-keyed
+    -- wrapped cache and re-clamp the LOCAL user's scroll offset against the
+    -- REMOTE row count, silently yanking a scrolled-back local view. So:
+    -- build a throwaway wrapped list at the remote width instead, and
+    -- render it through the untouched local offset. The remote viewer sees
+    -- approximately the local scroll position, per spec.
+    local list = build_transient(w, h + offset)
+    draw_rows(x, y, w, h, function(screen_row)
+      return list[1 + offset + (h - screen_row)]
+    end)
+  else
+    wrapped_ensure(w)
+    draw_rows(x, y, w, h, function(screen_row)
+      local idx = wrapped.last - offset - (h - screen_row)
+      if idx >= wrapped.first then return wrapped.lines[idx] end
+      return nil
+    end)
   end
 
   -- Show scroll indicator if not at bottom
