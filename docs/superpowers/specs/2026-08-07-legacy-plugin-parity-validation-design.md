@@ -62,7 +62,8 @@ Discovery and preliminary auditing produce a local-only proposed allowlist. Befo
 
 - every proposed current plugin;
 - every proposed approved legacy target name and source mapping;
-- mapped current plugin, including an explicit null mapping when absent;
+- whether each source is approved in full or only for named, approved feature groups;
+- mapped current plugins, including an explicit empty mapping when absent;
 - preliminary aggregate status;
 - any already-confirmed Lera capability blocker.
 
@@ -72,9 +73,9 @@ The tool renders the canonical scope and its SHA-256 digest for review. After ex
 
 The public manifest later records the matching scope revision, approval date, and digest. The public copy proves internal scope consistency; the private approval record is the authority proving that the exact scope received go-ahead. Full-private publication requires both to match.
 
-Adding or removing a current plugin, changing a current-plugin path, adding or removing a target, changing any selected XML or Lua helper path, or changing a target's mapped current plugin invalidates approval and requires another explicit go-ahead. Feature status and evidence changes inside an already approved mapping do not change scope approval.
+Adding or removing a current plugin, changing a current-plugin path, adding or removing a target, changing any selected XML or Lua helper source, changing a source between full and selected coverage, changing the approved feature groups for a selected source, changing its private construct bindings, or changing a target's mapped current plugins invalidates approval and requires another explicit go-ahead. Feature status and evidence changes inside an already approved feature group do not change scope approval.
 
-Approval applies to the exact allowlist, not merely to a category or discovery rule. The validator never auto-approves or auto-expands scope.
+Approval applies to the exact allowlist, source coverage modes, approved selected-source feature groups, private construct bindings, and current-plugin mappings—not merely to a category or discovery rule. The validator never auto-approves or auto-expands scope.
 
 ## Canonical Scope Serialization
 
@@ -91,17 +92,25 @@ The canonical object contains exactly:
   "legacy_targets": [
     {
       "key": <target-key>,
-      "xml_paths": [<repo-relative-posix-path>...],
-      "lua_paths": [<repo-relative-posix-path>...],
-      "current_plugin": <plugin-key-or-null>
+      "sources": [
+        {
+          "kind": <xml-or-lua>,
+          "path": <repo-relative-posix-path>,
+          "coverage": <complete-or-selected>,
+          "feature_keys": [<approved-safe-feature-key>...]
+        }
+      ],
+      "current_plugins": [<plugin-key>...]
     }
   ]
 }
 ```
 
-`current_plugins` is sorted by plugin key. `legacy_targets` is sorted by target key. XML and Lua path arrays are sorted bytewise after normalization to repository-relative POSIX paths. Null mappings are encoded as JSON `null`. Every current plugin key/path and every selected XML/helper path therefore participates in approval.
+`current_plugins` is sorted by plugin key. `legacy_targets` is sorted by target key. Target mappings are sorted by current-plugin key. Sources are sorted by kind and normalized repository-relative POSIX path. Approved feature keys are sorted bytewise. A `complete` source has an empty `feature_keys` array and places every discovered construct in scope. A `selected` source has a non-empty list of safe approved feature-group keys; the exact private construct-to-group bindings are stored in private selection state and authenticated by private approval. An empty `current_plugins` array means not converted. Every current plugin key/path, selected source, coverage mode, approved selected-source feature group, and target mapping therefore participates in public scope approval.
 
-Feature records, status, evidence, capabilities, issue URLs, reports, timestamps, and all private data are excluded from the scope digest.
+The public scope digest covers the safe public fields above. The private approval record additionally authenticates the exact private construct bindings for every `selected` source. Full-private validation requires both the public canonical bytes and private selection bindings to match the approved private proposal. The private binding digest is never committed because it could fingerprint unselected legacy behavior.
+
+Feature status, evidence, capabilities, issue URLs, reports, timestamps, and private construct identities are excluded from the public scope digest. Safe approved feature-group keys for selected sources are scope, not status, and are included.
 
 ## Public and Private Data Boundary
 
@@ -174,7 +183,7 @@ The directory is created with mode `0700` and files with mode `0600` where the p
 
 `selection.json` remembers locally reviewed candidates. Included candidates are represented publicly only after approval and complete validation. Omitted candidates remain only in this private registry so ordinary discovery does not repeatedly propose them. An explicit `discover --revisit-omitted` action may show them again.
 
-`approval.json` is the trusted local approval authority. It records the user-approved canonical scope bytes, digest, revision, and approval time. Recomputing the digest in a public manifest without a matching private approval record cannot publish or pass full-private validation.
+`approval.json` is the trusted local approval authority. It records the user-approved canonical public scope bytes and digest, the exact private selected-source binding digest, revision, and approval time. Recomputing the public digest in a public manifest without a matching private approval record and private bindings cannot publish or pass full-private validation.
 
 `provenance.json` records the private legacy Git commit, SHA-256 digests of the complete selected source files, local evidence records, and the last full verification time. Hashing whole source files is used only for local drift detection; no private source hash is committed publicly.
 
@@ -211,11 +220,12 @@ Current-only plugins are valid and have no fabricated legacy target.
 Each approved target records:
 
 - stable target key;
-- approved legacy XML path and relevant Lua helper paths;
-- mapped current plugin key, or no mapping when not converted;
+- approved legacy XML/helper sources and each source's complete/selected coverage mode;
+- safe approved feature-group keys for every selected source;
+- one or more mapped current plugin keys, or an empty mapping when not converted;
 - a non-empty ordered list of reviewed feature records.
 
-An approved target with no mapped current plugin still requires at least one feature record with status `not_converted`. A mapped target with no reviewed features is invalid and can never aggregate to parity.
+An approved target with no mapped current plugins still requires at least one feature record with status `not_converted`. A mapped target with no reviewed features is invalid and can never aggregate to parity.
 
 ### Feature records
 
@@ -257,7 +267,7 @@ New blockers are staged only in private local state until issue synchronization 
 
 Target status is derived rather than independently authored:
 
-1. `not_converted` when there is no mapped current plugin;
+1. `not_converted` when there are no mapped current plugins;
 2. `lera_blocker` when any feature is `lera_blocker`;
 3. `plugin_gap` when any feature is `plugin_gap` or `not_converted`;
 4. `parity` when every feature is `parity` or `waived`.
@@ -266,11 +276,13 @@ Reports also show feature-status counts so aggregation never hides simultaneous 
 
 ## Complete Coverage Requirement
 
-Every allowlisted target is checked in full. Sampling may be used inside a behavioral fixture, but sampling cannot establish feature-inventory completeness or allow a target to claim parity.
+Every allowlisted source is checked across its exact approved scope. Sampling may be used inside a behavioral fixture, but sampling cannot establish feature-inventory completeness or allow a target to claim parity.
 
-For each selected legacy target, the private extractor produces a complete set of discovered aliases, triggers, timers, callbacks, state responsibilities, renderers, protocol handlers, commands, public APIs, and relevant Lua helper behavior. Every discovered construct must map to exactly one reviewed feature record, or to an explicitly documented grouping whose evidence covers every grouped construct.
+For a source with `complete` coverage, the private extractor places every discovered alias, trigger, timer, callback, state responsibility, renderer, protocol handler, command, public API, and relevant Lua helper behavior in scope. Every discovered construct must map to exactly one reviewed feature record, or to an explicitly documented grouping whose evidence covers every grouped construct.
 
-Full-private validation fails when any discovered construct is unclassified, duplicated across feature records, or covered only by a fixture whose declared scope is narrower than the feature. It also fails when a public feature record has no corresponding approved legacy construct or approved current-only rationale.
+For a source with `selected` coverage, the private selection record binds every in-scope construct to exactly one approved safe feature-group key. Only those bound constructs are parity requirements. Unselected constructs remain private, require no public classification, and may not appear in public reports, counts, or diagnostics. A selected-source feature group cannot claim parity until all privately bound constructs are classified and covered by evidence.
+
+Full-private validation fails when any required construct is unclassified, duplicated across feature records, or covered only by a fixture whose declared scope is narrower than the feature. It also fails when a public feature record has no corresponding approved legacy construct or approved current-only rationale, when a selected construct is bound to an unapproved feature-group key, or when the private selected-source bindings differ from the approved private proposal.
 
 No target may aggregate to `parity` until coverage is 100% and every feature has valid evidence. Public reports show coverage only for approved targets and never reveal omitted-target counts.
 
@@ -302,7 +314,7 @@ For approved targets only, the full local extractor collects:
 - protocol and event handlers;
 - user-visible commands and information displays.
 
-The public manifest stores safe feature keys and categories rather than private patterns or bodies. The complete extraction and its provenance remain in private local state.
+The public manifest stores safe feature keys and categories rather than private patterns or bodies. Complete-source required sets, selected-source construct bindings, extraction detail, and provenance remain in private local state.
 
 ## Current Plugin Extraction
 
@@ -455,7 +467,7 @@ When the user omits a candidate, its name is stored only in private `selection.j
 Tests cover:
 
 - manifest schema and reference integrity;
-- exact canonical scope serialization for current keys/paths, target keys, every XML/helper path, and null/current mappings;
+- exact canonical scope serialization for current keys/paths, target keys, every source/coverage mode, selected-source feature key, and zero-or-more current mappings;
 - private approval recording and rejection of a recomputed public digest without matching trusted approval;
 - approval invalidation on every scope-changing field and proof that status/evidence-only changes do not invalidate scope;
 - deterministic target-status aggregation;
