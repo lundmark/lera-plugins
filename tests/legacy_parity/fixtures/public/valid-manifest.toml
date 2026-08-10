@@ -1,0 +1,36 @@
+[scope]
+revision = 1
+approved_on = "2026-08-10"
+digest = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[current_plugins]]
+key = "sample_current"
+path = "generic/sample.lua"
+target_keys = ["sample_legacy"]
+fixtures = ["sample-command"]
+notes = "Synthetic current plugin."
+
+[[legacy_targets]]
+key = "sample_legacy"
+current_plugins = ["sample_current"]
+
+[[legacy_targets.sources]]
+kind = "xml"
+path = "plugins/sample.xml"
+coverage = "selected"
+feature_keys = ["sample_command"]
+
+[[legacy_targets.features]]
+key = "sample_command"
+category = "command"
+status = "parity"
+summary = "Runs the approved synthetic command."
+current_refs = ["generic/sample.lua:3"]
+
+[legacy_targets.features.evidence]
+type = "public_fixture"
+review_date = "2026-08-10"
+reviewed_scope = "Synthetic command behavior."
+result = "Command output matched."
+outcome = "pass"
+reference = "sample-command"
