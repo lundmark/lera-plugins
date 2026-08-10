@@ -277,14 +277,42 @@ def _construct_ids(source, relative):
     raise ValueError("invalid_legacy_path")
 
 
-def _validate_construct_snapshots(bundle, legacy_root):
+def _validate_construct_snapshots(bundle, legacy_root, selection):
     root = Path(legacy_root).resolve()
+    selected_targets = {
+        target.key: target for target in selection.included_targets
+    }
     for target in bundle.targets:
+        selected_target = selected_targets.get(target.key)
+        if selected_target is None:
+            _fail("legacy_construct_drift")
+        selected_sources = {
+            source.path: source for source in selected_target.sources
+        }
         for inventory in target.construct_inventory:
+            selected_source = selected_sources.get(inventory.source_path)
+            if selected_source is None:
+                _fail("legacy_construct_drift")
             source = (root / inventory.source_path).resolve()
-            if _construct_ids(source, inventory.source_path) != (
-                inventory.construct_ids
-            ):
+            extracted_ids = _construct_ids(source, inventory.source_path)
+            if selected_source.coverage == "complete":
+                expected_ids = extracted_ids
+            elif selected_source.coverage == "selected":
+                approved_ids = {
+                    construct_id
+                    for binding in selected_source.bindings
+                    for construct_id in binding.construct_ids
+                }
+                if not approved_ids.issubset(extracted_ids):
+                    _fail("legacy_construct_drift")
+                expected_ids = tuple(
+                    construct_id
+                    for construct_id in extracted_ids
+                    if construct_id in approved_ids
+                )
+            else:
+                _fail("legacy_construct_drift")
+            if expected_ids != inventory.construct_ids:
                 _fail("legacy_construct_drift")
 
 
@@ -384,7 +412,9 @@ def _validate_private(
         if strict:
             _fail(strict[0].code)
 
-    _validate_construct_snapshots(bundle, roots.legacy_root)
+    _validate_construct_snapshots(
+        bundle, roots.legacy_root, selection
+    )
     if refresh_legacy and discover(roots.legacy_root, selection):
         _fail("unapproved_legacy_candidate")
 

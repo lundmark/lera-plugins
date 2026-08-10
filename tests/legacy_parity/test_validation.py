@@ -19,6 +19,7 @@ from tools.legacy_parity.audit import (
 from tools.legacy_parity.cli import main
 from tools.legacy_parity.current import extract_current
 from tools.legacy_parity.legacy import (
+    FeatureBinding,
     IncludedTarget,
     SelectedSource,
     SelectionState,
@@ -68,6 +69,7 @@ from tools.legacy_parity.state import (
 )
 from tools.legacy_parity.validation import (
     PRIVATE_HEADING,
+    _validate_construct_snapshots,
     PrivateValidationRoots,
     ValidationFailure,
     full_private_publication_gate,
@@ -317,6 +319,320 @@ class ValidationTests(unittest.TestCase):
             manifest_bytes=values["manifest"],
             report_bytes=values["parity_report"],
             not_converted_bytes=values["not_converted"],
+        )
+
+    def configure_source(
+        self,
+        construct_ids,
+        *,
+        coverage="selected",
+        binding_ids=None,
+    ):
+        relative = "plugins/sample.xml"
+        source = self.legacy / relative
+        source.write_text(
+            "<muclient><plugin name=\"bound\"/>"
+            "<plugin name=\"outside\"/></muclient>\n",
+            encoding="utf-8",
+        )
+        feature_key = "sample_command"
+        is_selected = coverage == "selected"
+        feature_keys = (feature_key,) if is_selected else ()
+        selected_legacy_source = LegacySource(
+            "xml", relative, coverage, feature_keys
+        )
+        target = replace(
+            self.manifest.legacy_targets[0],
+            sources=(selected_legacy_source,),
+        )
+        base_manifest = replace(
+            self.manifest,
+            scope=replace(self.manifest.scope, digest="0" * 64),
+            legacy_targets=(target,),
+        )
+        self.manifest = replace(
+            base_manifest,
+            scope=replace(
+                base_manifest.scope, digest=scope_digest(base_manifest)
+            ),
+        )
+        if is_selected:
+            authenticated_ids = tuple(
+                construct_ids if binding_ids is None else binding_ids
+            )
+            selected_bindings = (
+                FeatureBinding(feature_key, authenticated_ids),
+            )
+            self.bindings = {
+                "sample_legacy": {
+                    relative: {feature_key: list(authenticated_ids)}
+                }
+            }
+        else:
+            selected_bindings = ()
+            self.bindings = {"sample_legacy": {}}
+        self.selection = SelectionState(
+            version=1,
+            included_targets=(
+                IncludedTarget(
+                    key="sample_legacy",
+                    sources=(
+                        SelectedSource(
+                            "xml",
+                            relative,
+                            coverage,
+                            feature_keys,
+                            selected_bindings,
+                        ),
+                    ),
+                    current_plugins=("sample",),
+                ),
+            ),
+            omitted_candidates=(),
+        )
+        self.approval = approve_scope(
+            self.state,
+            self.manifest,
+            self.bindings,
+            revision=1,
+            approved_on="2026-08-10",
+        )
+        write_selection(
+            self.state, self.selection, public_repo=self.repo
+        )
+        self.provenance = replace(
+            self.provenance,
+            public_digest=self.manifest.scope.digest,
+            binding_digest=binding_digest(self.bindings),
+            source_digests=(
+                (relative, hashlib.sha256(source.read_bytes()).hexdigest()),
+            ),
+        )
+        write_provenance(
+            self.state,
+            self.provenance,
+            approved_paths=(relative,),
+        )
+        self.artifacts = {
+            "manifest": render_manifest(self.manifest).encode(),
+            "not_converted": render_not_converted(self.manifest).encode(),
+            "parity_report": render_parity_report(self.manifest).encode(),
+        }
+        target_audit = replace(
+            self.bundle.targets[0],
+            construct_inventory=(
+                SourceConstructs(relative, tuple(construct_ids)),
+            ),
+            assignments=(
+                FeatureAssignment(
+                    feature_key,
+                    tuple(construct_ids),
+                    tuple(construct_ids),
+                ),
+            ),
+            features=target.features,
+        )
+        self.bundle = replace(
+            self.bundle,
+            public_scope=canonical_scope(self.manifest).decode(),
+            public_digest=self.manifest.scope.digest,
+            targets=(target_audit,),
+            provenance=self.provenance,
+            provenance_digest=provenance_digest(self.provenance),
+            artifact_hashes=tuple(
+                ArtifactHash(key, hashlib.sha256(value).hexdigest())
+                for key, value in sorted(self.artifacts.items())
+            ),
+        )
+        write_staged_bundle(
+            self.state, self.bundle, public_repo=self.repo
+        )
+        for key, relative_path in (
+            ("manifest", "legacy-parity.toml"),
+            ("not_converted", "not-converted.md"),
+            ("parity_report", "parity-report.md"),
+        ):
+            (self.repo / "validation" / relative_path).write_bytes(
+                self.artifacts[key]
+            )
+
+    def test_selected_source_snapshot_accepts_only_authenticated_constructs(self):
+        selected_id = "xml:plugins/sample.xml:2"
+        self.configure_source((selected_id,))
+
+        full_private_publication_gate(
+            self.candidate(),
+            self.bundle,
+            self.roots,
+            self.lera_bin,
+        )
+
+        (self.legacy / "plugins" / "sample.xml").unlink()
+        with self.assertRaises(OSError):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_selected_source_snapshot_rejects_omitted_authenticated_binding(self):
+        selected_ids = (
+            "xml:plugins/sample.xml:2",
+            "xml:plugins/sample.xml:3",
+        )
+        self.configure_source(
+            selected_ids[:1],
+            binding_ids=selected_ids,
+        )
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "legacy_construct_drift"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_selected_source_snapshot_rejects_unselected_construct(self):
+        selected_id = "xml:plugins/sample.xml:2"
+        inventory_ids = (
+            selected_id,
+            "xml:plugins/sample.xml:3",
+        )
+        self.configure_source(
+            inventory_ids,
+            binding_ids=(selected_id,),
+        )
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "legacy_construct_drift"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_selected_source_snapshot_rejects_missing_source_construct(self):
+        missing_id = "xml:plugins/sample.xml:4"
+        self.configure_source(
+            (missing_id,),
+            binding_ids=(missing_id,),
+        )
+
+        with self.assertRaisesRegex(
+            ValidationFailure, "legacy_construct_drift"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_complete_source_snapshot_still_requires_full_extraction(self):
+        full_ids = (
+            "xml:plugins/sample.xml:2",
+            "xml:plugins/sample.xml:3",
+        )
+        self.configure_source(full_ids, coverage="complete")
+
+        full_private_publication_gate(
+            self.candidate(),
+            self.bundle,
+            self.roots,
+            self.lera_bin,
+        )
+
+        partial_target = replace(
+            self.bundle.targets[0],
+            construct_inventory=(
+                SourceConstructs(
+                    "plugins/sample.xml",
+                    full_ids[:1],
+                ),
+            ),
+            assignments=(
+                FeatureAssignment(
+                    "sample_command",
+                    full_ids[:1],
+                    full_ids[:1],
+                ),
+            ),
+        )
+        self.bundle = replace(self.bundle, targets=(partial_target,))
+        write_staged_bundle(
+            self.state, self.bundle, public_repo=self.repo
+        )
+        with self.assertRaisesRegex(
+            ValidationFailure, "legacy_construct_drift"
+        ):
+            full_private_publication_gate(
+                self.candidate(),
+                self.bundle,
+                self.roots,
+                self.lera_bin,
+            )
+
+    def test_shared_selected_source_bindings_are_scoped_per_target(self):
+        relative = "plugins/sample.xml"
+        (self.legacy / relative).write_text(
+            "<muclient><plugin name=\"alpha\"/>"
+            "<plugin name=\"beta\"/></muclient>\n",
+            encoding="utf-8",
+        )
+        alpha_id = "xml:plugins/sample.xml:2"
+        beta_id = "xml:plugins/sample.xml:3"
+        targets = tuple(
+            replace(
+                self.bundle.targets[0],
+                key=target_key,
+                construct_inventory=(
+                    SourceConstructs(relative, (construct_id,)),
+                ),
+            )
+            for target_key, construct_id in (
+                ("target_alpha", alpha_id),
+                ("target_beta", beta_id),
+            )
+        )
+        selection = SelectionState(
+            version=1,
+            included_targets=tuple(
+                IncludedTarget(
+                    key=target_key,
+                    sources=(
+                        SelectedSource(
+                            "xml",
+                            relative,
+                            "selected",
+                            (feature_key,),
+                            (
+                                FeatureBinding(
+                                    feature_key,
+                                    (construct_id,),
+                                ),
+                            ),
+                        ),
+                    ),
+                    current_plugins=("sample",),
+                )
+                for target_key, feature_key, construct_id in (
+                    ("target_alpha", "feature_alpha", alpha_id),
+                    ("target_beta", "feature_beta", beta_id),
+                )
+            ),
+            omitted_candidates=(),
+        )
+
+        _validate_construct_snapshots(
+            replace(self.bundle, targets=targets),
+            self.legacy,
+            selection,
         )
 
     def test_public_validation_is_deterministic_and_explicitly_limited(self):
