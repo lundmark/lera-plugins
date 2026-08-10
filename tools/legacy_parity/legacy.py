@@ -292,3 +292,65 @@ def included_target_from_dict(value):
         sources=tuple(sources),
         current_plugins=tuple(value["current_plugins"]),
     )
+
+
+@dataclass(frozen=True)
+class LegacyConstruct:
+    id: str
+    kind: str
+    path: str
+    structural_index: int
+    line: int | None = None
+
+
+def executable_lua_lines(text):
+    import re
+
+    executable = []
+    closing = None
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if closing is not None:
+            if closing in stripped:
+                closing = None
+            continue
+        marker = re.match(r"^--\[(=*)\[", stripped)
+        if marker:
+            closing = "]" + marker.group(1) + "]"
+            if closing in stripped[marker.end() :]:
+                closing = None
+            continue
+        if not stripped or stripped.startswith("--"):
+            continue
+        executable.append(line_number)
+    return tuple(executable)
+
+
+def extract_xml_constructs(path, relative_path):
+    import xml.etree.ElementTree as element_tree
+
+    tree = element_tree.parse(path)
+    constructs = []
+    for index, element in enumerate(tree.getroot().iter(), start=1):
+        text = element.text or ""
+        if element.attrib or text.strip():
+            constructs.append(
+                LegacyConstruct(
+                    id=f"xml:{relative_path}:{index}",
+                    kind="xml",
+                    path=relative_path,
+                    structural_index=index,
+                )
+            )
+        if element.tag.lower() == "script" and text:
+            for line in executable_lua_lines(text):
+                constructs.append(
+                    LegacyConstruct(
+                        id=f"xml-lua:{relative_path}:{index}:{line}",
+                        kind="xml-lua",
+                        path=relative_path,
+                        structural_index=index,
+                        line=line,
+                    )
+                )
+    return tuple(constructs)

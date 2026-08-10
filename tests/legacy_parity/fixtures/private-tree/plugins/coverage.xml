@@ -1,0 +1,12 @@
+<muclient>
+  <plugin name="Coverage"/>
+  <triggers>
+    <trigger match="synthetic" script="handle"/>
+  </triggers>
+  <script><![CDATA[
+-- ignored
+function handle()
+  synthetic_call()
+end
+]]></script>
+</muclient>

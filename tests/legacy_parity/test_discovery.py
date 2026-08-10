@@ -32,7 +32,11 @@ class DiscoveryTests(unittest.TestCase):
     def test_discovers_normalized_xml_paths_recursively(self):
         self.assertEqual(
             discover(self.root, self.empty),
-            ("plugins/alpha.xml", "plugins/category/beta.xml"),
+            (
+                "plugins/alpha.xml",
+                "plugins/category/beta.xml",
+                "plugins/coverage.xml",
+            ),
         )
 
     def test_omitted_candidates_are_private_and_suppressed(self):
@@ -41,11 +45,18 @@ class DiscoveryTests(unittest.TestCase):
         )
         self.assertEqual(
             discover(self.root, selection),
-            ("plugins/category/beta.xml",),
+            (
+                "plugins/category/beta.xml",
+                "plugins/coverage.xml",
+            ),
         )
         self.assertEqual(
             discover(self.root, selection, revisit_omitted=True),
-            ("plugins/alpha.xml", "plugins/category/beta.xml"),
+            (
+                "plugins/alpha.xml",
+                "plugins/category/beta.xml",
+                "plugins/coverage.xml",
+            ),
         )
 
     def test_does_not_follow_symlinks_outside_root(self):
