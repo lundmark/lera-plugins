@@ -1,6 +1,9 @@
+import hashlib
 import json
 import os
+import re
 import tempfile
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -295,6 +298,13 @@ def included_target_from_dict(value):
 
 
 @dataclass(frozen=True)
+class XmlCompatibility:
+    expected_relative_path: str
+    expected_sha256: str
+    normalizer: Callable[[bytes], bytes]
+
+
+@dataclass(frozen=True)
 class LegacyConstruct:
     id: str
     kind: str
@@ -326,15 +336,52 @@ def executable_lua_lines(text):
     return tuple(executable)
 
 
-def extract_xml_constructs(path, relative_path):
+def _raise_xml_extraction_failure():
+    from .validation import ValidationFailure
+
+    raise ValidationFailure("legacy_xml_extraction_failed") from None
+
+
+def _compatible_xml_bytes(raw, relative_path, compatibility):
+    if compatibility is None:
+        return raw
+    if (
+        not isinstance(compatibility, XmlCompatibility)
+        or not isinstance(compatibility.expected_relative_path, str)
+        or compatibility.expected_relative_path != relative_path
+        or not isinstance(compatibility.expected_sha256, str)
+        or re.fullmatch(
+            r"[0-9a-f]{64}", compatibility.expected_sha256
+        )
+        is None
+        or not callable(compatibility.normalizer)
+        or hashlib.sha256(raw).hexdigest()
+        != compatibility.expected_sha256
+    ):
+        _raise_xml_extraction_failure()
+    try:
+        normalized = compatibility.normalizer(raw)
+    except Exception:
+        _raise_xml_extraction_failure()
+    if type(normalized) is not bytes or normalized == raw:
+        _raise_xml_extraction_failure()
+    return normalized
+
+
+def extract_xml_constructs(path, relative_path, *, compatibility=None):
     import xml.etree.ElementTree as element_tree
 
     raw = Path(path).read_bytes()
-    normalized = raw.lstrip(b" \t\r\n")
-    if normalized != raw and normalized.startswith(b"<?xml"):
+    try:
+        compatible = _compatible_xml_bytes(
+            raw, relative_path, compatibility
+        )
+        normalized = compatible.lstrip(b" \t\r\n")
+        if normalized == compatible or not normalized.startswith(b"<?xml"):
+            normalized = compatible
         tree = element_tree.ElementTree(element_tree.fromstring(normalized))
-    else:
-        tree = element_tree.ElementTree(element_tree.fromstring(raw))
+    except Exception:
+        _raise_xml_extraction_failure()
     constructs = []
     for index, element in enumerate(tree.getroot().iter(), start=1):
         text = element.text or ""
