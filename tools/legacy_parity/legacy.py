@@ -371,8 +371,8 @@ def _compatible_xml_bytes(raw, relative_path, compatibility):
 def extract_xml_constructs(path, relative_path, *, compatibility=None):
     import xml.etree.ElementTree as element_tree
 
-    raw = Path(path).read_bytes()
     try:
+        raw = Path(path).read_bytes()
         compatible = _compatible_xml_bytes(
             raw, relative_path, compatibility
         )

@@ -65,6 +65,28 @@ class LegacyExtractionTests(unittest.TestCase):
             ("xml:plugins/leading-whitespace.xml:2",),
         )
 
+    def test_missing_xml_path_fails_without_path_or_cause_leakage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private-source-name.xml"
+            with self.assertRaises(ValidationFailure) as caught:
+                extract_xml_constructs(path, "plugins/missing.xml")
+        self.assertEqual(str(caught.exception), "legacy_xml_extraction_failed")
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertNotIn(str(path), str(caught.exception))
+
+    def test_unreadable_xml_fails_without_os_error_or_cause_leakage(self):
+        private_detail = "private unreadable source detail"
+        with mock.patch.object(
+            Path, "read_bytes", side_effect=OSError(private_detail)
+        ), self.assertRaises(ValidationFailure) as caught:
+            extract_xml_constructs(
+                Path("private-source-name.xml"),
+                "plugins/unreadable.xml",
+            )
+        self.assertEqual(str(caught.exception), "legacy_xml_extraction_failed")
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertNotIn(private_detail, str(caught.exception))
+
     def test_malformed_xml_without_compatibility_fails_sanitized(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "malformed.xml"

@@ -668,7 +668,9 @@ class ValidationTests(unittest.TestCase):
         )
 
         (self.legacy / "plugins" / "sample.xml").unlink()
-        with self.assertRaises(OSError):
+        with self.assertRaisesRegex(
+            ValidationFailure, "^legacy_xml_extraction_failed$"
+        ):
             full_private_publication_gate(
                 self.candidate(),
                 self.bundle,
