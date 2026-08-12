@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import tempfile
+import time
 from dataclasses import dataclass
-from pathlib import Path
 
 from .privacy import scan_public_bytes
 from .staged import with_issue_url, write_staged_bundle
@@ -18,6 +16,9 @@ _URL_RE = re.compile(
     r"^https://github\.com/lundmark/lera/issues/[1-9][0-9]*$"
 )
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+_MARKER_RE = re.compile(
+    r"<!-- legacy-parity-capability: [a-z][a-z0-9_]{0,79} -->"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,7 +140,7 @@ def _repository_is_private(runner):
     )
 
 
-def _search(runner, marker, state):
+def _search(runner, marker, title, state):
     query = f'repo:{REPOSITORY} is:{state} in:body "{marker}"'
     result = _run(
         runner,
@@ -147,6 +148,8 @@ def _search(runner, marker, state):
             "gh",
             "api",
             "search/issues",
+            "--method",
+            "GET",
             "-f",
             f"q={query}",
             "-f",
@@ -154,14 +157,15 @@ def _search(runner, marker, state):
         ),
     )
     value = _json(result.stdout, "invalid_issue_search")
-    if set(value) != {"items"} or not isinstance(value["items"], list):
+    if not isinstance(value.get("items"), list):
         raise ValueError("invalid_issue_search")
     urls = []
     for item in value["items"]:
         if (
             not isinstance(item, dict)
             or item.get("state") != state
-            or marker not in item.get("body", "")
+            or item.get("title") != title
+            or _MARKER_RE.findall(item.get("body", "")) != [marker]
             or not _URL_RE.fullmatch(item.get("html_url", ""))
         ):
             raise ValueError("invalid_issue_search")
@@ -169,47 +173,32 @@ def _search(runner, marker, state):
     return tuple(urls)
 
 
-def _search_both(runner, marker):
-    return _search(runner, marker, "open"), _search(
-        runner, marker, "closed"
+def _search_both(runner, marker, title):
+    return _search(runner, marker, title, "open"), _search(
+        runner, marker, title, "closed"
     )
 
 
 def _create(runner, state_root, title, body):
-    root = Path(state_root)
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if os.name == "posix":
-        root.chmod(0o700)
-    fd, path = tempfile.mkstemp(prefix=".issue-body.", dir=root)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(body)
-            handle.flush()
-            os.fsync(handle.fileno())
-        result = _run(
-            runner,
-            (
-                "gh",
-                "issue",
-                "create",
-                "--repo",
-                REPOSITORY,
-                "--title",
-                title,
-                "--body-file",
-                path,
-            ),
-        )
-        url = result.stdout.strip()
-        if not _URL_RE.fullmatch(url):
-            raise ValueError("invalid_created_issue_url")
-        return url
-    finally:
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            pass
+    del state_root
+    result = _run(
+        runner,
+        (
+            "gh",
+            "issue",
+            "create",
+            "--repo",
+            REPOSITORY,
+            "--title",
+            title,
+            "--body",
+            body,
+        ),
+    )
+    url = result.stdout.strip()
+    if not _URL_RE.fullmatch(url):
+        raise ValueError("invalid_created_issue_url")
+    return url
 
 
 def sync_capability_issue(
@@ -229,9 +218,16 @@ def sync_capability_issue(
         blocker, plugins = _derive(bundle, capability_key)
         title, body = _issue_text(blocker, plugins)
         marker = marker_for(capability_key)
+        linked_urls = tuple(
+            item.issue_url
+            for item in bundle.blockers
+            if item.issue_url is not None
+        )
+        if len(linked_urls) != len(set(linked_urls)):
+            raise ValueError("duplicate_issue_url")
         if not _repository_is_private(runner):
             raise ValueError("repository_not_private")
-        open_urls, closed_urls = _search_both(runner, marker)
+        open_urls, closed_urls = _search_both(runner, marker, title)
         if len(open_urls) + len(closed_urls) > 1 or closed_urls:
             raise ValueError("ambiguous_issue_marker")
         if open_urls:
@@ -240,14 +236,22 @@ def sync_capability_issue(
             return IssueSyncResult(0, bundle, None)
         else:
             created_url = _create(runner, state_root, title, body)
-            open_urls, closed_urls = _search_both(runner, marker)
-            if (
-                closed_urls
-                or open_urls != (created_url,)
-            ):
-                raise ValueError("post_create_issue_ambiguity")
+            for attempt in range(8):
+                open_urls, closed_urls = _search_both(runner, marker, title)
+                if closed_urls or len(open_urls) > 1:
+                    raise ValueError("post_create_issue_ambiguity")
+                if open_urls == (created_url,):
+                    break
+                if open_urls or attempt == 7:
+                    raise ValueError("post_create_issue_ambiguity")
+                time.sleep(0.25)
             url = created_url
 
+        if any(
+            item.key != capability_key and item.issue_url == url
+            for item in bundle.blockers
+        ):
+            raise ValueError("duplicate_issue_url")
         if dry_run:
             return IssueSyncResult(0, bundle, url)
         updated = with_issue_url(bundle, capability_key, url)

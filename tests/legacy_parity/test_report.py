@@ -117,6 +117,10 @@ class PrivateReportTests(unittest.TestCase):
                     repo / "validation" / "private.md",
                 )
 
+            outside = root / "other-private" / "report.md"
+            with self.assertRaisesRegex(ValueError, "unsafe_private_report_path"):
+                resolve_private_report_path(state, repo, outside)
+
 
 if __name__ == "__main__":
     unittest.main()

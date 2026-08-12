@@ -105,6 +105,79 @@ class PrivacyTests(unittest.TestCase):
             (),
         )
 
+    def test_approved_identifier_components_do_not_become_bare_denials(self):
+        approved_scope = (
+            '{"current_plugins":[],"legacy_targets":['
+            '{"current_plugins":[],"key":"sample_target",'
+            '"sources":[{"coverage":"selected",'
+            '"feature_keys":["shared_common_lifecycle"],"kind":"xml",'
+            '"path":"approved/sample.xml"}]}],"version":1}'
+        )
+        omitted = "omitted/common.xml"
+        selection = SelectionState(
+            version=1,
+            included_targets=(),
+            omitted_candidates=(omitted,),
+        )
+
+        tokens = build_private_deny_tokens(
+            selection,
+            self.provenance,
+            approved_public_scope=approved_scope,
+        )
+
+        self.assertIn(omitted, tokens)
+        self.assertNotIn("common", tokens)
+
+    def test_canonical_scope_schema_components_are_public_tokens(self):
+        omitted = "omitted/legacy.xml"
+        selection = SelectionState(
+            version=1,
+            included_targets=(),
+            omitted_candidates=(omitted,),
+        )
+
+        tokens = build_private_deny_tokens(
+            selection,
+            self.provenance,
+            approved_public_scope=self.approved_scope,
+        )
+
+        self.assertIn(omitted, tokens)
+        self.assertNotIn("legacy", tokens)
+
+    def test_generic_audit_vocabulary_does_not_hide_exact_omitted_path(self):
+        omitted = "omitted/events.xml"
+        selection = SelectionState(
+            version=1,
+            included_targets=(),
+            omitted_candidates=(omitted,),
+        )
+
+        tokens = build_private_deny_tokens(
+            selection,
+            self.provenance,
+            approved_public_scope=self.approved_scope,
+        )
+
+        self.assertIn(omitted, tokens)
+        self.assertNotIn("events", tokens)
+
+    def test_identifier_deny_token_does_not_match_inside_public_identifier(self):
+        self.assertEqual(
+            scan_public_bytes(
+                {"manifest": b'key = "uncommon_feature"'},
+                deny_tokens=("common",),
+            ),
+            (),
+        )
+        self.assertTrue(
+            scan_public_bytes(
+                {"manifest": b'summary = "common behavior"'},
+                deny_tokens=("common",),
+            )
+        )
+
     def test_scanner_reports_only_sanitized_artifact_codes(self):
         tokens = build_private_deny_tokens(
             self.selection,

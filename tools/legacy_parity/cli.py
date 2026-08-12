@@ -38,12 +38,18 @@ from .scope import (
 from .staged import (
     load_staged_bundle,
     parse_staged_bundle,
+    validate_issue_sync_bundle,
+    validate_staged_bundle,
     write_staged_bundle,
 )
 from .state import (
-    _atomic_json,
+    _json_bytes,
+    _load_private_json_bytes,
+    _load_private_root_bytes,
+    _write_private_root_bytes,
     approve_canonical_scope,
     load_approval,
+    load_provenance,
 )
 from .validation import (
     PrivateValidationRoots,
@@ -165,6 +171,27 @@ def _private_path(path, state_root, code):
     return candidate
 
 
+def _scope_proposal_name(path, state_root):
+    state = Path(os.path.abspath(os.fspath(state_root)))
+    proposal = Path(os.path.abspath(os.fspath(path)))
+    if proposal.parent != state or not proposal.name:
+        raise ValueError("scope_proposal_not_private")
+    return proposal.name
+
+
+def _write_scope_proposal(path, state_root, value):
+    name = _scope_proposal_name(path, state_root)
+    _write_private_root_bytes(state_root, name, _json_bytes(value))
+
+
+def _load_scope_proposal(path, state_root):
+    name = _scope_proposal_name(path, state_root)
+    return _load_private_json_bytes(
+        _load_private_root_bytes(state_root, name),
+        "invalid_scope_proposal",
+    )
+
+
 def _proposal_manifest(selection, plugin_root, revision):
     inventory = discover_current(Path(plugin_root))
     current = []
@@ -237,20 +264,13 @@ def _propose_scope(args):
             for audit in audits
         ],
     }
-    output = _private_path(
-        args.output, args.state_root, "scope_proposal_not_private"
-    )
-    output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    _atomic_json(output, proposal)
+    _write_scope_proposal(args.output, args.state_root, proposal)
     print("Private scope proposal written.")
     return EXIT_OK
 
 
 def _approve_scope(args):
-    proposal_path = _private_path(
-        args.proposal, args.state_root, "scope_proposal_not_private"
-    )
-    value = json.loads(proposal_path.read_text(encoding="utf-8"))
+    value = _load_scope_proposal(args.proposal, args.state_root)
     required = {
         "version",
         "revision",
@@ -294,14 +314,59 @@ def _gh_runner(arguments):
     return CommandResult(result.returncode, result.stdout, result.stderr)
 
 
-def _sync_issues(args):
-    path = Path(args.staged).resolve()
-    bundle = parse_staged_bundle(path)
-    state_root = (
-        path.parent.parent
-        if path.parent.name == "staged"
-        else Path(args.state_root).resolve()
+def _authenticated_issue_bundle(state_root, public_repo):
+    bundle = load_staged_bundle(state_root)
+    approval = load_approval(state_root)
+    selection = load_selection(state_root)
+    provenance = load_provenance(state_root)
+    unresolved = any(
+        blocker.issue_url is None for blocker in bundle.blockers
     )
+    manifest = manifest_from_staged(
+        bundle,
+        approval,
+        selection,
+        allow_unresolved_issues=unresolved,
+    )
+    artifacts = None
+    if not unresolved:
+        artifacts = {
+            "manifest": render_manifest(manifest).encode("utf-8"),
+            "not_converted": render_not_converted(manifest).encode("utf-8"),
+            "parity_report": render_parity_report(manifest).encode("utf-8"),
+        }
+    validate_issue_sync_bundle(
+        bundle,
+        manifest=manifest,
+        approval=approval,
+        selection=selection,
+        separate_provenance=provenance,
+        candidate_artifacts=artifacts,
+    )
+    public = Path(public_repo).resolve()
+    state = Path(os.path.abspath(os.fspath(state_root)))
+    try:
+        state.relative_to(public)
+    except ValueError:
+        return bundle
+    raise ValueError("public_staged_path")
+
+
+def _sync_issues(args):
+    state_root = Path(os.path.abspath(os.fspath(args.state_root)))
+    canonical_path = state_root / "staged" / "audit-bundle.json"
+    supplied_path = Path(os.path.abspath(os.fspath(args.staged)))
+    if supplied_path != canonical_path:
+        raise ValueError("noncanonical_staged_input")
+    bundle = _authenticated_issue_bundle(state_root, args.public_repo)
+
+    def validate_bundle(value):
+        current = _authenticated_issue_bundle(
+            state_root, args.public_repo
+        )
+        if value != current or value.version != 1:
+            raise ValueError("staged_bundle_mismatch")
+
     for blocker in bundle.blockers:
         result = sync_capability_issue(
             bundle,
@@ -309,16 +374,17 @@ def _sync_issues(args):
             _gh_runner,
             state_root=state_root,
             public_repo=args.public_repo,
-            validate_bundle=lambda value: (
-                None
-                if value == bundle and value.version == 1
-                else (_ for _ in ()).throw(ValueError("staged_bundle_mismatch"))
-            ),
+            validate_bundle=validate_bundle,
             dry_run=args.dry_run,
         )
         if result.exit_code != 0:
             return EXIT_GITHUB
-        bundle = result.bundle
+        current = _authenticated_issue_bundle(
+            state_root, args.public_repo
+        )
+        if current != result.bundle:
+            raise ValueError("staged_bundle_mismatch")
+        bundle = current
     print("Capability issues synchronized.")
     return EXIT_OK
 

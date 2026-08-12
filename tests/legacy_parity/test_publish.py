@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.legacy_parity.publish import (
     PUBLIC_PATHS,
@@ -58,6 +59,148 @@ class PublicationTests(unittest.TestCase):
         )
         self.assertFalse(any(self.private.glob("publication-*")))
 
+    def test_rejects_symlinked_validation_directory_without_redirect(self):
+        external = Path(self.temp.name) / "external"
+        external.mkdir()
+        (self.repo / "validation").symlink_to(external, target_is_directory=True)
+
+        with self.assertRaisesRegex(ValueError, "unsafe_publication_path"):
+            publish_transaction(
+                self.candidate, self.bundle, lambda candidate, bundle: None
+            )
+
+        self.assertEqual(tuple(external.iterdir()), ())
+
+    def test_preserves_concurrent_destination_substitution(self):
+        validation = self.repo / "validation"
+        validation.mkdir()
+        originals = {
+            "manifest": b"old manifest\n",
+            "not_converted": b"old inventory\n",
+            "parity_report": b"old report\n",
+        }
+        for key, relative in PUBLIC_PATHS.items():
+            (self.repo / relative).write_bytes(originals[key])
+
+        for target_key in PUBLIC_PATHS:
+            with self.subTest(target_key=target_key):
+                concurrent = f"concurrent-{target_key}\n".encode()
+                displaced = validation / f"displaced-{target_key}"
+                injected = False
+
+                def substituting_publish(event, key, source, destination):
+                    nonlocal injected
+                    destination = Path(destination)
+                    if (
+                        event == "before"
+                        and key == target_key
+                        and not injected
+                    ):
+                        destination.replace(displaced)
+                        destination.write_bytes(concurrent)
+                        injected = True
+
+                with self.assertRaises((OSError, ValueError)):
+                    publish_transaction(
+                        self.candidate,
+                        self.bundle,
+                        lambda candidate, bundle: None,
+                        publication_hook=substituting_publish,
+                    )
+                self.assertTrue(injected)
+                self.assertEqual(
+                    (self.repo / PUBLIC_PATHS[target_key]).read_bytes(),
+                    concurrent,
+                )
+                self.assertFalse(displaced.exists())
+                recovered = tuple((self.private / "recoveries").iterdir())
+                self.assertTrue(
+                    any(path.read_bytes() == originals[target_key] for path in recovered)
+                )
+                for key, relative in PUBLIC_PATHS.items():
+                    path = self.repo / relative
+                    if key != target_key:
+                        self.assertEqual(path.read_bytes(), originals[key])
+
+                (self.repo / PUBLIC_PATHS[target_key]).unlink()
+                (self.repo / PUBLIC_PATHS[target_key]).write_bytes(
+                    originals[target_key]
+                )
+
+    def test_preserves_post_publish_destination_substitution(self):
+        validation = self.repo / "validation"
+        validation.mkdir()
+        originals = {
+            "manifest": b"old manifest\n",
+            "not_converted": b"old inventory\n",
+            "parity_report": b"old report\n",
+        }
+        for key, relative in PUBLIC_PATHS.items():
+            (self.repo / relative).write_bytes(originals[key])
+
+        for target_key in PUBLIC_PATHS:
+            with self.subTest(target_key=target_key):
+                concurrent = f"post-{target_key}\n".encode()
+                escaped = validation / f"escaped-{target_key}"
+                injected = False
+
+                def substitute_after(event, key, source, destination):
+                    nonlocal injected
+                    destination = Path(destination)
+                    if event == "after" and key == target_key and not injected:
+                        destination.replace(escaped)
+                        destination.write_bytes(concurrent)
+                        injected = True
+
+                with self.assertRaises((OSError, ValueError)):
+                    publish_transaction(
+                        self.candidate,
+                        self.bundle,
+                        lambda candidate, bundle: None,
+                        publication_hook=substitute_after,
+                    )
+                self.assertTrue(injected)
+                self.assertEqual(
+                    (self.repo / PUBLIC_PATHS[target_key]).read_bytes(),
+                    concurrent,
+                )
+                self.assertFalse(escaped.exists())
+                for key, relative in PUBLIC_PATHS.items():
+                    if key != target_key:
+                        self.assertEqual(
+                            (self.repo / relative).read_bytes(), originals[key]
+                        )
+
+                (self.repo / PUBLIC_PATHS[target_key]).unlink()
+                (self.repo / PUBLIC_PATHS[target_key]).write_bytes(
+                    originals[target_key]
+                )
+
+    def test_partial_temporary_write_leaves_no_public_residue(self):
+        called = False
+
+        def partial_write(descriptor, content):
+            nonlocal called
+            called = True
+            os.write(descriptor, content[:1])
+            raise OSError("injected short write")
+
+        with mock.patch(
+            "tools.legacy_parity.publish._write_all",
+            side_effect=partial_write,
+        ):
+            with self.assertRaises(OSError):
+                publish_transaction(
+                    self.candidate,
+                    self.bundle,
+                    lambda candidate, bundle: None,
+                )
+
+        self.assertTrue(called)
+        self.assertEqual(self.public_bytes(), {})
+        validation = self.repo / "validation"
+        self.assertEqual(tuple(validation.iterdir()), ())
+
     def test_each_gate_failure_leaves_first_publication_empty(self):
         failures = (
             "missing_private_approval",
@@ -103,9 +246,10 @@ class PublicationTests(unittest.TestCase):
             with self.subTest(fail_after=fail_after):
                 count = 0
 
-                def failing_replace(source, destination):
+                def failing_publish(event, key, source, destination):
                     nonlocal count
-                    os.replace(source, destination)
+                    if event != "after":
+                        return
                     count += 1
                     if count == fail_after:
                         raise OSError("injected publication failure")
@@ -115,7 +259,7 @@ class PublicationTests(unittest.TestCase):
                         self.candidate,
                         self.bundle,
                         lambda candidate, bundle: None,
-                        replace_public=failing_replace,
+                        publication_hook=failing_publish,
                     )
                 self.assertEqual(self.public_bytes(), originals)
                 self.assertFalse(any(self.private.glob("publication-*")))

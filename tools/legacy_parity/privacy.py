@@ -25,6 +25,7 @@ _SOURCE_BODY_RE = re.compile(
     r"|\b(?:trigger|alias|timer)\s*\.\s*(?:add|new)\s*\("
 )
 _SAFE_DIAGNOSTIC_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+_PUBLIC_AUDIT_VOCABULARY = frozenset({"events"})
 
 
 def _approved_public_scope_tokens(encoded):
@@ -97,6 +98,12 @@ def _approved_public_scope_tokens(encoded):
                 raise ValueError("invalid_approved_public_scope")
             tokens.add(PurePosixPath(source["path"]).stem)
             tokens.update(source["feature_keys"])
+    tokens.update(
+        component
+        for component in re.findall(r"[A-Za-z0-9]+", canonical)
+        if len(component) >= 4
+    )
+    tokens.update(_PUBLIC_AUDIT_VOCABULARY)
     return frozenset(tokens)
 
 
@@ -129,6 +136,15 @@ def build_private_deny_tokens(
     return tuple(sorted(token for token in tokens if len(token) >= 4))
 
 
+def _contains_deny_token(text, token):
+    if re.fullmatch(r"[A-Za-z0-9_]+", token):
+        return re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![A-Za-z0-9_])",
+            text,
+        ) is not None
+    return token in text
+
+
 def scan_public_bytes(
     artifacts,
     *,
@@ -143,7 +159,10 @@ def scan_public_bytes(
             raise ValueError("invalid_public_artifact_bytes")
         text = content.decode("utf-8", errors="replace")
         codes = set()
-        if any(token in text for token in deny_tokens):
+        if any(
+            _contains_deny_token(text, token)
+            for token in deny_tokens
+        ):
             codes.add("private_deny_token")
         if _HOME_RE.search(text):
             codes.add("private_absolute_path")

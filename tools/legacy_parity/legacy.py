@@ -191,42 +191,25 @@ def record_included_target(
     )
 
 
-def _atomic_json(path, value):
-    fd, temporary = tempfile.mkstemp(prefix=".selection.", dir=path.parent)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, ensure_ascii=False, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        if os.name == "posix":
-            path.chmod(0o600)
-    except BaseException:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-        raise
-
-
 def write_selection(state_root, selection, *, public_repo):
-    root = Path(state_root).resolve()
+    root = Path(os.path.abspath(os.fspath(state_root)))
     public = Path(public_repo).resolve()
     if root == public or public in root.parents:
         raise ValueError("public_selection_path")
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if os.name == "posix":
-        root.chmod(0o700)
-    _atomic_json(root / "selection.json", asdict(selection))
+    from .state import _json_bytes, _write_private_root_bytes
+
+    _write_private_root_bytes(
+        root, "selection.json", _json_bytes(asdict(selection))
+    )
 
 
 def load_selection(state_root):
-    path = Path(state_root) / "selection.json"
-    if os.name == "posix" and path.stat().st_mode & 0o077:
-        raise ValueError("unsafe_selection_permissions")
-    value = json.loads(path.read_text(encoding="utf-8"))
+    from .state import _load_private_json_bytes, _load_private_root_bytes
+
+    value = _load_private_json_bytes(
+        _load_private_root_bytes(state_root, "selection.json"),
+        "invalid_selection_json",
+    )
     targets = []
     for target in value["included_targets"]:
         sources = []
@@ -342,6 +325,67 @@ def _raise_xml_extraction_failure():
     raise ValidationFailure("legacy_xml_extraction_failed") from None
 
 
+def _xml_name_start(byte):
+    return (
+        ord("A") <= byte <= ord("Z")
+        or ord("a") <= byte <= ord("z")
+        or byte in (ord("_"), ord(":"))
+    )
+
+
+def _escape_raw_attribute_lt(raw):
+    output = bytearray()
+    in_tag = False
+    quote = None
+    index = 0
+    while index < len(raw):
+        if not in_tag and raw.startswith(b"<!--", index):
+            finish = raw.find(b"-->", index + 4)
+            if finish < 0:
+                return raw
+            finish += 3
+            output.extend(raw[index:finish])
+            index = finish
+            continue
+        if not in_tag and raw.startswith(b"<![CDATA[", index):
+            finish = raw.find(b"]]>", index + 9)
+            if finish < 0:
+                return raw
+            finish += 3
+            output.extend(raw[index:finish])
+            index = finish
+            continue
+        byte = raw[index]
+        if not in_tag:
+            if byte == ord("<") and index + 1 < len(raw) and (
+                raw[index + 1] in b"/?!"
+                or _xml_name_start(raw[index + 1])
+            ):
+                in_tag = True
+            output.append(byte)
+        elif quote is not None:
+            if byte == quote:
+                quote = None
+                output.append(byte)
+                if (
+                    index + 1 < len(raw)
+                    and _xml_name_start(raw[index + 1])
+                ):
+                    output.append(ord(" "))
+            elif byte == ord("<"):
+                output.extend(b"&lt;")
+            else:
+                output.append(byte)
+        else:
+            output.append(byte)
+            if byte in (ord("\""), ord("'")):
+                quote = byte
+            elif byte == ord(">"):
+                in_tag = False
+        index += 1
+    return bytes(output)
+
+
 def _compatible_xml_bytes(raw, relative_path, compatibility):
     if compatibility is None:
         return raw
@@ -368,11 +412,12 @@ def _compatible_xml_bytes(raw, relative_path, compatibility):
     return normalized
 
 
-def extract_xml_constructs(path, relative_path, *, compatibility=None):
+def extract_xml_constructs_bytes(raw, relative_path, *, compatibility=None):
     import xml.etree.ElementTree as element_tree
 
     try:
-        raw = Path(path).read_bytes()
+        if not isinstance(raw, bytes):
+            raise TypeError("xml bytes required")
         compatible = _compatible_xml_bytes(
             raw, relative_path, compatibility
         )
@@ -406,3 +451,13 @@ def extract_xml_constructs(path, relative_path, *, compatibility=None):
                     )
                 )
     return tuple(constructs)
+
+
+def extract_xml_constructs(path, relative_path, *, compatibility=None):
+    try:
+        raw = Path(path).read_bytes()
+    except Exception:
+        _raise_xml_extraction_failure()
+    return extract_xml_constructs_bytes(
+        raw, relative_path, compatibility=compatibility
+    )

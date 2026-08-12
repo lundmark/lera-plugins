@@ -9,6 +9,8 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from unittest import mock
 
+import tools.legacy_parity.state as state_module
+
 from tools.legacy_parity.cli import main
 from tools.legacy_parity.legacy import (
     IncludedTarget,
@@ -467,7 +469,7 @@ class StagedBundleTests(unittest.TestCase):
 
         before = (self.state_root / "staged" / "audit-bundle.json").read_bytes()
         with mock.patch(
-            "tools.legacy_parity.staged.os.replace",
+            "tools.legacy_parity.state._renameat2_at",
             side_effect=OSError("interrupted"),
         ):
             with self.assertRaises(OSError):
@@ -520,6 +522,416 @@ class StagedBundleTests(unittest.TestCase):
                     str(outside),
                 ]
             )
+
+
+    def test_private_staged_io_fails_closed_without_secure_primitives(self):
+        with mock.patch(
+            "tools.legacy_parity.staged._require_secure_private_io",
+            side_effect=ValueError("unsupported_private_io"),
+        ):
+            with self.assertRaisesRegex(
+                ValueError, "unsupported_private_io"
+            ):
+                write_staged_bundle(
+                    self.state_root,
+                    self.bundle,
+                    public_repo=self.public_repo,
+                )
+            with self.assertRaisesRegex(
+                ValueError, "unsupported_private_io"
+            ):
+                load_staged_bundle(self.state_root)
+
+
+    @unittest.skipUnless(os.name == "posix", "requires descriptor semantics")
+    def test_reader_holds_authenticated_staged_bytes(self):
+        write_staged_bundle(
+            self.state_root, self.bundle, public_repo=self.public_repo
+        )
+        path = self.state_root / "staged" / "audit-bundle.json"
+        external = Path(self.temp.name) / "external-bundle.json"
+        external.write_bytes(path.read_bytes())
+        external.chmod(0o600)
+        path.unlink()
+        path.symlink_to(external)
+        with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+            load_staged_bundle(self.state_root)
+
+        path.unlink()
+        write_staged_bundle(
+            self.state_root, self.bundle, public_repo=self.public_repo
+        )
+        held = path.parent / "held-audit-bundle.json"
+        changed = external.read_text(encoding="utf-8").replace(
+            '"version": 1', '"version": 99'
+        )
+        external.write_text(changed, encoding="utf-8")
+        external.chmod(0o600)
+        real_identity = state_module._named_identity
+        substituted = False
+
+        def substitute_after_identity(directory, name):
+            nonlocal substituted
+            result = real_identity(directory, name)
+            if name == "audit-bundle.json" and not substituted:
+                substituted = True
+                path.rename(held)
+                path.symlink_to(external)
+            return result
+
+        with mock.patch(
+            "tools.legacy_parity.state._named_identity",
+            side_effect=substitute_after_identity,
+        ):
+            with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+                load_staged_bundle(self.state_root)
+        self.assertTrue(substituted)
+
+    @unittest.skipUnless(os.name == "posix", "requires renameat2")
+    def test_writer_preserves_concurrent_staged_destination(self):
+        write_staged_bundle(
+            self.state_root, self.bundle, public_repo=self.public_repo
+        )
+        staged = self.state_root / "staged"
+        displaced = staged / "displaced-audit-bundle.json"
+        concurrent = b'{"concurrent":true}\n'
+        real_rename = state_module._renameat2_at
+        injected = False
+
+        def substitute_before_rename(directory, source, destination, flags):
+            nonlocal injected
+            if destination == "audit-bundle.json" and not injected:
+                injected = True
+                os.rename(
+                    destination,
+                    displaced.name,
+                    src_dir_fd=directory,
+                    dst_dir_fd=directory,
+                )
+                descriptor = os.open(
+                    destination,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=directory,
+                )
+                try:
+                    os.write(descriptor, concurrent)
+                finally:
+                    os.close(descriptor)
+            return real_rename(directory, source, destination, flags)
+
+        with mock.patch(
+            "tools.legacy_parity.state._renameat2_at",
+            side_effect=substitute_before_rename,
+        ):
+            with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+                write_staged_bundle(
+                    self.state_root,
+                    self.bundle,
+                    public_repo=self.public_repo,
+                )
+        self.assertTrue(injected)
+        self.assertEqual((staged / "audit-bundle.json").read_bytes(), concurrent)
+        self.assertFalse(displaced.exists())
+
+
+    @unittest.skipUnless(os.name == "posix", "requires renameat2")
+    def test_writer_cleans_owned_alias_after_staged_substitution(self):
+        write_staged_bundle(
+            self.state_root, self.bundle, public_repo=self.public_repo
+        )
+        staged = self.state_root / "staged"
+        concurrent = b'{"concurrent":"post-rename"}\n'
+        real_rename = state_module._renameat2_at
+        injected = False
+
+        def substitute_after_rename(directory, source, destination, flags):
+            nonlocal injected
+            real_rename(directory, source, destination, flags)
+            if destination == "audit-bundle.json" and not injected:
+                injected = True
+                os.rename(
+                    destination,
+                    "escaped-owned",
+                    src_dir_fd=directory,
+                    dst_dir_fd=directory,
+                )
+                descriptor = os.open(
+                    destination,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=directory,
+                )
+                try:
+                    os.write(descriptor, concurrent)
+                finally:
+                    os.close(descriptor)
+
+        with mock.patch(
+            "tools.legacy_parity.state._renameat2_at",
+            side_effect=substitute_after_rename,
+        ):
+            with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+                write_staged_bundle(
+                    self.state_root,
+                    self.bundle,
+                    public_repo=self.public_repo,
+                )
+        self.assertTrue(injected)
+        self.assertEqual(
+            (staged / "audit-bundle.json").read_bytes(), concurrent
+        )
+        self.assertEqual(
+            {item.name for item in staged.iterdir()},
+            {"audit-bundle.json"},
+        )
+
+
+    @unittest.skipUnless(os.name == "posix", "requires renameat2")
+    def test_writer_preserves_unknown_during_verified_staged_unlink(self):
+        write_staged_bundle(
+            self.state_root, self.bundle, public_repo=self.public_repo
+        )
+        directory_path = self.state_root / "staged"
+        destination = directory_path / "audit-bundle.json"
+        old_identity = (
+            destination.stat().st_dev,
+            destination.stat().st_ino,
+        )
+        unknown = b'{"unknown":"retirement-race"}\n'
+        real_rename = state_module._renameat2_between
+        injected = False
+
+        def substitute_before_retirement(
+            source_directory,
+            source,
+            recovery_directory,
+            recovery_name,
+            flags,
+        ):
+            nonlocal injected
+            if (
+                source_directory != recovery_directory
+                and state_module._named_identity(
+                    source_directory, source
+                )
+                == old_identity
+                and not injected
+            ):
+                injected = True
+                os.rename(
+                    source,
+                    "escaped-old",
+                    src_dir_fd=source_directory,
+                    dst_dir_fd=source_directory,
+                )
+                descriptor = os.open(
+                    source,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o644,
+                    dir_fd=source_directory,
+                )
+                try:
+                    os.write(descriptor, unknown)
+                finally:
+                    os.close(descriptor)
+            return real_rename(
+                source_directory,
+                source,
+                recovery_directory,
+                recovery_name,
+                flags,
+            )
+
+        with mock.patch(
+            "tools.legacy_parity.state._renameat2_between",
+            side_effect=substitute_before_retirement,
+        ):
+            with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+                write_staged_bundle(
+                    self.state_root,
+                    self.bundle,
+                    public_repo=self.public_repo,
+                )
+        self.assertTrue(injected)
+        self.assertTrue(destination.exists())
+        active = tuple(directory_path.iterdir())
+        self.assertFalse(
+            any(
+                item.is_file()
+                and (item.stat().st_dev, item.stat().st_ino)
+                == old_identity
+                for item in active
+            )
+        )
+        recovered = tuple(
+            item
+            for item in (self.state_root / "recoveries").iterdir()
+            if item.is_file()
+        )
+        self.assertTrue(any(item.read_bytes() == unknown for item in recovered))
+        self.assertTrue(
+            all((item.stat().st_mode & 0o777) == 0o600 for item in recovered)
+        )
+        self.assertTrue(
+            any(
+                (item.stat().st_dev, item.stat().st_ino) == old_identity
+                for item in recovered
+            )
+        )
+
+
+    @unittest.skipUnless(os.name == "posix", "requires descriptor semantics")
+    def test_recovery_open_is_bound_to_retired_staged_identity(self):
+        write_staged_bundle(
+            self.state_root, self.bundle, public_repo=self.public_repo
+        )
+        destination = (
+            self.state_root / "provenance.json"
+            if "tests/legacy_parity/test_staged.py".endswith("test_state.py")
+            else self.state_root / "staged" / "audit-bundle.json"
+        )
+        old_identity = (
+            destination.stat().st_dev,
+            destination.stat().st_ino,
+        )
+        unknown = b'{"unknown":"recovery-open-race"}\n'
+        real_open = os.open
+        injected = False
+
+        def substitute_before_open(name, flags, *args, **kwargs):
+            nonlocal injected
+            directory = kwargs.get("dir_fd")
+            if (
+                directory is not None
+                and isinstance(name, str)
+                and name.startswith("writer-")
+                and not injected
+            ):
+                injected = True
+                os.rename(
+                    name,
+                    "escaped-old",
+                    src_dir_fd=directory,
+                    dst_dir_fd=directory,
+                )
+                descriptor = real_open(
+                    name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o644,
+                    dir_fd=directory,
+                )
+                try:
+                    os.write(descriptor, unknown)
+                finally:
+                    os.close(descriptor)
+            return real_open(name, flags, *args, **kwargs)
+
+        with mock.patch(
+            "tools.legacy_parity.state.os.open",
+            side_effect=substitute_before_open,
+        ):
+            with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+                write_staged_bundle(
+                    self.state_root,
+                    replace(
+                        self.bundle,
+                        public_digest="1" * 64,
+                    ),
+                    public_repo=self.public_repo,
+                )
+        self.assertTrue(injected)
+        active_root = destination.parent
+        self.assertFalse(
+            any(
+                item.is_file()
+                and (item.stat().st_dev, item.stat().st_ino)
+                == old_identity
+                for item in active_root.iterdir()
+            )
+        )
+        recovered = tuple(
+            item
+            for item in (self.state_root / "recoveries").iterdir()
+            if item.is_file()
+        )
+        self.assertTrue(any(item.read_bytes() == unknown for item in recovered))
+        self.assertTrue(
+            any(
+                (item.stat().st_dev, item.stat().st_ino) == old_identity
+                for item in recovered
+            )
+        )
+        self.assertTrue(
+            all((item.stat().st_mode & 0o777) == 0o600 for item in recovered)
+        )
+
+
+    @unittest.skipUnless(os.name == "posix", "requires descriptor semantics")
+    def test_writer_rejects_symlinked_or_substituted_staged_directory(self):
+        self.state_root.mkdir(mode=0o700)
+        (self.state_root / "staged").symlink_to(
+            self.public_repo, target_is_directory=True
+        )
+        with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+            write_staged_bundle(
+                self.state_root, self.bundle, public_repo=self.public_repo
+            )
+        self.assertFalse((self.public_repo / "audit-bundle.json").exists())
+
+        (self.state_root / "staged").unlink()
+        (self.state_root / "staged").mkdir(mode=0o700)
+        held = self.state_root / "held-staged"
+        staged_module = __import__(
+            "tools.legacy_parity.staged", fromlist=["_atomic_json_at"]
+        )
+        original_atomic = staged_module._atomic_json_at
+
+        def substitute(directory, name, value, verify_tree, **kwargs):
+            (self.state_root / "staged").rename(held)
+            (self.state_root / "staged").symlink_to(
+                self.public_repo, target_is_directory=True
+            )
+            return original_atomic(
+                directory, name, value, verify_tree, **kwargs
+            )
+
+        with mock.patch(
+            "tools.legacy_parity.staged._atomic_json_at",
+            side_effect=substitute,
+        ):
+            with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+                write_staged_bundle(
+                    self.state_root, self.bundle, public_repo=self.public_repo
+                )
+        self.assertFalse((self.public_repo / "audit-bundle.json").exists())
+        self.assertFalse((held / "audit-bundle.json").exists())
+
+        (self.state_root / "staged").unlink()
+        held.rename(self.state_root / "staged")
+        real_rename = state_module._renameat2_at
+        substituted = False
+
+        def substitute_after_rename(directory, source, destination, flags):
+            nonlocal substituted
+            real_rename(directory, source, destination, flags)
+            if not substituted:
+                substituted = True
+                (self.state_root / "staged").rename(held)
+                (self.state_root / "staged").symlink_to(
+                    self.public_repo, target_is_directory=True
+                )
+
+        with mock.patch(
+            "tools.legacy_parity.state._renameat2_at",
+            side_effect=substitute_after_rename,
+        ):
+            with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+                write_staged_bundle(
+                    self.state_root, self.bundle, public_repo=self.public_repo
+                )
+        self.assertFalse((self.public_repo / "audit-bundle.json").exists())
+        self.assertFalse((held / "audit-bundle.json").exists())
 
 
 if __name__ == "__main__":

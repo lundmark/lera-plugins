@@ -15,6 +15,7 @@ from tools.legacy_parity.audit import (
     PreliminaryBehavior,
     current_source_digest,
 )
+import tools.legacy_parity.cli as cli_module
 from tools.legacy_parity.cli import entrypoint
 from tools.legacy_parity.current import extract_current
 from tools.legacy_parity.issues import (
@@ -553,6 +554,7 @@ class AcceptanceWorkflow:
                 value = {
                     "items": [
                         {
+                            "title": "Legacy parity capability: synthetic_api",
                             "state": "open",
                             "body": marker,
                             "html_url": (
@@ -603,6 +605,50 @@ class WholeValidatorAcceptanceTests(unittest.TestCase):
         selection = load_selection(workflow.state)
         self.assertEqual(len(selection.included_targets), 1)
         self.assertEqual(len(selection.omitted_candidates), 1)
+
+    def test_issue_sync_authenticates_the_provisional_bundle_phase(self):
+        workflow = self.workflow()
+        provisional = replace(
+            workflow.bundle,
+            blockers=(
+                replace(workflow.bundle.blockers[0], issue_url=None),
+            ),
+            artifact_hashes=tuple(
+                ArtifactHash(key, "0" * 64)
+                for key in (
+                    "manifest",
+                    "not_converted",
+                    "parity_report",
+                )
+            ),
+        )
+        write_staged_bundle(
+            workflow.state, provisional, public_repo=workflow.repo
+        )
+
+        self.assertEqual(
+            cli_module._authenticated_issue_bundle(
+                workflow.state, workflow.repo
+            ),
+            provisional,
+        )
+
+        invalid = replace(
+            provisional,
+            blockers=(
+                replace(
+                    provisional.blockers[0],
+                    affected_features=("orbit_legacy.unknown",),
+                ),
+            ),
+        )
+        write_staged_bundle(
+            workflow.state, invalid, public_repo=workflow.repo
+        )
+        with self.assertRaisesRegex(ValueError, "staged_blocker_derivation"):
+            cli_module._authenticated_issue_bundle(
+                workflow.state, workflow.repo
+            )
 
     def test_private_mutations_block_publication_without_partial_update(self):
         cases = (

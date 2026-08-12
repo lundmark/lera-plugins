@@ -111,6 +111,31 @@ class ApprovalStateTests(unittest.TestCase):
                 0o600,
             )
 
+    def test_approval_reader_and_writer_reject_symlinked_state(self):
+        external = Path(self.temp.name) / "external"
+        external.mkdir(mode=0o700)
+        external_approval = external / "approval.json"
+        approve_scope(
+            external,
+            self.manifest,
+            BINDINGS,
+            revision=1,
+            approved_on="2026-08-10",
+        )
+        self.state_root.symlink_to(external, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+            load_approval(self.state_root)
+        external_approval.unlink()
+        with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+            approve_scope(
+                self.state_root,
+                self.manifest,
+                BINDINGS,
+                revision=1,
+                approved_on="2026-08-10",
+            )
+        self.assertFalse(external_approval.exists())
+
     def test_changed_binding_invalidates_approval(self):
         approve_scope(
             self.state_root,

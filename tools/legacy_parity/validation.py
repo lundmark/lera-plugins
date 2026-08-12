@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .compare import strict_parity_findings, validate_evidence
 from .current import (
@@ -19,14 +19,22 @@ from .current import (
     validate_current_scope,
 )
 from .legacy import (
+    XmlCompatibility,
+    _escape_raw_attribute_lt,
     discover,
     executable_lua_lines,
     extract_xml_constructs,
+    extract_xml_constructs_bytes,
     load_selection,
 )
 from .manifest import loads_manifest, render_manifest
 from .privacy import assert_public_bytes, build_private_deny_tokens
-from .publish import PUBLIC_PATHS
+from .publish import (
+    PUBLIC_PATHS,
+    _open_directory_root,
+    _read_public_optional,
+    _verify_directory_root,
+)
 from .report import (
     PRIVATE_HEADING,
     PUBLIC_HEADING,
@@ -50,6 +58,7 @@ from .staged import (
     validate_staged_bundle,
 )
 from .state import (
+    _write_private_child_bytes,
     load_approval,
     load_provenance,
     write_provenance_transaction,
@@ -77,10 +86,10 @@ class PrivateValidationRoots:
 
     def resolved(self):
         return PrivateValidationRoots(
-            repo_root=Path(self.repo_root).resolve(),
-            state_root=Path(self.state_root).resolve(),
-            legacy_root=Path(self.legacy_root).resolve(),
-            lera_root=Path(self.lera_root).resolve(),
+            repo_root=Path(os.path.abspath(os.fspath(self.repo_root))),
+            state_root=Path(os.path.abspath(os.fspath(self.state_root))),
+            legacy_root=Path(os.path.abspath(os.fspath(self.legacy_root))),
+            lera_root=Path(os.path.abspath(os.fspath(self.lera_root))),
         )
 
 
@@ -91,14 +100,44 @@ def _fail(code, error=None):
 
 
 def _read_public_artifacts(repo):
-    artifacts = {}
-    for key, relative in PUBLIC_PATHS.items():
-        path = Path(repo) / relative
+    root, root_descriptor, root_identity = _open_directory_root(repo)
+    validation_descriptor = None
+    try:
+        validation_descriptor = os.open(
+            "validation", _HELD_DIRECTORY_FLAGS, dir_fd=root_descriptor
+        )
+        validation_record = os.fstat(validation_descriptor)
+        validation_identity = (
+            validation_record.st_dev,
+            validation_record.st_ino,
+        )
+        artifacts = {}
+        for key, relative in PUBLIC_PATHS.items():
+            content, identity = _read_public_optional(
+                validation_descriptor, relative.name
+            )
+            if content is None or identity is None:
+                raise ValueError("missing_public_artifact")
+            artifacts[key] = content
+        _verify_directory_root(root, root_identity)
+        current = os.open(
+            "validation", _HELD_DIRECTORY_FLAGS, dir_fd=root_descriptor
+        )
         try:
-            artifacts[key] = path.read_bytes()
-        except OSError as error:
-            raise ValueError("missing_public_artifact") from error
-    return artifacts
+            record = os.fstat(current)
+            if (record.st_dev, record.st_ino) != validation_identity:
+                raise ValueError("unsafe_publication_path")
+        finally:
+            os.close(current)
+        return artifacts
+    except FileNotFoundError as error:
+        raise ValueError("missing_public_artifact") from error
+    except OSError as error:
+        raise ValueError("unsafe_publication_path") from error
+    finally:
+        if validation_descriptor is not None:
+            os.close(validation_descriptor)
+        os.close(root_descriptor)
 
 
 def _public_summary():
@@ -125,9 +164,7 @@ def _validate_mapping_agreement(manifest):
 
 
 def _validate_public_artifacts(repo_root, artifacts):
-    repo = Path(repo_root).resolve()
-    if not repo.is_dir():
-        raise ValueError("missing_plugin_root")
+    repo = Path(os.path.abspath(os.fspath(repo_root)))
     if set(artifacts) != set(PUBLIC_PATHS) or any(
         not isinstance(content, bytes) for content in artifacts.values()
     ):
@@ -239,52 +276,251 @@ def _git_commit(root):
     return value
 
 
-def _actual_source_digests(bundle, legacy_root):
-    root = Path(legacy_root).resolve()
-    paths = tuple(
-        sorted(
-            {
-                path
-                for target in bundle.targets
-                for path in target.dependency_closure
-            }
+_HELD_DIRECTORY_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+)
+_HELD_FILE_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+)
+
+
+def _descriptor_bytes(descriptor):
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    chunks = []
+    while True:
+        chunk = os.read(descriptor, 65536)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _open_held_root(path):
+    root = Path(os.path.abspath(os.fspath(path)))
+    descriptor = os.open(os.sep, _HELD_DIRECTORY_FLAGS)
+    try:
+        for part in root.parts[1:]:
+            next_descriptor = os.open(
+                part, _HELD_DIRECTORY_FLAGS, dir_fd=descriptor
+            )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        record = os.fstat(descriptor)
+        if not stat.S_ISDIR(record.st_mode):
+            raise ValueError("unsafe_source_path")
+        return root, descriptor, (record.st_dev, record.st_ino)
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _verify_held_root(path, expected):
+    _, descriptor, identity = _open_held_root(path)
+    try:
+        if identity != expected:
+            raise ValueError("unsafe_source_path")
+    finally:
+        os.close(descriptor)
+
+
+def _relative_parts(relative):
+    if (
+        not isinstance(relative, str)
+        or not relative
+        or relative.startswith("/")
+        or "\\" in relative
+    ):
+        raise ValueError("invalid_source_path")
+    parts = PurePosixPath(relative).parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("invalid_source_path")
+    return parts
+
+
+def _read_held_relative(root_descriptor, relative):
+    parts = _relative_parts(relative)
+    directory = os.dup(root_descriptor)
+    try:
+        for part in parts[:-1]:
+            next_directory = os.open(
+                part, _HELD_DIRECTORY_FLAGS, dir_fd=directory
+            )
+            os.close(directory)
+            directory = next_directory
+        before = os.stat(parts[-1], dir_fd=directory, follow_symlinks=False)
+        descriptor = os.open(
+            parts[-1], _HELD_FILE_FLAGS, dir_fd=directory
         )
-    )
-    digests = []
-    for relative in paths:
-        candidate = (root / relative).resolve()
         try:
-            candidate.relative_to(root)
-        except ValueError as error:
-            raise ValueError("invalid_legacy_path") from error
-        if not candidate.is_file():
-            raise ValueError("missing_legacy_path")
-        digests.append(
-            (relative, hashlib.sha256(candidate.read_bytes()).hexdigest())
+            record = os.fstat(descriptor)
+            identity = (record.st_dev, record.st_ino)
+            if (
+                not stat.S_ISREG(record.st_mode)
+                or identity != (before.st_dev, before.st_ino)
+            ):
+                raise ValueError("unsafe_source_path")
+            content = _descriptor_bytes(descriptor)
+            after = os.stat(
+                parts[-1], dir_fd=directory, follow_symlinks=False
+            )
+            if identity != (after.st_dev, after.st_ino):
+                raise ValueError("unsafe_source_path")
+            return content
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(directory)
+
+
+def _capture_relative_files(root_path, relatives):
+    root, descriptor, identity = _open_held_root(root_path)
+    try:
+        captured = {
+            relative: _read_held_relative(descriptor, relative)
+            for relative in sorted(set(relatives))
+        }
+        _verify_held_root(root, identity)
+        return captured
+    except OSError as error:
+        raise ValueError("unsafe_source_path") from error
+    finally:
+        os.close(descriptor)
+
+
+def _capture_current_sources(root_path):
+    root, descriptor, identity = _open_held_root(root_path)
+    try:
+        names = []
+        for directory_name in ("generic", "3scapes"):
+            try:
+                directory = os.open(
+                    directory_name,
+                    _HELD_DIRECTORY_FLAGS,
+                    dir_fd=descriptor,
+                )
+            except FileNotFoundError:
+                continue
+            try:
+                for name in os.listdir(directory):
+                    if not name.endswith(".lua"):
+                        continue
+                    record = os.stat(
+                        name, dir_fd=directory, follow_symlinks=False
+                    )
+                    if not stat.S_ISREG(record.st_mode):
+                        raise ValueError("unsafe_source_path")
+                    names.append(f"{directory_name}/{name}")
+            finally:
+                os.close(directory)
+        captured = {
+            relative: _read_held_relative(descriptor, relative)
+            for relative in sorted(names)
+        }
+        _verify_held_root(root, identity)
+        return captured
+    except OSError as error:
+        raise ValueError("unsafe_source_path") from error
+    finally:
+        os.close(descriptor)
+
+
+def _open_held_executable(path):
+    absolute = Path(os.path.abspath(os.fspath(path)))
+    root, directory, _ = _open_held_root(absolute.parent)
+    del root
+    try:
+        before = os.stat(
+            absolute.name, dir_fd=directory, follow_symlinks=False
         )
-    return tuple(digests)
+        descriptor = os.open(
+            absolute.name, _HELD_FILE_FLAGS, dir_fd=directory
+        )
+        record = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(record.st_mode)
+            or (record.st_dev, record.st_ino)
+            != (before.st_dev, before.st_ino)
+            or not (record.st_mode & 0o111)
+        ):
+            os.close(descriptor)
+            raise ValueError("missing_lera_binary")
+        return descriptor
+    finally:
+        os.close(directory)
 
 
-def _construct_ids(source, relative):
+def _legacy_snapshots(bundle, legacy_root):
+    paths = {
+        path
+        for target in bundle.targets
+        for path in target.dependency_closure
+    }
+    try:
+        return _capture_relative_files(legacy_root, paths)
+    except ValueError as error:
+        if str(error) == "unsafe_source_path":
+            _fail("legacy_xml_extraction_failed", error)
+        raise
+
+
+def _actual_source_digests(bundle, snapshots):
+    expected = {
+        path
+        for target in bundle.targets
+        for path in target.dependency_closure
+    }
+    if set(snapshots) != expected:
+        raise ValueError("legacy_source_drift")
+    return tuple(
+        (relative, hashlib.sha256(snapshots[relative]).hexdigest())
+        for relative in sorted(expected)
+    )
+
+
+def _construct_ids(source_bytes, relative, expected_digest=None):
+    if not isinstance(source_bytes, bytes):
+        raise ValueError("legacy_construct_drift")
     if relative.endswith(".xml"):
-        return tuple(
-            item.id for item in extract_xml_constructs(source, relative)
-        )
+        try:
+            constructs = extract_xml_constructs_bytes(
+                source_bytes, relative
+            )
+        except ValidationFailure:
+            if expected_digest is None:
+                raise
+            constructs = extract_xml_constructs_bytes(
+                source_bytes,
+                relative,
+                compatibility=XmlCompatibility(
+                    expected_relative_path=relative,
+                    expected_sha256=expected_digest,
+                    normalizer=_escape_raw_attribute_lt,
+                ),
+            )
+        return tuple(item.id for item in constructs)
     if relative.endswith(".lua"):
+        try:
+            text = source_bytes.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError("legacy_construct_drift") from error
         return tuple(
             f"lua:{relative}:{line}"
-            for line in executable_lua_lines(
-                source.read_text(encoding="utf-8")
-            )
+            for line in executable_lua_lines(text)
         )
     raise ValueError("invalid_legacy_path")
 
 
-def _validate_construct_snapshots(bundle, legacy_root, selection):
-    root = Path(legacy_root).resolve()
+def _validate_construct_snapshots(bundle, snapshots, selection):
+    if not isinstance(snapshots, dict):
+        snapshots = _legacy_snapshots(bundle, snapshots)
     selected_targets = {
         target.key: target for target in selection.included_targets
     }
+    source_digests = dict(bundle.provenance.source_digests)
     for target in bundle.targets:
         selected_target = selected_targets.get(target.key)
         if selected_target is None:
@@ -294,10 +530,14 @@ def _validate_construct_snapshots(bundle, legacy_root, selection):
         }
         for inventory in target.construct_inventory:
             selected_source = selected_sources.get(inventory.source_path)
-            if selected_source is None:
+            source_bytes = snapshots.get(inventory.source_path)
+            if selected_source is None or source_bytes is None:
                 _fail("legacy_construct_drift")
-            source = (root / inventory.source_path).resolve()
-            extracted_ids = _construct_ids(source, inventory.source_path)
+            extracted_ids = _construct_ids(
+                source_bytes,
+                inventory.source_path,
+                source_digests.get(inventory.source_path),
+            )
             if selected_source.coverage == "complete":
                 expected_ids = extracted_ids
             elif selected_source.coverage == "selected":
@@ -423,10 +663,16 @@ def _runtime_scenario_bytes(state_root, fixture_key):
         _fail("runtime_fixture_mismatch", error)
 
 
-def _validate_runtime(bundle, manifest, selection, roots, lera_bin):
-    binary = Path(lera_bin).resolve()
-    if not binary.is_file() or not os.access(binary, os.X_OK):
-        raise ValueError("missing_lera_binary")
+def _validate_runtime(
+    bundle,
+    manifest,
+    selection,
+    roots,
+    lera_bin,
+    current_snapshots,
+):
+    binary = Path(os.path.abspath(os.fspath(lera_bin)))
+    binary_descriptor = _open_held_executable(binary)
     manifest_targets = {
         target.key: target for target in manifest.legacy_targets
     }
@@ -440,6 +686,35 @@ def _validate_runtime(bundle, manifest, selection, roots, lera_bin):
     stored_results = {
         result.scenario_key: result for result in bundle.runtime_results
     }
+    try:
+        _validate_runtime_cases(
+            bundle,
+            manifest_targets,
+            selected_targets,
+            bundle_targets,
+            current_plugins,
+            stored_results,
+            roots,
+            binary,
+            binary_descriptor,
+            current_snapshots,
+        )
+    finally:
+        os.close(binary_descriptor)
+
+
+def _validate_runtime_cases(
+    bundle,
+    manifest_targets,
+    selected_targets,
+    bundle_targets,
+    current_plugins,
+    stored_results,
+    roots,
+    binary,
+    binary_descriptor,
+    current_snapshots,
+):
     for staged_scenario in bundle.runtime_scenarios:
         content = _runtime_scenario_bytes(
             roots.state_root, staged_scenario.fixture_key
@@ -491,7 +766,11 @@ def _validate_runtime(bundle, manifest, selection, roots, lera_bin):
 
         try:
             outcome = run_scenario(
-                binary, roots.repo_root, scenario
+                binary,
+                roots.repo_root,
+                scenario,
+                plugin_bytes=current_snapshots[scenario.plugin],
+                binary_descriptor=binary_descriptor,
             )
         except (OSError, RuntimeError, ValueError) as error:
             _fail("runtime_failure", error)
@@ -519,27 +798,17 @@ def _validate_issue_links(bundle, manifest):
         _fail("unresolved_blocker")
 
 
-def _write_private_report(path, content):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, temporary = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=path.parent
+def _write_private_report(state_root, path, content):
+    state = Path(os.path.abspath(os.fspath(state_root)))
+    expected = state / "reports" / "full-private-report.md"
+    if Path(os.path.abspath(os.fspath(path))) != expected:
+        raise ValueError("unsafe_private_report_path")
+    _write_private_child_bytes(
+        state_root,
+        "reports",
+        "full-private-report.md",
+        content.encode("utf-8"),
     )
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        if os.name == "posix":
-            path.chmod(0o600)
-    except BaseException:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-        raise
 
 
 def _validate_private(
@@ -575,8 +844,9 @@ def _validate_private(
         bundle = loaded_bundle
     elif bundle != loaded_bundle:
         _fail("staged_bundle_mismatch")
+    legacy_snapshots = _legacy_snapshots(bundle, roots.legacy_root)
     _validate_construct_snapshots(
-        bundle, roots.legacy_root, selection
+        bundle, legacy_snapshots, selection
     )
     if refresh_legacy and discover(roots.legacy_root, selection):
         _fail("unapproved_legacy_candidate")
@@ -589,7 +859,7 @@ def _validate_private(
             binding_digest=approval.binding_digest,
             legacy_commit=_git_commit(roots.legacy_root),
             source_digests=_actual_source_digests(
-                bundle, roots.legacy_root
+                bundle, legacy_snapshots
             ),
             evidence=bundle.evidence,
             refreshed_at=verified_at,
@@ -618,17 +888,42 @@ def _validate_private(
         )
     except ValueError as error:
         _fail(str(error), error)
-    actual_digests = _actual_source_digests(bundle, roots.legacy_root)
+    actual_digests = _actual_source_digests(bundle, legacy_snapshots)
     if (
         separate_provenance.source_digests != actual_digests
         or separate_provenance.legacy_commit
         != _git_commit(roots.legacy_root)
     ):
         _fail("legacy_source_drift")
-    if compare_mirror(roots.repo_root, roots.lera_root / "plugins"):
+    current_snapshots = _capture_current_sources(roots.repo_root)
+    mirror_snapshots = _capture_current_sources(
+        roots.lera_root / "plugins"
+    )
+    expected_current = {item.path for item in manifest.current_plugins}
+    if (
+        set(current_snapshots) != expected_current
+        or set(mirror_snapshots) != expected_current
+        or current_snapshots != mirror_snapshots
+    ):
         _fail("current_mirror_mismatch")
+    for target in manifest.legacy_targets:
+        for feature in target.features:
+            for reference in feature.current_refs:
+                relative, line_number = reference.rsplit(":", 1)
+                content = current_snapshots.get(relative)
+                try:
+                    lines = content.decode("utf-8").splitlines()
+                except (AttributeError, UnicodeDecodeError) as error:
+                    _fail("public_current_reference", error)
+                if int(line_number) > len(lines):
+                    _fail("public_current_reference")
     _validate_runtime(
-        bundle, manifest, selection, roots, lera_bin
+        bundle,
+        manifest,
+        selection,
+        roots,
+        lera_bin,
+        current_snapshots,
     )
     _validate_issue_links(bundle, manifest)
     deny_tokens = build_private_deny_tokens(
@@ -690,7 +985,7 @@ def validate_full_private(
     report = render_private_report(
         manifest, verified_at=verified_at
     )
-    _write_private_report(report_path, report)
+    _write_private_report(roots.state_root, report_path, report)
     return ValidationSummary(
         level="full-private", text=report, report_path=report_path
     )

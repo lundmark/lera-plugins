@@ -1,7 +1,9 @@
 import contextlib
 import io
 import subprocess
+import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 from unittest import mock
 
@@ -70,3 +72,71 @@ class CliSmokeTests(unittest.TestCase):
             self.assertEqual(
                 entrypoint(["sync-issues", "--staged", private_value]), 3
             )
+
+    def test_scope_proposal_io_rejects_symlink_redirects(self):
+        cli = __import__("tools.legacy_parity.cli", fromlist=["proposal"])
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            external = root / "external"
+            external.mkdir(mode=0o700)
+            state = root / "state"
+            state.symlink_to(external, target_is_directory=True)
+            proposal = state / "proposal.json"
+
+            with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+                cli._write_scope_proposal(
+                    proposal, state, {"version": 1}
+                )
+            self.assertFalse((external / "proposal.json").exists())
+
+            (external / "proposal.json").write_text(
+                '{"version":1}\n', encoding="utf-8"
+            )
+            (external / "proposal.json").chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+                cli._load_scope_proposal(proposal, state)
+
+    def test_scope_proposal_loader_rejects_symlink_and_duplicate_keys(self):
+        cli = __import__("tools.legacy_parity.cli", fromlist=["proposal"])
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            state = root / "state"
+            state.mkdir(mode=0o700)
+            external = root / "external.json"
+            external.write_text('{"version":1}\n', encoding="utf-8")
+            external.chmod(0o600)
+            proposal = state / "proposal.json"
+            proposal.symlink_to(external)
+            with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+                cli._load_scope_proposal(proposal, state)
+
+            proposal.unlink()
+            proposal.write_text(
+                '{"version":1,"version":1}\n', encoding="utf-8"
+            )
+            proposal.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "invalid_scope_proposal"):
+                cli._load_scope_proposal(proposal, state)
+
+    def test_issue_sync_rejects_noncanonical_staged_input_before_github(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            state = root / "state"
+            supplied = root / "crafted.json"
+            supplied.write_text("{}", encoding="utf-8")
+            args = Namespace(
+                staged=str(supplied),
+                state_root=str(state),
+                public_repo=str(root / "repo"),
+                dry_run=False,
+            )
+            with mock.patch(
+                "tools.legacy_parity.cli.sync_capability_issue"
+            ) as synchronize:
+                with self.assertRaisesRegex(
+                    ValueError, "noncanonical_staged_input"
+                ):
+                    __import__(
+                        "tools.legacy_parity.cli", fromlist=["_sync_issues"]
+                    )._sync_issues(args)
+            synchronize.assert_not_called()

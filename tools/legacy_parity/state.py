@@ -1,7 +1,10 @@
+import ctypes
+import errno
 import hashlib
 import json
 import os
-import shutil
+import secrets
+import stat
 import tempfile
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
@@ -58,6 +61,802 @@ def _atomic_json(path, value):
         raise
 
 
+_DIRECTORY_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+_FILE_READ_FLAGS = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+_FILE_WRITE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+
+def _require_secure_private_io():
+    if os.name != "posix":
+        raise ValueError("unsupported_private_io")
+
+
+def _absolute_path(path):
+    return Path(os.path.abspath(os.fspath(path)))
+
+
+def _private_directory_identity(descriptor):
+    record = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(record.st_mode)
+        or stat.S_IMODE(record.st_mode) != 0o700
+        or record.st_uid != os.geteuid()
+    ):
+        raise ValueError("unsafe_private_path")
+    return record.st_dev, record.st_ino
+
+
+def _private_file_identity(descriptor):
+    record = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(record.st_mode)
+        or stat.S_IMODE(record.st_mode) != 0o600
+        or record.st_uid != os.geteuid()
+    ):
+        raise ValueError("unsafe_private_path")
+    return record.st_dev, record.st_ino
+
+
+def _open_private_root(path, *, create=True):
+    if os.name != "posix":
+        root = _absolute_path(path)
+        if root.is_symlink():
+            raise ValueError("unsafe_private_path")
+        if create:
+            root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            root.chmod(0o700)
+        descriptor = os.open(root, os.O_RDONLY)
+        return root, descriptor, (0, 0)
+    root = _absolute_path(path)
+    descriptor = os.open(os.sep, _DIRECTORY_FLAGS)
+    try:
+        parts = root.parts[1:]
+        if not parts:
+            raise ValueError("unsafe_private_path")
+        for index, part in enumerate(parts):
+            final = index == len(parts) - 1
+            created = None
+            if final and create:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=descriptor)
+                    record = os.stat(part, dir_fd=descriptor, follow_symlinks=False)
+                    created = record.st_dev, record.st_ino
+                except FileExistsError:
+                    pass
+            try:
+                next_descriptor = os.open(part, _DIRECTORY_FLAGS, dir_fd=descriptor)
+            except OSError as error:
+                raise ValueError("unsafe_private_path") from error
+            os.close(descriptor)
+            descriptor = next_descriptor
+            if created is not None and _private_directory_identity(descriptor) != created:
+                raise ValueError("unsafe_private_path")
+        if create:
+            record = os.fstat(descriptor)
+            if not stat.S_ISDIR(record.st_mode) or record.st_uid != os.geteuid():
+                raise ValueError("unsafe_private_path")
+            os.fchmod(descriptor, 0o700)
+        identity = _private_directory_identity(descriptor)
+        return root, descriptor, identity
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _verify_private_root(path, expected):
+    _, descriptor, identity = _open_private_root(path, create=False)
+    try:
+        if identity != expected:
+            raise ValueError("unsafe_private_path")
+    finally:
+        os.close(descriptor)
+
+
+def _open_private_child(root_path, root_descriptor, root_identity, name, *, create=True):
+    _verify_private_root(root_path, root_identity)
+    created = None
+    if create:
+        try:
+            os.mkdir(name, 0o700, dir_fd=root_descriptor)
+            record = os.stat(name, dir_fd=root_descriptor, follow_symlinks=False)
+            created = record.st_dev, record.st_ino
+        except FileExistsError:
+            pass
+    try:
+        descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=root_descriptor)
+    except OSError as error:
+        raise ValueError("unsafe_private_path") from error
+    try:
+        if create:
+            record = os.fstat(descriptor)
+            if not stat.S_ISDIR(record.st_mode) or record.st_uid != os.geteuid():
+                raise ValueError("unsafe_private_path")
+            os.fchmod(descriptor, 0o700)
+        identity = _private_directory_identity(descriptor)
+        if created is not None and identity != created:
+            raise ValueError("unsafe_private_path")
+        _verify_private_root(root_path, root_identity)
+        return descriptor, identity
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _verify_private_child(root_path, root_identity, name, child_identity):
+    _, root_descriptor, identity = _open_private_root(root_path, create=False)
+    try:
+        if identity != root_identity:
+            raise ValueError("unsafe_private_path")
+        try:
+            child = os.open(name, _DIRECTORY_FLAGS, dir_fd=root_descriptor)
+        except OSError as error:
+            raise ValueError("unsafe_private_path") from error
+        try:
+            if _private_directory_identity(child) != child_identity:
+                raise ValueError("unsafe_private_path")
+        finally:
+            os.close(child)
+    finally:
+        os.close(root_descriptor)
+
+
+def _write_all(descriptor, content):
+    view = memoryview(content)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise OSError("short private write")
+        view = view[written:]
+
+
+def _write_temp_at(directory, content, prefix, recovery):
+    for _ in range(128):
+        name = f".{prefix}.{secrets.token_hex(12)}"
+        try:
+            descriptor = os.open(name, _FILE_WRITE_FLAGS, 0o600, dir_fd=directory)
+        except FileExistsError:
+            continue
+        try:
+            os.fchmod(descriptor, 0o600)
+            _private_file_identity(descriptor)
+            _write_all(descriptor, content)
+            os.fsync(descriptor)
+            return name, descriptor
+        except BaseException as primary:
+            identity = _descriptor_identity(descriptor)
+            os.close(descriptor)
+            try:
+                _retire_identity_aliases(
+                    directory, recovery, identity
+                )
+            except BaseException as cleanup_error:
+                raise cleanup_error from primary
+            raise
+    raise ValueError("unsafe_private_path")
+
+
+def _named_identity(directory, name):
+    try:
+        record = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    return record.st_dev, record.st_ino
+
+
+def _descriptor_identity(descriptor):
+    record = os.fstat(descriptor)
+    return record.st_dev, record.st_ino
+
+
+_RENAME_NOREPLACE = 1
+_RENAME_EXCHANGE = 2
+
+
+def _renameat2_between(
+    source_directory,
+    source,
+    destination_directory,
+    destination,
+    flags,
+):
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise ValueError("unsupported_private_io")
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        source_directory,
+        os.fsencode(source),
+        destination_directory,
+        os.fsencode(destination),
+        flags,
+    )
+    if result == 0:
+        return
+    failure = ctypes.get_errno()
+    if failure == errno.EEXIST:
+        raise FileExistsError(destination)
+    raise OSError(failure, os.strerror(failure), destination)
+
+
+def _renameat2_at(directory, source, destination, flags):
+    _renameat2_between(
+        directory, source, directory, destination, flags
+    )
+
+
+def _identity_names_at(directory, identity):
+    if identity is None:
+        return ()
+    matches = []
+    for name in os.listdir(directory):
+        try:
+            actual = _named_identity(directory, name)
+        except OSError:
+            continue
+        if actual == identity:
+            matches.append(name)
+    return tuple(matches)
+
+
+def _retire_name(directory, name, recovery, expected):
+    for _ in range(128):
+        destination = f"writer-{secrets.token_hex(16)}"
+        try:
+            _renameat2_between(
+                directory,
+                name,
+                recovery,
+                destination,
+                _RENAME_NOREPLACE,
+            )
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise ValueError("unsafe_private_path")
+    actual = _named_identity(recovery, destination)
+    try:
+        descriptor = os.open(
+            destination, _FILE_READ_FLAGS, dir_fd=recovery
+        )
+    except OSError as error:
+        os.fsync(directory)
+        os.fsync(recovery)
+        raise ValueError("unsafe_private_path") from error
+    try:
+        metadata = os.fstat(descriptor)
+        opened = (metadata.st_dev, metadata.st_ino)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+        ):
+            raise ValueError("unsafe_private_path")
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        if (
+            opened != actual
+            or _named_identity(recovery, destination) != opened
+        ):
+            raise ValueError("unsafe_private_path")
+    finally:
+        os.close(descriptor)
+        os.fsync(directory)
+        os.fsync(recovery)
+    return actual == expected
+
+
+def _retire_identity_aliases(
+    directory, recovery, identity, *, preserve=()
+):
+    if identity is None:
+        return
+    preserved = set(preserve)
+    mismatch = False
+    for _ in range(128):
+        aliases = tuple(
+            alias
+            for alias in _identity_names_at(directory, identity)
+            if alias not in preserved
+        )
+        if not aliases:
+            if mismatch:
+                raise ValueError("unsafe_private_path")
+            return
+        for alias in aliases:
+            if not _retire_name(
+                directory, alias, recovery, identity
+            ):
+                mismatch = True
+    raise ValueError("unsafe_private_path")
+
+
+def _retire_if_same(directory, name, descriptor, recovery):
+    identity = _descriptor_identity(descriptor)
+    if _named_identity(directory, name) != identity:
+        return False
+    if not _retire_name(directory, name, recovery, identity):
+        _retire_identity_aliases(
+            directory, recovery, identity
+        )
+        raise ValueError("unsafe_private_path")
+    return True
+
+
+
+def _replace_at(directory, source, destination, replace_operation):
+    replace_operation(
+        f"/proc/self/fd/{directory}/{source}",
+        f"/proc/self/fd/{directory}/{destination}",
+    )
+
+
+def _read_descriptor(descriptor):
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    chunks = []
+    while True:
+        chunk = os.read(descriptor, 65536)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _read_optional_at(directory, name):
+    before = _named_identity(directory, name)
+    if before is None:
+        return None, None
+    try:
+        descriptor = os.open(name, _FILE_READ_FLAGS, dir_fd=directory)
+    except (FileNotFoundError, OSError) as error:
+        raise ValueError("unsafe_private_path") from error
+    try:
+        identity = _private_file_identity(descriptor)
+        if before != identity:
+            raise ValueError("unsafe_private_path")
+        content = _read_descriptor(descriptor)
+        if _named_identity(directory, name) != identity:
+            raise ValueError("unsafe_private_path")
+        return content, identity
+    finally:
+        os.close(descriptor)
+
+
+def _read_required_at(directory, name):
+    content, identity = _read_optional_at(directory, name)
+    if content is None or identity is None:
+        raise FileNotFoundError(name)
+    return content
+
+
+def _destination_unchanged(directory, name, original_identity):
+    if _named_identity(directory, name) != original_identity:
+        raise ValueError("unsafe_private_path")
+
+
+def _prepare_bytes_record(directory, recovery, name, content):
+    if not isinstance(content, bytes):
+        raise ValueError("invalid_private_bytes")
+    original_content, original_identity = _read_optional_at(directory, name)
+    temporary, descriptor = _write_temp_at(
+        directory, content, name, recovery
+    )
+    return {
+        "directory": directory,
+        "recovery": recovery,
+        "name": name,
+        "temporary": temporary,
+        "descriptor": descriptor,
+        "identity": _descriptor_identity(descriptor),
+        "original_content": original_content,
+        "original_identity": original_identity,
+        "mode": None,
+        "published": False,
+    }
+
+
+def _prepare_json_record(directory, recovery, name, value):
+    return _prepare_bytes_record(
+        directory, recovery, name, _json_bytes(value)
+    )
+
+
+def _publish_record(record, replace_operation=None):
+    directory = record["directory"]
+    name = record["name"]
+    temporary = record["temporary"]
+    _destination_unchanged(directory, name, record["original_identity"])
+    try:
+        if replace_operation is not None:
+            record["mode"] = "replace"
+            _replace_at(directory, temporary, name, replace_operation)
+        elif record["original_identity"] is None:
+            record["mode"] = "noreplace"
+            _renameat2_at(
+                directory, temporary, name, _RENAME_NOREPLACE
+            )
+        else:
+            record["mode"] = "exchange"
+            _renameat2_at(
+                directory, temporary, name, _RENAME_EXCHANGE
+            )
+        record["published"] = True
+    except BaseException:
+        candidate_at_name = _named_identity(directory, name) == record["identity"]
+        candidate_at_temporary = (
+            _named_identity(directory, temporary) == record["identity"]
+        )
+        candidate_aliases = _identity_names_at(
+            directory, record["identity"]
+        )
+        if candidate_at_name or (
+            candidate_aliases and not candidate_at_temporary
+        ):
+            record["published"] = True
+        raise
+    if _named_identity(directory, name) != record["identity"]:
+        raise ValueError("unsafe_private_path")
+    if record["mode"] == "exchange":
+        if (
+            _named_identity(directory, temporary)
+            != record["original_identity"]
+        ):
+            raise ValueError("unsafe_private_path")
+    elif _named_identity(directory, temporary) is not None:
+        raise ValueError("unsafe_private_path")
+
+
+def _cleanup_displaced_record(record):
+    directory = record["directory"]
+    recovery = record["recovery"]
+    name = record["name"]
+    temporary = record["temporary"]
+    original_identity = record["original_identity"]
+    preserve_original = (
+        (name,) if _named_identity(directory, name) == original_identity else ()
+    )
+    _retire_identity_aliases(
+        directory, recovery, record["identity"]
+    )
+    _retire_identity_aliases(
+        directory,
+        recovery,
+        original_identity,
+        preserve=preserve_original,
+    )
+    temporary_identity = _named_identity(directory, temporary)
+    owned = {record["identity"], original_identity, None}
+    if temporary_identity not in owned:
+        raise ValueError("unsafe_private_path")
+
+
+def _rollback_record(record):
+    directory = record["directory"]
+    recovery = record["recovery"]
+    name = record["name"]
+    temporary = record["temporary"]
+    identity = record["identity"]
+    mode = record["mode"]
+    if not record["published"]:
+        _cleanup_displaced_record(record)
+        return
+
+    if mode == "exchange":
+        if (
+            _named_identity(directory, name) == identity
+            and _named_identity(directory, temporary) is not None
+        ):
+            _renameat2_at(
+                directory, name, temporary, _RENAME_EXCHANGE
+            )
+            if _named_identity(directory, temporary) != identity:
+                raise ValueError("unsafe_private_path")
+            if not _retire_if_same(
+                directory,
+                temporary,
+                record["descriptor"],
+                recovery,
+            ):
+                raise ValueError("unsafe_private_path")
+            _retire_identity_aliases(
+                directory,
+                recovery,
+                record["original_identity"],
+                preserve=(
+                    (name,)
+                    if _named_identity(directory, name)
+                    == record["original_identity"]
+                    else ()
+                ),
+            )
+            return
+        _cleanup_displaced_record(record)
+        return
+
+    if mode == "noreplace":
+        if _named_identity(directory, name) == identity:
+            if _named_identity(directory, temporary) is not None:
+                raise ValueError("unsafe_private_path")
+            _renameat2_at(
+                directory, name, temporary, _RENAME_NOREPLACE
+            )
+            if not _retire_if_same(
+                directory,
+                temporary,
+                record["descriptor"],
+                recovery,
+            ):
+                raise ValueError("unsafe_private_path")
+            return
+        _cleanup_displaced_record(record)
+        return
+
+    if mode == "replace":
+        if _named_identity(directory, name) != identity:
+            _cleanup_displaced_record(record)
+            return
+        if record["original_content"] is None:
+            if not _retire_if_same(
+                directory, name, record["descriptor"], recovery
+            ):
+                raise ValueError("unsafe_private_path")
+            return
+        restore, restore_descriptor = _write_temp_at(
+            directory,
+            record["original_content"],
+            f"restore-{name}",
+            recovery,
+        )
+        try:
+            _renameat2_at(
+                directory, restore, name, _RENAME_EXCHANGE
+            )
+            if (
+                _named_identity(directory, name)
+                != _descriptor_identity(restore_descriptor)
+                or _named_identity(directory, restore) != identity
+            ):
+                raise ValueError("unsafe_private_path")
+            if not _retire_if_same(
+                directory,
+                restore,
+                record["descriptor"],
+                recovery,
+            ):
+                raise ValueError("unsafe_private_path")
+        finally:
+            _retire_if_same(
+                directory, restore, restore_descriptor, recovery
+            )
+            os.close(restore_descriptor)
+        return
+
+    _cleanup_displaced_record(record)
+
+
+def _finalize_record(record):
+    if record["mode"] != "exchange":
+        return
+    directory = record["directory"]
+    recovery = record["recovery"]
+    temporary = record["temporary"]
+    original_identity = record["original_identity"]
+    if _named_identity(directory, temporary) != original_identity:
+        _retire_identity_aliases(
+            directory,
+            recovery,
+            original_identity,
+            preserve=(
+                (record["name"],)
+                if _named_identity(directory, record["name"])
+                == original_identity
+                else ()
+            ),
+        )
+        raise ValueError("unsafe_private_path")
+    try:
+        retired = _retire_name(
+            directory, temporary, recovery, original_identity
+        )
+    except BaseException:
+        _retire_identity_aliases(
+            directory,
+            recovery,
+            original_identity,
+        )
+        raise
+    if not retired:
+        _retire_identity_aliases(
+            directory,
+            recovery,
+            original_identity,
+        )
+        raise ValueError("unsafe_private_path")
+
+
+def _close_record(record):
+    try:
+        _retire_identity_aliases(
+            record["directory"],
+            record["recovery"],
+            record["identity"],
+            preserve=(
+                (record["name"],)
+                if _named_identity(
+                    record["directory"], record["name"]
+                )
+                == record["identity"]
+                else ()
+            ),
+        )
+    finally:
+        os.close(record["descriptor"])
+
+
+
+def _atomic_bytes_at(
+    directory,
+    name,
+    content,
+    verify_tree,
+    *,
+    recovery,
+    replace_operation=None,
+):
+    verify_tree()
+    record = _prepare_bytes_record(
+        directory, recovery, name, content
+    )
+    try:
+        try:
+            verify_tree()
+            _publish_record(record, replace_operation)
+            verify_tree()
+            os.fsync(directory)
+        except BaseException as primary:
+            try:
+                _rollback_record(record)
+                os.fsync(directory)
+            except BaseException as cleanup_error:
+                raise cleanup_error from primary
+            raise
+        _finalize_record(record)
+        os.fsync(directory)
+    finally:
+        _close_record(record)
+
+
+def _atomic_json_at(
+    directory,
+    name,
+    value,
+    verify_tree,
+    *,
+    recovery,
+    replace_operation=None,
+):
+    _atomic_bytes_at(
+        directory,
+        name,
+        _json_bytes(value),
+        verify_tree,
+        recovery=recovery,
+        replace_operation=replace_operation,
+    )
+
+
+
+
+def _write_private_root_bytes(state_root, name, content):
+    _require_secure_private_io()
+    root_path, root_descriptor, root_identity = _open_private_root(state_root)
+    recovery_descriptor = None
+    try:
+        recovery_descriptor, recovery_identity = _open_private_child(
+            root_path, root_descriptor, root_identity, "recoveries"
+        )
+
+        def verify_tree():
+            _verify_private_root(root_path, root_identity)
+            _verify_private_child(
+                root_path,
+                root_identity,
+                "recoveries",
+                recovery_identity,
+            )
+
+        _atomic_bytes_at(
+            root_descriptor,
+            name,
+            content,
+            verify_tree,
+            recovery=recovery_descriptor,
+        )
+    finally:
+        if recovery_descriptor is not None:
+            os.close(recovery_descriptor)
+        os.close(root_descriptor)
+
+
+def _write_private_child_bytes(state_root, child_name, name, content):
+    _require_secure_private_io()
+    root_path, root_descriptor, root_identity = _open_private_root(state_root)
+    child_descriptor = None
+    recovery_descriptor = None
+    try:
+        recovery_descriptor, recovery_identity = _open_private_child(
+            root_path, root_descriptor, root_identity, "recoveries"
+        )
+        child_descriptor, child_identity = _open_private_child(
+            root_path, root_descriptor, root_identity, child_name
+        )
+
+        def verify_tree():
+            _verify_private_root(root_path, root_identity)
+            _verify_private_child(
+                root_path, root_identity, child_name, child_identity
+            )
+            _verify_private_child(
+                root_path,
+                root_identity,
+                "recoveries",
+                recovery_identity,
+            )
+
+        _atomic_bytes_at(
+            child_descriptor,
+            name,
+            content,
+            verify_tree,
+            recovery=recovery_descriptor,
+        )
+    finally:
+        if child_descriptor is not None:
+            os.close(child_descriptor)
+        if recovery_descriptor is not None:
+            os.close(recovery_descriptor)
+        os.close(root_descriptor)
+
+
+def _load_private_root_bytes(state_root, name):
+    _require_secure_private_io()
+    root_path, root_descriptor, root_identity = _open_private_root(
+        state_root, create=False
+    )
+    try:
+        content = _read_required_at(root_descriptor, name)
+        _verify_private_root(root_path, root_identity)
+        return content
+    finally:
+        os.close(root_descriptor)
+
+
+def _unique_json_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate_private_json_key")
+        value[key] = item
+    return value
+
+
+def _load_private_json_bytes(content, code):
+    try:
+        return json.loads(
+            content.decode("utf-8"),
+            object_pairs_hook=_unique_json_object,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError(code) from error
+
+
 def approve_scope(
     state_root,
     manifest,
@@ -78,8 +877,9 @@ def approve_scope(
         binding_digest=binding_digest(bindings),
         private_bindings=binding_bytes.decode("utf-8"),
     )
-    root = _ensure_state_root(state_root)
-    _atomic_json(root / "approval.json", asdict(approval))
+    _write_private_root_bytes(
+        state_root, "approval.json", _json_bytes(asdict(approval))
+    )
     return approval
 
 
@@ -144,19 +944,17 @@ def approve_canonical_scope(
         binding_digest=private_digest,
         private_bindings=private_bindings,
     )
-    root = _ensure_state_root(state_root)
-    _atomic_json(root / "approval.json", asdict(approval))
+    _write_private_root_bytes(
+        state_root, "approval.json", _json_bytes(asdict(approval))
+    )
     return approval
 
 
 def load_approval(state_root):
-    path = Path(state_root) / "approval.json"
-    if os.name == "posix":
-        if path.parent.stat().st_mode & 0o077:
-            raise ValueError("unsafe_state_permissions")
-        if path.stat().st_mode & 0o077:
-            raise ValueError("unsafe_approval_permissions")
-    value = json.loads(path.read_text(encoding="utf-8"))
+    value = _load_private_json_bytes(
+        _load_private_root_bytes(state_root, "approval.json"),
+        "invalid_approval_json",
+    )
     if set(value) != {
         "version",
         "revision",
@@ -230,18 +1028,41 @@ def _validate_provenance(provenance, approved_paths):
 
 def write_provenance(state_root, provenance, *, approved_paths):
     _validate_provenance(provenance, approved_paths)
-    root = _ensure_state_root(state_root)
-    _atomic_json(root / "provenance.json", asdict(provenance))
+    _require_secure_private_io()
+    root_path, root_descriptor, root_identity = _open_private_root(state_root)
+    recovery_descriptor = None
+    try:
+        recovery_descriptor, recovery_identity = _open_private_child(
+            root_path,
+            root_descriptor,
+            root_identity,
+            "recoveries",
+        )
+
+        def verify_tree():
+            _verify_private_root(root_path, root_identity)
+            _verify_private_child(
+                root_path,
+                root_identity,
+                "recoveries",
+                recovery_identity,
+            )
+
+        _atomic_json_at(
+            root_descriptor,
+            "provenance.json",
+            asdict(provenance),
+            verify_tree,
+            recovery=recovery_descriptor,
+        )
+    finally:
+        if recovery_descriptor is not None:
+            os.close(recovery_descriptor)
+        os.close(root_descriptor)
 
 
-def load_provenance(state_root):
-    path = Path(state_root) / "provenance.json"
-    if os.name == "posix":
-        if path.parent.stat().st_mode & 0o077:
-            raise ValueError("unsafe_state_permissions")
-        if path.stat().st_mode & 0o077:
-            raise ValueError("unsafe_provenance_permissions")
-    value = json.loads(path.read_text(encoding="utf-8"))
+
+def _provenance_from_value(value):
     required = {
         "version",
         "scope_revision",
@@ -285,6 +1106,25 @@ def load_provenance(state_root):
     return provenance
 
 
+def load_provenance(state_root):
+    _require_secure_private_io()
+
+    root_path, root_descriptor, root_identity = _open_private_root(
+        state_root, create=False
+    )
+    try:
+        content = _read_required_at(root_descriptor, "provenance.json")
+        _verify_private_root(root_path, root_identity)
+    finally:
+        os.close(root_descriptor)
+    try:
+        value = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("invalid_provenance_json") from error
+    return _provenance_from_value(value)
+
+
+
 def _json_bytes(value):
     return (
         json.dumps(
@@ -313,48 +1153,90 @@ def write_provenance_transaction(
 ):
     """Replace provenance and its staged snapshot as one rollback-safe unit."""
 
-    approved_paths = tuple(
-        path for path, _ in provenance.source_digests
-    )
+    approved_paths = tuple(path for path, _ in provenance.source_digests)
     _validate_provenance(provenance, approved_paths)
-    root = _ensure_state_root(state_root)
-    staged = root / "staged"
-    staged.mkdir(mode=0o700, exist_ok=True)
-    if os.name == "posix":
-        staged.chmod(0o700)
-    destinations = (
-        root / "provenance.json",
-        staged / "audit-bundle.json",
-    )
-    originals = tuple(
-        path.read_bytes() if path.is_file() else None
-        for path in destinations
-    )
-    directory = Path(tempfile.mkdtemp(prefix=".provenance-", dir=root))
-    replace = replace_operation or os.replace
+    _require_secure_private_io()
+
+    root_path, root_descriptor, root_identity = _open_private_root(state_root)
+    staged_descriptor = None
+    recovery_descriptor = None
+    records = []
     try:
-        candidates = (
-            directory / "provenance.json",
-            directory / "audit-bundle.json",
+        recovery_descriptor, recovery_identity = _open_private_child(
+            root_path,
+            root_descriptor,
+            root_identity,
+            "recoveries",
         )
-        _write_bytes(candidates[0], _json_bytes(asdict(provenance)))
-        _write_bytes(candidates[1], _json_bytes(asdict(bundle)))
+        staged_descriptor, staged_identity = _open_private_child(
+            root_path, root_descriptor, root_identity, "staged"
+        )
+
+        def verify_tree():
+            _verify_private_root(root_path, root_identity)
+            _verify_private_child(
+                root_path, root_identity, "staged", staged_identity
+            )
+            _verify_private_child(
+                root_path,
+                root_identity,
+                "recoveries",
+                recovery_identity,
+            )
+
+        destinations = (
+            (root_descriptor, "provenance.json", asdict(provenance)),
+            (staged_descriptor, "audit-bundle.json", asdict(bundle)),
+        )
+        verify_tree()
+        for directory, name, value in destinations:
+            records.append(
+                _prepare_json_record(
+                    directory,
+                    recovery_descriptor,
+                    name,
+                    value,
+                )
+            )
+
         try:
-            for source, destination in zip(candidates, destinations):
-                replace(source, destination)
-                if os.name == "posix":
-                    destination.chmod(0o600)
-        except BaseException:
-            for destination, original in zip(destinations, originals):
-                if original is None:
-                    try:
-                        destination.unlink()
-                    except FileNotFoundError:
-                        pass
-                else:
-                    restore = directory / f"restore-{destination.name}"
-                    _write_bytes(restore, original)
-                    os.replace(restore, destination)
+            for record in records:
+                verify_tree()
+                _publish_record(record, replace_operation)
+                verify_tree()
+            os.fsync(root_descriptor)
+            os.fsync(staged_descriptor)
+        except BaseException as primary:
+            cleanup_error = None
+            for record in reversed(records):
+                try:
+                    _rollback_record(record)
+                except BaseException as error:
+                    if cleanup_error is None:
+                        cleanup_error = error
+            os.fsync(root_descriptor)
+            os.fsync(staged_descriptor)
+            if cleanup_error is not None:
+                raise cleanup_error from primary
             raise
+
+        cleanup_error = None
+        for record in records:
+            try:
+                _finalize_record(record)
+            except BaseException as error:
+                if cleanup_error is None:
+                    cleanup_error = error
+        os.fsync(root_descriptor)
+        os.fsync(staged_descriptor)
+        if cleanup_error is not None:
+            raise cleanup_error
+        verify_tree()
     finally:
-        shutil.rmtree(directory, ignore_errors=True)
+        for record in records:
+            _close_record(record)
+        if staged_descriptor is not None:
+            os.close(staged_descriptor)
+        if recovery_descriptor is not None:
+            os.close(recovery_descriptor)
+        os.close(root_descriptor)

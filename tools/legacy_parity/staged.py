@@ -12,7 +12,17 @@ from pathlib import Path, PurePosixPath
 from .compare import validate_target
 from .model import Evidence, Feature
 from .scope import canonical_scope
-from .state import LocalEvidence, ProvenanceState
+from .state import (
+    LocalEvidence,
+    ProvenanceState,
+    _atomic_json_at,
+    _open_private_child,
+    _open_private_root,
+    _read_required_at,
+    _require_secure_private_io,
+    _verify_private_child,
+    _verify_private_root,
+)
 
 
 _ARTIFACT_KEYS = frozenset(
@@ -376,18 +386,22 @@ def _unique_object(pairs):
     return value
 
 
-def parse_staged_bundle(path) -> StagedAuditBundle:
+def _parse_staged_bytes(content) -> StagedAuditBundle:
     try:
         value = json.loads(
-            Path(path).read_text(encoding="utf-8"),
+            content.decode("utf-8"),
             object_pairs_hook=_unique_object,
         )
-    except json.JSONDecodeError as error:
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("invalid_staged_json") from error
     bundle = _bundle(value)
     if bundle.version != 1:
         raise ValueError("invalid_staged_version")
     return bundle
+
+
+def parse_staged_bundle(path) -> StagedAuditBundle:
+    return _parse_staged_bytes(Path(path).read_bytes())
 
 
 def provenance_digest(provenance) -> str:
@@ -440,7 +454,9 @@ def _validate_target_set(bundle, manifest, selection):
     return manifest_targets, selected_targets, bundle_targets
 
 
-def _validate_targets(bundle, manifest, selection):
+def _validate_targets(
+    bundle, manifest, selection, *, allow_unresolved_issues=False
+):
     manifest_targets, selected_targets, bundle_targets = _validate_target_set(
         bundle, manifest, selection
     )
@@ -550,6 +566,7 @@ def _validate_targets(bundle, manifest, selection):
             evidence_scopes=scopes,
             private_evidence=private_evidence,
             full_private=True,
+            allow_unresolved_issues=allow_unresolved_issues,
         )
         if findings:
             raise ValueError("staged_feature_validation")
@@ -573,6 +590,13 @@ def _validate_evidence(bundle):
 
 def _validate_blockers(bundle, manifest):
     blocker_by_key = {item.key: item for item in bundle.blockers}
+    linked_urls = tuple(
+        item.issue_url
+        for item in bundle.blockers
+        if item.issue_url is not None
+    )
+    if len(linked_urls) != len(set(linked_urls)):
+        raise ValueError("staged_blocker_derivation")
     derived = {}
     evidence_by_feature = {
         (item.target, item.feature): item.key for item in bundle.evidence
@@ -674,6 +698,43 @@ def _validate_artifacts(bundle, candidate_artifacts):
             raise ValueError("candidate_artifact_hash")
 
 
+def validate_issue_sync_bundle(
+    bundle,
+    *,
+    manifest,
+    approval,
+    selection,
+    separate_provenance,
+    candidate_artifacts=None,
+) -> None:
+    _validate_scope(bundle, manifest, approval)
+    _validate_target_set(bundle, manifest, selection)
+    _validate_evidence(bundle)
+    _validate_targets(
+        bundle,
+        manifest,
+        selection,
+        allow_unresolved_issues=True,
+    )
+    _validate_blockers(bundle, manifest)
+    _validate_runtime(
+        bundle, {target.key for target in manifest.legacy_targets}
+    )
+    _validate_provenance(bundle, approval, separate_provenance)
+
+    hashes = {item.key: item.digest for item in bundle.artifact_hashes}
+    provisional = (
+        len(hashes) == len(bundle.artifact_hashes)
+        and set(hashes) == _ARTIFACT_KEYS
+        and set(hashes.values()) == {"0" * 64}
+    )
+    if provisional:
+        return
+    if any(blocker.issue_url is None for blocker in bundle.blockers):
+        raise ValueError("candidate_artifact_hash")
+    _validate_artifacts(bundle, candidate_artifacts or {})
+
+
 def validate_staged_bundle(
     bundle,
     *,
@@ -716,27 +777,81 @@ def _atomic_json(path, value):
 
 
 def write_staged_bundle(state_root, bundle, *, public_repo):
-    root = Path(state_root).resolve()
+    root_lexical = Path(os.path.abspath(os.fspath(state_root)))
     public = Path(public_repo).resolve()
-    if root == public or public in root.parents:
+    if root_lexical == public or public in root_lexical.parents:
         raise ValueError("public_staged_path")
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    staged = root / "staged"
-    staged.mkdir(mode=0o700, exist_ok=True)
-    if os.name == "posix":
-        root.chmod(0o700)
-        staged.chmod(0o700)
-    _atomic_json(staged / "audit-bundle.json", asdict(bundle))
+    _require_secure_private_io()
+    root_path, root_descriptor, root_identity = _open_private_root(
+        root_lexical
+    )
+    staged_descriptor = None
+    recovery_descriptor = None
+    try:
+        recovery_descriptor, recovery_identity = _open_private_child(
+            root_path,
+            root_descriptor,
+            root_identity,
+            "recoveries",
+        )
+        staged_descriptor, staged_identity = _open_private_child(
+            root_path, root_descriptor, root_identity, "staged"
+        )
+
+        def verify_tree():
+            _verify_private_root(root_path, root_identity)
+            _verify_private_child(
+                root_path, root_identity, "staged", staged_identity
+            )
+            _verify_private_child(
+                root_path,
+                root_identity,
+                "recoveries",
+                recovery_identity,
+            )
+
+        _atomic_json_at(
+            staged_descriptor,
+            "audit-bundle.json",
+            asdict(bundle),
+            verify_tree,
+            recovery=recovery_descriptor,
+        )
+    finally:
+        if staged_descriptor is not None:
+            os.close(staged_descriptor)
+        if recovery_descriptor is not None:
+            os.close(recovery_descriptor)
+        os.close(root_descriptor)
 
 
 def load_staged_bundle(state_root):
-    path = Path(state_root) / "staged" / "audit-bundle.json"
-    if os.name == "posix":
-        if path.parent.stat().st_mode & 0o077:
-            raise ValueError("unsafe_staged_directory")
-        if path.stat().st_mode & 0o077:
-            raise ValueError("unsafe_staged_permissions")
-    return parse_staged_bundle(path)
+    _require_secure_private_io()
+
+    root_path, root_descriptor, root_identity = _open_private_root(
+        state_root, create=False
+    )
+    staged_descriptor = None
+    try:
+        staged_descriptor, staged_identity = _open_private_child(
+            root_path,
+            root_descriptor,
+            root_identity,
+            "staged",
+            create=False,
+        )
+        content = _read_required_at(
+            staged_descriptor, "audit-bundle.json"
+        )
+        _verify_private_root(root_path, root_identity)
+        _verify_private_child(
+            root_path, root_identity, "staged", staged_identity
+        )
+    finally:
+        if staged_descriptor is not None:
+            os.close(staged_descriptor)
+        os.close(root_descriptor)
+    return _parse_staged_bytes(content)
 
 
 def with_issue_url(bundle, blocker_key, issue_url):

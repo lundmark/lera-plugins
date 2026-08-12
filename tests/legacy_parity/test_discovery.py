@@ -171,5 +171,22 @@ class DiscoveryTests(unittest.TestCase):
             )
 
 
+    def test_selection_reader_and_writer_reject_symlinked_state(self):
+        target_state = record_omitted_candidate(
+            self.empty, "plugins/alpha.xml", self.root
+        )
+        external = Path(self.temp.name) / "external-state"
+        write_selection(external, target_state, public_repo=self.root)
+        state = Path(self.temp.name) / "state-link"
+        state.symlink_to(external, target_is_directory=True)
+
+        with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+            load_selection(state)
+        (external / "selection.json").unlink()
+        with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+            write_selection(state, target_state, public_repo=self.root)
+        self.assertFalse((external / "selection.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

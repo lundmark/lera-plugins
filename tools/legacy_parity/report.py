@@ -144,13 +144,22 @@ def resolve_private_report_path(
 ) -> Path:
     state = Path(state_root).resolve()
     repo = Path(repo_root).resolve()
+    reports = state / "reports"
     candidate = (
         Path(requested).resolve()
         if requested is not None
-        else state / "reports" / "full-private-report.md"
+        else reports / "full-private-report.md"
     )
     try:
         candidate.relative_to(repo)
     except ValueError:
-        return candidate
-    raise ValueError("public_private_report_path")
+        pass
+    else:
+        raise ValueError("public_private_report_path")
+    try:
+        relative = candidate.relative_to(reports)
+    except ValueError as error:
+        raise ValueError("unsafe_private_report_path") from error
+    if len(relative.parts) != 1 or relative.name != "full-private-report.md":
+        raise ValueError("unsafe_private_report_path")
+    return candidate

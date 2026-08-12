@@ -105,6 +105,7 @@ def validate_evidence(
     private_evidence=None,
     full_private=False,
     declared_construct_scope=(),
+    allow_unresolved_issues=False,
 ) -> tuple[Finding, ...]:
     public_key = f"{target_key}.{feature.key}"
     findings = []
@@ -150,7 +151,9 @@ def validate_evidence(
         capability = capability_by_key.get(feature.capability)
         if capability is None:
             findings.append(_finding("unknown_blocker_capability", public_key))
-        elif not _ISSUE_RE.fullmatch(capability.issue_url):
+        elif not (
+            allow_unresolved_issues and capability.issue_url == ""
+        ) and not _ISSUE_RE.fullmatch(capability.issue_url):
             findings.append(_finding("invalid_capability_issue_url", public_key))
 
     if feature.status == "waived":
@@ -207,6 +210,7 @@ def validate_target(
     evidence_scopes=None,
     private_evidence=None,
     full_private=False,
+    allow_unresolved_issues=False,
 ) -> tuple[Finding, ...]:
     del current_paths  # Current reference syntax/path validation is a separate gate.
     findings = []
@@ -254,6 +258,7 @@ def validate_target(
                 private_evidence=private_evidence,
                 full_private=full_private,
                 declared_construct_scope=declared_scope,
+                allow_unresolved_issues=allow_unresolved_issues,
             )
         )
     return tuple(dict.fromkeys(findings))

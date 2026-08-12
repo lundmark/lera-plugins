@@ -11,6 +11,9 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from unittest import mock
 
+import tools.legacy_parity.state as state_module
+import tools.legacy_parity.validation as validation_module
+
 from tools.legacy_parity.audit import (
     PreliminaryAudit,
     PreliminaryBehavior,
@@ -656,6 +659,80 @@ class ValidationTests(unittest.TestCase):
                 self.artifacts[key]
             )
 
+    def test_complete_snapshot_accepts_authenticated_raw_lt_in_attribute(self):
+        construct_ids = (
+            "xml:plugins/sample.xml:2",
+            "xml:plugins/sample.xml:3",
+        )
+        self.configure_source(construct_ids, coverage="complete")
+        relative = "plugins/sample.xml"
+        source = self.legacy / relative
+        source.write_bytes(
+            b'<muclient><plugin name="broken < value"/>'
+            b'<plugin name="outside"/></muclient>\n'
+        )
+        self.provenance = replace(
+            self.provenance,
+            source_digests=((
+                relative,
+                hashlib.sha256(source.read_bytes()).hexdigest(),
+            ),),
+        )
+        write_provenance(
+            self.state,
+            self.provenance,
+            approved_paths=(relative,),
+        )
+        self.bundle = replace(
+            self.bundle,
+            provenance=self.provenance,
+            provenance_digest=provenance_digest(self.provenance),
+        )
+        write_staged_bundle(
+            self.state, self.bundle, public_repo=self.repo
+        )
+
+        full_private_publication_gate(
+            self.candidate(), self.bundle, self.roots, self.lera_bin
+        )
+
+    def test_complete_snapshot_accepts_authenticated_joined_attributes(self):
+        construct_ids = (
+            "xml:plugins/sample.xml:2",
+            "xml:plugins/sample.xml:3",
+        )
+        self.configure_source(construct_ids, coverage="complete")
+        relative = "plugins/sample.xml"
+        source = self.legacy / relative
+        source.write_bytes(
+            b'<muclient><plugin name="bound"sequence="10"/>'
+            b'<plugin name="outside"/></muclient>\n'
+        )
+        self.provenance = replace(
+            self.provenance,
+            source_digests=((
+                relative,
+                hashlib.sha256(source.read_bytes()).hexdigest(),
+            ),),
+        )
+        write_provenance(
+            self.state,
+            self.provenance,
+            approved_paths=(relative,),
+        )
+        self.bundle = replace(
+            self.bundle,
+            provenance=self.provenance,
+            provenance_digest=provenance_digest(self.provenance),
+        )
+        write_staged_bundle(
+            self.state, self.bundle, public_repo=self.repo
+        )
+
+        full_private_publication_gate(
+            self.candidate(), self.bundle, self.roots, self.lera_bin
+        )
+
     def test_selected_source_snapshot_accepts_only_authenticated_constructs(self):
         selected_id = "xml:plugins/sample.xml:2"
         self.configure_source((selected_id,))
@@ -857,6 +934,23 @@ class ValidationTests(unittest.TestCase):
         ):
             validate_public(self.repo)
 
+    def test_public_validation_rejects_symlinked_repo_root(self):
+        external = self.repo.with_name("external-repo")
+        self.repo.rename(external)
+        self.repo.symlink_to(external, target_is_directory=True)
+
+        with self.assertRaisesRegex(ValueError, "unsafe_publication_path"):
+            validate_public(self.repo)
+
+    def test_public_validation_rejects_symlinked_validation_directory(self):
+        validation = self.repo / "validation"
+        external = self.repo / "external-validation"
+        validation.rename(external)
+        validation.symlink_to(external, target_is_directory=True)
+
+        with self.assertRaisesRegex(ValueError, "unsafe_publication_path"):
+            validate_public(self.repo)
+
     def test_full_private_gate_authenticates_exact_candidate_bytes(self):
         summary = validate_full_private(
             roots=self.roots,
@@ -884,6 +978,77 @@ class ValidationTests(unittest.TestCase):
                 self.roots,
                 self.lera_bin,
             )
+
+    def test_full_gate_uses_one_held_legacy_snapshot_for_parse_and_digest(self):
+        source = self.legacy / "plugins" / "sample.xml"
+        approved = source.read_bytes()
+        tampered = (
+            b'<muclient name="sample"><plugin name="extra"/></muclient>\n'
+        )
+        original_validate = validation_module._validate_construct_snapshots
+        observed_snapshot = False
+
+        def mutate_path_during_construct_validation(bundle, snapshots, selection):
+            nonlocal observed_snapshot
+            self.assertIsInstance(snapshots, dict)
+            self.assertEqual(snapshots["plugins/sample.xml"], approved)
+            observed_snapshot = True
+            source.write_bytes(tampered)
+            try:
+                return original_validate(bundle, snapshots, selection)
+            finally:
+                source.write_bytes(approved)
+
+        with mock.patch.object(
+            validation_module,
+            "_validate_construct_snapshots",
+            side_effect=mutate_path_during_construct_validation,
+        ):
+            full_private_publication_gate(
+                self.candidate(), self.bundle, self.roots, self.lera_bin
+            )
+        self.assertTrue(observed_snapshot)
+
+    def test_runtime_receives_mirror_verified_plugin_bytes(self):
+        plugin = self.repo / "generic" / "sample.lua"
+        approved = plugin.read_bytes()
+        observed = False
+
+        def inspect_runtime(binary, plugin_root, scenario, **kwargs):
+            nonlocal observed
+            self.assertEqual(kwargs["plugin_bytes"], approved)
+            self.assertIn("binary_descriptor", kwargs)
+            observed = True
+            plugin.write_bytes(b"return { name = 'substituted' }\n")
+            try:
+                return mock.Mock(exit_code=0)
+            finally:
+                plugin.write_bytes(approved)
+
+        with mock.patch.object(
+            validation_module, "run_scenario", side_effect=inspect_runtime
+        ):
+            full_private_publication_gate(
+                self.candidate(), self.bundle, self.roots, self.lera_bin
+            )
+        self.assertTrue(observed)
+
+    def test_private_report_writer_rejects_symlinked_reports_directory(self):
+        external = Path(self.temp.name) / "external-reports"
+        external.mkdir()
+        reports = self.state / "reports"
+        if reports.exists():
+            for child in reports.iterdir():
+                child.unlink()
+            reports.rmdir()
+        reports.symlink_to(external, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+            validation_module._write_private_report(
+                self.state,
+                self.state / "reports" / "full-private-report.md",
+                "private report\n",
+            )
+        self.assertEqual(tuple(external.iterdir()), ())
 
     def test_full_private_privacy_authenticates_scope_before_stem_exceptions(self):
         exact_omitted_path = "omitted/sample_legacy.xml"
@@ -1522,6 +1687,239 @@ class ValidationTests(unittest.TestCase):
                     (self.state / "staged" / "audit-bundle.json").read_bytes(),
                     prior_bundle,
                 )
+
+
+    @unittest.skipUnless(os.name == "posix", "requires renameat2")
+    def test_provenance_transaction_preserves_each_concurrent_destination(self):
+        changed = replace(
+            self.provenance,
+            refreshed_at="2026-08-10T15:00:00+00:00",
+        )
+        for destination in ("provenance.json", "audit-bundle.json"):
+            directory = (
+                self.state
+                if destination == "provenance.json"
+                else self.state / "staged"
+            )
+            path = directory / destination
+            prior_current = path.read_bytes()
+            prior_other = (
+                (self.state / "staged" / "audit-bundle.json").read_bytes()
+                if destination == "provenance.json"
+                else (self.state / "provenance.json").read_bytes()
+            )
+            displaced = directory / f"displaced-{destination}"
+            concurrent = (
+                f'{{"concurrent":"{destination}"}}\n'.encode("utf-8")
+            )
+            real_rename = state_module._renameat2_at
+            injected = False
+
+            def substitute_before_rename(
+                descriptor, source, named_destination, flags
+            ):
+                nonlocal injected
+                if named_destination == destination and not injected:
+                    injected = True
+                    os.rename(
+                        named_destination,
+                        displaced.name,
+                        src_dir_fd=descriptor,
+                        dst_dir_fd=descriptor,
+                    )
+                    held = os.open(
+                        named_destination,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=descriptor,
+                    )
+                    try:
+                        os.write(held, concurrent)
+                    finally:
+                        os.close(held)
+                return real_rename(
+                    descriptor, source, named_destination, flags
+                )
+
+            with self.subTest(destination=destination):
+                with mock.patch(
+                    "tools.legacy_parity.state._renameat2_at",
+                    side_effect=substitute_before_rename,
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError, "unsafe_private_path"
+                    ):
+                        write_provenance_transaction(
+                            self.state, changed, self.bundle
+                        )
+                self.assertTrue(injected)
+                self.assertEqual(path.read_bytes(), concurrent)
+                self.assertFalse(displaced.exists())
+                other = (
+                    self.state / "staged" / "audit-bundle.json"
+                    if destination == "provenance.json"
+                    else self.state / "provenance.json"
+                )
+                self.assertEqual(other.read_bytes(), prior_other)
+                path.write_bytes(prior_current)
+                path.chmod(0o600)
+
+
+    @unittest.skipUnless(os.name == "posix", "requires renameat2")
+    def test_provenance_transaction_cleans_owned_post_rename_aliases(self):
+        changed = replace(
+            self.provenance,
+            refreshed_at="2026-08-10T15:00:00+00:00",
+        )
+        for destination in ("provenance.json", "audit-bundle.json"):
+            provenance_path = self.state / "provenance.json"
+            bundle_path = self.state / "staged" / "audit-bundle.json"
+            prior_provenance = provenance_path.read_bytes()
+            prior_bundle = bundle_path.read_bytes()
+            directory = (
+                self.state
+                if destination == "provenance.json"
+                else self.state / "staged"
+            )
+            path = directory / destination
+            concurrent = (
+                f'{{"concurrent":"post-{destination}"}}\n'.encode("utf-8")
+            )
+            real_rename = state_module._renameat2_at
+            injected = False
+
+            def substitute_after_rename(
+                descriptor, source, named_destination, flags
+            ):
+                nonlocal injected
+                real_rename(
+                    descriptor, source, named_destination, flags
+                )
+                if named_destination == destination and not injected:
+                    injected = True
+                    os.rename(
+                        named_destination,
+                        "escaped-owned",
+                        src_dir_fd=descriptor,
+                        dst_dir_fd=descriptor,
+                    )
+                    held = os.open(
+                        named_destination,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=descriptor,
+                    )
+                    try:
+                        os.write(held, concurrent)
+                    finally:
+                        os.close(held)
+
+            with self.subTest(destination=destination):
+                with mock.patch(
+                    "tools.legacy_parity.state._renameat2_at",
+                    side_effect=substitute_after_rename,
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError, "unsafe_private_path"
+                    ):
+                        write_provenance_transaction(
+                            self.state, changed, self.bundle
+                        )
+                self.assertTrue(injected)
+                self.assertEqual(path.read_bytes(), concurrent)
+                self.assertFalse((directory / "escaped-owned").exists())
+                self.assertFalse(
+                    any(item.name.startswith(".") for item in directory.iterdir())
+                )
+                if destination == "provenance.json":
+                    self.assertEqual(bundle_path.read_bytes(), prior_bundle)
+                else:
+                    self.assertEqual(
+                        provenance_path.read_bytes(), prior_provenance
+                    )
+                path.write_bytes(
+                    prior_provenance
+                    if destination == "provenance.json"
+                    else prior_bundle
+                )
+                path.chmod(0o600)
+
+
+    @unittest.skipUnless(os.name == "posix", "requires descriptor semantics")
+    def test_provenance_transaction_rejects_staged_redirect(self):
+        prior_provenance = (self.state / "provenance.json").read_bytes()
+        prior_bundle = (
+            self.state / "staged" / "audit-bundle.json"
+        ).read_bytes()
+        held = self.state / "held-staged"
+        public = Path(self.temp.name) / "redirect-public"
+        public.mkdir(mode=0o700)
+        (self.state / "staged").rename(held)
+        (self.state / "staged").symlink_to(
+            public, target_is_directory=True
+        )
+        with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+            write_provenance_transaction(
+                self.state,
+                replace(
+                    self.provenance,
+                    refreshed_at="2026-08-10T15:00:00+00:00",
+                ),
+                self.bundle,
+            )
+        self.assertFalse((public / "audit-bundle.json").exists())
+        self.assertEqual(
+            (self.state / "provenance.json").read_bytes(),
+            prior_provenance,
+        )
+        self.assertEqual((held / "audit-bundle.json").read_bytes(), prior_bundle)
+
+
+    @unittest.skipUnless(os.name == "posix", "requires descriptor semantics")
+    def test_provenance_transaction_rolls_back_staged_substitution_before_each_replace(self):
+        prior_provenance = (self.state / "provenance.json").read_bytes()
+        prior_bundle = (
+            self.state / "staged" / "audit-bundle.json"
+        ).read_bytes()
+        for substitute_before in (1, 2):
+            public = Path(self.temp.name) / f"redirect-{substitute_before}"
+            held = self.state / f"held-staged-{substitute_before}"
+            public.mkdir(mode=0o700)
+            count = 0
+
+            def substituting_replace(source, destination):
+                nonlocal count
+                count += 1
+                if count == substitute_before:
+                    (self.state / "staged").rename(held)
+                    (self.state / "staged").symlink_to(
+                        public, target_is_directory=True
+                    )
+                os.replace(source, destination)
+
+            with self.subTest(substitute_before=substitute_before):
+                with self.assertRaisesRegex(ValueError, "unsafe_private_path"):
+                    write_provenance_transaction(
+                        self.state,
+                        replace(
+                            self.provenance,
+                            refreshed_at="2026-08-10T15:00:00+00:00",
+                        ),
+                        self.bundle,
+                        replace_operation=substituting_replace,
+                    )
+                self.assertEqual(
+                    (self.state / "provenance.json").read_bytes(),
+                    prior_provenance,
+                )
+                self.assertEqual(
+                    (held / "audit-bundle.json").read_bytes(),
+                    prior_bundle,
+                )
+                self.assertFalse((public / "audit-bundle.json").exists())
+                self.assertFalse((public / "provenance.json").exists())
+                (self.state / "staged").unlink()
+                held.rename(self.state / "staged")
 
 
 if __name__ == "__main__":

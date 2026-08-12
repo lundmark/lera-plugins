@@ -39,7 +39,7 @@ def _duplicates(values):
     return any(value in seen or seen.add(value) for value in values)
 
 
-def validate_manifest(manifest):
+def validate_manifest(manifest, *, allow_unresolved_issues=False):
     findings = []
 
     if manifest.scope.revision < 1:
@@ -134,7 +134,9 @@ def validate_manifest(manifest):
     for capability in manifest.capabilities:
         if not capability.key or not capability.description:
             findings.append("invalid_capability")
-        if not _ISSUE_RE.fullmatch(capability.issue_url):
+        if not (
+            allow_unresolved_issues and capability.issue_url == ""
+        ) and not _ISSUE_RE.fullmatch(capability.issue_url):
             findings.append("invalid_capability_url")
 
     return tuple(dict.fromkeys(findings))
@@ -342,7 +344,9 @@ def render_manifest(manifest):
     return "\n".join(lines) + "\n"
 
 
-def manifest_from_staged(bundle, approval, selection):
+def manifest_from_staged(
+    bundle, approval, selection, *, allow_unresolved_issues=False
+):
     """Derive the public manifest solely from approved private records."""
 
     try:
@@ -427,7 +431,9 @@ def manifest_from_staged(bundle, approval, selection):
         legacy_targets=tuple(targets),
         capabilities=capabilities,
     )
-    findings = validate_manifest(manifest)
+    findings = validate_manifest(
+        manifest, allow_unresolved_issues=allow_unresolved_issues
+    )
     if findings:
         raise ValueError(",".join(findings))
     if canonical_scope(manifest).decode("utf-8") != bundle.public_scope:

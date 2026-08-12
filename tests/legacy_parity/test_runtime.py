@@ -177,6 +177,18 @@ class RuntimeHarnessTests(unittest.TestCase):
         self.assertIn("lera.quit()", harness)
         self.assertNotIn("sleep(", harness)
 
+    def test_harness_models_only_the_approved_safe_wm_module(self):
+        harness = render_harness(self.scenario)
+        self.assertIn("safe_modules = {", harness)
+        self.assertIn("wm = {", harness)
+        self.assertIn("make_scroller = function(config)", harness)
+        self.assertIn("require = function(name)", harness)
+        self.assertIn("undeclared Lua module", harness)
+
+    def test_mip_registration_returns_a_stable_synthetic_handle(self):
+        harness = render_harness(self.scenario)
+        self.assertIn('mip_handlers[name] = callback\n  return name', harness)
+
     def test_schema_rejects_executable_or_external_escape_values(self):
         base = json.loads(
             (FIXTURE / "sample_scenario.json").read_text(encoding="utf-8")

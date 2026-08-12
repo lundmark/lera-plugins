@@ -418,6 +418,7 @@ end
 mip.on = function(name, callback)
   capture("mip.on", name)
   mip_handlers[name] = callback
+  return name
 end
 
 plugin.get = function(name)
@@ -436,6 +437,30 @@ os.execute = function() error("shell commands forbidden") end
 io.popen = function() error("shell commands forbidden") end
 http = setmetatable({{}}, {{ __index = function() error("undeclared external API") end }})
 socket = nil
+
+-- The mapped chat monitor uses Lera's built-in wm helper.  Model only the
+-- deterministic scroller surface it consumes; every other Lua module remains
+-- unavailable in the closed runtime harness.
+local safe_modules = {{
+  wm = {{
+    make_scroller = function(config)
+      local position = 0
+      return {{
+        on_append = function() end,
+        on_trim = function() end,
+        scroll_to_bottom = function() position = 0 end,
+        scroll = function(delta) position = math.max(0, position + (delta or 0)) end,
+        following_tail = function() return position == 0 end,
+        offset = function() return position end,
+      }}
+    end,
+  }},
+}}
+require = function(name)
+  local module = safe_modules[name]
+  if not module then error("undeclared Lua module") end
+  return module
+end
 
 local function advance_clock(amount)
   now_ms = now_ms + amount
@@ -466,6 +491,8 @@ def run_scenario(
     scenario,
     *,
     timeout=10,
+    plugin_bytes=None,
+    binary_descriptor=None,
 ) -> RuntimeOutcome:
     executable = Path(lera_bin).resolve()
     root = Path(plugin_root).resolve()
@@ -476,8 +503,10 @@ def run_scenario(
         raise ValueError("invalid_runtime_scenario") from error
     if not executable.is_file() or not os.access(executable, os.X_OK):
         raise ValueError("missing_lera_binary")
-    if not source.is_file():
+    if plugin_bytes is None and not source.is_file():
         raise ValueError("missing_runtime_plugin")
+    if plugin_bytes is not None and not isinstance(plugin_bytes, bytes):
+        raise ValueError("invalid_runtime_plugin")
     harness = render_harness(scenario)
     try:
         with tempfile.TemporaryDirectory(prefix="lera-parity-") as temporary:
@@ -487,7 +516,10 @@ def run_scenario(
             storage = profile / ".storage"
             storage.mkdir()
             target = plugins / Path(scenario.plugin).name
-            shutil.copy2(source, target)
+            if plugin_bytes is None:
+                shutil.copy2(source, target)
+            else:
+                target.write_bytes(plugin_bytes)
             (profile / "profile.conf").write_text(
                 "script = init.lua\n", encoding="utf-8"
             )
@@ -501,8 +533,13 @@ def run_scenario(
                 "LC_ALL": "C",
                 "PARITY_PLUGIN": str(target),
             }
+            command = (
+                f"/proc/self/fd/{binary_descriptor}"
+                if binary_descriptor is not None
+                else str(executable)
+            )
             result = subprocess.run(
-                (str(executable), str(profile)),
+                (command, str(profile)),
                 cwd=profile,
                 env=environment,
                 stdin=subprocess.DEVNULL,
@@ -511,6 +548,9 @@ def run_scenario(
                 text=True,
                 timeout=timeout,
                 check=False,
+                pass_fds=(binary_descriptor,)
+                if binary_descriptor is not None
+                else (),
             )
             return RuntimeOutcome(
                 exit_code=result.returncode,

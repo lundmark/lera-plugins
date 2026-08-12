@@ -47,23 +47,31 @@ class FakeRunner:
         open_matches=(),
         closed_matches=(),
         post_open=None,
+        post_open_after=1,
         repository_private=True,
+        extra_marker=None,
     ):
         self.open_matches = tuple(open_matches)
         self.closed_matches = tuple(closed_matches)
         self.post_open = (
             tuple(post_open) if post_open is not None else self.open_matches
         )
+        self.post_open_after = post_open_after
         self.repository_private = repository_private
         self.commands = []
         self.created_bodies = []
         self.open_searches = 0
+        self.extra_marker = extra_marker
 
     def issue(self, url, state):
+        body = marker_for("shared_api")
+        if self.extra_marker is not None:
+            body += "\n" + marker_for(self.extra_marker)
         return {
             "html_url": url,
             "state": state,
-            "body": marker_for("shared_api"),
+            "title": "Legacy parity capability: shared_api",
+            "body": body,
         }
 
     def __call__(self, arguments):
@@ -88,7 +96,7 @@ class FakeRunner:
                 self.open_searches += 1
                 matches = (
                     self.open_matches
-                    if self.open_searches == 1
+                    if self.open_searches <= self.post_open_after
                     else self.post_open
                 )
                 state = "open"
@@ -98,13 +106,21 @@ class FakeRunner:
             return CommandResult(
                 0,
                 json.dumps(
-                    {"items": [self.issue(url, state) for url in matches]}
+                    {
+                        "total_count": len(matches),
+                        "incomplete_results": False,
+                        "items": [
+                            self.issue(url, state) for url in matches
+                        ],
+                        "search_type": "lexical",
+                    }
                 ),
                 "",
             )
         if args[:3] == ("gh", "issue", "create"):
-            body_path = Path(args[args.index("--body-file") + 1])
-            self.created_bodies.append(body_path.read_text(encoding="utf-8"))
+            if "--body-file" in args:
+                return CommandResult(1, "", "body file inaccessible")
+            self.created_bodies.append(args[args.index("--body") + 1])
             return CommandResult(
                 0,
                 "https://github.com/lundmark/lera/issues/123\n",
@@ -290,6 +306,18 @@ class IssueSynchronizationTests(unittest.TestCase):
         self.assertTrue(any("is:open" in query for query in queries))
         self.assertTrue(any("is:closed" in query for query in queries))
         self.assertTrue(all(marker_for("shared_api") in query for query in queries))
+        searches = [
+            command
+            for command in runner.commands
+            if command[:3] == ("gh", "api", "search/issues")
+        ]
+        self.assertTrue(
+            all(
+                "--method" in command
+                and command[command.index("--method") + 1] == "GET"
+                for command in searches
+            )
+        )
         self.assertEqual(
             load_staged_bundle(self.state_root).blockers[1].issue_url,
             url,
@@ -344,6 +372,19 @@ class IssueSynchronizationTests(unittest.TestCase):
         self.assertEqual(self.sync(duplicate).exit_code, 3)
         self.assertEqual(staged_path.read_bytes(), before)
 
+    def test_post_create_recheck_tolerates_search_index_delay(self):
+        created = "https://github.com/lundmark/lera/issues/123"
+        runner = FakeRunner(
+            open_matches=(),
+            post_open=(created,),
+            post_open_after=3,
+        )
+        result = self.sync(runner)
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.issue_url, created)
+        self.assertEqual(runner.open_searches, 4)
+
+
     def test_dry_run_never_creates_or_writes(self):
         runner = FakeRunner()
         result = self.sync(runner, dry_run=True)
@@ -379,6 +420,38 @@ class IssueSynchronizationTests(unittest.TestCase):
         }
         for forbidden in ("reopen", "close", "delete", "edit"):
             self.assertNotIn(("gh", "issue", forbidden), destructive)
+
+    def test_rejects_issue_owned_by_multiple_capability_markers(self):
+        runner = FakeRunner(
+            open_matches=("https://github.com/lundmark/lera/issues/22",),
+            extra_marker="distinct_api",
+        )
+        result = self.sync(runner, dry_run=True)
+        self.assertEqual(result.exit_code, 3)
+        self.assertFalse(
+            any(
+                command[:3] == ("gh", "issue", "create")
+                for command in runner.commands
+            )
+        )
+
+    def test_rejects_reusing_one_issue_url_for_distinct_capabilities(self):
+        shared = "https://github.com/lundmark/lera/issues/22"
+        linked = replace(
+            self.bundle,
+            blockers=(
+                replace(self.bundle.blockers[0], issue_url=shared),
+                self.bundle.blockers[1],
+            ),
+        )
+        runner = FakeRunner(open_matches=(shared,))
+        result = self.sync(
+            runner,
+            dry_run=True,
+            bundle=linked,
+            key="shared_api",
+        )
+        self.assertEqual(result.exit_code, 3)
 
     def test_rejects_authored_derivation_or_private_text_before_gh(self):
         blocker = replace(
