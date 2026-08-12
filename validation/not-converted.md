@@ -1,0 +1,24 @@
+# Approved targets not converted
+
+- `general` — 17 approved features
+- `guild_angels` — 6 approved features
+- `guild_bards` — 13 approved features
+- `guild_breeds` — 19 approved features
+- `guild_changelings` — 28 approved features
+- `guild_cyborgs` — 23 approved features
+- `guild_elementals` — 28 approved features
+- `guild_fremen` — 28 approved features
+- `guild_gentech` — 32 approved features
+- `guild_jedis` — 19 approved features
+- `guild_juggernauts` — 26 approved features
+- `guild_knights` — 19 approved features
+- `guild_mage` — 16 approved features
+- `guild_monks` — 16 approved features
+- `guild_necromancers` — 33 approved features
+- `guild_priests` — 30 approved features
+- `guild_sii` — 30 approved features
+- `guild_viking` — 51 approved features
+- `guild_warders` — 21 approved features
+- `guild_witches` — 30 approved features
+- `party_interface` — 13 approved features
+- `professions` — 20 approved features
