@@ -4,7 +4,7 @@
 
 local M = {}
 M.name = "chat_monitor"
-M.version = "1.1"
+M.version = "1.2"
 M.priority = 50  -- Run before most plugins
 
 local wm = require("wm")
@@ -13,6 +13,8 @@ local wm = require("wm")
 local config = {
   max_lines = 32768,      -- Max lines to keep in scrollback (32k default)
   default_color = "white",
+  timestamps = true,      -- Prepend a timestamp to every message
+  timestamp_format = "%H:%M",
 }
 
 -- Default prefix function for built-in types
@@ -22,6 +24,12 @@ end
 
 local function default_emote_prefix(cfg, who)
   return "* " .. (who or "???") .. " "
+end
+
+-- MIP CAA text already contains the formatted line ("Simon <Wiz>: hi"), so
+-- chat lines get no prefix of their own; use configure() to opt back in.
+local function default_chat_prefix(cfg, who)
+  return ""
 end
 
 -- Chat line types with their colors and enabled state
@@ -113,6 +121,7 @@ local function add_message(msg_type, sender, text)
     sender = sender,
     text = text,
     seq = message_seq,
+    time = os.time(),
   })
 
   -- Wrap into the cache at the current width (first render builds it otherwise)
@@ -218,8 +227,12 @@ local function wrap_msg(msg, width)
   else
     prefix = "[" .. (msg.sender or msg.type) .. "] "
   end
+  local stamp = ""
+  if config.timestamps and msg.time then
+    stamp = "[" .. os.date(config.timestamp_format, msg.time) .. "] "
+  end
   local color_code = get_color(type_cfg.color)
-  local lines = word_wrap(prefix .. msg.text, width)
+  local lines = word_wrap(stamp .. prefix .. msg.text, width)
   return color_code, lines
 end
 
@@ -323,9 +336,7 @@ local function handle_chat(key, code, data)
       gags = {},
       label = line_name,
       command = command,
-      prefix = function(cfg, who)
-        return "[" .. (cfg.label or cfg.command or "Chat") .. "] " .. (who or "") .. ": "
-      end,
+      prefix = default_chat_prefix,
     }
   end
 
@@ -335,10 +346,6 @@ end
 --------------------------------------------------------------------------------
 -- Public API
 --------------------------------------------------------------------------------
-
-local function default_chat_prefix(cfg, who)
-  return "[" .. (cfg.label or cfg.command or "Chat") .. "] " .. (who or "") .. ": "
-end
 
 local function formatting_options_changed(opts)
   return opts.color ~= nil or opts.label ~= nil or opts.prefix ~= nil
@@ -529,6 +536,7 @@ function M.get_messages(limit)
         sender = msg.sender,
         text = msg.text,
         seq = msg.seq,
+        time = msg.time,
         color = type_cfg.color,
         color_code = get_color(type_cfg.color),
         prefix = prefix_text,
@@ -654,6 +662,20 @@ function M.get_max_lines()
   return config.max_lines
 end
 
+-- Toggle timestamps on every message; format is an os.date() format string
+-- (default "%H:%M"). Returns the new enabled state.
+function M.set_timestamps(enabled, format)
+  config.timestamps = enabled and true or false
+  if format then config.timestamp_format = format end
+  invalidate_wrapped_formatting()
+  return config.timestamps
+end
+
+-- Returns enabled, format
+function M.timestamps()
+  return config.timestamps, config.timestamp_format
+end
+
 --------------------------------------------------------------------------------
 -- Persistence helpers
 --------------------------------------------------------------------------------
@@ -712,6 +734,8 @@ function M.on_load()
     if data.config then
       if data.config.max_lines then config.max_lines = data.config.max_lines end
       if data.config.default_color then config.default_color = data.config.default_color end
+      if data.config.timestamps ~= nil then config.timestamps = data.config.timestamps end
+      if data.config.timestamp_format then config.timestamp_format = data.config.timestamp_format end
     end
     -- Restore line type configurations
     restore_line_types(data.line_types)
@@ -743,6 +767,8 @@ function M.on_unload()
     config = {
       max_lines = config.max_lines,
       default_color = config.default_color,
+      timestamps = config.timestamps,
+      timestamp_format = config.timestamp_format,
     },
     line_types = serialize_line_types(),
     messages = messages,
