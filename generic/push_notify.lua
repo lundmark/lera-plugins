@@ -1,16 +1,25 @@
 -- Push Notification Plugin for Lera
--- Sends push notifications via Pushover for tells, channels, and events
+-- Pure consumer for push notifications via Pushover. Producers (other
+-- plugins) call M.notify(channel, text); this plugin owns credentials,
+-- per-channel enable/priority, the grace period and rate limiting. It never
+-- looks at MUD output itself.
+--
+-- Producer API:
+--   pushn = plugin.get("push_notify")          -- in your plugin's on_setup
+--   pushn.register_channel("tells", { priority = 1 })
+--   pushn.notify("tells", "Bob tells you: hi") -- true if a push was sent
+--
+-- Channels default to disabled; the user opts in per channel with
+-- 'pushn toggle <channel>'. A notify() on an unknown channel auto-registers
+-- it (disabled) so it shows up in 'pushn toggle'.
 --
 -- Commands:
 --   pushn                          - Show status and help
 --   pushn set <token> <userkey>    - Set Pushover credentials
 --   pushn notify <message>         - Send a test notification
 --   pushn enable / disable         - Turn notifications on/off
+--   pushn toggle                   - List channels and their states
 --   pushn toggle <channel>         - Toggle a channel on/off
---   pushn filter                   - List keywords
---   pushn filter add <word>        - Add a keyword filter
---   pushn filter remove <word>     - Remove a keyword filter
---   pushn filter toggle <word>     - Toggle a keyword filter
 --   pushn grace <seconds>          - Set activity grace period (0 to disable)
 
 local M = {}
@@ -19,16 +28,8 @@ M.priority = 50
 
 -- Default configuration
 local config = {
-  -- Channel patterns to watch
-  channels = {
-    tells = { pattern = "^(.+) tells you", enabled = false, priority = 1 },
-    gossip = { pattern = "^%[gossip%]", enabled = false, priority = 0 },
-    auction = { pattern = "^%[auction%]", enabled = false, priority = 0 },
-    guild = { pattern = "^%[guild%]", enabled = false, priority = 0 },
-  },
-
-  -- Custom keywords to watch for (in any line)
-  keywords = {},
+  -- Channels, registered by producer plugins: name -> { enabled, priority }
+  channels = {},
 
   -- Event notifications
   events = {
@@ -49,6 +50,7 @@ local config = {
 local credentials_set = false
 local alias_ids = {}
 local last_user_input = 0  -- Timestamp of last keyboard input
+local saved_channels = {}  -- Persisted channel state, applied on registration
 
 -- Helper: check if user has been active recently
 local function is_user_active()
@@ -61,24 +63,25 @@ local function is_user_active()
   return (lera.time() - last_user_input) < config.grace_period
 end
 
--- Helper: check if any pattern matches
-local function check_patterns(line)
-  -- Check channel patterns
-  for name, channel in pairs(config.channels) do
-    if channel.enabled and line:match(channel.pattern) then
-      return name, channel.priority or 0
+-- Register a channel, applying any persisted enabled/priority state. Safe to
+-- call for an already-registered channel (state is preserved).
+local function register(name, opts)
+  local channel = config.channels[name]
+  if not channel then
+    channel = {
+      enabled = false,
+      priority = (opts and opts.priority) or 0,
+    }
+    local saved = saved_channels[name]
+    if saved then
+      if saved.enabled ~= nil then channel.enabled = saved.enabled end
+      if saved.priority then channel.priority = saved.priority end
     end
+    config.channels[name] = channel
+  elseif opts and opts.priority and not saved_channels[name] then
+    channel.priority = opts.priority
   end
-
-  -- Check keywords
-  local lower_line = line:lower()
-  for _, kw in ipairs(config.keywords) do
-    if lower_line:find(kw:lower(), 1, true) then
-      return "keyword:" .. kw, 1
-    end
-  end
-
-  return nil
+  return channel
 end
 
 --------------------------------------------------------------------------------
@@ -92,12 +95,21 @@ local function show_help()
   print("  pushn notify <message>       - Send a test notification")
   print("  pushn enable                 - Enable notifications")
   print("  pushn disable                - Disable notifications")
+  print("  pushn toggle                 - List channels and their states")
   print("  pushn toggle <channel>       - Toggle channel (tells, gossip, etc.)")
-  print("  pushn filter                 - List keyword filters")
-  print("  pushn filter add <word>      - Add keyword filter")
-  print("  pushn filter remove <word>   - Remove keyword filter")
-  print("  pushn filter toggle <word>   - Toggle keyword filter")
   print("  pushn grace <seconds>        - Set activity grace period (0=off)")
+end
+
+local function list_channels()
+  print("[pushn] Channels:")
+  local any = false
+  for name, channel in pairs(config.channels) do
+    print("  " .. name .. ": " .. (channel.enabled and "ON" or "off"))
+    any = true
+  end
+  if not any then
+    print("  (none registered yet)")
+  end
 end
 
 local function show_status()
@@ -113,59 +125,8 @@ local function show_status()
     print("  User active: no")
   end
   print("  Pending: " .. push.pending())
-  print("  Channels:")
-  for name, channel in pairs(config.channels) do
-    local status = channel.enabled and "ON" or "off"
-    print("    " .. name .. ": " .. status)
-  end
-  print("  Keywords: " .. (#config.keywords > 0 and table.concat(config.keywords, ", ") or "(none)"))
+  list_channels()
   print("  Disconnect alerts: " .. (config.events.disconnect and "on" or "off"))
-end
-
-local function list_filters()
-  if #config.keywords == 0 then
-    print("[pushn] No keyword filters set")
-  else
-    print("[pushn] Keyword filters:")
-    for i, kw in ipairs(config.keywords) do
-      print("  " .. i .. ". " .. kw)
-    end
-  end
-end
-
-local function add_filter(word)
-  -- Check if already exists
-  for _, kw in ipairs(config.keywords) do
-    if kw:lower() == word:lower() then
-      print("[pushn] Keyword already exists: " .. word)
-      return
-    end
-  end
-  table.insert(config.keywords, word)
-  print("[pushn] Added keyword filter: " .. word)
-end
-
-local function remove_filter(word)
-  for i, kw in ipairs(config.keywords) do
-    if kw:lower() == word:lower() then
-      table.remove(config.keywords, i)
-      print("[pushn] Removed keyword filter: " .. kw)
-      return
-    end
-  end
-  print("[pushn] Keyword not found: " .. word)
-end
-
-local function toggle_filter(word)
-  for i, kw in ipairs(config.keywords) do
-    if kw:lower() == word:lower() then
-      table.remove(config.keywords, i)
-      print("[pushn] Removed keyword filter: " .. kw)
-      return
-    end
-  end
-  table.insert(config.keywords, word)
-  print("[pushn] Added keyword filter: " .. word)
 end
 
 local function toggle_channel(name)
@@ -175,17 +136,13 @@ local function toggle_channel(name)
     print("[pushn] Channel '" .. name .. "' " .. status)
   else
     print("[pushn] Unknown channel: " .. name)
-    print("[pushn] Available channels: " .. table.concat((function()
-      local names = {}
-      for n in pairs(config.channels) do names[#names+1] = n end
-      return names
-    end)(), ", "))
+    list_channels()
   end
 end
 
 local function register_aliases()
   -- "pushn" - show status and help
-  alias_ids[#alias_ids + 1] = alias.add("^pushn$", function()
+  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s*$", function()
     show_status()
     print("")
     show_help()
@@ -242,33 +199,15 @@ local function register_aliases()
     return nil
   end)
 
+  -- "pushn toggle" - list channels and their states
+  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+toggle\\s*$", function()
+    list_channels()
+    return nil
+  end)
+
   -- "pushn toggle <channel>" - toggle channel
   alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+toggle\\s+(\\S+)$", function(_, channel)
     toggle_channel(channel)
-    return nil
-  end)
-
-  -- "pushn filter" - list filters
-  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+filter$", function()
-    list_filters()
-    return nil
-  end)
-
-  -- "pushn filter add <word>" - add filter
-  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+filter\\s+add\\s+(\\S+)$", function(_, word)
-    add_filter(word)
-    return nil
-  end)
-
-  -- "pushn filter remove <word>" - remove filter
-  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+filter\\s+remove\\s+(\\S+)$", function(_, word)
-    remove_filter(word)
-    return nil
-  end)
-
-  -- "pushn filter toggle <word>" - toggle filter
-  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+filter\\s+toggle\\s+(\\S+)$", function(_, word)
-    toggle_filter(word)
     return nil
   end)
 
@@ -300,19 +239,9 @@ function M.on_load()
   store.load()
   local data = store.get() or {}
   if data.config then
-    -- Merge saved config
+    -- Channel state is applied lazily as producers register; remember it here.
     if data.config.channels then
-      for name, channel in pairs(data.config.channels) do
-        if config.channels[name] then
-          config.channels[name].enabled = channel.enabled
-          if channel.priority then
-            config.channels[name].priority = channel.priority
-          end
-        end
-      end
-    end
-    if data.config.keywords then
-      config.keywords = data.config.keywords
+      saved_channels = data.config.channels
     end
     if data.config.events then
       config.events = data.config.events
@@ -346,22 +275,24 @@ function M.on_unload()
   -- Unregister command aliases
   unregister_aliases()
 
-  -- Save config
+  -- Save config. Persist saved state for channels no producer registered
+  -- this session, so a temporarily unloaded producer doesn't lose its toggle.
+  local channels = {}
+  for name, saved in pairs(saved_channels) do
+    channels[name] = { enabled = saved.enabled, priority = saved.priority }
+  end
+  for name, channel in pairs(config.channels) do
+    channels[name] = { enabled = channel.enabled, priority = channel.priority }
+  end
+
   local data = store.get() or {}
   data.config = {
-    channels = {},
-    keywords = config.keywords,
+    channels = channels,
     events = config.events,
     rate_limit = config.rate_limit,
     grace_period = config.grace_period,
     sound = config.sound,
   }
-  for name, channel in pairs(config.channels) do
-    data.config.channels[name] = {
-      enabled = channel.enabled,
-      priority = channel.priority,
-    }
-  end
   store.set(data)
   store.save()
 end
@@ -370,49 +301,6 @@ function M.on_input(text)
   -- Track user activity for grace period
   last_user_input = lera.time()
   return text
-end
-
-function M.on_line(line)
-  if not credentials_set or not push.enabled() then
-    return line
-  end
-
-  -- Skip if user has been active recently
-  if is_user_active() then
-    return line
-  end
-
-  local pattern_id, priority = check_patterns(line)
-  if pattern_id then
-    -- Check rate limit
-    if push.is_rate_limited(pattern_id) then
-      return line
-    end
-
-    -- Truncate long lines
-    local msg = line
-    if #msg > 200 then
-      msg = msg:sub(1, 197) .. "..."
-    end
-
-    -- Send notification
-    local title = pattern_id:match("^keyword:") and "Keyword Match" or pattern_id:upper()
-    push.send(msg, {
-      title = title,
-      priority = priority,
-      sound = config.sound,
-      callback = function(success, err)
-        if not success then
-          print("[pushn] Failed to send: " .. (err or "unknown error"))
-        end
-      end
-    })
-
-    -- Record for rate limiting
-    push.record_send(pattern_id)
-  end
-
-  return line
 end
 
 function M.on_disconnect()
@@ -427,6 +315,50 @@ end
 --------------------------------------------------------------------------------
 -- Public API
 --------------------------------------------------------------------------------
+
+-- Declare a channel. opts = { priority = -2..2 }. Persisted user state
+-- (enabled, priority) wins over opts for a channel the user has toggled.
+function M.register_channel(name, opts)
+  register(name, opts)
+end
+
+-- Send a push notification on a channel. Returns true if a push was sent.
+-- An unknown channel is auto-registered disabled so it appears in
+-- 'pushn toggle' for the user to opt in.
+function M.notify(channel, text)
+  local ch = register(channel)
+  if not credentials_set or not push.enabled() then
+    return false
+  end
+  if not ch.enabled then
+    return false
+  end
+  if is_user_active() then
+    return false
+  end
+  if push.is_rate_limited(channel) then
+    return false
+  end
+
+  local msg = text
+  if #msg > 200 then
+    msg = msg:sub(1, 197) .. "..."
+  end
+
+  push.send(msg, {
+    title = channel:upper(),
+    priority = ch.priority or 0,
+    sound = config.sound,
+    callback = function(success, err)
+      if not success then
+        print("[pushn] Failed to send: " .. (err or "unknown error"))
+      end
+    end
+  })
+
+  push.record_send(channel)
+  return true
+end
 
 function M.set_credentials(app_token, user_key)
   push.init(app_token, user_key)
@@ -454,36 +386,9 @@ function M.clear_credentials()
 end
 
 function M.enable_channel(name, enabled)
-  if config.channels[name] then
-    config.channels[name].enabled = enabled
-    print("[pushn] " .. name .. " notifications " .. (enabled and "enabled" or "disabled"))
-  else
-    print("[pushn] Unknown channel: " .. name)
-  end
-end
-
-function M.add_channel(name, pattern, priority)
-  config.channels[name] = {
-    pattern = pattern,
-    enabled = true,
-    priority = priority or 0,
-  }
-  print("[pushn] Added channel: " .. name)
-end
-
-function M.remove_channel(name)
-  if config.channels[name] then
-    config.channels[name] = nil
-    print("[pushn] Removed channel: " .. name)
-  end
-end
-
-function M.add_keyword(word)
-  add_filter(word)
-end
-
-function M.remove_keyword(word)
-  remove_filter(word)
+  local channel = register(name)
+  channel.enabled = enabled
+  print("[pushn] " .. name .. " notifications " .. (enabled and "enabled" or "disabled"))
 end
 
 function M.set_rate_limit(seconds)

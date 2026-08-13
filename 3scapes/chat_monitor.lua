@@ -95,6 +95,9 @@ local function get_color(color_name)
   return colors[color_name] or colors.white
 end
 
+-- push_notify sink, resolved in on_setup (nil when push_notify isn't loaded)
+local pushn
+
 local function add_message(msg_type, sender, text)
   local type_cfg = line_types[msg_type]
   if not type_cfg then
@@ -111,6 +114,28 @@ local function add_message(msg_type, sender, text)
   for _, pattern in ipairs(type_cfg.gags or {}) do
     if text:match(pattern) or (sender and sender:match(pattern)) then
       return false  -- Gagged
+    end
+  end
+
+  -- Forward to push_notify: incoming tells/emotes and chat lines, never our
+  -- own outgoing messages. push_notify applies its own per-channel gating.
+  if pushn then
+    local channel
+    if msg_type == "tell_in" then
+      channel = "tells"
+    elseif msg_type == "emote_in" then
+      channel = "emotes"
+    else
+      channel = msg_type:match("^chat_(.+)")
+    end
+    if channel then
+      local prefix
+      if type_cfg.prefix then
+        prefix = type_cfg.prefix(type_cfg, sender)
+      else
+        prefix = "[" .. (sender or msg_type) .. "] "
+      end
+      pushn.notify(channel, prefix .. text)
     end
   end
 
@@ -753,6 +778,13 @@ function M.on_load()
   table.insert(mip_handlers, mip.on("BAB", handle_tell))
   table.insert(mip_handlers, mip.on("BAG", handle_emote))
   table.insert(mip_handlers, mip.on("CAA", handle_chat))
+end
+
+function M.on_setup()
+  pushn = plugin.get("push_notify")
+  if pushn and pushn.register_channel then
+    pushn.register_channel("tells", { priority = 1 })
+  end
 end
 
 function M.on_unload()

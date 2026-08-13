@@ -258,5 +258,43 @@ end
 check("width_change_newest_reachable", found_newest)
 check("width_change_back_at_tail", chat.following_tail())
 
+-- ---- push_notify producer wiring ----------------------------------------------
+local push_calls = {}
+local registered = {}
+local fake_pushn = {
+  register_channel = function(name, opts) registered[name] = opts or {} end,
+  notify = function(channel, text) push_calls[#push_calls + 1] = { channel = channel, text = text } end,
+}
+plugin = { get = function(name) if name == "push_notify" then return fake_pushn end end }
+chat.on_setup()
+check("setup_registers_tells_channel", registered.tells and registered.tells.priority == 1)
+
+mip_handlers["BAB"]("k", "BAB", "~Bob~hi there")
+check("incoming_tell_notifies", push_calls[1] and push_calls[1].channel == "tells",
+      push_calls[1] and push_calls[1].channel)
+check("tell_notify_uses_display_format", push_calls[1] and push_calls[1].text == "[Bob] hi there",
+      push_calls[1] and push_calls[1].text)
+
+push_calls = {}
+mip_handlers["BAB"]("k", "BAB", "x~Bob~hi back")
+check("outgoing_tell_does_not_notify", #push_calls == 0, push_calls[1] and push_calls[1].text)
+
+mip_handlers["BAG"]("k", "BAG", "x~Ann~waves at you")
+check("incoming_emote_notifies", push_calls[1] and push_calls[1].channel == "emotes",
+      push_calls[1] and push_calls[1].channel)
+
+push_calls = {}
+mip_handlers["BAG"]("k", "BAG", "~Me~wave back")
+check("outgoing_emote_does_not_notify", #push_calls == 0, push_calls[1] and push_calls[1].text)
+
+send_chat("Ann", "hello everyone")
+check("chat_line_notifies_by_command", push_calls[1] and push_calls[1].channel == "gossip",
+      push_calls[1] and push_calls[1].channel)
+
+push_calls = {}
+chat.add_gag("tell_in", "Spammer")
+mip_handlers["BAB"]("k", "BAB", "~Spammer~buy gold")
+check("gagged_message_does_not_notify", #push_calls == 0, push_calls[1] and push_calls[1].text)
+
 print(failures == 0 and "ALL PASS" or (failures .. " FAILURES"))
 os.exit(failures == 0 and 0 or 1)
