@@ -15,6 +15,7 @@ local config = {
   default_color = "white",
   timestamps = true,      -- Prepend a timestamp to every message
   timestamp_format = "%H:%M",
+  timestamp_color = "white",
 }
 
 -- Default prefix function for built-in types
@@ -258,6 +259,12 @@ local function wrap_msg(msg, width)
   end
   local color_code = get_color(type_cfg.color)
   local lines = word_wrap(stamp .. prefix .. msg.text, width)
+  -- Colorize the stamp after wrapping so escape codes never enter the width
+  -- math; skipped when the first line is narrower than the stamp itself.
+  if #stamp > 0 and #lines[1] >= #stamp then
+    lines[1] = get_color(config.timestamp_color) .. lines[1]:sub(1, #stamp)
+               .. color_code .. lines[1]:sub(#stamp + 1)
+  end
   return color_code, lines
 end
 
@@ -688,17 +695,19 @@ function M.get_max_lines()
 end
 
 -- Toggle timestamps on every message; format is an os.date() format string
--- (default "%H:%M"). Returns the new enabled state.
-function M.set_timestamps(enabled, format)
+-- (default "%H:%M"), color a name from the color table (default "white").
+-- Returns the new enabled state.
+function M.set_timestamps(enabled, format, color)
   config.timestamps = enabled and true or false
   if format then config.timestamp_format = format end
+  if color and colors[color] then config.timestamp_color = color end
   invalidate_wrapped_formatting()
   return config.timestamps
 end
 
--- Returns enabled, format
+-- Returns enabled, format, color
 function M.timestamps()
-  return config.timestamps, config.timestamp_format
+  return config.timestamps, config.timestamp_format, config.timestamp_color
 end
 
 --------------------------------------------------------------------------------
@@ -761,6 +770,7 @@ function M.on_load()
       if data.config.default_color then config.default_color = data.config.default_color end
       if data.config.timestamps ~= nil then config.timestamps = data.config.timestamps end
       if data.config.timestamp_format then config.timestamp_format = data.config.timestamp_format end
+      if data.config.timestamp_color then config.timestamp_color = data.config.timestamp_color end
     end
     -- Restore line type configurations
     restore_line_types(data.line_types)
@@ -801,6 +811,7 @@ function M.on_unload()
       default_color = config.default_color,
       timestamps = config.timestamps,
       timestamp_format = config.timestamp_format,
+      timestamp_color = config.timestamp_color,
     },
     line_types = serialize_line_types(),
     messages = messages,

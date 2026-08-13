@@ -296,5 +296,35 @@ chat.add_gag("tell_in", "Spammer")
 mip_handlers["BAB"]("k", "BAB", "~Spammer~buy gold")
 check("gagged_message_does_not_notify", #push_calls == 0, push_calls[1] and push_calls[1].text)
 
+-- ---- timestamp color ------------------------------------------------------------
+local ts_enabled, ts_format, ts_color = chat.timestamps()
+check("timestamp_color_defaults_white", ts_color == "white", ts_color)
+
+chat.clear()
+chat.set_max_lines(100)
+send_chat("Bob", "stamp color message")
+rows = render()
+-- draw_row wraps the row in the type color (chat_gossip = bright_cyan), then
+-- the stamp runs in the timestamp color and switches back to the type color.
+local stamped = rows[4]
+check("stamp_rendered_in_timestamp_color",
+      stamped and stamped:match("^\027%[96m\027%[37m%[%d%d:%d%d%] \027%[96mstamp color message") ~= nil,
+      stamped)
+
+-- remote pass renders the stamp identically (shared wrap_msg)
+render_pass = "remote"
+local stamped_remote = render()[4]
+render_pass = "local"
+check("stamp_color_matches_on_remote_pass", stamped_remote == stamped,
+      tostring(stamped_remote) .. " vs " .. tostring(stamped))
+
+chat.set_timestamps(true, "%H:%M", "yellow")
+local restamped = render()[4]
+check("stamp_color_configurable",
+      restamped and restamped:match("^\027%[96m\027%[33m%[%d%d:%d%d%] \027%[96m") ~= nil,
+      restamped)
+check("timestamps_returns_color", select(3, chat.timestamps()) == "yellow")
+chat.set_timestamps(true, "%H:%M", "white")
+
 print(failures == 0 and "ALL PASS" or (failures .. " FAILURES"))
 os.exit(failures == 0 and 0 or 1)
