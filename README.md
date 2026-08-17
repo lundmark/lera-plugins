@@ -33,9 +33,36 @@ plugin.load("/path/to/lera-plugins/generic/deadmans")
 |--------|-------------|
 | `autologin` | Automatic login on connect |
 | `deadmans` | Idle detection with warnings and auto-disconnect |
+| `gmcp_state` | Subscribes to GMCP packages, tracks state, formats vitals bars (`/gmcp`) |
 | `help` | In-client help system |
 | `input_echo` | Display sent commands in output |
+| `mxp_links` | Makes MXP `<send>`/`<a>` links usable via a popup picker (`/link`) |
 | `push_notify` | Push notifications via Pushover |
+
+### Protocol plugins
+
+`gmcp_state` and `mxp_links` turn a Lera protocol API into features, the way
+`chat_monitor` consumes `mip.*`. Both are MUD-agnostic; neither owns layout or
+keys, because pane placement and `bind.*` are composition-level and `bind` is
+not in the plugin sandbox. A profile composes them:
+
+```lua
+local gs = plugin.load("gmcp_state")
+local links = plugin.load("mxp_links")
+
+-- Vitals bars in a pane the profile owns.
+for _, row in ipairs(gs.vitals_lines(width, height)) do ... end
+
+-- Keys belong to the profile, not the plugin.
+bind.add("ctrl+l", function() links.open() end)
+
+-- Plugins have no io, so a profile writes the observation itself.
+local f = io.open(path, "w"); f:write(gs.report()); f:close()
+```
+
+There is deliberately **no MCCP plugin**: MCCP2 decompression is transparent in
+C and its entire Lua surface is one boolean, `mud.mccp_active()`. There are no
+events or payloads for a plugin to consume.
 
 ## 3scapes Plugins
 
