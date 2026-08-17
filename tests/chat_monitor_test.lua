@@ -43,6 +43,14 @@ buffer = {
 }
 local render_pass = "local"
 lera = { render_pass = function() return render_pass end, display = function() return "tty" end }
+-- wm requires menu, which registers its Up/Down/Enter/cancel binds at module
+-- load time, so bind must exist before the require below.
+bind = {
+  add = function() return 1 end,
+  remove = function() return true end,
+  enable = function() return true end,
+  count = function() return 0 end,
+}
 
 local chat = require("chat_monitor")
 chat.on_load()
