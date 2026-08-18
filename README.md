@@ -123,31 +123,72 @@ events or payloads for a plugin to consume.
 
 ### Chat sources: MIP and GMCP
 
-`chat_monitor` can take channel lines from either protocol. 3K sends the same
-line over both, so only one feeds the pane at a time:
+`chat_monitor` can take chat from either protocol. 3K sends the same lines over
+both, so exactly one source feeds the pane at a time:
 
-| Traffic | Source |
-|---------|--------|
-| Channel lines | MIP `CAA`, or GMCP `Comm.Channel.Text` once it arrives |
-| Tells | MIP `BAB` always |
-| Emotes | MIP `BAG` always |
+| Traffic | MIP | GMCP |
+|---------|-----|------|
+| Channel lines | `CAA` | `Comm.Channel.Text`, `channel = "wiz"` etc. |
+| Tells | `BAB` | `Comm.Channel.Text`, `channel = "tell"` |
+| Souls | `BAG` | `Comm.Channel.Text`, `channel = "soul"` |
 
 In the default `auto` mode the pane starts on MIP and switches to GMCP the
 first time a real `Comm.Channel.Text` arrives — negotiation alone is not
 enough, because a server can negotiate GMCP and never send the package. The
-latch resets on disconnect. Pin it with `/chat source mip|gmcp|auto` or
-`chat.set_source(mode)`.
-
-The latch covers channels only. `Comm.Channel.Text` carries no direction field,
-so it cannot distinguish an incoming tell from one of your own the way MIP
-`BAB` can; suppressing MIP tells would silence them outright.
+latch then suppresses **all three** MIP handlers, not just `CAA`; anything less
+double-prints. It resets on disconnect. Pin it with
+`/chat source mip|gmcp|auto` or `chat.set_source(mode)`.
 
 Both protocols name a channel the same way (`wiz`), so both land on the same
-`chat_wiz` line type and its color, label and gags survive a source change. The
-payload shapes differ, though — MIP `CAA` text is a pre-formatted line
-(`Simon <Wiz>: hi`) while GMCP carries `{channel, talker, text}` with a bare
-body — so a GMCP message renders its own `talker: ` prefix unless the line type
-has a prefix set through `configure()`.
+`chat_wiz` line type and its color, label and gags survive a source change.
+
+### The lead-in
+
+MIP text is a finished line (`Simon <Wiz>: hi`), which is why the default chat
+prefix is empty. GMCP text is the body alone, with everything else in sibling
+fields:
+
+```json
+{ "text": "test", "talker": "Simon", "targets": ["Lennart"], "channel": "tell" }
+{ "text": "smiles at you.", "talker": "Simon", "channel": "soul" }
+```
+
+So a GMCP message needs a lead-in rendered for it. Three sources, in order:
+
+1. A `prefix` **field on the message**, used verbatim. Only the server knows how
+   it phrases `You tell X, Y: ` against `X tells you: `.
+2. A `prefix` **set through `configure()`**.
+3. Otherwise **synthesized**: `talker: ` normally, `talker ` for soul-like
+   channels (whose text continues the name), and `talker -> a, b: ` when
+   `targets` names recipients other than the talker.
+
+A server-sent prefix outranking a configured one is deliberate, and it is the
+one place `configure()` does not win. One setting cannot serve both protocols: an
+empty emote prefix is correct for MIP text reading `Simon smiles at you.` and
+wrong for a GMCP body of `smiles at you.`. The server knows which it sent; the
+setting cannot. Configured prefixes still apply to every MIP line and to any
+GMCP line the server sent no prefix for.
+
+Synthesis is guesswork about server-side phrasing and exists only so the pane
+reads sensibly before a server sends its own `prefix`.
+
+### Direction
+
+`Comm.Channel.Text` has no direction of its own, and `targets` only reveals it
+to a client that knows its own character name. When the server sends
+`"direction": "in"` or `"out"`, two channels map onto the built-in directional
+types:
+
+| Channel | `direction` | Line type |
+|---------|-------------|-----------|
+| `tell` | `in` / `out` | `tell_in` / `tell_out` |
+| `soul` | `in` / `out` | `emote_in` / `emote_out` |
+
+That is what keeps an incoming tell reaching the `tells` push channel and an
+outgoing one silent, whichever protocol delivered it. Without a recognised
+`direction` the line stays an ordinary `chat_tell` / `chat_soul` type rather than
+being guessed into the wrong one — visible in that it notifies on channel `tell`
+instead of `tells`. `direction` on any other channel is ignored.
 
 `/chat source` reports which protocol is live and what each has delivered,
 including anything under `Comm` that could not be read:

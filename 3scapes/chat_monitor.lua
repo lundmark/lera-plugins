@@ -38,13 +38,57 @@ local function default_chat_prefix(cfg, who)
   return ""
 end
 
--- GMCP Comm.Channel.Text carries the body alone ("test") with the speaker in a
--- separate field, so a structured message has to render the talker itself or
--- lose it. Only used where the line type still carries the MIP default above;
--- a prefix set through configure() always wins.
-local function structured_chat_prefix(cfg, who)
-  if who and who ~= "" then return who .. ": " end
-  return ""
+-- The three prefixes above are defaults, not user intent. A prefix installed
+-- through configure() is, which is why the two are told apart when deciding
+-- what a line's lead-in should be.
+local BUILTIN_PREFIXES = {
+  [default_tell_prefix] = true,
+  [default_emote_prefix] = true,
+  [default_chat_prefix] = true,
+}
+
+-- GMCP channels that map onto the built-in directional types, so an incoming
+-- tell keeps its colour, its gags and the "tells" push channel whichever
+-- protocol delivered it. Requires the server to say which way it went:
+-- Comm.Channel.Text has no direction of its own, and targets only reveals it to
+-- a client that knows its own character name.
+local DIRECTED_CHANNELS = {
+  tell = { ["in"] = "tell_in", out = "tell_out" },
+  soul = { ["in"] = "emote_in", out = "emote_out" },
+}
+
+-- Channels whose text reads as a continuation of the speaker's name ("smiles at
+-- you.") rather than something quoted after a colon. Pure guesswork about
+-- server-side channel semantics, and superseded the moment the server sends its
+-- own prefix field -- see gmcp_prefix() below.
+local SPACE_JOINED_CHANNELS = {
+  soul = true, souls = true, emote = true, emotes = true,
+}
+
+-- GMCP Comm.Channel.Text carries the body alone, with the speaker, the channel
+-- and any targets in separate fields, so the text on its own loses all of that.
+-- The server may send the finished lead-in as a "prefix" field; when it does it
+-- is used verbatim, because only the server knows how it phrases a tell, a soul
+-- or a multi-target tell. This is the fallback for when it does not.
+local function gmcp_prefix(channel, talker, targets)
+  if not talker or talker == "" then return "" end
+  if SPACE_JOINED_CHANNELS[channel] then return talker .. " " end
+
+  -- A multi-target tell names its recipients; without them "Simon: test" gives
+  -- no hint that it went to anyone in particular.
+  if type(targets) == "table" and #targets > 0 then
+    local named = {}
+    for _, name in ipairs(targets) do
+      if type(name) == "string" and name ~= "" and name ~= talker then
+        named[#named + 1] = name
+      end
+    end
+    if #named > 0 then
+      return talker .. " -> " .. table.concat(named, ", ") .. ": "
+    end
+  end
+
+  return talker .. ": "
 end
 
 -- Chat line types with their colors and enabled state
@@ -128,27 +172,26 @@ local wrapped_reset, wrapped_append, wrapped_ensure, wrapped_trim_front
 -- server can negotiate GMCP and never send Comm.Channel.Text, and latching the
 -- other way round would leave the pane empty with no fallback.
 --
--- The latch covers channels only. Tells (MIP BAB) and emotes (MIP BAG) always
--- come from MIP: Comm.Channel.Text is the only GMCP chat traffic observed, and
--- it carries no direction field, so it cannot tell an incoming tell from one of
--- your own the way BAB's direction can. Suppressing those on latch would
--- silence them outright.
+-- The latch covers every kind of chat line, because Comm.Channel.Text carries
+-- all of them -- channels, tells (channel "tell") and souls (channel "soul").
+-- An earlier version latched channels only and left MIP BAB/BAG always on,
+-- which double-printed every tell and soul once GMCP took over.
 local source = {
   mode = "auto",        -- "auto" | "mip" | "gmcp"
-  channels = "mip",     -- "mip" | "gmcp"
+  active = "mip",       -- "mip" | "gmcp": which protocol feeds every chat line
   mip_count = 0,
   gmcp_count = 0,
   gmcp_unmapped = 0,
   last_unmapped = nil,  -- { package = "Comm.Channel.List", fields = "channels" }
 }
 
-local function mip_channels_allowed()
+local function mip_allowed()
   if source.mode == "gmcp" then return false end
   if source.mode == "mip" then return true end
-  return source.channels ~= "gmcp"
+  return source.active ~= "gmcp"
 end
 
-local function gmcp_channels_allowed()
+local function gmcp_allowed()
   return source.mode ~= "mip"
 end
 
@@ -156,14 +199,15 @@ end
 local function source_status()
   local qualifier
   if source.mode == "auto" then
-    qualifier = (source.channels == "gmcp") and "auto; latched" or
+    qualifier = (source.active == "gmcp") and "auto; latched" or
                 "auto; no GMCP chat seen yet"
   else
     qualifier = "pinned"
   end
   return {
     mode = source.mode,
-    channels = source.channels,
+    active = source.active,
+    channels = source.active,  -- kept: earlier name for the same value
     qualifier = qualifier,
     mip_count = source.mip_count,
     gmcp_count = source.gmcp_count,
@@ -182,21 +226,35 @@ end
 -- push_notify sink, resolved in on_setup (nil when push_notify isn't loaded)
 local pushn
 
--- One prefix rule for both the pane and the push_notify forward. msg.structured
--- marks a message that arrived as GMCP fields rather than a pre-formatted MIP
--- line; such a message needs the talker rendered unless the type carries a
--- prefix the user configured.
+-- One prefix rule for both the pane and the push_notify forward.
+--
+-- A prefix set through configure() always wins: the user asked for it. Failing
+-- that, a structured (GMCP) message uses the lead-in worked out at intake and
+-- stored on the record, since its text carries no speaker of its own. MIP text
+-- is already a formatted line, which is why the default is empty.
 local function resolve_prefix(type_cfg, msg)
-  local prefix_fn = type_cfg.prefix
-  if msg.structured and (prefix_fn == nil or prefix_fn == default_chat_prefix) then
-    prefix_fn = structured_chat_prefix
+  -- A lead-in the server sent with this message wins outright. A configured
+  -- prefix cannot know whether the body already carries its own attribution,
+  -- and the same setting has to serve both protocols: an empty emote prefix is
+  -- right for MIP text that reads "Simon smiles at you." and wrong for a GMCP
+  -- body of "smiles at you.".
+  if msg.prefix_from_server and type(msg.prefix) == "string" then
+    return msg.prefix
   end
+
+  local prefix_fn = type_cfg.prefix
+  if prefix_fn and not BUILTIN_PREFIXES[prefix_fn] then
+    return prefix_fn(type_cfg, msg.sender)
+  end
+  if type(msg.prefix) == "string" then return msg.prefix end
   if prefix_fn then return prefix_fn(type_cfg, msg.sender) end
   return "[" .. (msg.sender or msg.type) .. "] "
 end
 
 local function add_message(msg_type, sender, text, opts)
   local structured = opts and opts.structured or false
+  local prefix_text = opts and opts.prefix or nil
+  local prefix_from_server = opts and opts.prefix_from_server or false
   local type_cfg = line_types[msg_type]
   if not type_cfg then
     -- Unknown type, use defaults
@@ -229,6 +287,7 @@ local function add_message(msg_type, sender, text, opts)
     if channel then
       local prefix = resolve_prefix(type_cfg, {
         type = msg_type, sender = sender, structured = structured,
+        prefix = prefix_text, prefix_from_server = prefix_from_server,
       })
       pushn.notify(channel, prefix .. text)
     end
@@ -242,8 +301,10 @@ local function add_message(msg_type, sender, text, opts)
     text = text,
     seq = message_seq,
     time = os.time(),
-    -- Persisted: a restored GMCP line must keep rendering its talker.
+    -- Persisted: a restored GMCP line must keep rendering its lead-in.
     structured = structured or nil,
+    prefix = prefix_text,
+    prefix_from_server = prefix_from_server or nil,
   })
 
   -- Wrap into the cache at the current width (first render builds it otherwise)
@@ -409,6 +470,7 @@ end
 -- Format: direction~object~text
 -- direction: "x" = outgoing, "" = incoming
 local function handle_tell(key, code, data)
+  if not mip_allowed() then return end
   source.mip_count = source.mip_count + 1
   local parts = parse_delimited(data)
   local direction = parts[1] or ""
@@ -423,6 +485,7 @@ end
 -- Format: direction~person~text
 -- direction: "x" = from afar (incoming?), "" = local
 local function handle_emote(key, code, data)
+  if not mip_allowed() then return end
   source.mip_count = source.mip_count + 1
   local parts = parse_delimited(data)
   local direction = parts[1] or ""
@@ -463,7 +526,7 @@ end
 -- CAA - Chat lines
 -- Format: command~line_name~sender~text
 local function handle_chat(key, code, data)
-  if not mip_channels_allowed() then return end
+  if not mip_allowed() then return end
   source.mip_count = source.mip_count + 1
 
   local parts = parse_delimited(data)
@@ -497,7 +560,7 @@ end
 --   { "channel": "wiz", "talker": "Simon", "text": "test" }
 -- The channel name is used exactly as sent.
 local function handle_gmcp_comm(package, data)
-  if not gmcp_channels_allowed() then return end
+  if not gmcp_allowed() then return end
   if tostring(package):lower() ~= "comm.channel.text" then
     return note_unmapped(package, data)
   end
@@ -511,11 +574,31 @@ local function handle_gmcp_comm(package, data)
   end
   local talker = (type(data.talker) == "string" and data.talker ~= "") and data.talker or nil
 
-  source.gmcp_count = source.gmcp_count + 1
-  -- The latch: a real channel line is what promotes GMCP, not negotiation.
-  if source.mode == "auto" then source.channels = "gmcp" end
+  -- The server's own lead-in, when it sends one, beats anything reconstructed
+  -- here: it knows how it phrases "You tell X, Y:" against "X tells you:".
+  local prefix, from_server = data.prefix, true
+  if type(prefix) ~= "string" then
+    prefix, from_server = gmcp_prefix(channel, talker, data.targets), false
+  end
 
-  add_message(ensure_chat_type(channel, channel), talker, text, { structured = true })
+  -- A directed channel lands on the matching built-in type, but only when the
+  -- server says which direction it went; without that it stays an ordinary
+  -- chat_<channel> type rather than being guessed into the wrong one.
+  local msg_type
+  local directed = DIRECTED_CHANNELS[channel:lower()]
+  local direction = type(data.direction) == "string" and data.direction:lower() or nil
+  if directed and direction and directed[direction] then
+    msg_type = directed[direction]
+  else
+    msg_type = ensure_chat_type(channel, channel)
+  end
+
+  source.gmcp_count = source.gmcp_count + 1
+  -- The latch: a real chat line is what promotes GMCP, not negotiation.
+  if source.mode == "auto" then source.active = "gmcp" end
+
+  add_message(msg_type, talker, text,
+              { structured = true, prefix = prefix, prefix_from_server = from_server })
 end
 
 --------------------------------------------------------------------------------
@@ -541,12 +624,12 @@ function M.set_source(mode)
   end
   source.mode = mode
   if mode == "mip" then
-    source.channels = "mip"
+    source.active = "mip"
   elseif mode == "gmcp" then
-    source.channels = "gmcp"
+    source.active = "gmcp"
   else
     -- Back to latching: GMCP has to prove itself again this connection.
-    source.channels = (source.gmcp_count > 0) and "gmcp" or "mip"
+    source.active = (source.gmcp_count > 0) and "gmcp" or "mip"
   end
   return true
 end
@@ -931,14 +1014,13 @@ end
 
 local function print_source()
   local st = source_status()
-  print("[chat] source: " .. st.channels .. " (" .. st.qualifier .. ")")
+  print("[chat] source: " .. st.active .. " (" .. st.qualifier .. ")")
   print("[chat] mip: " .. st.mip_count .. " messages    gmcp: " ..
         st.gmcp_count .. " mapped, " .. st.gmcp_unmapped .. " unmapped")
   if st.last_unmapped then
     print("[chat] last unmapped: " .. st.last_unmapped.package ..
           " (fields: " .. st.last_unmapped.fields .. ")")
   end
-  print("[chat] tells and emotes always come from MIP")
 end
 
 local function chat_help()
@@ -1080,7 +1162,7 @@ function M.on_load()
       local mode = data.config.source_mode
       if mode == "auto" or mode == "mip" or mode == "gmcp" then
         source.mode = mode
-        source.channels = (mode == "gmcp") and "gmcp" or "mip"
+        source.active = (mode == "gmcp") and "gmcp" or "mip"
       end
     end
     -- Restore line type configurations
@@ -1113,7 +1195,7 @@ end
 -- re-prove GMCP rather than inherit the last session's answer. The counters
 -- describe the session too, so they reset with it.
 function M.on_disconnect()
-  if source.mode == "auto" then source.channels = "mip" end
+  if source.mode == "auto" then source.active = "mip" end
   source.mip_count = 0
   source.gmcp_count = 0
   source.gmcp_unmapped = 0
