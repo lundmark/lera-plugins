@@ -7,9 +7,7 @@ from tools.legacy_parity.current import (
     discover_current,
     extract_current,
     validate_code_ref,
-    validate_current_scope,
 )
-from tools.legacy_parity.model import CurrentPlugin
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -90,24 +88,6 @@ class CurrentInventoryTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "duplicate_current_key"):
                 discover_current(root)
-
-    def test_validates_inventory_against_manifest_current_records(self):
-        # Exercises the comparison, not the census: records built from the live
-        # inventory must agree, and dropping one must be caught. Whether the
-        # committed manifest agrees with the repository is what
-        # `legacy-parity validate --level public` decides.
-        inventory = discover_current(REPO)
-        records = tuple(
-            CurrentPlugin(key=item.key, path=item.path) for item in inventory
-        )
-        validate_current_scope(inventory, records)
-        with self.assertRaisesRegex(ValueError, "current_scope_mismatch"):
-            validate_current_scope(inventory, records[:-1])
-        with self.assertRaisesRegex(ValueError, "current_scope_mismatch"):
-            validate_current_scope(
-                inventory,
-                records + (CurrentPlugin(key="ghost", path="generic/ghost.lua"),),
-            )
 
     def test_validates_only_single_line_refs_inside_current_scope(self):
         scope = {"generic/sample.lua"}

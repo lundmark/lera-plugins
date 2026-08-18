@@ -92,15 +92,6 @@ def extract_current(path: Path, relative_path: str) -> tuple[CurrentConstruct, .
     return tuple(constructs)
 
 
-def validate_current_scope(inventory, current_plugins) -> None:
-    """Require manifest current records to match discovered production files."""
-
-    discovered = tuple(sorted((item.key, item.path) for item in inventory))
-    declared = tuple(sorted((item.key, item.path) for item in current_plugins))
-    if discovered != declared:
-        raise ValueError("current_scope_mismatch")
-
-
 def validate_code_ref(
     repo_root: Path, reference: str, current_paths
 ) -> tuple[str, int]:

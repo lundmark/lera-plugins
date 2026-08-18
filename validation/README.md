@@ -39,9 +39,13 @@ Run the reproducible public baseline from the repository root:
 
     tools/legacy-parity validate --level public
 
-This checks the manifest schema and public scope digest, the current plugin
-inventory, fixture declarations, current-code references, deterministic
-reports, artifact agreement, and structural privacy. Its heading explicitly
+This checks the manifest schema and public scope digest, fixture declarations,
+current-code references, deterministic reports, artifact agreement, and
+structural privacy. It deliberately does not require the manifest's plugin list
+to match the repository's: the manifest is a point-in-time approval record, and
+gating current CI on it would mean re-approving a historical audit every time a
+plugin is added, renamed or removed. Audited plugins are still held to the
+repository through their current-code references. Its heading explicitly
 states that private approval and legacy sources were not rechecked. There is
 no timestamp, so identical inputs produce identical output.
 

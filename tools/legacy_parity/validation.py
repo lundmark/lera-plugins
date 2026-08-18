@@ -12,12 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 from .compare import strict_parity_findings, validate_evidence
-from .current import (
-    compare_mirror,
-    discover_current,
-    validate_code_ref,
-    validate_current_scope,
-)
+from .current import compare_mirror, validate_code_ref
 from .legacy import (
     XmlCompatibility,
     _escape_raw_attribute_lt,
@@ -177,11 +172,6 @@ def _validate_public_artifacts(repo_root, artifacts):
         _fail("public_scope_digest_mismatch")
     if artifacts["manifest"] != render_manifest(manifest).encode("utf-8"):
         _fail("public_artifact_mismatch")
-    try:
-        inventory = discover_current(repo)
-        validate_current_scope(inventory, manifest.current_plugins)
-    except (OSError, ValueError) as error:
-        _fail("public_current_inventory_mismatch", error)
     _validate_mapping_agreement(manifest)
 
     fixtures = tuple(
