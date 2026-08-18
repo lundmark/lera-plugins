@@ -14,59 +14,47 @@ from tools.legacy_parity.model import CurrentPlugin
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE = Path(__file__).resolve().parent / "fixtures"
-EXPECTED = (
-    "autologin",
-    "autostepper",
-    "chat_monitor",
-    "deadmans",
-    "guild_druid",
-    "help",
-    "input_echo",
-    "kill_trigger",
-    "mapper",
-    "mapview",
-    "mercenary",
-    "minimap",
-    "player_stats",
-    "push_notify",
-    "roominfo",
-    "speedwalk",
-    "stats_window",
-)
 
-EXPECTED_PATHS = {
-    "autologin": "generic/autologin.lua",
-    "autostepper": "3scapes/autostepper.lua",
-    "chat_monitor": "3scapes/chat_monitor.lua",
-    "deadmans": "generic/deadmans.lua",
-    "guild_druid": "3scapes/guild_druid.lua",
-    "help": "generic/help.lua",
-    "input_echo": "generic/input_echo.lua",
-    "kill_trigger": "3scapes/kill_trigger.lua",
-    "mapper": "3scapes/mapper.lua",
-    "mapview": "3scapes/mapview.lua",
-    "mercenary": "3scapes/mercenary.lua",
-    "minimap": "3scapes/minimap.lua",
-    "player_stats": "3scapes/player_stats.lua",
-    "push_notify": "generic/push_notify.lua",
-    "roominfo": "3scapes/roominfo.lua",
-    "speedwalk": "3scapes/speedwalk.lua",
-    "stats_window": "3scapes/stats_window.lua",
-}
+
+def globbed_production_plugins() -> dict[str, str]:
+    """The production plugins as the filesystem has them.
+
+    Computed here rather than hardcoded: the authoritative census lives in
+    validation/legacy-parity.toml, and `legacy-parity validate` is what holds
+    discovery to it. Duplicating that list in the unit suite only meant every
+    added plugin broke a test whose name then misreported the count.
+    """
+
+    found: dict[str, str] = {}
+    for directory in ("generic", "3scapes"):
+        for path in sorted((REPO / directory).glob("*.lua")):
+            found[path.stem] = f"{directory}/{path.name}"
+    return found
 
 
 class CurrentInventoryTests(unittest.TestCase):
-    def test_discovers_exactly_the_17_production_plugins(self):
+    def test_discovers_the_production_plugins_on_disk(self):
         inventory = discover_current(REPO)
-        self.assertEqual(tuple(item.key for item in inventory), EXPECTED)
-        self.assertEqual({item.key: item.path for item in inventory}, EXPECTED_PATHS)
-        self.assertNotIn("3scapes/configs/init.lua", {item.path for item in inventory})
-        self.assertTrue(
-            all(
-                item.path.startswith(("generic/", "3scapes/"))
-                for item in inventory
-            )
-        )
+        expected = globbed_production_plugins()
+
+        self.assertTrue(expected, "no production plugins found to discover")
+        self.assertEqual({item.key: item.path for item in inventory}, expected)
+
+        keys = [item.key for item in inventory]
+        self.assertEqual(keys, sorted(keys), "inventory must be sorted by key")
+        self.assertEqual(len(keys), len(set(keys)), "keys must be unique")
+
+    def test_discovery_covers_only_the_production_directories(self):
+        inventory = discover_current(REPO)
+        paths = {item.path for item in inventory}
+
+        # Nested directories, example plugins and the test tree are all out of
+        # scope: only the two production directories, one level deep.
+        self.assertNotIn("3scapes/configs/init.lua", paths)
+        for path in paths:
+            self.assertTrue(path.startswith(("generic/", "3scapes/")), path)
+            self.assertEqual(path.count("/"), 1, path)
+            self.assertTrue((REPO / path).is_file(), path)
 
     def test_extracts_current_behavior_responsibilities(self):
         path = FIXTURE / "current" / "generic" / "sample.lua"
@@ -104,13 +92,22 @@ class CurrentInventoryTests(unittest.TestCase):
                 discover_current(root)
 
     def test_validates_inventory_against_manifest_current_records(self):
+        # Exercises the comparison, not the census: records built from the live
+        # inventory must agree, and dropping one must be caught. Whether the
+        # committed manifest agrees with the repository is what
+        # `legacy-parity validate --level public` decides.
+        inventory = discover_current(REPO)
         records = tuple(
-            CurrentPlugin(key=key, path=path)
-            for key, path in sorted(EXPECTED_PATHS.items())
+            CurrentPlugin(key=item.key, path=item.path) for item in inventory
         )
-        validate_current_scope(discover_current(REPO), records)
+        validate_current_scope(inventory, records)
         with self.assertRaisesRegex(ValueError, "current_scope_mismatch"):
-            validate_current_scope(discover_current(REPO), records[:-1])
+            validate_current_scope(inventory, records[:-1])
+        with self.assertRaisesRegex(ValueError, "current_scope_mismatch"):
+            validate_current_scope(
+                inventory,
+                records + (CurrentPlugin(key="ghost", path="generic/ghost.lua"),),
+            )
 
     def test_validates_only_single_line_refs_inside_current_scope(self):
         scope = {"generic/sample.lua"}
