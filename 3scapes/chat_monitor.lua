@@ -181,9 +181,15 @@ local wrapped_reset, wrapped_append, wrapped_ensure, wrapped_trim_front
 -- all of them -- channels, tells (channel "tell") and souls (channel "soul").
 -- An earlier version latched channels only and left MIP BAB/BAG always on,
 -- which double-printed every tell and soul once GMCP took over.
+--
+-- Whether GMCP chat has ever been seen is remembered across sessions. Both
+-- protocols deliver the same line and MIP gets there first, so a session that
+-- starts on MIP prints that first line before the latch can flip -- exactly one
+-- duplicate per connection. A profile that has proved GMCP once starts on it.
 local source = {
   mode = "auto",        -- "auto" | "mip" | "gmcp"
   active = "mip",       -- "mip" | "gmcp": which protocol feeds every chat line
+  gmcp_seen = false,    -- persisted: GMCP chat arrived in some earlier session
   mip_count = 0,
   gmcp_count = 0,
   gmcp_unmapped = 0,
@@ -203,14 +209,18 @@ end
 -- Reported by /chat source, and the answer to "is GMCP actually arriving?".
 local function source_status()
   local qualifier
-  if source.mode == "auto" then
-    qualifier = (source.active == "gmcp") and "auto; latched" or
-                "auto; no GMCP chat seen yet"
-  else
+  if source.mode ~= "auto" then
     qualifier = "pinned"
+  elseif source.active ~= "gmcp" then
+    qualifier = "auto; no GMCP chat seen yet"
+  elseif source.gmcp_count > 0 then
+    qualifier = "auto; latched"
+  else
+    qualifier = "auto; remembered from an earlier session"
   end
   return {
     mode = source.mode,
+    gmcp_seen = source.gmcp_seen,
     active = source.active,
     channels = source.active,  -- kept: earlier name for the same value
     qualifier = qualifier,
@@ -665,7 +675,9 @@ local function handle_gmcp_comm(package, data)
   end
 
   source.gmcp_count = source.gmcp_count + 1
-  -- The latch: a real chat line is what promotes GMCP, not negotiation.
+  -- The latch: a real chat line is what promotes GMCP, not negotiation. Also
+  -- remembered, so the next session need not re-learn it the expensive way.
+  source.gmcp_seen = true
   if source.mode == "auto" then source.active = "gmcp" end
 
   add_message(msg_type, talker, text,
@@ -700,8 +712,9 @@ function M.set_source(mode)
   elseif mode == "gmcp" then
     source.active = "gmcp"
   else
-    -- Back to latching: GMCP has to prove itself again this connection.
-    source.active = (source.gmcp_count > 0) and "gmcp" or "mip"
+    -- Back to latching, which a profile that has already proved GMCP resolves
+    -- in GMCP's favour immediately.
+    source.active = (source.gmcp_count > 0 or source.gmcp_seen) and "gmcp" or "mip"
   end
   return true
 end
@@ -1248,11 +1261,16 @@ function M.on_load()
       if data.config.timestamp_format then config.timestamp_format = data.config.timestamp_format end
       if data.config.timestamp_color then config.timestamp_color = data.config.timestamp_color end
       if data.config.text_color then config.text_color = data.config.text_color end
-      -- The preference persists; the latch does not (it is per connection).
       local mode = data.config.source_mode
       if mode == "auto" or mode == "mip" or mode == "gmcp" then
         source.mode = mode
         source.active = (mode == "gmcp") and "gmcp" or "mip"
+      end
+      -- Restored before the first line arrives, which is the whole point: MIP
+      -- is ignored from the outset rather than after it has printed one.
+      if data.config.gmcp_chat_seen then
+        source.gmcp_seen = true
+        if source.mode == "auto" then source.active = "gmcp" end
       end
     end
     -- Restore line type configurations
@@ -1285,7 +1303,11 @@ end
 -- re-prove GMCP rather than inherit the last session's answer. The counters
 -- describe the session too, so they reset with it.
 function M.on_disconnect()
-  if source.mode == "auto" then source.active = "mip" end
+  -- The per-connection latch goes, the memory of having seen GMCP does not:
+  -- otherwise every reconnect re-earns its duplicate first line.
+  if source.mode == "auto" then
+    source.active = source.gmcp_seen and "gmcp" or "mip"
+  end
   source.mip_count = 0
   source.gmcp_count = 0
   source.gmcp_unmapped = 0
@@ -1328,6 +1350,7 @@ function M.on_unload()
       timestamp_color = config.timestamp_color,
       text_color = config.text_color,
       source_mode = source.mode,
+      gmcp_chat_seen = source.gmcp_seen,
     },
     line_types = serialize_line_types(),
     messages = messages,

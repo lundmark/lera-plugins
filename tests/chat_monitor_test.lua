@@ -25,10 +25,13 @@ ui = {
   on_render = function() end,
   on_mouse_wheel = function() end,
 }
+-- Stateful, so a save/load round trip can be exercised: starts empty, which is
+-- what the initial on_load below sees.
+local stored_chat = nil
 store = {
   load = function() end,
-  get = function() return nil end,
-  set = function() end,
+  get = function() return stored_chat end,
+  set = function(data) stored_chat = data end,
   save = function() end,
 }
 local mip_handlers = {}
@@ -708,19 +711,22 @@ check("wrapped_text_not_corrupted_by_paint",
       joined)
 chat.set_timestamps(true, "%H:%M", "white")
 
--- ---- disconnect resets the latch ----------------------------------------------
+-- ---- disconnect clears the counters, not the memory -----------------------------
 chat.set_source("auto")
 send_gmcp("wiz", "Simon", "latch me")
 check("latched_before_disconnect", chat.source().active == "gmcp")
 chat.on_disconnect()
 st = chat.source()
-check("disconnect_resets_latch", st.active == "mip", st.active)
 check("disconnect_resets_counters", st.gmcp_count == 0 and st.mip_count == 0)
 check("disconnect_keeps_mode", st.mode == "auto", st.mode)
+-- Having seen GMCP chat outlives the connection: reverting to MIP here would
+-- hand the next session's first line back to MIP and duplicate it.
+check("disconnect_keeps_source", st.active == "gmcp", st.active)
+check("disconnect_keeps_gmcp_seen_flag", st.gmcp_seen == true)
 
 chat.clear()
-send_chat("Bob", "mip again after disconnect")
-check("mip_feeds_again_after_disconnect", chat.count() == 1, chat.count())
+send_chat("Bob", "mip stays suppressed after disconnect")
+check("mip_still_suppressed_after_disconnect", chat.count() == 0, chat.count())
 
 -- ---- /chat command -------------------------------------------------------------
 local chat_spec = spec_for("/chat")
@@ -738,7 +744,9 @@ local function capture(args)
 end
 
 local cmd_out = capture("source")
-check("chat_source_reports_protocol", cmd_out:find("source: mip", 1, true) ~= nil, cmd_out)
+check("chat_source_reports_protocol", cmd_out:find("source: gmcp", 1, true) ~= nil, cmd_out)
+check("chat_source_explains_memory",
+      cmd_out:find("remembered", 1, true) ~= nil, cmd_out)
 check("chat_source_reports_counts", cmd_out:find("gmcp:", 1, true) ~= nil, cmd_out)
 
 capture("source gmcp")
@@ -751,6 +759,63 @@ check("chat_source_rejects_nonsense",
 
 cmd_out = capture("types")
 check("chat_types_lists", cmd_out:find("chat_wiz", 1, true) ~= nil, cmd_out)
+
+-- ---- the remembered source kills the duplicate first line -----------------------
+-- Both protocols deliver the same line and MIP arrives first, so a session that
+-- starts on MIP prints it before the latch can flip. A profile that has seen
+-- GMCP chat before starts on GMCP and never gives MIP the chance.
+chat.set_source("auto")
+gmcp_handlers["Comm"]("Comm.Channel.Text",
+  { channel = "wiz", talker = "Simon", text = "proves gmcp" })
+check("gmcp_seen_recorded", chat.source().gmcp_seen == true)
+
+chat.clear()
+chat.on_unload()
+check("gmcp_seen_persisted",
+      stored_chat and stored_chat.config and stored_chat.config.gmcp_chat_seen == true,
+      stored_chat and stored_chat.config and tostring(stored_chat.config.gmcp_chat_seen))
+
+package.loaded.chat_monitor = nil
+local reloaded = require("chat_monitor")
+reloaded.on_load()
+
+check("reload_starts_on_gmcp", reloaded.source().active == "gmcp",
+      reloaded.source().active)
+check("reload_reports_remembered",
+      reloaded.source().qualifier:find("remembered", 1, true) ~= nil,
+      reloaded.source().qualifier)
+check("reload_has_no_latch_yet", reloaded.source().gmcp_count == 0,
+      reloaded.source().gmcp_count)
+
+-- The first MIP line of the new session is dropped rather than printed: this is
+-- the duplicate that used to slip through.
+reloaded.clear()
+mip_handlers["CAA"]("k", "CAA", "wiz~Wiz~Simon~first line")
+check("remembered_source_drops_first_mip_line", reloaded.count() == 0, reloaded.count())
+
+gmcp_handlers["Comm"]("Comm.Channel.Text",
+  { channel = "wiz", talker = "Simon", text = "first line" })
+check("remembered_source_prints_gmcp_line", reloaded.count() == 1, reloaded.count())
+
+-- A disconnect drops the per-connection latch but keeps the memory, so a
+-- reconnect does not re-earn its duplicate.
+reloaded.on_disconnect()
+check("disconnect_keeps_remembered_source", reloaded.source().active == "gmcp",
+      reloaded.source().active)
+check("disconnect_keeps_gmcp_seen", reloaded.source().gmcp_seen == true)
+reloaded.clear()
+mip_handlers["CAA"]("k", "CAA", "wiz~Wiz~Simon~after reconnect")
+check("remembered_source_survives_reconnect", reloaded.count() == 0, reloaded.count())
+
+-- Pinning to MIP still wins over the memory, which is the escape hatch if a
+-- server stops sending GMCP chat.
+reloaded.set_source("mip")
+reloaded.clear()
+mip_handlers["CAA"]("k", "CAA", "wiz~Wiz~Simon~pinned to mip")
+check("pinning_mip_overrides_memory", reloaded.count() == 1, reloaded.count())
+reloaded.set_source("auto")
+check("auto_returns_to_remembered_gmcp", reloaded.source().active == "gmcp",
+      reloaded.source().active)
 
 print(failures == 0 and "ALL PASS" or (failures .. " FAILURES"))
 os.exit(failures == 0 and 0 or 1)

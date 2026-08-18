@@ -136,8 +136,24 @@ In the default `auto` mode the pane starts on MIP and switches to GMCP the
 first time a real `Comm.Channel.Text` arrives — negotiation alone is not
 enough, because a server can negotiate GMCP and never send the package. The
 latch then suppresses **all three** MIP handlers, not just `CAA`; anything less
-double-prints. It resets on disconnect. Pin it with
-`/chat source mip|gmcp|auto` or `chat.set_source(mode)`.
+double-prints. Pin it with `/chat source mip|gmcp|auto` or
+`chat.set_source(mode)`.
+
+Having seen GMCP chat is **remembered across sessions** (`gmcp_chat_seen` in the
+plugin's store). Without that memory the very first line of every session
+duplicates: both protocols carry it, MIP arrives first, so it prints before the
+latch can flip. A profile that has proved GMCP once starts on GMCP and never
+gives MIP the opening. The per-connection latch and the counters still reset on
+disconnect; the memory does not, or every reconnect would re-earn its duplicate.
+
+The escape hatch, if a server stops sending GMCP chat, is `/chat source mip` —
+which persists, being a pinned mode. `/chat source` distinguishes a latch earned
+this session from one remembered, so a silent pane is diagnosable:
+
+```
+[chat] source: gmcp (auto; remembered from an earlier session)
+[chat] mip: 0 messages    gmcp: 0 mapped, 0 unmapped
+```
 
 Both protocols name a channel the same way (`wiz`), so both land on the same
 `chat_wiz` line type and its color, label and gags survive a source change.
