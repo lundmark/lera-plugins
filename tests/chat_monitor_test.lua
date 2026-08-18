@@ -36,6 +36,30 @@ mip = {
   on = function(code, fn) mip_handlers[code] = fn; return code end,
   off = function() end,
 }
+local gmcp_handlers = {}
+gmcp = {
+  on = function(package, fn) gmcp_handlers[package] = fn; return package end,
+  remove = function() return true end,
+}
+
+-- Command registry stub, matching the real one: the handler is called with
+-- everything after the command name.
+local registered = {}
+local command_stub = {
+  register = function(spec) registered[#registered + 1] = spec return #registered end,
+  unregister = function() return true end,
+  get = function(name)
+    for _, spec in ipairs(registered) do
+      if spec.name == name then return { name = spec.name } end
+    end
+    return nil
+  end,
+}
+local real_require = require
+require = function(name)
+  if name == "command" then return command_stub end
+  return real_require(name)
+end
 buffer = {
   scroll_offset = function() return 0 end,
   set_scroll_offset = function() end,
@@ -57,6 +81,19 @@ chat.on_load()
 
 local function send_chat(sender, text)
   mip_handlers["CAA"]("k", "CAA", "gossip~Gossip~" .. sender .. "~" .. text)
+end
+
+-- Comm.Channel.Text exactly as 3K sends it.
+local function send_gmcp(channel, talker, text, package)
+  gmcp_handlers["Comm"](package or "Comm.Channel.Text",
+    { channel = channel, talker = talker, text = text })
+end
+
+local function spec_for(name)
+  for _, spec in ipairs(registered) do
+    if spec.name == name then return spec end
+  end
+  return nil
 end
 
 local RECT = { x = 0, y = 0, w = 40, h = 5 }   -- borderless: 40x5 content
@@ -333,6 +370,125 @@ check("stamp_color_configurable",
       restamped)
 check("timestamps_returns_color", select(3, chat.timestamps()) == "yellow")
 chat.set_timestamps(true, "%H:%M", "white")
+
+-- ---- GMCP source -------------------------------------------------------------
+-- The observed 3K payload: Comm.Channel.Text {channel="wiz", talker="Simon",
+-- text="test"}. The channel name is used as sent, so it lands on the same type
+-- ID MIP CAA would build for that channel.
+local st = chat.source()
+check("source_starts_on_mip", st.channels == "mip", st.channels)
+check("source_mode_defaults_auto", st.mode == "auto", st.mode)
+
+chat.clear()
+send_gmcp("wiz", "Simon", "test")
+st = chat.source()
+check("gmcp_message_counted", st.gmcp_count == 1, st.gmcp_count)
+check("gmcp_latches_source", st.channels == "gmcp", st.channels)
+check("gmcp_creates_channel_type", chat.is_enabled("chat_wiz") == true)
+
+local wiz_label
+for _, item in ipairs(chat.list_types()) do
+  if item.id == "chat_wiz" then wiz_label = item.label end
+end
+check("gmcp_labels_type_with_channel_as_sent", wiz_label == "wiz", wiz_label)
+
+-- GMCP text is the bare body, so the talker has to be rendered or it is lost.
+local grows = render()
+check("gmcp_line_renders_talker", grows[4] and grows[4]:find("Simon: test", 1, true) ~= nil,
+      grows[4])
+
+-- ---- the latch suppresses MIP channel lines, not tells or emotes -------------
+chat.clear()
+send_chat("Bob", "should not appear")
+check("mip_channel_dropped_after_latch", chat.count() == 0, chat.count())
+
+mip_handlers["BAB"]("k", "BAB", "~Alice~a tell")
+check("mip_tell_survives_latch", chat.count() == 1, chat.count())
+mip_handlers["BAG"]("k", "BAG", "~Alice~waves")
+check("mip_emote_survives_latch", chat.count() == 2, chat.count())
+
+-- ---- pinning -----------------------------------------------------------------
+check("set_source_rejects_nonsense", chat.set_source("carrier-pigeon") == false)
+check("set_source_mip", chat.set_source("mip") == true)
+check("pinned_mip_reports_mip", chat.source().channels == "mip")
+
+chat.clear()
+send_gmcp("wiz", "Simon", "ignored while pinned to mip")
+check("gmcp_ignored_when_pinned_to_mip", chat.count() == 0, chat.count())
+send_chat("Bob", "mip works again")
+check("mip_restored_when_pinned", chat.count() == 1, chat.count())
+
+check("set_source_gmcp", chat.set_source("gmcp") == true)
+chat.clear()
+send_chat("Bob", "ignored while pinned to gmcp")
+check("mip_ignored_when_pinned_to_gmcp", chat.count() == 0, chat.count())
+
+chat.set_source("auto")
+
+-- ---- malformed payloads are counted, not printed ------------------------------
+chat.clear()
+local before_unmapped = chat.source().gmcp_unmapped
+gmcp_handlers["Comm"]("Comm.Channel.List", { channels = { "wiz" } })
+gmcp_handlers["Comm"]("Comm.Channel.Text", { channel = "wiz" })       -- no text
+gmcp_handlers["Comm"]("Comm.Channel.Text", { text = "orphan" })       -- no channel
+gmcp_handlers["Comm"]("Comm.Channel.Text", "not a table")
+st = chat.source()
+check("unmapped_counted", st.gmcp_unmapped == before_unmapped + 4, st.gmcp_unmapped)
+check("unmapped_not_printed", chat.count() == 0, chat.count())
+check("unmapped_reports_package", st.last_unmapped ~= nil and
+      st.last_unmapped.package == "Comm.Channel.Text", st.last_unmapped)
+
+-- A missing talker is not malformed; it just has nothing to prefix with.
+chat.clear()
+send_gmcp("wiz", nil, "anonymous")
+check("missing_talker_still_delivered", chat.count() == 1, chat.count())
+grows = render()
+check("missing_talker_renders_text", grows[4] and grows[4]:find("anonymous", 1, true) ~= nil,
+      grows[4])
+
+-- ---- disconnect resets the latch ----------------------------------------------
+chat.set_source("auto")
+send_gmcp("wiz", "Simon", "latch me")
+check("latched_before_disconnect", chat.source().channels == "gmcp")
+chat.on_disconnect()
+st = chat.source()
+check("disconnect_resets_latch", st.channels == "mip", st.channels)
+check("disconnect_resets_counters", st.gmcp_count == 0 and st.mip_count == 0)
+check("disconnect_keeps_mode", st.mode == "auto", st.mode)
+
+chat.clear()
+send_chat("Bob", "mip again after disconnect")
+check("mip_feeds_again_after_disconnect", chat.count() == 1, chat.count())
+
+-- ---- /chat command -------------------------------------------------------------
+local chat_spec = spec_for("/chat")
+check("registers_chat_command", chat_spec ~= nil)
+check("chat_command_takes_args", chat_spec and chat_spec.accepts_args == true)
+
+local printed_lines = {}
+local real_print = print
+local function capture(args)
+  printed_lines = {}
+  print = function(text) printed_lines[#printed_lines + 1] = tostring(text) end
+  chat_spec.handler(args)
+  print = real_print
+  return table.concat(printed_lines, "\n")
+end
+
+local cmd_out = capture("source")
+check("chat_source_reports_protocol", cmd_out:find("source: mip", 1, true) ~= nil, cmd_out)
+check("chat_source_reports_counts", cmd_out:find("gmcp:", 1, true) ~= nil, cmd_out)
+
+capture("source gmcp")
+check("chat_source_pins", chat.source().mode == "gmcp", chat.source().mode)
+chat.set_source("auto")
+
+cmd_out = capture("source carrier-pigeon")
+check("chat_source_rejects_nonsense",
+      cmd_out:find("auto, mip or gmcp", 1, true) ~= nil, cmd_out)
+
+cmd_out = capture("types")
+check("chat_types_lists", cmd_out:find("chat_wiz", 1, true) ~= nil, cmd_out)
 
 print(failures == 0 and "ALL PASS" or (failures .. " FAILURES"))
 os.exit(failures == 0 and 0 or 1)

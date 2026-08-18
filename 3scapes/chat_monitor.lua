@@ -1,6 +1,11 @@
 -- Chat Monitor Plugin for Lera
--- Captures MIP chat events (tells, emotes, chat lines) and displays them
--- in a separate panel with color coding and gag support.
+-- Captures chat events (tells, emotes, chat lines) and displays them in a
+-- separate panel with color coding and gag support.
+--
+-- Two protocols can carry channel lines. MIP CAA is the historical source;
+-- GMCP Comm.Channel.Text is preferred when the server proves it is sending it,
+-- because 3K sends the same line over both and printing both would double
+-- every message. See the "Source selection" section below.
 
 local M = {}
 M.name = "chat_monitor"
@@ -30,6 +35,15 @@ end
 -- MIP CAA text already contains the formatted line ("Simon <Wiz>: hi"), so
 -- chat lines get no prefix of their own; use configure() to opt back in.
 local function default_chat_prefix(cfg, who)
+  return ""
+end
+
+-- GMCP Comm.Channel.Text carries the body alone ("test") with the speaker in a
+-- separate field, so a structured message has to render the talker itself or
+-- lose it. Only used where the line type still carries the MIP default above;
+-- a prefix set through configure() always wins.
+local function structured_chat_prefix(cfg, who)
+  if who and who ~= "" then return who .. ": " end
   return ""
 end
 
@@ -71,8 +85,18 @@ local colors = {
 local messages = {}
 local message_seq = 0  -- Sequence number for ordering
 
--- MIP handler refs for cleanup
+-- Protocol handler refs for cleanup
 local mip_handlers = {}
+local gmcp_handlers = {}
+local command_id = nil
+
+-- require("command") is optional: a profile that never required 'commands' has
+-- no registry, and the chat pane still works.
+local command
+do
+  local ok, mod = pcall(require, "command")
+  if ok then command = mod end
+end
 
 -- Wrapped-line cache: a deque so trimming old messages never shifts the array.
 -- Rebuilt in full when the render width changes; appended to incrementally.
@@ -92,6 +116,65 @@ local wrapped_reset, wrapped_append, wrapped_ensure, wrapped_trim_front
 -- Internal helpers
 --------------------------------------------------------------------------------
 
+--------------------------------------------------------------------------------
+-- Source selection
+--------------------------------------------------------------------------------
+--
+-- mode is the user's preference and persists; channels is which protocol is
+-- actually feeding channel lines right now and resets on every disconnect.
+--
+-- In "auto", channel lines come from MIP until GMCP delivers one, then GMCP
+-- owns them for the rest of the connection. That ordering is deliberate: a
+-- server can negotiate GMCP and never send Comm.Channel.Text, and latching the
+-- other way round would leave the pane empty with no fallback.
+--
+-- The latch covers channels only. Tells (MIP BAB) and emotes (MIP BAG) always
+-- come from MIP: Comm.Channel.Text is the only GMCP chat traffic observed, and
+-- it carries no direction field, so it cannot tell an incoming tell from one of
+-- your own the way BAB's direction can. Suppressing those on latch would
+-- silence them outright.
+local source = {
+  mode = "auto",        -- "auto" | "mip" | "gmcp"
+  channels = "mip",     -- "mip" | "gmcp"
+  mip_count = 0,
+  gmcp_count = 0,
+  gmcp_unmapped = 0,
+  last_unmapped = nil,  -- { package = "Comm.Channel.List", fields = "channels" }
+}
+
+local function mip_channels_allowed()
+  if source.mode == "gmcp" then return false end
+  if source.mode == "mip" then return true end
+  return source.channels ~= "gmcp"
+end
+
+local function gmcp_channels_allowed()
+  return source.mode ~= "mip"
+end
+
+-- Reported by /chat source, and the answer to "is GMCP actually arriving?".
+local function source_status()
+  local qualifier
+  if source.mode == "auto" then
+    qualifier = (source.channels == "gmcp") and "auto; latched" or
+                "auto; no GMCP chat seen yet"
+  else
+    qualifier = "pinned"
+  end
+  return {
+    mode = source.mode,
+    channels = source.channels,
+    qualifier = qualifier,
+    mip_count = source.mip_count,
+    gmcp_count = source.gmcp_count,
+    gmcp_unmapped = source.gmcp_unmapped,
+    last_unmapped = source.last_unmapped and {
+      package = source.last_unmapped.package,
+      fields = source.last_unmapped.fields,
+    } or nil,
+  }
+end
+
 local function get_color(color_name)
   return colors[color_name] or colors.white
 end
@@ -99,7 +182,21 @@ end
 -- push_notify sink, resolved in on_setup (nil when push_notify isn't loaded)
 local pushn
 
-local function add_message(msg_type, sender, text)
+-- One prefix rule for both the pane and the push_notify forward. msg.structured
+-- marks a message that arrived as GMCP fields rather than a pre-formatted MIP
+-- line; such a message needs the talker rendered unless the type carries a
+-- prefix the user configured.
+local function resolve_prefix(type_cfg, msg)
+  local prefix_fn = type_cfg.prefix
+  if msg.structured and (prefix_fn == nil or prefix_fn == default_chat_prefix) then
+    prefix_fn = structured_chat_prefix
+  end
+  if prefix_fn then return prefix_fn(type_cfg, msg.sender) end
+  return "[" .. (msg.sender or msg.type) .. "] "
+end
+
+local function add_message(msg_type, sender, text, opts)
+  local structured = opts and opts.structured or false
   local type_cfg = line_types[msg_type]
   if not type_cfg then
     -- Unknown type, use defaults
@@ -130,12 +227,9 @@ local function add_message(msg_type, sender, text)
       channel = msg_type:match("^chat_(.+)")
     end
     if channel then
-      local prefix
-      if type_cfg.prefix then
-        prefix = type_cfg.prefix(type_cfg, sender)
-      else
-        prefix = "[" .. (sender or msg_type) .. "] "
-      end
+      local prefix = resolve_prefix(type_cfg, {
+        type = msg_type, sender = sender, structured = structured,
+      })
       pushn.notify(channel, prefix .. text)
     end
   end
@@ -148,6 +242,8 @@ local function add_message(msg_type, sender, text)
     text = text,
     seq = message_seq,
     time = os.time(),
+    -- Persisted: a restored GMCP line must keep rendering its talker.
+    structured = structured or nil,
   })
 
   -- Wrap into the cache at the current width (first render builds it otherwise)
@@ -247,12 +343,7 @@ end
 -- prefix/color formatting can't drift between the two.
 local function wrap_msg(msg, width)
   local type_cfg = line_types[msg.type] or { color = config.default_color }
-  local prefix
-  if type_cfg.prefix then
-    prefix = type_cfg.prefix(type_cfg, msg.sender)
-  else
-    prefix = "[" .. (msg.sender or msg.type) .. "] "
-  end
+  local prefix = resolve_prefix(type_cfg, msg)
   local stamp = ""
   if config.timestamps and msg.time then
     stamp = "[" .. os.date(config.timestamp_format, msg.time) .. "] "
@@ -318,6 +409,7 @@ end
 -- Format: direction~object~text
 -- direction: "x" = outgoing, "" = incoming
 local function handle_tell(key, code, data)
+  source.mip_count = source.mip_count + 1
   local parts = parse_delimited(data)
   local direction = parts[1] or ""
   local person = parts[2] or "Unknown"
@@ -331,6 +423,7 @@ end
 -- Format: direction~person~text
 -- direction: "x" = from afar (incoming?), "" = local
 local function handle_emote(key, code, data)
+  source.mip_count = source.mip_count + 1
   local parts = parse_delimited(data)
   local direction = parts[1] or ""
   local person = parts[2] or "Unknown"
@@ -340,9 +433,39 @@ local function handle_emote(key, code, data)
   add_message(msg_type, person, text)
 end
 
+-- Colors assigned in rotation to newly discovered chat types.
+local CHAT_COLORS = { "bright_cyan", "bright_green", "bright_yellow", "bright_magenta", "bright_blue" }
+
+-- Both protocols name the same channel the same way ("wiz"), so both land on
+-- the same type ID and a channel keeps its color, label and gags when the
+-- source flips. Shared so the two intake paths cannot drift apart.
+local function ensure_chat_type(command, label)
+  local msg_type = "chat_" .. command
+  if line_types[msg_type] then return msg_type end
+
+  local color_idx = 1
+  for k, _ in pairs(line_types) do
+    if k:match("^chat_") then
+      color_idx = color_idx + 1
+    end
+  end
+  line_types[msg_type] = {
+    color = CHAT_COLORS[((color_idx - 1) % #CHAT_COLORS) + 1],
+    enabled = true,
+    gags = {},
+    label = label or command,
+    command = command,
+    prefix = default_chat_prefix,
+  }
+  return msg_type
+end
+
 -- CAA - Chat lines
 -- Format: command~line_name~sender~text
 local function handle_chat(key, code, data)
+  if not mip_channels_allowed() then return end
+  source.mip_count = source.mip_count + 1
+
   local parts = parse_delimited(data)
   local command = parts[1] or "unknown"
   local line_name = parts[2] or "Chat"
@@ -350,29 +473,49 @@ local function handle_chat(key, code, data)
   local text = parts[4] or ""
 
   -- Use command as the type ID (e.g., "gossip", "guildchat")
-  local msg_type = "chat_" .. command
+  add_message(ensure_chat_type(command, line_name), sender, text)
+end
 
-  -- Auto-register unknown chat types with a default color
-  if not line_types[msg_type] then
-    -- Assign colors in rotation for new chat types
-    local chat_colors = { "bright_cyan", "bright_green", "bright_yellow", "bright_magenta", "bright_blue" }
-    local color_idx = 1
-    for k, _ in pairs(line_types) do
-      if k:match("^chat_") then
-        color_idx = color_idx + 1
-      end
-    end
-    line_types[msg_type] = {
-      color = chat_colors[((color_idx - 1) % #chat_colors) + 1],
-      enabled = true,
-      gags = {},
-      label = line_name,
-      command = command,
-      prefix = default_chat_prefix,
-    }
+-- Anything under Comm that is not a channel line we can read. Counted and
+-- described rather than printed, so "GMCP is silent" stays distinguishable
+-- from "GMCP is arriving in a shape this does not understand".
+local function note_unmapped(package, data)
+  source.gmcp_unmapped = source.gmcp_unmapped + 1
+
+  local fields = {}
+  if type(data) == "table" then
+    for k, _ in pairs(data) do fields[#fields + 1] = tostring(k) end
+    table.sort(fields)
+  end
+  source.last_unmapped = {
+    package = package,
+    fields = (#fields > 0) and table.concat(fields, ", ") or "(none)",
+  }
+end
+
+-- GMCP Comm.Channel.Text, as 3K sends it:
+--   { "channel": "wiz", "talker": "Simon", "text": "test" }
+-- The channel name is used exactly as sent.
+local function handle_gmcp_comm(package, data)
+  if not gmcp_channels_allowed() then return end
+  if tostring(package):lower() ~= "comm.channel.text" then
+    return note_unmapped(package, data)
+  end
+  if type(data) ~= "table" then
+    return note_unmapped(package, data)
   end
 
-  add_message(msg_type, sender, text)
+  local channel, text = data.channel, data.text
+  if type(channel) ~= "string" or channel == "" or type(text) ~= "string" then
+    return note_unmapped(package, data)
+  end
+  local talker = (type(data.talker) == "string" and data.talker ~= "") and data.talker or nil
+
+  source.gmcp_count = source.gmcp_count + 1
+  -- The latch: a real channel line is what promotes GMCP, not negotiation.
+  if source.mode == "auto" then source.channels = "gmcp" end
+
+  add_message(ensure_chat_type(channel, channel), talker, text, { structured = true })
 end
 
 --------------------------------------------------------------------------------
@@ -390,6 +533,29 @@ end
 -- Configure any line type (built-in or chat)
 -- type_id: "tell_in", "tell_out", "emote_in", "emote_out", or "chat_<command>"
 -- opts: { color = "color_name", label = "Display Name", prefix = function, enabled = true/false }
+-- Source control. "auto" latches to GMCP once it delivers a channel line,
+-- "mip" and "gmcp" pin it. Returns true, or false plus a reason.
+function M.set_source(mode)
+  if mode ~= "auto" and mode ~= "mip" and mode ~= "gmcp" then
+    return false, "source must be auto, mip or gmcp"
+  end
+  source.mode = mode
+  if mode == "mip" then
+    source.channels = "mip"
+  elseif mode == "gmcp" then
+    source.channels = "gmcp"
+  else
+    -- Back to latching: GMCP has to prove itself again this connection.
+    source.channels = (source.gmcp_count > 0) and "gmcp" or "mip"
+  end
+  return true
+end
+
+-- Snapshot of which protocol is feeding the pane and what each has delivered.
+function M.source()
+  return source_status()
+end
+
 function M.configure(type_id, opts)
   opts = opts or {}
   if not line_types[type_id] then
@@ -759,6 +925,145 @@ end
 -- Plugin lifecycle
 --------------------------------------------------------------------------------
 
+--------------------------------------------------------------------------------
+-- Command
+--------------------------------------------------------------------------------
+
+local function print_source()
+  local st = source_status()
+  print("[chat] source: " .. st.channels .. " (" .. st.qualifier .. ")")
+  print("[chat] mip: " .. st.mip_count .. " messages    gmcp: " ..
+        st.gmcp_count .. " mapped, " .. st.gmcp_unmapped .. " unmapped")
+  if st.last_unmapped then
+    print("[chat] last unmapped: " .. st.last_unmapped.package ..
+          " (fields: " .. st.last_unmapped.fields .. ")")
+  end
+  print("[chat] tells and emotes always come from MIP")
+end
+
+local function chat_help()
+  print("Chat monitor commands:")
+  print("  /chat source [mip|gmcp|auto] - Show or pin the channel source")
+  print("  /chat types           - List all chat line types")
+  print("  /chat toggle <type>   - Toggle a line type on/off")
+  print("  /chat enable <type>   - Enable a line type")
+  print("  /chat disable <type>  - Disable a line type")
+  print("  /chat color <type> <color> - Set color for a type")
+  print("  /chat gag <type> <pattern> - Add a gag pattern")
+  print("  /chat ungag <type> <pattern> - Remove a gag pattern")
+  print("  /chat gags <type>     - List gags for a type")
+  print("  /chat clear           - Clear all chat messages")
+  print("")
+  print("Colors: black, red, green, yellow, blue, magenta, cyan, white")
+  print("        bright_black, bright_red, bright_green, etc.")
+end
+
+local function chat_command(args)
+  local parts = {}
+  for word in tostring(args or ""):gmatch("%S+") do parts[#parts + 1] = word end
+  local subcmd = (parts[1] or ""):lower()
+
+  if subcmd == "" or subcmd == "help" then
+    chat_help()
+  elseif subcmd == "source" then
+    if parts[2] then
+      local ok, err = M.set_source(parts[2]:lower())
+      if not ok then
+        print("[chat] " .. err)
+        return
+      end
+    end
+    print_source()
+  elseif subcmd == "types" then
+    local types = M.list_types()
+    print("Chat line types:")
+    for _, item in ipairs(types) do
+      local status = item.enabled and "ON" or "OFF"
+      local gags = item.gag_count > 0 and (" [" .. item.gag_count .. " gags]") or ""
+      print(string.format("  %-15s %-12s %s (%s)%s",
+        item.id, item.color, status, item.label, gags))
+    end
+  elseif subcmd == "toggle" then
+    local type_id = parts[2]
+    if not type_id then return print("Usage: /chat toggle <type>") end
+    local enabled = M.toggle(type_id)
+    if enabled ~= nil then
+      print(type_id .. " is now " .. (enabled and "enabled" or "disabled"))
+    else
+      print("Unknown type: " .. type_id)
+    end
+  elseif subcmd == "enable" then
+    local type_id = parts[2]
+    if not type_id then return print("Usage: /chat enable <type>") end
+    print(M.enable(type_id) and (type_id .. " enabled") or ("Unknown type: " .. type_id))
+  elseif subcmd == "disable" then
+    local type_id = parts[2]
+    if not type_id then return print("Usage: /chat disable <type>") end
+    print(M.disable(type_id) and (type_id .. " disabled") or ("Unknown type: " .. type_id))
+  elseif subcmd == "color" then
+    local type_id, color = parts[2], parts[3]
+    if not type_id or not color then return print("Usage: /chat color <type> <color>") end
+    if M.set_color(type_id, color) then
+      print(type_id .. " color set to " .. color)
+    else
+      print("Failed - unknown type or invalid color")
+    end
+  elseif subcmd == "gag" then
+    local type_id, pattern = parts[2], parts[3]
+    if not type_id or not pattern then return print("Usage: /chat gag <type> <pattern>") end
+    if M.add_gag(type_id, pattern) then
+      print("Added gag '" .. pattern .. "' to " .. type_id)
+    else
+      print("Unknown type: " .. type_id)
+    end
+  elseif subcmd == "ungag" then
+    local type_id, pattern = parts[2], parts[3]
+    if not type_id or not pattern then return print("Usage: /chat ungag <type> <pattern>") end
+    print(M.remove_gag(type_id, pattern)
+      and ("Removed gag '" .. pattern .. "' from " .. type_id) or "Gag not found")
+  elseif subcmd == "gags" then
+    local type_id = parts[2]
+    if not type_id then return print("Usage: /chat gags <type>") end
+    local gags = M.list_gags(type_id)
+    if #gags == 0 then
+      print("No gags for " .. type_id)
+    else
+      print("Gags for " .. type_id .. ":")
+      for index, gag in ipairs(gags) do print("  " .. index .. ". " .. gag) end
+    end
+  elseif subcmd == "clear" then
+    M.clear()
+    print("Chat cleared")
+  else
+    print("Unknown subcommand: " .. subcmd)
+    print("Type /chat help for usage")
+  end
+end
+
+-- Hosted mode registers its own /chat (scripts/hosted/commands.lua) before any
+-- plugin loads, and a plugin cannot replace a profile-owned command. Claiming
+-- it only when it is free gives local profiles the same interface without
+-- fighting hosted for the name.
+local function register_command()
+  if not command then return end
+  if command.get("/chat") then return end
+
+  local id, err = command.register({
+    name = "/chat",
+    usage = "/chat <subcommand>",
+    summary = "Manage the chat monitor",
+    description = "List and configure chat types, colors, gags and messages, "
+      .. "and choose whether channel lines come from MIP or GMCP.",
+    accepts_args = true,
+    handler = chat_command,
+  })
+  if id then
+    command_id = id
+  else
+    print("[chat_monitor] command registration failed: " .. tostring(err))
+  end
+end
+
 function M.on_load()
   -- Load saved data from disk
   store.load()
@@ -771,6 +1076,12 @@ function M.on_load()
       if data.config.timestamps ~= nil then config.timestamps = data.config.timestamps end
       if data.config.timestamp_format then config.timestamp_format = data.config.timestamp_format end
       if data.config.timestamp_color then config.timestamp_color = data.config.timestamp_color end
+      -- The preference persists; the latch does not (it is per connection).
+      local mode = data.config.source_mode
+      if mode == "auto" or mode == "mip" or mode == "gmcp" then
+        source.mode = mode
+        source.channels = (mode == "gmcp") and "gmcp" or "mip"
+      end
     end
     -- Restore line type configurations
     restore_line_types(data.line_types)
@@ -788,6 +1099,25 @@ function M.on_load()
   table.insert(mip_handlers, mip.on("BAB", handle_tell))
   table.insert(mip_handlers, mip.on("BAG", handle_emote))
   table.insert(mip_handlers, mip.on("CAA", handle_chat))
+
+  -- One GMCP subscription: dot-boundary matching delivers everything under
+  -- Comm, so Comm.Channel.Text arrives here along with anything else the
+  -- server sends under that package.
+  local gmcp_id = gmcp.on("Comm", handle_gmcp_comm)
+  if gmcp_id then table.insert(gmcp_handlers, gmcp_id) end
+
+  register_command()
+end
+
+-- The latch belongs to a connection: a reconnect (or a different server) must
+-- re-prove GMCP rather than inherit the last session's answer. The counters
+-- describe the session too, so they reset with it.
+function M.on_disconnect()
+  if source.mode == "auto" then source.channels = "mip" end
+  source.mip_count = 0
+  source.gmcp_count = 0
+  source.gmcp_unmapped = 0
+  source.last_unmapped = nil
 end
 
 function M.on_setup()
@@ -798,11 +1128,23 @@ function M.on_setup()
 end
 
 function M.on_unload()
-  -- Unregister MIP handlers
+  -- Unregister protocol handlers
   for _, handler_id in ipairs(mip_handlers) do
     mip.off(handler_id)
   end
   mip_handlers = {}
+
+  for _, handler_id in ipairs(gmcp_handlers) do
+    pcall(gmcp.remove, handler_id)
+  end
+  gmcp_handlers = {}
+
+  -- The loader drops a plugin's commands on unload; unregistering here keeps a
+  -- manual reload from colliding with its own leftover record.
+  if command and command_id then
+    pcall(command.unregister, command_id)
+    command_id = nil
+  end
 
   -- Save data to disk
   store.set({
@@ -812,6 +1154,7 @@ function M.on_unload()
       timestamps = config.timestamps,
       timestamp_format = config.timestamp_format,
       timestamp_color = config.timestamp_color,
+      source_mode = source.mode,
     },
     line_types = serialize_line_types(),
     messages = messages,
