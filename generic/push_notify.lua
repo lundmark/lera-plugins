@@ -10,21 +10,29 @@
 --   pushn.notify("tells", "Bob tells you: hi") -- true if a push was sent
 --
 -- Channels default to disabled; the user opts in per channel with
--- 'pushn toggle <channel>'. A notify() on an unknown channel auto-registers
--- it (disabled) so it shows up in 'pushn toggle'.
+-- '/pushn toggle <channel>'. A notify() on an unknown channel auto-registers
+-- it (disabled) so it shows up in '/pushn toggle'.
 --
 -- Commands:
---   pushn                          - Show status and help
---   pushn set <token> <userkey>    - Set Pushover credentials
---   pushn notify <message>         - Send a test notification
---   pushn enable / disable         - Turn notifications on/off
---   pushn toggle                   - List channels and their states
---   pushn toggle <channel>         - Toggle a channel on/off
---   pushn grace <seconds>          - Set activity grace period (0 to disable)
+--   /pushn                          - Show status and help
+--   /pushn set <token> <userkey>    - Set Pushover credentials
+--   /pushn notify <message>         - Send a test notification
+--   /pushn enable / disable         - Turn notifications on/off
+--   /pushn toggle                   - List channels and their states
+--   /pushn toggle <channel>         - Toggle a channel on/off
+--   /pushn grace <seconds>          - Set activity grace period (0 to disable)
 
 local M = {}
 M.name = "push_notify"
 M.priority = 50
+
+-- require("command") is optional: a profile that never required 'commands' has
+-- no registry, and the producer API (M.notify) still works.
+local command
+do
+  local ok, mod = pcall(require, "command")
+  if ok then command = mod end
+end
 
 -- Default configuration
 local config = {
@@ -48,7 +56,7 @@ local config = {
 
 -- Internal state
 local credentials_set = false
-local alias_ids = {}
+local command_id = nil     -- Registered command ID for cleanup
 local last_user_input = 0  -- Timestamp of last keyboard input
 local saved_channels = {}  -- Persisted channel state, applied on registration
 
@@ -90,14 +98,14 @@ end
 
 local function show_help()
   print("[pushn] Commands:")
-  print("  pushn                        - Show status and help")
-  print("  pushn set <token> <userkey>  - Set Pushover credentials")
-  print("  pushn notify <message>       - Send a test notification")
-  print("  pushn enable                 - Enable notifications")
-  print("  pushn disable                - Disable notifications")
-  print("  pushn toggle                 - List channels and their states")
-  print("  pushn toggle <channel>       - Toggle channel (tells, gossip, etc.)")
-  print("  pushn grace <seconds>        - Set activity grace period (0=off)")
+  print("  /pushn                        - Show status and help")
+  print("  /pushn set <token> <userkey>  - Set Pushover credentials")
+  print("  /pushn notify <message>       - Send a test notification")
+  print("  /pushn enable                 - Enable notifications")
+  print("  /pushn disable                - Disable notifications")
+  print("  /pushn toggle                 - List channels and their states")
+  print("  /pushn toggle <channel>       - Toggle channel (tells, gossip, etc.)")
+  print("  /pushn grace <seconds>        - Set activity grace period (0=off)")
 end
 
 local function list_channels()
@@ -140,94 +148,114 @@ local function toggle_channel(name)
   end
 end
 
-local function register_aliases()
-  -- "pushn" - show status and help
-  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s*$", function()
+-- The registry hands the handler everything after the command name, so the
+-- subcommand split and its validation happen here rather than in a regex.
+local function split_subcommand(args)
+  local sub, rest = tostring(args or ""):match("^%s*(%S*)%s*(.-)%s*$")
+  return sub:lower(), rest
+end
+
+local function send_test(message)
+  if message == "" then
+    print("[pushn] Usage: /pushn notify <message>")
+    return
+  end
+  if not credentials_set then
+    print("[pushn] No credentials set. Use: /pushn set <token> <userkey>")
+    return
+  end
+  push.send(message, {
+    title = "Lera",
+    priority = 0,
+    callback = function(success, err)
+      if not success then
+        print("[pushn] Failed: " .. (err or "unknown error"))
+      end
+    end
+  })
+end
+
+local function set_grace(rest)
+  local seconds = tonumber(rest:match("^%d+$"))
+  if not seconds then
+    print("[pushn] Usage: /pushn grace <seconds>")
+    return
+  end
+  config.grace_period = seconds
+  if config.grace_period > 0 then
+    print("[pushn] Grace period set to " .. config.grace_period .. "s")
+  else
+    print("[pushn] Grace period disabled")
+  end
+end
+
+local function dispatch(args)
+  local sub, rest = split_subcommand(args)
+
+  if sub == "" then
     show_status()
     print("")
     show_help()
-    return nil
-  end)
-
-  -- "pushn help" - show help
-  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+help$", function()
+  elseif sub == "help" then
     show_help()
-    return nil
-  end)
-
-  -- "pushn status" - show status
-  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+status$", function()
+  elseif sub == "status" then
     show_status()
-    return nil
-  end)
-
-  -- "pushn set <token> <userkey>" - set credentials
-  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+set\\s+(\\S+)\\s+(\\S+)$", function(_, token, userkey)
-    M.set_credentials(token, userkey)
-    return nil
-  end)
-
-  -- "pushn notify <message>" - send notification
-  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+notify\\s+(.+)$", function(_, message)
-    if not credentials_set then
-      print("[pushn] No credentials set. Use: pushn set <token> <userkey>")
-      return nil
+  elseif sub == "set" then
+    local token, userkey = rest:match("^(%S+)%s+(%S+)$")
+    if token then
+      M.set_credentials(token, userkey)
+    else
+      print("[pushn] Usage: /pushn set <token> <userkey>")
     end
-    push.send(message, {
-      title = "Lera",
-      priority = 0,
-      callback = function(success, err)
-        if not success then
-          print("[pushn] Failed: " .. (err or "unknown error"))
-        end
-      end
-    })
-    return nil
-  end)
-
-  -- "pushn enable" - enable notifications
-  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+enable$", function()
+  elseif sub == "notify" then
+    send_test(rest)
+  elseif sub == "enable" then
     push.enable()
     print("[pushn] Notifications enabled")
-    return nil
-  end)
-
-  -- "pushn disable" - disable notifications
-  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+disable$", function()
+  elseif sub == "disable" then
     push.disable()
     print("[pushn] Notifications disabled")
-    return nil
-  end)
-
-  -- "pushn toggle" - list channels and their states
-  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+toggle\\s*$", function()
-    list_channels()
-    return nil
-  end)
-
-  -- "pushn toggle <channel>" - toggle channel
-  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+toggle\\s+(\\S+)$", function(_, channel)
-    toggle_channel(channel)
-    return nil
-  end)
-
-  -- "pushn grace <seconds>" - set grace period
-  alias_ids[#alias_ids + 1] = alias.add("^pushn\\s+grace\\s+(\\d+)$", function(_, seconds)
-    config.grace_period = tonumber(seconds)
-    if config.grace_period > 0 then
-      print("[pushn] Grace period set to " .. config.grace_period .. "s")
+  elseif sub == "toggle" then
+    if rest == "" then
+      list_channels()
     else
-      print("[pushn] Grace period disabled")
+      toggle_channel(rest:match("^(%S+)$") or rest)
     end
-    return nil
-  end)
+  elseif sub == "grace" then
+    set_grace(rest)
+  else
+    print("[pushn] Unknown subcommand: " .. sub)
+    show_help()
+  end
 end
 
-local function unregister_aliases()
-  for _, id in ipairs(alias_ids) do
-    if id then alias.remove(id) end
+local function register_command()
+  if not command then return end
+  local id, err = command.register({
+    name = "/pushn",
+    usage = "/pushn [set <token> <userkey>|notify <msg>|enable|disable|toggle [channel]|grace <s>]",
+    summary = "Pushover push notifications",
+    description = "Owns Pushover credentials, per-channel opt-in, the "
+      .. "user-activity grace period and rate limiting. Producer plugins call "
+      .. "notify(channel, text); channels start disabled and are turned on "
+      .. "with 'toggle <channel>'.",
+    accepts_args = true,
+    handler = dispatch,
+  })
+  if id then
+    command_id = id
+  else
+    print("[pushn] command registration failed: " .. tostring(err))
   end
-  alias_ids = {}
+end
+
+local function unregister_command()
+  -- The loader drops a plugin's commands on unload; unregistering here keeps a
+  -- manual reload from colliding with its own leftover record.
+  if command and command_id then
+    pcall(command.unregister, command_id)
+    command_id = nil
+  end
 end
 
 --------------------------------------------------------------------------------
@@ -265,15 +293,13 @@ function M.on_load()
     print("[pushn] Loaded saved credentials")
   end
 
-  -- Register command aliases
-  register_aliases()
+  register_command()
 
-  print("[pushn] Loaded - type 'pushn' for commands")
+  print("[pushn] Loaded - type '/pushn' for commands")
 end
 
 function M.on_unload()
-  -- Unregister command aliases
-  unregister_aliases()
+  unregister_command()
 
   -- Save config. Persist saved state for channels no producer registered
   -- this session, so a temporarily unloaded producer doesn't lose its toggle.
@@ -324,7 +350,7 @@ end
 
 -- Send a push notification on a channel. Returns true if a push was sent.
 -- An unknown channel is auto-registered disabled so it appears in
--- 'pushn toggle' for the user to opt in.
+-- '/pushn toggle' for the user to opt in.
 function M.notify(channel, text)
   local ch = register(channel)
   if not credentials_set or not push.enabled() then
@@ -418,7 +444,7 @@ end
 
 function M.test()
   if not credentials_set then
-    print("[pushn] No credentials set. Use: pushn set <token> <userkey>")
+    print("[pushn] No credentials set. Use: /pushn set <token> <userkey>")
     return
   end
 

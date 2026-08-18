@@ -15,11 +15,19 @@ local config = {
   overlay_height_pct = 0.40, -- 40% of screen height
 }
 
+-- require("command") is optional: a profile that never required 'commands' has
+-- no registry, and the plugin's public API still works.
+local command
+do
+  local ok, mod = pcall(require, "command")
+  if ok then command = mod end
+end
+
 -- State
 local last_user_input = 0  -- Timestamp of last user input
 local blocked_count = 0     -- Number of sends blocked this session
 local update_timer = nil    -- Timer for updating the display
-local alias_ids = {}        -- Registered alias IDs for cleanup
+local command_id = nil      -- Registered command ID for cleanup
 
 -- ANSI 256 color palette indices
 local colors = {
@@ -72,11 +80,11 @@ end
 
 local function show_help()
   print("[deadmans] Commands:")
-  print("  deadmans          - Show status and help")
-  print("  deadmans status   - Show current status")
-  print("  deadmans reset    - Reset idle timer (re-enable sends)")
-  print("  deadmans warning <min>  - Set warning time (minutes)")
-  print("  deadmans block <min>    - Set block time (minutes)")
+  print("  /deadmans               - Show status and help")
+  print("  /deadmans status        - Show current status")
+  print("  /deadmans reset         - Reset idle timer (re-enable sends)")
+  print("  /deadmans warning <min> - Set warning time (minutes)")
+  print("  /deadmans block <min>   - Set block time (minutes)")
 end
 
 local function show_status()
@@ -97,51 +105,72 @@ local function show_status()
   end
 end
 
-local function register_aliases()
-  -- "deadmans" - show help and status
-  alias_ids[#alias_ids + 1] = alias.add("^deadmans$", function()
+-- The registry hands the handler everything after the command name, so the
+-- subcommand split and its validation happen here rather than in a regex.
+local function split_subcommand(args)
+  local sub, rest = tostring(args or ""):match("^%s*(%S*)%s*(.-)%s*$")
+  return sub:lower(), rest
+end
+
+local function set_minutes(sub, rest)
+  local minutes = tonumber(rest:match("^%d+$"))
+  if not minutes then
+    print("[deadmans] Usage: /deadmans " .. sub .. " <minutes>")
+  elseif sub == "warning" then
+    M.set_warning_time(minutes)
+  else
+    M.set_block_time(minutes)
+  end
+end
+
+local function dispatch(args)
+  local sub, rest = split_subcommand(args)
+
+  if sub == "" then
     show_status()
     print("")
     show_help()
-    return nil
-  end)
-
-  -- "deadmans help" - show help
-  alias_ids[#alias_ids + 1] = alias.add("^deadmans\\s+help$", function()
+  elseif sub == "help" then
     show_help()
-    return nil
-  end)
-
-  -- "deadmans status" - show status
-  alias_ids[#alias_ids + 1] = alias.add("^deadmans\\s+status$", function()
+  elseif sub == "status" then
     show_status()
-    return nil
-  end)
-
-  -- "deadmans reset" - reset idle timer
-  alias_ids[#alias_ids + 1] = alias.add("^deadmans\\s+reset$", function()
+  elseif sub == "reset" then
     M.reset()
-    return nil
-  end)
-
-  -- "deadmans warning <minutes>" - set warning time
-  alias_ids[#alias_ids + 1] = alias.add("^deadmans\\s+warning\\s+(\\d+)$", function(_, minutes)
-    M.set_warning_time(tonumber(minutes))
-    return nil
-  end)
-
-  -- "deadmans block <minutes>" - set block time
-  alias_ids[#alias_ids + 1] = alias.add("^deadmans\\s+block\\s+(\\d+)$", function(_, minutes)
-    M.set_block_time(tonumber(minutes))
-    return nil
-  end)
+  elseif sub == "warning" or sub == "block" then
+    set_minutes(sub, rest)
+  else
+    print("[deadmans] Unknown subcommand: " .. sub)
+    show_help()
+  end
 end
 
-local function unregister_aliases()
-  for _, id in ipairs(alias_ids) do
-    if id then alias.remove(id) end
+local function register_command()
+  if not command then return end
+  local id, err = command.register({
+    name = "/deadmans",
+    usage = "/deadmans [status|reset|warning <min>|block <min>]",
+    summary = "Idle detection and automated-send blocking",
+    description = "Tracks how long it has been since you last typed something. "
+      .. "After the warning time an overlay appears; after the block time "
+      .. "automated sends from triggers and timers are suppressed until you "
+      .. "type again. 'reset' clears the idle timer by hand.",
+    accepts_args = true,
+    handler = dispatch,
+  })
+  if id then
+    command_id = id
+  else
+    print("[deadmans] command registration failed: " .. tostring(err))
   end
-  alias_ids = {}
+end
+
+local function unregister_command()
+  -- The loader drops a plugin's commands on unload; unregistering here keeps a
+  -- manual reload from colliding with its own leftover record.
+  if command and command_id then
+    pcall(command.unregister, command_id)
+    command_id = nil
+  end
 end
 
 --------------------------------------------------------------------------------
@@ -259,20 +288,18 @@ function M.on_load()
     if data.config.block_time then config.block_time = data.config.block_time end
   end
 
-  -- Register command aliases
-  register_aliases()
+  register_command()
 
   -- Start update timer (every second when warning/active)
   update_timer = timer.every(1000, update_display)
 
   print("[deadmans] Loaded - warning at " .. math.floor(config.warning_time / 60) ..
         "m, blocking at " .. math.floor(config.block_time / 60) .. "m")
-  print("[deadmans] Type 'deadmans' for commands")
+  print("[deadmans] Type '/deadmans' for commands")
 end
 
 function M.on_unload()
-  -- Unregister command aliases
-  unregister_aliases()
+  unregister_command()
 
   -- Stop update timer
   if update_timer then

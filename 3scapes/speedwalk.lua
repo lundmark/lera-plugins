@@ -36,7 +36,6 @@ local config = {
   command_prefix = ".",     -- Prefix for speedwalk commands
   continue_cmd = "..",      -- Command to continue after pause / single step
   unstep_cmd = ".,",        -- Command to take a step backward
-  clear_cmd = ".clear",     -- Command to clear walk queue
 }
 
 -- Direction reversal table
@@ -460,6 +459,26 @@ function M.walk_between(from, to)
   return true
 end
 
+-- Walk to a named place, falling back to interpreting the argument as a
+-- speedwalk path. Shared by the "." shorthand and "/speedwalk walk".
+function M.walk_path(input)
+  if M.walk_to(input) then
+    return true
+  end
+
+  local path = speedwalk.parse(input)
+  if path and #path > 0 then
+    local commands = speedwalk.flatten(path)
+    if commands and #commands > 0 then
+      print("[speedwalk] Executing path: " .. #commands .. " commands")
+      start_walk(commands)
+      return true
+    end
+  end
+
+  return false
+end
+
 -- Show path without walking
 function M.show_path(from, to)
   if not graph then
@@ -508,18 +527,31 @@ end
 -- Plugin Hooks
 --------------------------------------------------------------------------------
 
-local alias_ids = {}  -- Store alias IDs for cleanup
+local alias_ids = {}  -- Store alias IDs for the "." shorthands
+local command_id = nil
+
+-- require("command") is optional: a profile that never required 'commands' has
+-- no registry, and the "." shorthands still work.
+local command
+do
+  local ok, mod = pcall(require, "command")
+  if ok then command = mod end
+end
 
 local function show_help()
   print("[speedwalk] Commands:")
-  print("  .set [place]    - Set/show current location")
-  print("  .place          - Walk from current place to 'place'")
-  print("  .from-to        - Walk from 'from' to 'to'")
-  print("  ..              - Continue after pause, or single step forward")
-  print("  .,              - Single step backward (unstep)")
-  print("  .clear          - Clear the walk queue")
+  print("  .place              - Walk from current place to 'place'")
+  print("  .from-to            - Walk from 'from' to 'to'")
+  print("  ..                  - Continue after pause, or single step forward")
+  print("  .,                  - Single step backward (unstep)")
+  print("  /speedwalk set [place] - Set/show current location")
+  print("  /speedwalk clear    - Clear the walk queue")
+  print("  /speedwalk walk <p> - Walk to a place or run a path")
 end
 
+-- The "." shorthands stay raw aliases: they are movement syntax, not slash
+-- tokens the command registry can express. The word-shaped subcommands
+-- (".set", ".clear") moved to /speedwalk.
 local function register_aliases()
   -- Order matters! More specific patterns first.
 
@@ -545,43 +577,6 @@ local function register_aliases()
     return nil
   end)
 
-  -- ".clear" - clear walk queue
-  alias_ids[#alias_ids + 1] = alias.add("^\\.clear$", function()
-    clear_walk()
-    return nil
-  end)
-
-  -- ".set <place>" - set current place
-  alias_ids[#alias_ids + 1] = alias.add("^\\.set\\s+(.+)$", function(_, place)
-    if graph then
-      graph:add_place(place)
-      current_place = place
-      print("[speedwalk] Current place: " .. current_place)
-      -- Auto-load steps if available for this place
-      if place_data[place] and place_data[place].steps and place_data[place].steps ~= "" then
-        M.load_steps()
-      else
-        -- Clear any old steps
-        step_list = {}
-        step_targets = ""
-        step_index = 0
-      end
-    else
-      print("[speedwalk] Not initialized")
-    end
-    return nil
-  end)
-
-  -- ".set" - show current place
-  alias_ids[#alias_ids + 1] = alias.add("^\\.set$", function()
-    if current_place then
-      print("[speedwalk] Current place: " .. current_place)
-    else
-      print("[speedwalk] Current place not set")
-    end
-    return nil
-  end)
-
   -- ".from-to" - walk between places
   alias_ids[#alias_ids + 1] = alias.add("^\\.([^-]+)-(.+)$", function(_, from, to)
     M.walk_between(from, to)
@@ -590,23 +585,8 @@ local function register_aliases()
 
   -- ".place" - walk to place, or execute as speedwalk path (must be last)
   alias_ids[#alias_ids + 1] = alias.add("^\\.(.+)$", function(_, input)
-    -- First try to walk to it as a place name
-    if M.walk_to(input) then
-      return nil
-    end
-
-    -- If that failed, try to parse and execute as a speedwalk path
-    local path = speedwalk.parse(input)
-    if path and #path > 0 then
-      local commands = speedwalk.flatten(path)
-      if commands and #commands > 0 then
-        print("[speedwalk] Executing path: " .. #commands .. " commands")
-        start_walk(commands)
-        return nil
-      end
-    end
-
-    -- Neither worked - already printed error in walk_to
+    -- A failure has already printed its own error inside walk_to.
+    M.walk_path(input)
     return nil
   end)
 end
@@ -618,6 +598,89 @@ local function unregister_aliases()
   alias_ids = {}
 end
 
+--------------------------------------------------------------------------------
+-- Command
+--------------------------------------------------------------------------------
+
+local function set_place(place)
+  if not graph then
+    print("[speedwalk] Not initialized")
+    return
+  end
+  if place == "" then
+    if current_place then
+      print("[speedwalk] Current place: " .. current_place)
+    else
+      print("[speedwalk] Current place not set")
+    end
+    return
+  end
+
+  graph:add_place(place)
+  current_place = place
+  print("[speedwalk] Current place: " .. current_place)
+  -- Auto-load steps if available for this place
+  if place_data[place] and place_data[place].steps and place_data[place].steps ~= "" then
+    M.load_steps()
+  else
+    -- Clear any old steps
+    step_list = {}
+    step_targets = ""
+    step_index = 0
+  end
+end
+
+local function dispatch(args)
+  local sub, rest = tostring(args or ""):match("^%s*(%S*)%s*(.-)%s*$")
+  sub = sub:lower()
+
+  if sub == "" or sub == "help" then
+    show_help()
+  elseif sub == "set" then
+    set_place(rest)
+  elseif sub == "clear" then
+    clear_walk()
+  elseif sub == "walk" then
+    if rest == "" then
+      print("[speedwalk] Usage: /speedwalk walk <place|path>")
+    else
+      M.walk_path(rest)
+    end
+  else
+    print("[speedwalk] Unknown subcommand: " .. sub)
+    show_help()
+  end
+end
+
+local function register_command()
+  if not command then return end
+  local id, err = command.register({
+    name = "/speedwalk",
+    usage = "/speedwalk [set [place]|clear|walk <place|path>]",
+    summary = "Speedwalk paths and named places",
+    description = "Walks stored routes between named places. The shorthands "
+      .. "are '.place' to walk to a place or run a path, '.from-to' to walk "
+      .. "between two places, '..' to continue or single-step, '.,' to step "
+      .. "back, and '.' for help.",
+    accepts_args = true,
+    handler = dispatch,
+  })
+  if id then
+    command_id = id
+  else
+    print("[speedwalk] command registration failed: " .. tostring(err))
+  end
+end
+
+local function unregister_command()
+  -- The loader drops a plugin's commands on unload; unregistering here keeps a
+  -- manual reload from colliding with its own leftover record.
+  if command and command_id then
+    pcall(command.unregister, command_id)
+    command_id = nil
+  end
+end
+
 function M.on_load()
   -- Create the graph
   graph = speedwalk.graph_create(256, 512)
@@ -626,8 +689,9 @@ function M.on_load()
     return
   end
 
-  -- Register aliases for commands
+  -- Register the "." shorthands and the /speedwalk command
   register_aliases()
+  register_command()
 
   -- Load saved state
   store.load()
@@ -675,8 +739,8 @@ function M.on_load()
 end
 
 function M.on_unload()
-  -- Unregister aliases
   unregister_aliases()
+  unregister_command()
 
   -- Cancel any pending walk timer
   if walk_timer then

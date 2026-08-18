@@ -94,8 +94,16 @@ local totem_dropped = false
 -- Trigger IDs for cleanup
 local trigger_ids = {}
 
--- Alias IDs for cleanup
-local alias_ids = {}
+-- Registered command IDs for cleanup
+local command_ids = {}
+
+-- require("command") is optional: a profile that never required 'commands' has
+-- no registry, and the guild automation still works.
+local command
+do
+  local ok, mod = pcall(require, "command")
+  if ok then command = mod end
+end
 
 --------------------------------------------------------------------------------
 -- Drench Color Scale
@@ -638,95 +646,103 @@ end
 
 local function show_help()
   print("[druid] Commands:")
-  print("  dauto           - Show status")
-  print("  dauto all       - Toggle master automation (syncs killers)")
-  print("  dauto <spell>   - Toggle spell auto (vern, vd, vg, dhj, ht, hr, fk, skug, krm)")
-  print("  dauto drench    - Toggle drench automation")
-  print("  dauto totem     - Toggle totem automation")
-  print("  dauto lifsk     - Toggle lifskraftla timing")
-  print("  dauto killers   - Toggle killers sync (on/off with dauto all)")
-  print("  resetgxp        - Reset session GXP counters")
+  print("  /dauto           - Show status")
+  print("  /dauto all       - Toggle master automation (syncs killers)")
+  print("  /dauto <spell>   - Toggle spell auto (vern, vd, vg, dhj, ht, hr, fk, skug, krm)")
+  print("  /dauto drench    - Toggle drench automation")
+  print("  /dauto totem     - Toggle totem automation")
+  print("  /dauto lifsk     - Toggle lifskraftla timing")
+  print("  /dauto killers   - Toggle killers sync (on/off with /dauto all)")
+  print("  /resetgxp        - Reset session GXP counters")
 end
 
-local function register_aliases()
-  -- "dauto" - show status and help
-  alias_ids[#alias_ids + 1] = alias.add("^dauto$", function()
+-- The registry hands the handler everything after the command name, so the
+-- subcommand split happens here rather than in a regex.
+local function dispatch_dauto(args)
+  local sub = tostring(args or ""):match("^%s*(%S*)"):lower()
+
+  if sub == "" then
     show_status()
     print("")
     show_help()
-    return nil
-  end)
-
-  -- "dauto help" - show help
-  alias_ids[#alias_ids + 1] = alias.add("^dauto\\s+help$", function()
+  elseif sub == "help" then
     show_help()
-    return nil
-  end)
-
-  -- "dauto all" - master toggle
-  alias_ids[#alias_ids + 1] = alias.add("^dauto\\s+all$", function()
+  elseif sub == "all" then
     auto.enabled = not auto.enabled
     print("[druid] Master automation: " .. (auto.enabled and "ON" or "OFF"))
     sync_killers(auto.enabled)
-    return nil
-  end)
-
-  -- "dauto drench" - toggle drench
-  alias_ids[#alias_ids + 1] = alias.add("^dauto\\s+drench$", function()
+  elseif sub == "drench" then
     auto.drench.enabled = not auto.drench.enabled
     print("[druid] Drench automation: " .. (auto.drench.enabled and "ON" or "OFF"))
-    return nil
-  end)
-
-  -- "dauto totem" - toggle totem
-  alias_ids[#alias_ids + 1] = alias.add("^dauto\\s+totem$", function()
+  elseif sub == "totem" then
     auto.totem.enabled = not auto.totem.enabled
     print("[druid] Totem automation: " .. (auto.totem.enabled and "ON" or "OFF"))
-    return nil
-  end)
-
-  -- "dauto lifsk" - toggle lifskraftla
-  alias_ids[#alias_ids + 1] = alias.add("^dauto\\s+lifsk$", function()
+  elseif sub == "lifsk" then
     auto.lifskraftla = not auto.lifskraftla
     print("[druid] Lifskraftla: " .. (auto.lifskraftla and "ON" or "OFF"))
-    return nil
-  end)
-
-  -- "dauto killers" - toggle killers sync
-  alias_ids[#alias_ids + 1] = alias.add("^dauto\\s+killers$", function()
+  elseif sub == "killers" then
     auto.sync_killers = not auto.sync_killers
     print("[druid] Killers sync: " .. (auto.sync_killers and "ON" or "OFF"))
-    return nil
-  end)
-
-  -- "dauto <spell>" - toggle specific spell
-  alias_ids[#alias_ids + 1] = alias.add("^dauto\\s+(\\w+)$", function(_, spell)
-    spell = spell:lower()
-    if auto.spells[spell] then
-      auto.spells[spell].enabled = not auto.spells[spell].enabled
-      print("[druid] " .. spell .. " auto: " .. (auto.spells[spell].enabled and "ON" or "OFF"))
-    else
-      print("[druid] Unknown spell: " .. spell)
-      print("[druid] Valid spells: vern, vd, vg, dhj, ht, hr, fk, skug, krm")
-    end
-    return nil
-  end)
-
-  -- "resetgxp" - reset session GXP
-  alias_ids[#alias_ids + 1] = alias.add("^resetgxp$", function()
-    for i = 1, 5 do
-      druid.session_gxp[i] = 0
-    end
-    print("[druid] Session GXP reset")
-    return nil
-  end)
+  elseif auto.spells[sub] then
+    auto.spells[sub].enabled = not auto.spells[sub].enabled
+    print("[druid] " .. sub .. " auto: " .. (auto.spells[sub].enabled and "ON" or "OFF"))
+  else
+    print("[druid] Unknown spell: " .. sub)
+    print("[druid] Valid spells: vern, vd, vg, dhj, ht, hr, fk, skug, krm")
+  end
 end
 
-local function unregister_aliases()
-  for _, id in ipairs(alias_ids) do
-    if id then alias.remove(id) end
+local function reset_session_gxp()
+  for i = 1, 5 do
+    druid.session_gxp[i] = 0
   end
-  alias_ids = {}
+  print("[druid] Session GXP reset")
+end
+
+local function register_commands()
+  if not command then return end
+
+  local specs = {
+    {
+      name = "/dauto",
+      usage = "/dauto [all|<spell>|drench|totem|lifsk|killers]",
+      summary = "Toggle druid spell and rite automation",
+      description = "Each subcommand toggles one piece of automation; bare "
+        .. "/dauto shows what is currently on. 'all' is the master switch and "
+        .. "also syncs the killers list when 'killers' is on. Spells: vern, "
+        .. "vd, vg, dhj, ht, hr, fk, skug, krm.",
+      accepts_args = true,
+      handler = dispatch_dauto,
+    },
+    {
+      name = "/resetgxp",
+      usage = "/resetgxp",
+      summary = "Reset the session GXP counters",
+      description = "Zeroes the per-session guild experience counters the "
+        .. "druid status display accumulates.",
+      accepts_args = false,
+      handler = reset_session_gxp,
+    },
+  }
+
+  for _, spec in ipairs(specs) do
+    local id, err = command.register(spec)
+    if id then
+      command_ids[#command_ids + 1] = id
+    else
+      print("[druid] command registration failed for " .. spec.name .. ": " .. tostring(err))
+    end
+  end
+end
+
+local function unregister_commands()
+  -- The loader drops a plugin's commands on unload; unregistering here keeps a
+  -- manual reload from colliding with its own leftover records.
+  if not command then return end
+  for _, id in ipairs(command_ids) do
+    pcall(command.unregister, id)
+  end
+  command_ids = {}
 end
 
 --------------------------------------------------------------------------------
@@ -1026,17 +1042,17 @@ function M.on_load()
     end
   end
 
-  -- Register triggers and aliases
+  -- Register triggers and commands
   register_triggers()
-  register_aliases()
+  register_commands()
 
-  print("[druid] Loaded - type 'dauto' for status and commands")
+  print("[druid] Loaded - type '/dauto' for status and commands")
 end
 
 function M.on_unload()
-  -- Unregister triggers and aliases
+  -- Unregister triggers and commands
   unregister_triggers()
-  unregister_aliases()
+  unregister_commands()
 
   -- Save config
   store.set({

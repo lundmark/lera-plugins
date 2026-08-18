@@ -186,21 +186,33 @@ end
 -- Aliases
 --------------------------------------------------------------------------------
 
-local alias_ids = {}  -- Store alias IDs for cleanup
+local alias_ids = {}  -- Store alias IDs for the movement shorthands
+local command_id = nil
+
+-- require("command") is optional: a profile that never required 'commands' has
+-- no registry, and the "-" shorthands still work.
+local command
+do
+  local ok, mod = pcall(require, "command")
+  if ok then command = mod end
+end
 
 local function show_help()
   log("Commands:")
-  log("  -.              - Start stepping, kill any mob")
-  log("  ->              - Start stepping, only kill targets")
-  log("  -!              - Stop stepping")
-  log("  -set status     - Show current status")
-  log("  -set prompt <p> - Set prompt detection pattern")
-  log("  -set attack [on|off] - Toggle auto-attack")
-  log("  -set glance [cmd]    - Set/show glance command")
-  log("  -set kill [cmd]      - Set/show attack command prefix")
-  log("  -set config     - Show configuration")
+  log("  -.                     - Start stepping, kill any mob")
+  log("  ->                     - Start stepping, only kill targets")
+  log("  -!                     - Stop stepping")
+  log("  /step status           - Show current status")
+  log("  /step set prompt <p>   - Set prompt detection pattern")
+  log("  /step set attack [on|off] - Toggle auto-attack")
+  log("  /step set glance [cmd]    - Set/show glance command")
+  log("  /step set kill [cmd]      - Set/show attack command prefix")
+  log("  /step set config       - Show configuration")
 end
 
+-- The movement shorthands stay raw aliases: "-", "-.", "->" and "-!" are input
+-- syntax, not slash tokens the command registry can express. Everything
+-- word-shaped moved to /step.
 local function register_aliases()
   -- "-" - show help
   alias_ids[#alias_ids + 1] = alias.add("^-$", function()
@@ -225,86 +237,6 @@ local function register_aliases()
     M.stop()
     return nil
   end)
-
-  -- "-set status"
-  alias_ids[#alias_ids + 1] = alias.add("^-set\\s+status$", function()
-    M.status()
-    return nil
-  end)
-
-  -- "-set prompt <pattern>"
-  alias_ids[#alias_ids + 1] = alias.add("^-set\\s+prompt\\s+(.+)$", function(_, pattern)
-    M.set_prompt_pattern(pattern)
-    return nil
-  end)
-
-  -- "-set prompt" (no arg)
-  alias_ids[#alias_ids + 1] = alias.add("^-set\\s+prompt$", function()
-    log("Usage: -set prompt <pattern>")
-    log("Current: " .. (config.prompt_pattern or "(not set)"))
-    return nil
-  end)
-
-  -- "-set config"
-  alias_ids[#alias_ids + 1] = alias.add("^-set\\s+config$", function()
-    log("Configuration:")
-    log("  glance_cmd: " .. config.glance_cmd)
-    log("  attack_cmd: " .. config.attack_cmd)
-    log("  prompt_pattern: " .. (config.prompt_pattern or "(not set)"))
-    log("  auto_attack: " .. tostring(config.auto_attack))
-    log("  targets_only: " .. tostring(config.targets_only))
-    return nil
-  end)
-
-  -- "-set attack on/off"
-  alias_ids[#alias_ids + 1] = alias.add("^-set\\s+attack\\s+(on|off)$", function(_, val)
-    config.auto_attack = (val == "on")
-    log("Auto-attack " .. (config.auto_attack and "enabled" or "disabled"))
-    return nil
-  end)
-
-  -- "-set attack" (no arg)
-  alias_ids[#alias_ids + 1] = alias.add("^-set\\s+attack$", function()
-    log("Auto-attack: " .. (config.auto_attack and "on" or "off"))
-    return nil
-  end)
-
-  -- "-set glance <cmd>"
-  alias_ids[#alias_ids + 1] = alias.add("^-set\\s+glance\\s+(.+)$", function(_, cmd)
-    config.glance_cmd = cmd
-    log("Glance command set: " .. config.glance_cmd)
-    return nil
-  end)
-
-  -- "-set glance" (no arg)
-  alias_ids[#alias_ids + 1] = alias.add("^-set\\s+glance$", function()
-    log("Glance command: " .. config.glance_cmd)
-    return nil
-  end)
-
-  -- "-set kill <cmd>"
-  alias_ids[#alias_ids + 1] = alias.add("^-set\\s+kill\\s+(.+)$", function(_, cmd)
-    config.attack_cmd = cmd
-    log("Attack command set: " .. config.attack_cmd)
-    return nil
-  end)
-
-  -- "-set kill" (no arg)
-  alias_ids[#alias_ids + 1] = alias.add("^-set\\s+kill$", function()
-    log("Attack command: " .. config.attack_cmd)
-    return nil
-  end)
-
-  -- "-set" or "-set help" - show help
-  alias_ids[#alias_ids + 1] = alias.add("^-set$", function()
-    show_help()
-    return nil
-  end)
-
-  alias_ids[#alias_ids + 1] = alias.add("^-set\\s+help$", function()
-    show_help()
-    return nil
-  end)
 end
 
 local function unregister_aliases()
@@ -312,6 +244,119 @@ local function unregister_aliases()
     if id then alias.remove(id) end
   end
   alias_ids = {}
+end
+
+--------------------------------------------------------------------------------
+-- Command
+--------------------------------------------------------------------------------
+
+local function show_config()
+  log("Configuration:")
+  log("  glance_cmd: " .. config.glance_cmd)
+  log("  attack_cmd: " .. config.attack_cmd)
+  log("  prompt_pattern: " .. (config.prompt_pattern or "(not set)"))
+  log("  auto_attack: " .. tostring(config.auto_attack))
+  log("  targets_only: " .. tostring(config.targets_only))
+end
+
+-- "set" takes a key and an optional value; with no value each key reports what
+-- it currently holds, which is what the bare "-set <key>" aliases used to do.
+local function dispatch_set(rest)
+  local key, value = rest:match("^(%S*)%s*(.-)%s*$")
+  key = key:lower()
+
+  if key == "" or key == "help" then
+    show_help()
+  elseif key == "status" then
+    M.status()
+  elseif key == "config" then
+    show_config()
+  elseif key == "prompt" then
+    if value == "" then
+      log("Usage: /step set prompt <pattern>")
+      log("Current: " .. (config.prompt_pattern or "(not set)"))
+    else
+      M.set_prompt_pattern(value)
+    end
+  elseif key == "attack" then
+    if value == "" then
+      log("Auto-attack: " .. (config.auto_attack and "on" or "off"))
+    elseif value == "on" or value == "off" then
+      config.auto_attack = (value == "on")
+      log("Auto-attack " .. (config.auto_attack and "enabled" or "disabled"))
+    else
+      log("Usage: /step set attack [on|off]")
+    end
+  elseif key == "glance" then
+    if value == "" then
+      log("Glance command: " .. config.glance_cmd)
+    else
+      config.glance_cmd = value
+      log("Glance command set: " .. config.glance_cmd)
+    end
+  elseif key == "kill" then
+    if value == "" then
+      log("Attack command: " .. config.attack_cmd)
+    else
+      config.attack_cmd = value
+      log("Attack command set: " .. config.attack_cmd)
+    end
+  else
+    log("Unknown setting: " .. key)
+    show_help()
+  end
+end
+
+local function dispatch(args)
+  local sub, rest = tostring(args or ""):match("^%s*(%S*)%s*(.-)%s*$")
+  sub = sub:lower()
+
+  if sub == "" or sub == "help" then
+    show_help()
+  elseif sub == "set" then
+    dispatch_set(rest)
+  elseif sub == "status" then
+    M.status()
+  elseif sub == "start" then
+    M.start(false)
+  elseif sub == "targets" then
+    M.start(true)
+  elseif sub == "stop" then
+    M.stop()
+  else
+    log("Unknown subcommand: " .. sub)
+    show_help()
+  end
+end
+
+local function register_command()
+  if not command then return end
+  local id, err = command.register({
+    name = "/step",
+    aliases = { "/autostepper" },
+    usage = "/step [start|targets|stop|status|set <key> [value]]",
+    summary = "Automatic speedwalk stepping with optional combat",
+    description = "Walks a stored step path one room at a time, optionally "
+      .. "glancing and attacking on the way. The shorthands are '-.' to start "
+      .. "on any mob, '->' to start on targets only, '-!' to stop, and '-' for "
+      .. "help. Settings: status, config, prompt, attack, glance, kill.",
+    accepts_args = true,
+    handler = dispatch,
+  })
+  if id then
+    command_id = id
+  else
+    log("command registration failed: " .. tostring(err))
+  end
+end
+
+local function unregister_command()
+  -- The loader drops a plugin's commands on unload; unregistering here keeps a
+  -- manual reload from colliding with its own leftover record.
+  if command and command_id then
+    pcall(command.unregister, command_id)
+    command_id = nil
+  end
 end
 
 --------------------------------------------------------------------------------
@@ -330,15 +375,16 @@ function M.on_load()
     log("Warning: roominfo plugin not loaded")
   end
 
-  -- Register aliases
+  -- Register the movement shorthands and the /step command
   register_aliases()
+  register_command()
 
-  log("Loaded (use -set help for commands)")
+  log("Loaded (use /step help for commands)")
 end
 
 function M.on_unload()
-  -- Unregister aliases
   unregister_aliases()
+  unregister_command()
 
   M.stop()
   log("Unloaded")

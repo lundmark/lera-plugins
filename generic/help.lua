@@ -19,16 +19,16 @@ M.commands = {
     desc = "List loaded plugins"
   },
   load = {
-    usage = "/load <plugin>",
+    usage = "/plugins load <plugin>",
     desc = "Load a plugin"
   },
   unload = {
-    usage = "/unload <plugin>",
+    usage = "/plugins unload <plugin>",
     desc = "Unload a plugin"
   },
   chat = {
     usage = "/chat <subcommand>",
-    desc = "Chat monitor commands: types, toggle, gag, ungag, clear"
+    desc = "Chat monitor commands (hosted mode): types, toggle, gag, ungag, clear"
   },
 }
 
@@ -307,48 +307,28 @@ local function chat_command(args)
   end
 end
 
-local alias_ids = {}
+--------------------------------------------------------------------------------
+-- Public API
+--------------------------------------------------------------------------------
+--
+-- This plugin no longer registers commands. It predates the command registry
+-- in scripts/default/command.lua, and its raw aliases shadowed the built-ins:
+-- /help, /plugins and /quit are supplied by require('commands'), /plugins
+-- load|unload supersedes /load and /unload, and hosted mode owns /chat. A
+-- profile that loaded this plugin alongside the built-ins ended up advertising
+-- one command in /help while a different one actually ran.
+--
+-- What is left is the content library. Call these directly, or register them
+-- under names of your own choosing with command.register.
+
+M.show_help = show_help          -- (topic) -> prints command list or API docs
+M.list_plugins = list_plugins
+M.load_plugin = load_plugin
+M.unload_plugin = unload_plugin
+M.chat_command = chat_command    -- chat_monitor administration
 
 function M.on_load()
-  -- Register command aliases
-  alias_ids[#alias_ids + 1] = alias.add("^/help\\s*(.*)$", function(_, arg)
-    show_help(arg)
-    return nil
-  end)
-
-  alias_ids[#alias_ids + 1] = alias.add("^/quit$", function()
-    lera.quit()
-    return nil
-  end)
-
-  alias_ids[#alias_ids + 1] = alias.add("^/plugins$", function()
-    list_plugins()
-    return nil
-  end)
-
-  alias_ids[#alias_ids + 1] = alias.add("^/load\\s+(.+)$", function(_, name)
-    load_plugin(name)
-    return nil
-  end)
-
-  alias_ids[#alias_ids + 1] = alias.add("^/unload\\s+(.+)$", function(_, name)
-    unload_plugin(name)
-    return nil
-  end)
-
-  alias_ids[#alias_ids + 1] = alias.add("^/chat\\s*(.*)$", function(_, args)
-    chat_command(args)
-    return nil
-  end)
-
-  print("[help] Loaded - type /help for commands")
-end
-
-function M.on_unload()
-  for _, id in ipairs(alias_ids) do
-    alias.remove(id)
-  end
-  alias_ids = {}
+  print("[help] Loaded - help library only; commands come from require('commands')")
 end
 
 return M

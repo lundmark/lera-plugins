@@ -38,7 +38,15 @@ local last_kill = {
 
 -- Trigger and alias IDs for cleanup
 local trigger_ids = {}
-local alias_ids = {}
+local command_id = nil
+
+-- require("command") is optional: a profile that never required 'commands' has
+-- no registry, and the kill triggers themselves still work.
+local command
+do
+  local ok, mod = pcall(require, "command")
+  if ok then command = mod end
+end
 
 --------------------------------------------------------------------------------
 -- ANSI Colors
@@ -453,124 +461,136 @@ local function show_status()
   end
 end
 
-local function register_aliases()
-  -- Main /killers command
-  alias_ids[#alias_ids + 1] = alias.add("^/killers$", function()
+-- The registry hands the handler everything after the command name, so the
+-- subcommand split and its validation happen here rather than in a regex.
+local function split_subcommand(args)
+  local sub, rest = tostring(args or ""):match("^%s*(%S*)%s*(.-)%s*$")
+  return sub:lower(), rest
+end
+
+local function usage(form)
+  print("[killers] Usage: /killers " .. form)
+end
+
+local function list_commands()
+  print("[killers] Commands:")
+  for i, cmd in ipairs(data.commands) do
+    print("  " .. i .. ": " .. cmd)
+  end
+end
+
+local function list_other_commands()
+  print("[killers] Other-commands (non-killer kills):")
+  for i, cmd in ipairs(data.other_commands) do
+    print("  " .. i .. ": " .. cmd)
+  end
+  if #data.other_commands == 0 then
+    print("  (none)")
+  end
+end
+
+-- Index arguments were validated by \d+ in the old alias patterns; the checks
+-- are explicit now so a bad index prints usage instead of reaching the API.
+local function one_index(sub, rest)
+  local index = tonumber(rest:match("^%d+$"))
+  if not index then
+    usage(sub .. " <#>")
+    return nil
+  end
+  return index
+end
+
+local function two_indices(sub, rest)
+  local first, second = rest:match("^(%d+)%s+(%d+)$")
+  if not first then
+    usage(sub .. " <#> <#>")
+    return nil
+  end
+  return tonumber(first), tonumber(second)
+end
+
+local function dispatch(args)
+  local sub, rest = split_subcommand(args)
+
+  if sub == "" then
     show_status()
     print("")
     show_help()
-    return nil
-  end)
-
-  -- /killers on
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+on$", function()
+  elseif sub == "help" then
+    show_help()
+  elseif sub == "on" then
     M.enable()
-    return nil
-  end)
-
-  -- /killers off
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+off$", function()
+  elseif sub == "off" then
     M.disable()
-    return nil
-  end)
-
-  -- /killers list
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+list$", function()
+  elseif sub == "list" then
     local killers = M.get_killers()
     print("[killers] Killers:")
     for _, name in ipairs(killers) do
       print("  " .. name)
     end
-    return nil
-  end)
-
-  -- /killers add <name>
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+add\\s+(.+)$", function(_, name)
-    M.add_killer(name)
-    return nil
-  end)
-
-  -- /killers del <name>
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+del\\s+(.+)$", function(_, name)
-    M.remove_killer(name)
-    return nil
-  end)
-
-  -- /killers listcmd
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+listcmd$", function()
-    print("[killers] Commands:")
-    for i, cmd in ipairs(data.commands) do
-      print("  " .. i .. ": " .. cmd)
-    end
-    return nil
-  end)
-
-  -- /killers addcmd <cmd>
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+addcmd\\s+(.+)$", function(_, cmd)
-    M.add_command(cmd)
-    return nil
-  end)
-
-  -- /killers delcmd <index>
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+delcmd\\s+(\\d+)$", function(_, idx)
-    M.remove_command(tonumber(idx))
-    return nil
-  end)
-
-  -- /killers swapcmd <idx1> <idx2>
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+swapcmd\\s+(\\d+)\\s+(\\d+)$", function(_, idx1, idx2)
-    M.swap_commands(tonumber(idx1), tonumber(idx2))
-    return nil
-  end)
-
-  -- /killers listocmd
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+listocmd$", function()
-    print("[killers] Other-commands (non-killer kills):")
-    for i, cmd in ipairs(data.other_commands) do
-      print("  " .. i .. ": " .. cmd)
-    end
-    if #data.other_commands == 0 then
-      print("  (none)")
-    end
-    return nil
-  end)
-
-  -- /killers addocmd <cmd>
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+addocmd\\s+(.+)$", function(_, cmd)
-    M.add_other_command(cmd)
-    return nil
-  end)
-
-  -- /killers delocmd <index>
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+delocmd\\s+(\\d+)$", function(_, idx)
-    M.remove_other_command(tonumber(idx))
-    return nil
-  end)
-
-  -- /killers swapocmd <idx1> <idx2>
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+swapocmd\\s+(\\d+)\\s+(\\d+)$", function(_, idx1, idx2)
-    M.swap_other_commands(tonumber(idx1), tonumber(idx2))
-    return nil
-  end)
-
-  -- /killers clear
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+clear$", function()
+  elseif sub == "add" then
+    if rest == "" then return usage("add <name>") end
+    M.add_killer(rest)
+  elseif sub == "del" then
+    if rest == "" then return usage("del <name>") end
+    M.remove_killer(rest)
+  elseif sub == "listcmd" then
+    list_commands()
+  elseif sub == "addcmd" then
+    if rest == "" then return usage("addcmd <cmd>") end
+    M.add_command(rest)
+  elseif sub == "delcmd" then
+    local index = one_index(sub, rest)
+    if index then M.remove_command(index) end
+  elseif sub == "swapcmd" then
+    local first, second = two_indices(sub, rest)
+    if first then M.swap_commands(first, second) end
+  elseif sub == "listocmd" then
+    list_other_commands()
+  elseif sub == "addocmd" then
+    if rest == "" then return usage("addocmd <cmd>") end
+    M.add_other_command(rest)
+  elseif sub == "delocmd" then
+    local index = one_index(sub, rest)
+    if index then M.remove_other_command(index) end
+  elseif sub == "swapocmd" then
+    local first, second = two_indices(sub, rest)
+    if first then M.swap_other_commands(first, second) end
+  elseif sub == "clear" then
     M.clear()
-    return nil
-  end)
-
-  -- /killers help
-  alias_ids[#alias_ids + 1] = alias.add("^/killers\\s+help$", function()
+  else
+    print("[killers] Unknown subcommand: " .. sub)
     show_help()
-    return nil
-  end)
+  end
 end
 
-local function unregister_aliases()
-  for _, id in ipairs(alias_ids) do
-    if id then alias.remove(id) end
+local function register_command()
+  if not command then return end
+  local id, err = command.register({
+    name = "/killers",
+    usage = "/killers [on|off|list|add <name>|del <name>|listcmd|addcmd <cmd>|clear]",
+    summary = "Run commands when a named killer lands a killing blow",
+    description = "Watches for killing-blow lines. When one of the configured "
+      .. "killers lands it, the command list runs; any other killer runs the "
+      .. "other-command list. 'addcmd'/'delcmd'/'swapcmd' edit the first list, "
+      .. "the 'ocmd' variants the second.",
+    accepts_args = true,
+    handler = dispatch,
+  })
+  if id then
+    command_id = id
+  else
+    print("[kill_trigger] command registration failed: " .. tostring(err))
   end
-  alias_ids = {}
+end
+
+local function unregister_command()
+  -- The loader drops a plugin's commands on unload; unregistering here keeps a
+  -- manual reload from colliding with its own leftover record.
+  if command and command_id then
+    pcall(command.unregister, command_id)
+    command_id = nil
+  end
 end
 
 --------------------------------------------------------------------------------
@@ -617,14 +637,14 @@ function M.on_load()
   end
 
   register_triggers()
-  register_aliases()
+  register_command()
 
   print("[killers] Loaded - " .. (data.enabled and "ENABLED" or "DISABLED") .. " - type '/killers' for help")
 end
 
 function M.on_unload()
   unregister_triggers()
-  unregister_aliases()
+  unregister_command()
 
   -- Save data
   save_data()

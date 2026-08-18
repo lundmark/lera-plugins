@@ -14,7 +14,15 @@ M.priority = 5  -- Run before roominfo (10) to capture =R= lines before they're 
 local map_buffer = {}         -- Buffered map lines (list of {text=, styles=})
 local last_map = {}           -- Last complete map for redrawing
 local capturing = false       -- Are we currently buffering map lines?
-local alias_id = nil          -- Alias ID for /minimap command
+local command_id = nil        -- Registered command ID for cleanup
+
+-- require("command") is optional: a profile that never required 'commands' has
+-- no registry, and the minimap capture still works.
+local command
+do
+  local ok, mod = pcall(require, "command")
+  if ok then command = mod end
+end
 
 -- Settings (persisted)
 local settings = {
@@ -366,15 +374,28 @@ function M.on_load()
     end
   end
 
-  -- Register /minimap command alias
-  alias_id = alias.add("^/minimap\\s*(.*)$", function(_, args_str)
-    local args = {}
-    for arg in (args_str or ""):gmatch("%S+") do
-      table.insert(args, arg)
+  if command then
+    local id, err = command.register({
+      name = "/minimap",
+      usage = "/minimap [room|exits|steps|status|clear]",
+      summary = "Compact minimap capture and display",
+      description = "Captures the MUD's minimap output into a pane and toggles "
+        .. "the extra lines drawn with it: room name, exits and the step path.",
+      accepts_args = true,
+      handler = function(args)
+        local words = {}
+        for word in tostring(args or ""):gmatch("%S+") do
+          words[#words + 1] = word
+        end
+        handle_minimap_command(words)
+      end,
+    })
+    if id then
+      command_id = id
+    else
+      print("[minimap] command registration failed: " .. tostring(err))
     end
-    handle_minimap_command(args)
-    return nil  -- suppress
-  end)
+  end
 
   print("[minimap] Loaded")
 end
@@ -384,9 +405,11 @@ function M.on_unload()
   store.set({settings = settings})
   store.save()
 
-  if alias_id then
-    alias.remove(alias_id)
-    alias_id = nil
+  -- The loader drops a plugin's commands on unload; unregistering here keeps a
+  -- manual reload from colliding with its own leftover record.
+  if command and command_id then
+    pcall(command.unregister, command_id)
+    command_id = nil
   end
 
   print("[minimap] Unloaded")

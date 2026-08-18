@@ -19,7 +19,15 @@ local settings = {
   show_unmapped = true,
 }
 
-local alias_id = nil
+local command_id = nil
+
+-- require("command") is optional: a profile that never required 'commands' has
+-- no registry, and the map rendering still works.
+local command
+do
+  local ok, mod = pcall(require, "command")
+  if ok then command = mod end
+end
 
 -- Direction offsets for correlating minimap positions to mapper rooms
 -- Minimap uses room-corridor-room pattern (2 units apart)
@@ -656,15 +664,29 @@ function M.on_load()
     end
   end
 
-  -- Register /mapview command alias
-  alias_id = alias.add("^/mapview\\s*(.*)$", function(_, args_str)
-    local args = {}
-    for arg in (args_str or ""):gmatch("%S+") do
-      table.insert(args, arg)
+  if command then
+    local id, err = command.register({
+      name = "/mapview",
+      usage = "/mapview [mobs|players|freshness|waypoints|unmapped|status]",
+      summary = "Hybrid minimap/mapper visualization",
+      description = "Draws the MUD's own minimap with mapper data overlaid: "
+        .. "mob and player coloring, room freshness, waypoint highlighting and "
+        .. "unmapped rooms, each toggled independently.",
+      accepts_args = true,
+      handler = function(args)
+        local words = {}
+        for word in tostring(args or ""):gmatch("%S+") do
+          words[#words + 1] = word
+        end
+        handle_command(words)
+      end,
+    })
+    if id then
+      command_id = id
+    else
+      print("[mapview] command registration failed: " .. tostring(err))
     end
-    handle_command(args)
-    return nil  -- suppress
-  end)
+  end
 
   print("[mapview] Loaded - hybrid minimap/mapper visualization")
   print("[mapview] Use /mapview for help")
@@ -675,9 +697,11 @@ function M.on_unload()
   store.set({settings = settings})
   store.save()
 
-  if alias_id then
-    alias.remove(alias_id)
-    alias_id = nil
+  -- The loader drops a plugin's commands on unload; unregistering here keeps a
+  -- manual reload from colliding with its own leftover record.
+  if command and command_id then
+    pcall(command.unregister, command_id)
+    command_id = nil
   end
 
   print("[mapview] Unloaded")

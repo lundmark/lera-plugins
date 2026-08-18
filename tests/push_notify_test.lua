@@ -45,32 +45,40 @@ push = {
   record_send = function(id) recorded[#recorded + 1] = id end,
 }
 
--- Alias registry mirroring the C engine (src/script/alias.c): aliases are
--- tried in registration order, the first match wins, and the callback gets
--- the full match followed by the capture groups.
-local aliases = {}
+-- Command registry stub. The real registry (scripts/default/command.lua)
+-- installs "^/name(?:\s+(.*))?$" and hands the handler everything after the
+-- command name, so a test drives the handler with that remainder directly.
+local registered = {}
+local unregistered = {}
+local command_stub = {
+  register = function(spec) registered[#registered + 1] = spec return #registered end,
+  unregister = function(id) unregistered[#unregistered + 1] = id return true end,
+}
+local real_require = require
+require = function(name)
+  if name == "command" then return command_stub end
+  return real_require(name)
+end
+
+-- Raw aliases must not come back: this plugin's whole surface is /pushn now.
 alias = {
-  add = function(pattern, fn)
-    aliases[#aliases + 1] = { pattern = pattern, fn = fn }
-    return #aliases
-  end,
+  add = function() error("push_notify must not register raw aliases", 0) end,
   remove = function() end,
 }
 
-local function pcre_to_lua(pattern)
-  return (pattern:gsub("\\([sSd])", "%%%1"))
+local function spec_for(name)
+  for _, spec in ipairs(registered) do
+    if spec.name == name then return spec end
+  end
+  return nil
 end
 
-local function dispatch(input)
-  for _, a in ipairs(aliases) do
-    local captures = { input:match(pcre_to_lua(a.pattern)) }
-    if captures[1] then
-      local full = input:match("(" .. pcre_to_lua(a.pattern) .. ")")
-      a.fn(full, unpack(captures))
-      return true
-    end
-  end
-  return false
+-- Everything after "/pushn", the way the registry passes it.
+local function dispatch(args)
+  local spec = spec_for("/pushn")
+  if not spec then return false end
+  spec.handler(args)
+  return true
 end
 
 local printed = {}
@@ -91,10 +99,10 @@ local pushn = require("push_notify")
 pushn.on_load()
 print = real_print
 
-local function run(input)
+local function run(args)
   printed = {}
   print = capture_print
-  local matched = dispatch(input)
+  local matched = dispatch(args)
   print = real_print
   return matched, table.concat(printed, "\n")
 end
@@ -106,9 +114,17 @@ local function quiet(fn, ...)
   return r
 end
 
+-- ---- command registration -------------------------------------------------------
+local pushn_spec = spec_for("/pushn")
+check("registers_pushn_command", pushn_spec ~= nil)
+check("pushn_takes_args", pushn_spec and pushn_spec.accepts_args == true)
+check("pushn_has_summary", pushn_spec and type(pushn_spec.summary) == "string"
+      and #pushn_spec.summary > 0)
+
 -- ---- no MUD line listening -----------------------------------------------------
 check("no_on_line_hook", pushn.on_line == nil)
-check("filter_command_gone", not dispatch("pushn filter"))
+local _, filter_out = run("filter")
+check("filter_command_gone", filter_out:find("Unknown subcommand", 1, true) ~= nil, filter_out)
 
 -- ---- stored channel state survives re-registration ------------------------------
 quiet(pushn.register_channel, "tells", { priority = 1 })
@@ -122,11 +138,11 @@ check("notify_records_rate_limit", recorded[1] == "tells", recorded[1])
 sent = {}
 check("unregistered_channel_blocked", not quiet(pushn.notify, "gossip", "[gossip] hi"))
 check("unregistered_channel_no_send", #sent == 0)
-local _, out = run("pushn toggle")
+local _, out = run("toggle")
 check("auto_registered_listed", out:find("gossip", 1, true) ~= nil, out)
 
 -- ---- toggle enables an auto-registered channel ----------------------------------
-run("pushn toggle gossip")
+run("toggle gossip")
 check("toggled_channel_notifies", quiet(pushn.notify, "gossip", "[gossip] hi") and #sent == 1)
 
 -- ---- disabled push blocks -------------------------------------------------------
@@ -157,21 +173,21 @@ check("long_message_truncated", sent[1] and #sent[1].msg == 200 and sent[1].msg:
 
 -- ---- commands ---------------------------------------------------------------------
 local matched
-matched, out = run("pushn")
+matched, out = run("")
 check("bare_pushn_matches", matched)
 check("bare_pushn_shows_status", out:find("Status", 1, true) ~= nil, out)
 
-matched, out = run("pushn ")
-check("pushn_trailing_space_matches", matched)
+matched, out = run("   ")
+check("pushn_whitespace_only_is_bare", matched and out:find("Status", 1, true) ~= nil, out)
 
-matched, out = run("pushn toggle")
+matched, out = run("toggle")
 check("toggle_lists_channels", matched and out:find("tells", 1, true) ~= nil, out)
 
-matched, out = run("pushn toggle tells")
+matched, out = run("toggle tells")
 check("toggle_disables", out:find("'tells' disabled", 1, true) ~= nil, out)
 sent = {}
 check("disabled_channel_blocked", not quiet(pushn.notify, "tells", "x") and #sent == 0)
-run("pushn toggle tells")
+run("toggle tells")
 
 -- ---- unload persists channel state -------------------------------------------------
 quiet(pushn.on_unload)
@@ -181,6 +197,7 @@ check("unload_saves_channels", saved and saved.tells and saved.tells.enabled == 
       saved and "tells=" .. tostring(saved.tells and saved.tells.enabled)
             .. " gossip=" .. tostring(saved.gossip and saved.gossip.enabled))
 check("unload_saves_no_keywords", stored_data.config.keywords == nil)
+check("unload_unregisters_command", #unregistered == 1, tostring(#unregistered))
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")

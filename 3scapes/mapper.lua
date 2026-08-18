@@ -21,8 +21,16 @@ local map = {
 local mapping_mode = false  -- only learn connections when true
 local mapping_lost = false  -- true if we moved too fast and lost sync
 local mip_handlers = {}
-local alias_ids = {}
+local command_id = nil
 local roominfo_callback_id = nil
+
+-- require("command") is optional: a profile that never required 'commands' has
+-- no registry, and the mapping itself still works.
+local command
+do
+  local ok, mod = pcall(require, "command")
+  if ok then command = mod end
+end
 
 --------------------------------------------------------------------------------
 -- Direction mappings
@@ -984,6 +992,46 @@ function M.save()
 end
 
 --------------------------------------------------------------------------------
+-- Command
+--------------------------------------------------------------------------------
+
+local function register_command()
+  if not command then return end
+  -- The registry installs "^/map(?:\s+(.*))?$", which does not match /mapview
+  -- or /mapper: those have no space after "/map".
+  local id, err = command.register({
+    name = "/map",
+    usage = "/map [start|stop|status|resync|wp <name>|wps|delwp <name>|stats|find <name>|clear]",
+    summary = "Room mapping and pathfinding",
+    description = "Learns room connections while mapping is on, tracks the "
+      .. "current room, and stores named waypoints to walk back to. 'resync' "
+      .. "recovers after moving faster than the mapper could follow.",
+    accepts_args = true,
+    handler = function(args)
+      local words = {}
+      for word in tostring(args or ""):gmatch("%S+") do
+        words[#words + 1] = word
+      end
+      handle_map_command(words)
+    end,
+  })
+  if id then
+    command_id = id
+  else
+    print("[mapper] command registration failed: " .. tostring(err))
+  end
+end
+
+local function unregister_command()
+  -- The loader drops a plugin's commands on unload; unregistering here keeps a
+  -- manual reload from colliding with its own leftover record.
+  if command and command_id then
+    pcall(command.unregister, command_id)
+    command_id = nil
+  end
+end
+
+--------------------------------------------------------------------------------
 -- Plugin lifecycle
 --------------------------------------------------------------------------------
 
@@ -999,26 +1047,7 @@ function M.on_load()
     roominfo_callback_id = roominfo.on_room_change(on_roominfo_change)
   end
 
-  -- Register /map command alias (must be before speedwalk's catch-all)
-  -- Use two patterns: one for /map with args, one for bare /map
-  table.insert(alias_ids, alias.add("^/map\\s+(.*)$", function(full_line, args_str)
-    local args = {}
-    for arg in (args_str or ""):gmatch("%S+") do
-      table.insert(args, arg)
-    end
-    -- Don't intercept /mapview, /mapper, etc.
-    if args[1] and args[1]:match("^view") then
-      return full_line  -- Pass through unchanged
-    end
-    handle_map_command(args)
-    return nil  -- suppress
-  end))
-
-  -- Handle bare /map with no args
-  table.insert(alias_ids, alias.add("^/map$", function()
-    handle_map_command({})
-    return nil
-  end))
+  register_command()
 
   local stats = M.stats()
   local persist_note = has_store and "" or " (no persistence)"
@@ -1042,10 +1071,7 @@ function M.on_unload()
     roominfo_callback_id = nil
   end
 
-  for _, id in ipairs(alias_ids) do
-    alias.remove(id)
-  end
-  alias_ids = {}
+  unregister_command()
 
   print("[mapper] Saved and unloaded")
 end

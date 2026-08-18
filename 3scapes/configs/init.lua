@@ -22,6 +22,8 @@ local function load_plugin(name)
 end
 
 -- Core plugins (order matters: roominfo before mapper)
+-- 'help' is a content library only: /help itself comes from require('commands')
+-- below, and every plugin registers its own commands with the same registry.
 local help         = load_plugin("help")
 local autologin    = load_plugin("autologin")
 local deadmans     = load_plugin("deadmans")
