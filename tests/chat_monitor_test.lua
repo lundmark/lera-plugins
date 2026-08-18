@@ -89,6 +89,14 @@ local function send_gmcp(channel, talker, text, package)
     { channel = channel, talker = talker, text = text })
 end
 
+-- Rendered rows carry SGR codes now: the lead-in runs in the line type's colour
+-- and the body in the text colour, so an assertion about wording has to look at
+-- the plain text.
+local function plain(row)
+  if type(row) ~= "string" then return nil end
+  return (row:gsub("\027%[[%d;]*m", ""))
+end
+
 local function spec_for(name)
   for _, spec in ipairs(registered) do
     if spec.name == name then return spec end
@@ -394,7 +402,7 @@ check("gmcp_labels_type_with_channel_as_sent", wiz_label == "wiz", wiz_label)
 
 -- GMCP text is the bare body, so the talker has to be rendered or it is lost.
 local grows = render()
-check("gmcp_line_renders_talker", grows[4] and grows[4]:find("Simon: test", 1, true) ~= nil,
+check("gmcp_line_renders_talker", plain(grows[4]) and plain(grows[4]):find("Simon: test", 1, true) ~= nil,
       grows[4])
 
 -- ---- the latch covers every kind of line --------------------------------------
@@ -448,7 +456,7 @@ chat.clear()
 send_gmcp("wiz", nil, "anonymous")
 check("missing_talker_still_delivered", chat.count() == 1, chat.count())
 grows = render()
-check("missing_talker_renders_text", grows[4] and grows[4]:find("anonymous", 1, true) ~= nil,
+check("missing_talker_renders_text", plain(grows[4]) and plain(grows[4]):find("anonymous", 1, true) ~= nil,
       grows[4])
 
 -- ---- tells, souls and multi-target tells --------------------------------------
@@ -461,9 +469,9 @@ gmcp_handlers["Comm"]("Comm.Channel.Text",
   { channel = "soul", talker = "Simon", text = "smiles at you." })
 grows = render()
 check("soul_joins_with_space",
-      grows[4] and grows[4]:find("Simon smiles at you.", 1, true) ~= nil, grows[4])
+      plain(grows[4]) and plain(grows[4]):find("Simon smiles at you.", 1, true) ~= nil, grows[4])
 check("soul_has_no_colon",
-      grows[4] and grows[4]:find("Simon: smiles", 1, true) == nil, grows[4])
+      plain(grows[4]) and plain(grows[4]):find("Simon: smiles", 1, true) == nil, grows[4])
 
 chat.clear()
 gmcp_handlers["Comm"]("Comm.Channel.Text",
@@ -471,7 +479,7 @@ gmcp_handlers["Comm"]("Comm.Channel.Text",
     targets = { "Lennart", "Simon" } })
 grows = render()
 check("multi_tell_names_targets",
-      grows[4] and grows[4]:find("Simon -> Lennart: test", 1, true) ~= nil, grows[4])
+      plain(grows[4]) and plain(grows[4]):find("Simon -> Lennart: test", 1, true) ~= nil, grows[4])
 
 -- A single target that is the talker alone adds nothing, so it is left off.
 chat.clear()
@@ -479,7 +487,7 @@ gmcp_handlers["Comm"]("Comm.Channel.Text",
   { channel = "tell", talker = "Bob", text = "hi", targets = { "Bob" } })
 grows = render()
 check("self_only_target_omitted",
-      grows[4] and grows[4]:find("Bob: hi", 1, true) ~= nil, grows[4])
+      plain(grows[4]) and plain(grows[4]):find("Bob: hi", 1, true) ~= nil, grows[4])
 
 -- A server-sent prefix is used verbatim, whatever the channel or targets say.
 chat.clear()
@@ -488,9 +496,9 @@ gmcp_handlers["Comm"]("Comm.Channel.Text",
     targets = { "Lennart" }, prefix = "You tell Lennart: " })
 grows = render()
 check("server_prefix_used_verbatim",
-      grows[4] and grows[4]:find("You tell Lennart: test", 1, true) ~= nil, grows[4])
+      plain(grows[4]) and plain(grows[4]):find("You tell Lennart: test", 1, true) ~= nil, grows[4])
 check("server_prefix_replaces_synthesis",
-      grows[4] and grows[4]:find("Simon ->", 1, true) == nil, grows[4])
+      plain(grows[4]) and plain(grows[4]):find("Simon ->", 1, true) == nil, grows[4])
 
 -- A configured prefix applies when the server sent none...
 chat.add_chatline("tell", { color = "cyan" })
@@ -502,7 +510,7 @@ gmcp_handlers["Comm"]("Comm.Channel.Text",
   { channel = "tell", talker = "Simon", text = "test" })
 grows = render()
 check("configured_prefix_used_without_server_prefix",
-      grows[4] and grows[4]:find("<Simon> test", 1, true) ~= nil, grows[4])
+      plain(grows[4]) and plain(grows[4]):find("<Simon> test", 1, true) ~= nil, grows[4])
 
 -- ...but a server-sent one wins, because the same setting has to serve MIP text
 -- that already carries its attribution and GMCP text that does not.
@@ -511,7 +519,7 @@ gmcp_handlers["Comm"]("Comm.Channel.Text",
   { channel = "tell", talker = "Simon", text = "test", prefix = "You tell X: " })
 grows = render()
 check("server_prefix_outranks_configured",
-      grows[4] and grows[4]:find("You tell X: test", 1, true) ~= nil, grows[4])
+      plain(grows[4]) and plain(grows[4]):find("You tell X: test", 1, true) ~= nil, grows[4])
 
 -- MIP messages are untouched by that rule: no server prefix exists for them.
 chat.set_source("mip")
@@ -519,7 +527,7 @@ chat.clear()
 mip_handlers["BAG"]("k", "BAG", "~Simon~Simon smiles at you.")
 grows = render()
 check("mip_emote_keeps_configured_empty_prefix",
-      grows[4] and grows[4]:find("Simon smiles at you.", 1, true) ~= nil, grows[4])
+      plain(grows[4]) and plain(grows[4]):find("Simon smiles at you.", 1, true) ~= nil, grows[4])
 chat.set_source("auto")
 
 -- ---- push routing survives the protocol change ---------------------------------
@@ -617,6 +625,88 @@ gmcp_handlers["Comm"]("Comm.Channel.Text",
 last = chat.get_messages(1)[1]
 check("direction_ignored_on_plain_channel", last and last.type == "chat_wiz",
       last and last.type)
+
+-- ---- lead-in spacing ------------------------------------------------------------
+-- A server prefix need not end in whitespace; exactly one space is inserted, and
+-- a prefix that already ends in one is left alone.
+chat.set_source("auto")
+chat.clear()
+gmcp_handlers["Comm"]("Comm.Channel.Text",
+  { channel = "wiz", talker = "Simon", text = "test", prefix = "Simon says:" })
+grows = render()
+check("space_inserted_after_prefix",
+      plain(grows[4]) and plain(grows[4]):find("Simon says: test", 1, true) ~= nil,
+      grows[4])
+
+chat.clear()
+gmcp_handlers["Comm"]("Comm.Channel.Text",
+  { channel = "wiz", talker = "Simon", text = "test", prefix = "Simon says: " })
+grows = render()
+check("no_double_space_when_prefix_ends_in_one",
+      plain(grows[4]) and plain(grows[4]):find("Simon says:  test", 1, true) == nil,
+      grows[4])
+
+-- ---- two-tone colouring ---------------------------------------------------------
+-- The lead-in carries the line type's colour, the body the text colour.
+check("text_color_defaults_white", chat.text_color() == "white", chat.text_color())
+chat.set_color("chat_wiz", "bright_cyan")
+chat.set_timestamps(false)
+chat.clear()
+gmcp_handlers["Comm"]("Comm.Channel.Text",
+  { channel = "wiz", talker = "Simon", text = "body", prefix = "LEAD:" })
+grows = render()
+check("prefix_in_type_color_body_in_text_color",
+      grows[4] and grows[4]:find("\027[96mLEAD: \027[37mbody", 1, true) ~= nil, grows[4])
+
+check("set_text_color_rejects_nonsense", chat.set_text_color("greenish") == false)
+check("set_text_color", chat.set_text_color("bright_black") == true)
+grows = render()
+check("text_color_applies",
+      grows[4] and grows[4]:find("\027[96mLEAD: \027[90mbody", 1, true) ~= nil, grows[4])
+
+-- Per-type override beats the global setting.
+check("configure_accepts_text_color",
+      chat.configure("chat_wiz", { text_color = "yellow" }))
+grows = render()
+check("per_type_text_color_applies",
+      grows[4] and grows[4]:find("\027[96mLEAD: \027[33mbody", 1, true) ~= nil, grows[4])
+chat.configure("chat_wiz", { text_color = "white" })
+chat.set_text_color("white")
+
+-- A line with no lead-in stays entirely in its type colour: MIP text is already
+-- a formatted line, and greying it would discard the per-channel colour.
+chat.set_source("mip")
+chat.clear()
+send_chat("Bob", "whole line one colour")
+grows = render()
+check("no_prefix_keeps_single_color",
+      grows[4] and grows[4]:find("\027[37m", 1, true) == nil, grows[4])
+chat.set_source("auto")
+
+-- ---- colour survives wrapping ---------------------------------------------------
+-- The body colour has to be re-stated on continuation rows, or a wrapped message
+-- reverts to the row's base colour halfway through.
+chat.clear()
+gmcp_handlers["Comm"]("Comm.Channel.Text",
+  { channel = "wiz", talker = "Simon", prefix = "LEAD:",
+    text = "one two three four five six seven eight nine ten eleven twelve" })
+local wrapped_rows = render()
+local body_rows = 0
+for _, text in pairs(wrapped_rows) do
+  if text:find("\027[37m", 1, true) then body_rows = body_rows + 1 end
+end
+check("wrapped_body_keeps_text_color_on_every_row", body_rows >= 2, body_rows)
+
+-- And the words survive the paint intact.
+local joined = {}
+for row = 1, 5 do
+  if wrapped_rows[row] then joined[#joined + 1] = plain(wrapped_rows[row]) end
+end
+joined = table.concat(joined, " ")
+check("wrapped_text_not_corrupted_by_paint",
+      joined:find("eleven", 1, true) ~= nil and joined:find("LEAD:", 1, true) ~= nil,
+      joined)
+chat.set_timestamps(true, "%H:%M", "white")
 
 -- ---- disconnect resets the latch ----------------------------------------------
 chat.set_source("auto")

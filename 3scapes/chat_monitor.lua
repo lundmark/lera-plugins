@@ -21,6 +21,11 @@ local config = {
   timestamps = true,      -- Prepend a timestamp to every message
   timestamp_format = "%H:%M",
   timestamp_color = "white",
+  -- Body colour for a line that has a lead-in: the prefix carries the line
+  -- type's colour and the message itself reads in this one. A line with no
+  -- prefix stays entirely in its type colour, so MIP chat lines -- whose text
+  -- *is* the whole formatted line -- keep their per-channel colour.
+  text_color = "white",
 }
 
 -- Default prefix function for built-in types
@@ -226,6 +231,15 @@ end
 -- push_notify sink, resolved in on_setup (nil when push_notify isn't loaded)
 local pushn
 
+-- A lead-in and the body need exactly one space between them, and a prefix may
+-- or may not already end in whitespace: the built-in defaults do ("[Bob] "), a
+-- server-sent one need not ("Simon tells you:").
+local function join_prefix(prefix, text)
+  if prefix == "" then return text end
+  if prefix:match("%s$") then return prefix .. text end
+  return prefix .. " " .. text
+end
+
 -- One prefix rule for both the pane and the push_notify forward.
 --
 -- A prefix set through configure() always wins: the user asked for it. Failing
@@ -289,7 +303,7 @@ local function add_message(msg_type, sender, text, opts)
         type = msg_type, sender = sender, structured = structured,
         prefix = prefix_text, prefix_from_server = prefix_from_server,
       })
-      pushn.notify(channel, prefix .. text)
+      pushn.notify(channel, join_prefix(prefix, text))
     end
   end
 
@@ -342,16 +356,22 @@ end
 
 -- Word wrap text to fit within width
 -- Returns array of lines
+-- Returns the wrapped lines and, alongside them, how many source characters
+-- each line consumed. They differ whenever a break space is dropped, and colour
+-- spans are mapped back onto the wrapped output by source offset, so the count
+-- has to be exact rather than inferred from the line lengths.
 local function word_wrap(text, width)
-  if width <= 0 then return { text } end
-  if #text <= width then return { text } end
+  if width <= 0 then return { text }, { #text } end
+  if #text <= width then return { text }, { #text } end
 
   local lines = {}
+  local consumed = {}
   local remaining = text
 
   while #remaining > 0 do
     if #remaining <= width then
       table.insert(lines, remaining)
+      table.insert(consumed, #remaining)
       break
     end
 
@@ -380,16 +400,14 @@ local function word_wrap(text, width)
       line = line:sub(1, -2)
     end
     table.insert(lines, line)
+    -- remaining always advances past the break character, whether or not it was
+    -- trimmed off the line above.
+    table.insert(consumed, break_pos)
 
-    -- Skip the break character if it was a space
-    if remaining:sub(break_pos, break_pos) == " " then
-      remaining = remaining:sub(break_pos + 1)
-    else
-      remaining = remaining:sub(break_pos + 1)
-    end
+    remaining = remaining:sub(break_pos + 1)
   end
 
-  return lines
+  return lines, consumed
 end
 
 function wrapped_reset()
@@ -402,6 +420,49 @@ end
 -- Format + word-wrap one message at a given width. Shared by the local cache
 -- builder (wrapped_append) and the transient remote-pass builder below, so
 -- prefix/color formatting can't drift between the two.
+-- Paint colour spans onto already-wrapped lines. Wrapping runs on the plain
+-- string so escape codes never enter the width arithmetic; the spans are then
+-- mapped back by source offset, which is what word_wrap's consumed counts are
+-- for. A span boundary landing mid-line splits that line; one landing at a line
+-- edge simply becomes the next line's opening colour.
+--
+-- Each line opens with an explicit colour code, so a continuation line resumes
+-- in the right colour rather than inheriting the row's base one.
+local function paint_spans(lines, consumed, spans)
+  local bounds, acc = {}, 0
+  for _, span in ipairs(spans) do
+    if span.len > 0 then
+      bounds[#bounds + 1] = { at = acc, code = span.code }
+      acc = acc + span.len
+    end
+  end
+  if #bounds == 0 then return lines end
+
+  local painted = {}
+  local offset = 0
+  for i, line in ipairs(lines) do
+    local opening = bounds[1].code
+    for _, bound in ipairs(bounds) do
+      if bound.at <= offset then opening = bound.code end
+    end
+
+    local parts, cursor = { opening }, 0
+    for _, bound in ipairs(bounds) do
+      local rel = bound.at - offset
+      if rel > 0 and rel < #line then
+        parts[#parts + 1] = line:sub(cursor + 1, rel)
+        parts[#parts + 1] = bound.code
+        cursor = rel
+      end
+    end
+    parts[#parts + 1] = line:sub(cursor + 1)
+
+    painted[i] = table.concat(parts)
+    offset = offset + (consumed[i] or #line)
+  end
+  return painted
+end
+
 local function wrap_msg(msg, width)
   local type_cfg = line_types[msg.type] or { color = config.default_color }
   local prefix = resolve_prefix(type_cfg, msg)
@@ -409,15 +470,25 @@ local function wrap_msg(msg, width)
   if config.timestamps and msg.time then
     stamp = "[" .. os.date(config.timestamp_format, msg.time) .. "] "
   end
+
   local color_code = get_color(type_cfg.color)
-  local lines = word_wrap(stamp .. prefix .. msg.text, width)
-  -- Colorize the stamp after wrapping so escape codes never enter the width
-  -- math; skipped when the first line is narrower than the stamp itself.
-  if #stamp > 0 and #lines[1] >= #stamp then
-    lines[1] = get_color(config.timestamp_color) .. lines[1]:sub(1, #stamp)
-               .. color_code .. lines[1]:sub(#stamp + 1)
+  -- With no lead-in the whole line stays in the type colour: MIP text is itself
+  -- a formatted line ("Simon <Wiz>: hi"), and greying it would throw away the
+  -- per-channel colour that distinguishes one channel from another.
+  local body_code = color_code
+  if #prefix > 0 then
+    body_code = get_color(type_cfg.text_color or config.text_color)
   end
-  return color_code, lines
+
+  local body = join_prefix(prefix, msg.text)
+  local lead = stamp .. body:sub(1, #body - #msg.text)
+  local lines, consumed = word_wrap(stamp .. body, width)
+
+  return color_code, paint_spans(lines, consumed, {
+    { len = #stamp, code = get_color(config.timestamp_color) },
+    { len = #lead - #stamp, code = color_code },
+    { len = #msg.text, code = body_code },
+  })
 end
 
 -- Wrap one message and append its rows to the cache. Returns the row count,
@@ -607,6 +678,7 @@ end
 
 local function formatting_options_changed(opts)
   return opts.color ~= nil or opts.label ~= nil or opts.prefix ~= nil
+     or opts.text_color ~= nil
 end
 
 local function invalidate_wrapped_formatting()
@@ -648,6 +720,10 @@ function M.configure(type_id, opts)
   if opts.label then line_types[type_id].label = opts.label end
   if opts.prefix then line_types[type_id].prefix = opts.prefix end
   if opts.enabled ~= nil then line_types[type_id].enabled = opts.enabled end
+  -- Per-type override of the body colour; falls back to config.text_color.
+  if opts.text_color and colors[opts.text_color] then
+    line_types[type_id].text_color = opts.text_color
+  end
   if formatting_options_changed(opts) then invalidate_wrapped_formatting() end
   return true
 end
@@ -959,6 +1035,19 @@ function M.timestamps()
   return config.timestamps, config.timestamp_format, config.timestamp_color
 end
 
+-- Body colour for lines that have a lead-in. A line without one keeps its type
+-- colour throughout, so this never touches MIP chat lines.
+function M.set_text_color(color)
+  if not colors[color] then return false end
+  config.text_color = color
+  invalidate_wrapped_formatting()
+  return true
+end
+
+function M.text_color()
+  return config.text_color
+end
+
 --------------------------------------------------------------------------------
 -- Persistence helpers
 --------------------------------------------------------------------------------
@@ -1158,6 +1247,7 @@ function M.on_load()
       if data.config.timestamps ~= nil then config.timestamps = data.config.timestamps end
       if data.config.timestamp_format then config.timestamp_format = data.config.timestamp_format end
       if data.config.timestamp_color then config.timestamp_color = data.config.timestamp_color end
+      if data.config.text_color then config.text_color = data.config.text_color end
       -- The preference persists; the latch does not (it is per connection).
       local mode = data.config.source_mode
       if mode == "auto" or mode == "mip" or mode == "gmcp" then
@@ -1236,6 +1326,7 @@ function M.on_unload()
       timestamps = config.timestamps,
       timestamp_format = config.timestamp_format,
       timestamp_color = config.timestamp_color,
+      text_color = config.text_color,
       source_mode = source.mode,
     },
     line_types = serialize_line_types(),

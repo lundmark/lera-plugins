@@ -172,6 +172,34 @@ GMCP line the server sent no prefix for.
 Synthesis is guesswork about server-side phrasing and exists only so the pane
 reads sensibly before a server sends its own `prefix`.
 
+The lead-in and the body are joined by exactly one space, added only when the
+prefix does not already end in whitespace — the built-in defaults do (`[Bob] `),
+a server-sent one need not (`Simon tells you:`).
+
+### Two-tone colouring
+
+A line with a lead-in renders the lead-in in the line type's colour and the body
+in `text_color` (default `white`):
+
+```
+[09:57] Simon tells you: are you there?
+        ^^^^^^^^^^^^^^^^ type colour
+                         ^^^^^^^^^^^^^^ text_color
+```
+
+A line *without* a lead-in stays entirely in its type colour. That is deliberate:
+MIP text is itself a formatted line (`Simon <Wiz>: hi`), so greying the body would
+throw away the per-channel colour that distinguishes one channel from another.
+
+```lua
+chat.set_text_color("bright_black")            -- global; "white" by default
+chat.configure("chat_wiz", { text_color = "yellow" })   -- per line type
+```
+
+Colour spans are painted after wrapping, so escape codes never enter the width
+arithmetic, and each wrapped row re-opens in the colour it continues — a body
+that wraps stays in `text_color` on every row rather than reverting.
+
 ### Direction
 
 `Comm.Channel.Text` has no direction of its own, and `targets` only reveals it
