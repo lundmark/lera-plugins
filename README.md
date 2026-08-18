@@ -1,5 +1,11 @@
 # Lera Plugins
 
+> **Mirrored into [lundmark/lera](https://github.com/lundmark/lera) at
+> `plugins/`** as a git subtree. Day-to-day development happens there and is
+> pushed here periodically; PRs against this repository are welcome and get
+> pulled back into lera after merge. Both directions preserve history, which
+> is why a merged PR here reappears in lera with its original commits.
+
 Plugin collection for the Lera MUD client.
 
 ## Legacy parity validation
