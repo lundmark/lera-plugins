@@ -25,8 +25,34 @@ store = {
 lera = { time = function() return 1000 end, version = function() return "test" end }
 buffer = { color_print = function() end }
 mud = { send = function() end }
-mip = { on = function() return 1 end, off = function() end, enabled = function() return true end }
-gmcp = { on = function() return 1 end, remove = function() end, enabled = function() return false end }
+-- mip/gmcp stubs capture registrations and can fire them with the real wire
+-- shapes, so wiring bugs (e.g. binding the wrong callback argument) show up
+-- as test failures instead of only at runtime.
+local mip_handlers, mip_handler_count = {}, 0
+mip = {
+  on = function(code, cb)
+    mip_handlers[code] = cb
+    mip_handler_count = mip_handler_count + 1
+    return mip_handler_count
+  end,
+  off = function() end,
+  enabled = function() return true end,
+  -- real shape: callback(key, code, data) -- key is the 5-digit packet
+  -- sequence number, data is the payload string.
+  fire = function(code, data) mip_handlers[code](12345, code, data) end,
+}
+local gmcp_handlers, gmcp_handler_count = {}, 0
+gmcp = {
+  on = function(pkg, cb)
+    gmcp_handlers[pkg] = cb
+    gmcp_handler_count = gmcp_handler_count + 1
+    return gmcp_handler_count
+  end,
+  remove = function() end,
+  enabled = function() return false end,
+  -- real shape: callback(package, data)
+  fire = function(pkg, data) gmcp_handlers[pkg](pkg, data) end,
+}
 trigger = { add = function() return 1 end, remove = function() end }
 timer = { every = function() return 1 end, remove = function() end }
 alias = { add = function() return 1 end, remove = function() end }
@@ -134,6 +160,36 @@ check("mip suppressed after latch", #seen == 1 and protocol.stats().suppressed >
 protocol.source("mip")
 protocol.on_bbe("TESTKEY^^mipforced^^")
 check("forced mip overrides latch", seen[#seen] == "mipforced")
+protocol.source("auto")
+
+-- LEGACY quirk, ported faithfully (guild_viking.lua:2932-2942, "dispatch
+-- whatever we have after the grace period, as before"): a lone non-contiguous
+-- no-total part dispatches unconditionally on the first sweep, joined from
+-- whatever parts exist -- there is no contiguity gate here. Do not "fix"
+-- this into a contiguous-from-1 check; the tests below encode the intended,
+-- LEGACY-matching behavior.
+seen = {}
+protocol.on_bbe("TESTKEY_2^^orphan^^")   -- part 1 never arrives
+protocol.sweep(1000)
+check("non-contiguous no-total part still dispatches", #seen == 1 and seen[1] == "orphan")
+
+-- ---- init.lua wiring: mip "BBE" and gmcp "Viking" reach protocol correctly --
+-- M.on_load() registers the real mip/gmcp/timer callbacks used at runtime.
+-- It must only run once in this suite -- later /vik command tests (task 10)
+-- rely on it having already run and must not call it again.
+M.on_load()
+
+seen = {}
+mip.fire("BBE", "TESTKEY^^wired^^")
+check("mip BBE wiring feeds the payload, not the packet sequence number",
+      seen[#seen] == "wired")
+
+seen = {}
+gmcp.fire("Viking", "TESTKEY^^gmcpwired^^")
+check("gmcp Viking wiring feeds protocol.on_gmcp", seen[#seen] == "gmcpwired")
+
+-- Restore a clean, unlatched source state for later test files.
+protocol.source("mip")
 protocol.source("auto")
 
 if failures > 0 then os.exit(1) end

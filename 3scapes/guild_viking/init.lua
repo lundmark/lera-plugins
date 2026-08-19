@@ -14,7 +14,7 @@ end
 local mip_id, gmcp_id, sweep_id
 
 function M.on_load()
-  mip_id = mip.on("BBE", function(text) protocol.on_bbe(text) end)
+  mip_id = mip.on("BBE", function(key, code, data) protocol.on_bbe(data) end)
   gmcp_id = gmcp.on("Viking", function(pkg, data) protocol.on_gmcp(pkg, data) end)
   sweep_id = timer.every(100, function() protocol.sweep(lera.time()) end)
 end
