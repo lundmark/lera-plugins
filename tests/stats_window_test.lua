@@ -54,11 +54,10 @@ if M.on_load then M.on_load() end
 
 -- a guild plugin double that records render calls
 local function guild_double()
-  return {
-    calls = 0,
-    has_data = function() return true end,
-    render_guild_stats = function() return 1 end,
-  }
+  local d = { calls = 0 }
+  d.has_data = function() return true end
+  d.render_guild_stats = function() d.calls = d.calls + 1; return 1 end
+  return d
 end
 
 -- ---- cases -------------------------------------------------------------
@@ -71,11 +70,13 @@ local druid, viking = guild_double(), guild_double()
 live_plugins.guild_druid = druid
 live_plugins.guild_viking = viking
 M.render(make_rect(0, 0, 40, 20), {})
+check("druid probed first when both live", druid.calls > 0 and viking.calls == 0,
+  druid.calls .. "/" .. viking.calls)
+
 -- with only viking live, the probe finds it (fresh probe after registration)
 live_plugins.guild_druid = nil
 check("register resets cached probe", M.register_guild("guild_viking") == true)
 local before = viking.calls
-viking.render_guild_stats = function() viking.calls = viking.calls + 1; return 1 end
 M.render(make_rect(0, 0, 40, 20), {})
 check("viking probed when druid absent", viking.calls > before, viking.calls)
 
