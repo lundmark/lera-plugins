@@ -186,6 +186,53 @@ out = run("nonsense")
 check("unknown_subcommand_reported",
       out:find("Unknown subcommand: nonsense", 1, true) ~= nil, out)
 
+-- ---- cross-plugin kill listeners --------------------------------------
+local heard = {}
+local id1 = kt.on_monster_died(function(killer, victim)
+  heard[#heard + 1] = { who = killer, what = victim, order = 1 }
+end)
+local id2 = kt.on_monster_died(function(killer, victim)
+  heard[#heard + 1] = { who = killer, what = victim, order = 2 }
+end)
+check("listener ids distinct", id1 ~= nil and id2 ~= nil and id1 ~= id2)
+check("non-function rejected", kt.on_monster_died("nope") == nil)
+
+local blow = nil
+for _, t in ipairs(triggers) do
+  if t.pattern:find("killing blow", 1, true) then blow = t.fn end
+end
+check("killing blow trigger found", blow ~= nil)
+
+heard = {}
+blow("Simon dealt the killing blow to a rat.", "Simon", "a rat")
+check("both listeners fired in order", #heard == 2
+      and heard[1].order == 1 and heard[2].order == 2)
+check("listener args", heard[1].who == "Simon" and heard[1].what == "a rat")
+
+-- an erroring listener does not stop the rest
+kt.on_monster_died(function() error("boom") end)
+local id4 = kt.on_monster_died(function() heard[#heard + 1] = { order = 4 } end)
+heard = {}
+blow("Simon dealt the killing blow to a rat.", "Simon", "a rat")
+check("error does not stop dispatch", heard[#heard] and heard[#heard].order == 4)
+
+-- listeners observe every kill regardless of the command-execution enable flag
+run("off")
+check("enable flag off for this check", kt.is_enabled() == false)
+heard = {}
+blow("Simon dealt the killing blow to a rat.", "Simon", "a rat")
+check("listeners fire while command execution is disabled", #heard > 0)
+run("on")
+
+-- removal
+check("remove known id", kt.remove_kill_listener(id1) == true)
+check("remove unknown id", kt.remove_kill_listener(9999) == false)
+heard = {}
+blow("Simon dealt the killing blow to a rat.", "Simon", "a rat")
+local saw_first = false
+for _, h in ipairs(heard) do if h.order == 1 then saw_first = true end end
+check("removed listener silent", not saw_first)
+
 -- ---- unload -----------------------------------------------------------------
 print = capture_print
 kt.on_unload()

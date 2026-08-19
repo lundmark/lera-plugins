@@ -40,6 +40,12 @@ local last_kill = {
 local trigger_ids = {}
 local command_id = nil
 
+-- Cross-plugin kill feed (the Portal killtrigger.monster_died event).
+-- Listeners are registration-ordered and die with this plugin's unload;
+-- consumers re-register in their on_setup.
+local kill_listeners = {}
+local next_listener_id = 1
+
 -- require("command") is optional: a profile that never required 'commands' has
 -- no registry, and the kill triggers themselves still work.
 local command
@@ -142,6 +148,11 @@ local function on_killing_blow(line, killer, victim)
     colors.red, " dealt the killing blow to ",
     colors.yellow, victim
   )
+
+  for _, entry in ipairs(kill_listeners) do
+    local ok, err = pcall(entry.cb, killer, victim)
+    if not ok then print("[kill_trigger] listener error: " .. tostring(err)) end
+  end
 
   -- Check if we should execute commands
   if not data.enabled then
@@ -325,6 +336,25 @@ end
 -- Check if plugin has meaningful data to display
 function M.has_data()
   return true  -- Always has data (enabled state, killers list)
+end
+
+-- Cross-plugin kill feed
+function M.on_monster_died(cb)
+  if type(cb) ~= "function" then return nil end
+  local id = next_listener_id
+  next_listener_id = next_listener_id + 1
+  kill_listeners[#kill_listeners + 1] = { id = id, cb = cb }
+  return id
+end
+
+function M.remove_kill_listener(id)
+  for i, entry in ipairs(kill_listeners) do
+    if entry.id == id then
+      table.remove(kill_listeners, i)
+      return true
+    end
+  end
+  return false
 end
 
 --------------------------------------------------------------------------------
