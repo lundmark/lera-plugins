@@ -249,6 +249,44 @@ including anything under `Comm` that could not be read:
 [chat] last unmapped: Comm.Channel.List (fields: channels)
 ```
 
+### Interop hooks
+
+Two stage-0 hooks let other plugins react to `kill_trigger` and `stats_window` without
+depending on their internals.
+
+**`kill_trigger.on_monster_died(cb)` / `remove_kill_listener(id)`** — a cross-plugin kill
+feed. `cb(killer, victim)` fires once per killing blow, in registration order, independent of
+`kill_trigger`'s own command-execution enable flag (a disabled `/killers` still reports kills to
+listeners). A listener's error is pcall-guarded and does not stop the rest. Listeners die with
+`kill_trigger`'s unload, so a producer plugin should re-register from `on_setup` rather than
+assume a one-time registration survives a reload:
+
+```lua
+local kt = plugin.get("kill_trigger")
+local id
+function M.on_setup()
+  kt = plugin.get("kill_trigger")
+  if kt then
+    id = kt.on_monster_died(function(killer, victim)
+      -- react to the kill
+    end)
+  end
+end
+
+function M.on_unload()
+  if kt and id then kt.remove_kill_listener(id) end
+end
+```
+
+**`stats_window.register_guild(name)`** — adds a guild plugin's name to the probe list
+`stats_window` uses to find a guild-stats section to render (`guild_druid` is first and
+untouched). Registering resets the cached probe so the next render picks up the newcomer:
+
+```lua
+local sw = plugin.get("stats_window")
+if sw then sw.register_guild("guild_viking") end
+```
+
 ## Example Plugins
 
 | Plugin | Description |
