@@ -82,6 +82,15 @@ check("farm plots", #S.farm_plots == 1 and S.farm_plots[1].coord == "A1"
       and S.farm_plots[1].shroom == "redcap" and S.farm_plots[1].time_left == 100)
 check("farm wmod", S.farm_wmod == 15)
 
+do
+  local entries = {}
+  for i = 1, 51 do
+    entries[#entries + 1] = string.format("P%d|redcap|10|0|5", i)
+  end
+  protocol.ingest("FARM", table.concat(entries, ";"))
+  check("farm safety cap", #S.farm_plots == 50)
+end
+
 -- BUILDS (LEGACY 1709): bid|tier|mats_total|mats_done|complete_at_secs|total_build_secs|good:done/need,...
 protocol.ingest("BUILDS", "longhouse|2|10|5|300|600|timber:5/10,ore:0/5")
 check("builds count", #S.pending_builds == 1)
@@ -105,6 +114,15 @@ check("supg count", #S.ship_upgrades == 1)
 check("supg fields", S.ship_upgrades[1].name == "Ormen" and S.ship_upgrades[1].tier == 2
       and S.ship_upgrades[1].secs_left == 120)
 check("supg mats", #S.ship_upgrades[1].mats == 1 and S.ship_upgrades[1].mats[1].good == "timber")
+
+do
+  local entries = {}
+  for i = 1, 21 do
+    entries[#entries + 1] = string.format("Ship%d|1|10|0|0|", i)
+  end
+  protocol.ingest("SUPG", table.concat(entries, ";"))
+  check("supg safety cap", #S.ship_upgrades == 20)
+end
 
 -- SETTLERS (LEGACY 1756): count|mood|tax|water|fert
 protocol.ingest("SETTLERS", "40|70|10|60|55")
@@ -201,6 +219,15 @@ check("sproj fields", S.settler_projects[1].id == "p1" and S.settler_projects[1]
 check("sproj mat_detail", S.settler_projects[1].mat_detail.timber.have == 4
       and S.settler_projects[1].mat_detail.timber.need == 10)
 
+do
+  local entries = {}
+  for i = 1, 31 do
+    entries[#entries + 1] = string.format("p%d|upgrade|1|2|10|0|0||0", i)
+  end
+  protocol.ingest("SPROJ", table.concat(entries, ";"))
+  check("sproj safety cap", #S.settler_projects == 30)
+end
+
 -- SHPLOTS (LEGACY 2065): housing plot tier counts t1|t2|t3|t4
 protocol.ingest("SHPLOTS", "5|3|2|1")
 check("shplots tiers", S.settler_housing_plot_tiers.t1 == 5 and S.settler_housing_plot_tiers.t4 == 1)
@@ -231,6 +258,18 @@ check("production fields", S.production.timber == 10 and S.production.fish == -5
 protocol.ingest("MONUMENTS", "5;First jarl;Second jarl")
 check("monuments cap", S.monument_cap == 5)
 check("monuments count", #S.monuments == 2 and S.monuments[1] == "First jarl")
+
+do
+  -- parts caps at 51 total (1 cap slot + up to 50 names): feed a cap value
+  -- plus 51 name entries (52 segments) and expect only the first 50 names
+  -- to survive.
+  local entries = { "5" }
+  for i = 1, 51 do
+    entries[#entries + 1] = string.format("Monument%d", i)
+  end
+  protocol.ingest("MONUMENTS", table.concat(entries, ";"))
+  check("monuments safety cap", #S.monuments == 50)
+end
 
 -- MISSIONS (LEGACY 2248): new 8-field: id|label|reward_rep|reward_daler|expires_in|origin_town|target_town|want_goods
 protocol.ingest("MISSIONS", "1|Deliver fish|10|200|300|Havn|Fjord|fish:5,salt:2")
