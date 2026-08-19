@@ -149,7 +149,14 @@ local function on_killing_blow(line, killer, victim)
     colors.yellow, victim
   )
 
-  for _, entry in ipairs(kill_listeners) do
+  -- Dispatch over a snapshot: a listener may unsubscribe (itself or another)
+  -- from inside its callback, and table.remove during iteration would shift
+  -- later entries down and silently skip one for this kill. Registrations
+  -- and removals apply to future dispatches; this one runs on the set it
+  -- started with.
+  local listener_snapshot = {}
+  for i, entry in ipairs(kill_listeners) do listener_snapshot[i] = entry end
+  for _, entry in ipairs(listener_snapshot) do
     local ok, err = pcall(entry.cb, killer, victim)
     if not ok then print("[kill_trigger] listener error: " .. tostring(err)) end
   end

@@ -233,6 +233,28 @@ local saw_first = false
 for _, h in ipairs(heard) do if h.order == 1 then saw_first = true end end
 check("removed listener silent", not saw_first)
 
+-- self-removal from inside a callback must not skip the next listener in
+-- the same dispatch (dispatch runs over a snapshot of the registration set)
+local self_removal_heard = {}
+local idA, idB
+idA = kt.on_monster_died(function()
+  self_removal_heard[#self_removal_heard + 1] = "A"
+  kt.remove_kill_listener(idA)
+end)
+idB = kt.on_monster_died(function()
+  self_removal_heard[#self_removal_heard + 1] = "B"
+end)
+blow("Simon dealt the killing blow to a rat.", "Simon", "a rat")
+check("both fire on the dispatch where one self-removes",
+      #self_removal_heard == 2 and self_removal_heard[1] == "A" and self_removal_heard[2] == "B",
+      table.concat(self_removal_heard, ","))
+
+self_removal_heard = {}
+blow("Simon dealt the killing blow to a rat.", "Simon", "a rat")
+check("self-removed listener silent next time, other still fires",
+      #self_removal_heard == 1 and self_removal_heard[1] == "B",
+      table.concat(self_removal_heard, ","))
+
 -- ---- unload -----------------------------------------------------------------
 print = capture_print
 kt.on_unload()
