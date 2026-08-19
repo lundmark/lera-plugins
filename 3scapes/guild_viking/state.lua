@@ -1,0 +1,208 @@
+local state = {
+  -- HP
+  hp = 0, mhp = 0, hp_prev = 0, hp_delta = 0,
+  -- Threk (damage absorption pool)
+  threk = 0, mthrek = 0, threk_prev = 0, threk_delta = 0,
+  -- Guild points
+  seid = 0, mseid = 0, seid_prev = 0, seid_delta = 0,
+  vig  = 0, mvig  = 0, vig_prev  = 0, vig_delta  = 0,
+  rad  = 0, mrad  = 0, rad_prev  = 0, rad_delta  = 0,
+  -- Fury visual bar (raw string from $FURY$ token, e.g. "[----------]")
+  fury = "",
+  -- Chain / Body-strike depth
+  chain = 0, bsdepth = 0,
+  -- Saga XP with per-round gains and session totals
+  vis = 0, vis_gain = 0, vis_session = 0,
+  kap = 0, kap_gain = 0, kap_session = 0,
+  soe = 0, soe_gain = 0, soe_session = 0,
+  aud = 0, aud_gain = 0, aud_session = 0,
+  xp_session_start = nil,
+  -- Ledung
+  ldng = 0, mldng = 0, lrst = 0,
+  -- Enemy from hpbar E field
+  en5  = "None",  -- enemy name (5 chars, or "None")
+  ens  = "",       -- enemy status descriptor (e.g. "low")
+  rndz = 0,        -- rounds in hpbar
+  -- Enemy from MIP (supplements E field)
+  mob_name_full = "None",
+  estatus_pct   = 0,
+  combat_rounds = 0,
+  -- Combat state
+  combat = false,
+  -- Active spell effects from $STFX$ line 3, e.g. {"ein",54},{"bvorn",91}
+  stfx = {},
+  -- City / trade / farm / blot (from mip.viking_extra / send_mip_city)
+  carts      = {},   -- { mode, good, village, return_in, amount, halfway_in, quality_pct, cart_id, tier, durability, cap, refit }
+  courier    = { tier = 0, runs = {} },  -- Courier Post: tier + { good, village, return_in, amount, cost, fee }
+  spy        = { tier = 0, mode = "", village = "", secs = 0, sab_pct = 0, sab_secs = 0, cd_secs = 0, scouts = {} },  -- Shadow-House
+  train      = { tier = 0, name = "", stat = "", trained = 0, secs = 0 },  -- Training Yard
+  heat       = {},   -- shared lineage heat, values for lineage ids 1..13
+  idle_carts = {},   -- { cart_id, tier, durability, cap, refit }
+  cart_upgrades = {},  -- { cart_id, target_tier, secs_left, mats_total, mats_done, mats, target_refit, job_type }
+  ships      = {},   -- { name, tier, state, target, return_in, ship_id, crew }
+  wstock     = {},   -- { good, amount, freshness_pct }
+  cellar     = {},   -- { stock, cap, tier, lots={{qty, pct}, ...} }
+  market_orders = {},  -- { id, buyer, good, remaining, price, age_secs }
+  vfind = { tier = 0, postings = {}, offers = {}, auctions = {} },
+  incoming_fills = {},  -- { good, seller, amount, arrives_in }
+  blot_status= "",   -- "open" | "complete" | "rest"
+  blot_reset_in = 0,
+  blot_filled   = 0,
+  blot_total    = 9,
+  farm_plots = {},   -- { coord, shroom, time_left, fertilized }
+  farm_wmod   = 0,    -- weather growth modifier for farm (e.g. +15 or -10)
+  -- Buildings under construction
+  pending_builds = {},  -- { bldg_id, tier, mats_total, mats_done, complete_at_secs, total_build_secs, mats }
+  ship_upgrades  = {},  -- { name, tier, secs_left, mats_total, mats_done, mats }
+  route_builds   = {},  -- ["kind:vid"] = { vid, name, kind, tier, mats_total, mats_done, complete_at_secs, total_build_secs, mats }
+  -- City
+  settlers     = 0,
+  settler_mood = 0,
+  settler_tax  = 0,
+  city_water   = 0,
+  city_fert    = 0,
+  settler_edict = "",
+  settler_edict_left = 0,
+  settler_edict_cd = 0,
+  settler_housing_cap = 0,
+  settler_housing_plots = 0,
+  settler_housing_avg = 0,
+  settler_housing_quality = 0,
+  settler_housing_upkeep = 0,
+  settler_jobs = 0,
+  settler_employed = 0,
+  settler_market_staffed = 0,
+  settler_mult_pct = 100,
+  settler_security = 0,
+  settler_dignity = 0,
+  settler_flourishing = 0,
+  settler_community_net = 0,
+  settler_community_upkeep = 0,
+  settler_sustenance = 0,
+  settler_emp_score = 0,
+  settler_sentiment = 0,
+  settler_actions = {}, -- { { name, secs } }
+  settler_events = {},  -- { { ts, msg } }
+  settler_projects = {}, -- { id, kind, from_tier, to_tier, secs_left, mats_total, mats_done, mat_detail }
+  settler_housing_plot_tiers = {}, -- { t1=count, t2=count, t3=count, t4=count }
+  settler_supply_next = 0,
+  settler_pop_next = 0,
+  dispatch_cd = 0,
+  settler_community_buildings = {}, -- { civic_id=tier }
+  settler_consumption = {}, -- { good=amount }
+  settler_roles = {},       -- { {key,label,cur,tgt,work,bonus,effect}, ... }
+  city_plan = {},           -- { enabled,dim,uoff,udim,coast,moat,wall,gate,mood,perks,rows={},blds={} }
+  settler_commoner = 0,     -- idle populace percent
+  settler_identity = "",    -- city identity title from dominant designation
+  garrison_stationed = 0,
+  garrison_free      = 0,
+  garrison_cap       = 0,
+  garrison_defpower  = 0,
+  varang_out = {},   -- { { name, count, expires_in } } contracts dispatched
+  varang_in  = {},   -- { { name, count, expires_in } } reinforcements received
+  raid_in            = -1,   -- -1 = no raid; >= 0 = seconds until raid arrives
+  raid_faction       = "",
+  raid_strength      = 0,
+  buildings          = {},   -- { [bldg_id] = tier }
+  monuments          = {},   -- array of inscription strings
+  monument_cap       = 0,    -- max slots (guild_level / 5)
+  thralls          = 0,
+  thralls_longhouse = 0,
+  thralls_warehouse = 0,
+  thrall_assignments = {},
+  thrall_follower_level = 0,
+  thrall_follower_name = "",
+  thrall_follower_xp = 0,
+  thrall_follower_xp_cap = 0,
+  thrall_follower_carry_used = 0,
+  thrall_follower_carry_cap = 0,
+  thrall_follower_status = "none",
+  missions = {},   -- { id, label, reward_rep, reward, expires_in, origin_town, target_town, want_goods }
+  errand   = nil,  -- { id, label, reward, expires_in, origin_town, target_town, reward_good, reward_qty } or nil
+  mission_reg_left = -1,  -- regular missions remaining this period (-1 = unknown)
+  mission_new_left = -1,  -- newbie errands remaining this period (-1 = unknown)
+  bdmg     = {},   -- { bldg_id, pct }
+  staff_list = {},  -- { name, assigned_to, stat_key, stats={combat=N,...}, trait, loyalty, age, arrive_at }
+  hird_list  = {},  -- { name, status, level, mode }
+  hird_by_id = {},  -- [id] = hird record (populated when server sends id-prefixed HIRD packet)
+  bonds_list  = {},  -- { id_a, id_b, ticks, tier }
+  standings   = {},  -- { [lin_id] = { name, score, label, is_own } }
+  village_rep = {},  -- { [lin_id] = { name, rep, rank, next_at } }
+  -- Trade goods demand/supply per settlement (from mip_trade_goods toggle)
+  -- trade_goods[lin_id][good] = { score, supply, demand, buy, sell }
+  trade_goods = {},
+  -- Rolling price history kept by THIS plugin (auto-persisted via OnPluginSaveState).
+  -- price_history[lin_id][good] = { {t=epoch, b=buy, s=sell}, ... } (oldest first)
+  price_history = {},
+  daler        = -1, -- current daler balance (-1 = not yet received)
+  -- Auto-Trade (arbitrage) settings; on/off lives in page_opts.auto_trade.
+  -- use_stock: sell matching goods already in the warehouse before buying more.
+  -- last_msg: the most recent action, shown on the Goods tab.
+  autotrade    = { reserve = 0, min_margin = 3, min_profit = 200, max_carts = 2, last = 0,
+                   use_stock = false, auto_stock = 0, last_msg = "", show_n = 6, log = {},
+                   stock_priority = true },
+  route_upkeep = 0,  -- total road+fort maintenance cost, daler/tick (from RUPKEEP)
+  next_tick_in = 0, -- seconds until next trade/stock production tick
+  demand_cycle = "",
+  demand_cycle_in = 0, -- seconds until next demand cycle shift
+  -- Weather / season
+  weather         = "",   -- clear|overcast|rain|storm|fog|snow|blizzard
+  weather_str     = 1,    -- 1=light 2=moderate 3=heavy
+  season          = "",   -- spring|summer|autumn|winter
+  god_power_name  = "",
+  god_power_next  = 0,
+  god_power_next_at = 0,
+  god_power_focus = "",
+  mip_voyage_seen = false,
+  voyage_longships = {},
+  voyage_status = nil,
+  voyage_chart_width = 0,
+  voyage_chart_height = 0,
+  voyage_chart_mode = "",
+  voyage_chart_rows = {},
+  voyage_queue = {},
+  voyage_saga = {},
+  voyage_memory = {},
+  voyage_wait = "",
+  voyage_resolve_options = {},
+  voyage_boons = "",
+  voyage_spoils_daler = 0,
+  voyage_goods = {},
+  voyage_aids = {},
+  voyage_runes = {},
+  voyage_relics = {},
+  voyage_curios = {},
+  voyage_reagents = 0,  -- Nikr's Bile phials secured this voyage (VREAGENT)
+  -- Territory map (from send_mip_map / vtoggle mip_map)
+  vmap_w    = 0,
+  vmap_h    = 0,
+  vmap_px   = -1,
+  vmap_py   = -1,
+  vmap_rows = {},   -- [0-based row index] = row_string
+  vmap_east_edges  = {}, -- [0-based row index] = east edge passability string
+  vmap_south_edges = {}, -- [0-based row index] = south edge passability string
+  vmap_pois = {},   -- { type, name, x, y, owner }
+  vmap_pois_keys = {},          -- { "x,y" = true } dedup lookup
+  vmap_pois_expecting = false,  -- true when waiting for first VMAPL after VMAPH
+  vmap_pois_batch_time = 0,     -- timestamp of last VMAPH for batch window
+  vmap_pois_batch_rows = 0,     -- number of rows in current batch
+  vmap_pois_batch_rows_expected = 0,  -- expected number of rows in current batch
+}
+
+local M = { S = state }
+
+function M.reset_connection()
+  state.combat = false
+  state.chain = 0
+  state.bsdepth = 0
+  state.en5 = "None"
+  state.ens = ""
+  state.rndz = 0
+  state.mob_name_full = "None"
+  state.estatus_pct = 0
+  state.combat_rounds = 0
+  state.stfx = {}
+  state.vis_gain, state.kap_gain, state.soe_gain, state.aud_gain = 0, 0, 0, 0
+end
+
+return M

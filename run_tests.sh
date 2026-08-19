@@ -62,3 +62,4 @@ LERA_ROOT=$lera_root "$luajit" tests/kill_trigger_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/mxp_links_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/gmcp_state_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/stats_window_test.lua
+LERA_ROOT=$lera_root "$luajit" tests/guild_viking_test.lua
