@@ -23,6 +23,14 @@ for _, p in ipairs(kingdom._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
 end
 
+local city = require("handlers.city")
+for key, fn in pairs(city) do
+  if key ~= "_patterns" then protocol.handler(key, fn) end
+end
+for _, p in ipairs(city._patterns or {}) do
+  protocol.pattern_handler(p.pattern, p.fn)
+end
+
 local M = {}
 M.name = "guild_viking"
 M.version = "0.1"
