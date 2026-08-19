@@ -115,6 +115,16 @@ check("ingest marks dirty", dirty_count > before_dirty)
 protocol.ingest("NOSUCH", "x")
 check("unknown counted", protocol.stats().unknown.NOSUCH == 1)
 
+-- pattern tier: registration, dispatch (fn receives key AND value), and
+-- duplicate-pattern rejection. Exact-vs-pattern precedence and the row-key
+-- LEGACY cases live in guild_viking_voyage_test.lua alongside the handlers
+-- that actually use this tier.
+local pattern_seen = {}
+protocol.pattern_handler("^PATKEY%d%d$", function(k, v) pattern_seen[#pattern_seen + 1] = k .. ":" .. v end)
+check("duplicate pattern rejected", not pcall(protocol.pattern_handler, "^PATKEY%d%d$", function() end))
+protocol.ingest("PATKEY07", "seven")
+check("pattern dispatches with key and value", pattern_seen[1] == "PATKEY07:seven")
+
 -- erroring parser: counted, does not break later ingest
 protocol.handler("BOOMKEY", function() error("boom") end)
 protocol.ingest("BOOMKEY", "x")

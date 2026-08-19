@@ -5,6 +5,7 @@ local util = require("util")
 local protocol = {}
 
 local handlers = {}
+local pattern_handlers = {}  -- ordered list: { {pattern=p, fn=fn}, ... }
 local batches, batch_totals, batch_ts = {}, {}, {}
 local stats = { ingested = 0, unknown = {}, errors = {}, suppressed = 0 }
 local reported_errors = {}
@@ -16,13 +17,25 @@ function protocol.handler(key, fn)
   handlers[key] = fn
 end
 
-function protocol.ingest(key, value)
-  local fn = handlers[key]
-  if not fn then
-    stats.unknown[key] = (stats.unknown[key] or 0) + 1
-    return
+-- Second dispatch tier for LEGACY's key:match(...) branches (numbered row/edge
+-- keys like VCR%d%d). Registration-ordered; ingest tries the exact table
+-- first, then walks this list and fires the first pattern that matches --
+-- so a literal handlers[key] entry always wins over a pattern that would
+-- also have matched. The matched fn receives (key, value), unlike an exact
+-- handler's (value), since the row branches extract their row index from
+-- the key itself.
+function protocol.pattern_handler(pattern, fn)
+  for _, p in ipairs(pattern_handlers) do
+    if p.pattern == pattern then error("duplicate pattern handler: " .. pattern) end
   end
-  local ok, err = pcall(fn, value)
+  pattern_handlers[#pattern_handlers + 1] = { pattern = pattern, fn = fn }
+end
+
+-- Shared invoke path for both tiers: same pcall/error-counting/dirty
+-- semantics regardless of which tier's fn is running or how many arguments
+-- it takes.
+local function dispatch(key, fn, ...)
+  local ok, err = pcall(fn, ...)
   if not ok then
     stats.errors[key] = (stats.errors[key] or 0) + 1
     if not reported_errors[key] then
@@ -33,6 +46,21 @@ function protocol.ingest(key, value)
   end
   stats.ingested = stats.ingested + 1
   ui.dirty()
+end
+
+function protocol.ingest(key, value)
+  local fn = handlers[key]
+  if fn then
+    dispatch(key, fn, value)
+    return
+  end
+  for _, p in ipairs(pattern_handlers) do
+    if key:match(p.pattern) then
+      dispatch(key, p.fn, key, value)
+      return
+    end
+  end
+  stats.unknown[key] = (stats.unknown[key] or 0) + 1
 end
 
 local function dispatch_batch(root_key)

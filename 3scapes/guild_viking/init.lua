@@ -7,8 +7,12 @@ for key, fn in pairs(require("handlers.trade")) do
   if key ~= "_market_seam" then protocol.handler(key, fn) end
 end
 
-for key, fn in pairs(require("handlers.voyage")) do
-  protocol.handler(key, fn)
+local voyage = require("handlers.voyage")
+for key, fn in pairs(voyage) do
+  if key ~= "_patterns" then protocol.handler(key, fn) end
+end
+for _, p in ipairs(voyage._patterns or {}) do
+  protocol.pattern_handler(p.pattern, p.fn)
 end
 
 local M = {}

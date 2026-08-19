@@ -387,7 +387,15 @@ M.VMAPH = function(val)
   end
 end
 
--- LEGACY 2549
+-- LEGACY 2549, plus the LEGACY 2659-2668 promotion check (see the fix report
+-- for the mapping): in LEGACY that check runs once per whole MIP packet,
+-- after the entire elseif chain, not inside any single branch -- it fires
+-- whenever "vmap_pois is still empty but the pending buffer has data".
+-- vmap_pois_pending can only gain data from this handler, so the equivalent
+-- moment in a per-key dispatch architecture is the end of this same
+-- ingest call: nothing else in this module can clear vmap_pois to empty
+-- between VMAPL calls, so checking here fires under exactly the same
+-- condition LEGACY's post-packet check would have found true.
 M.VMAPL = function(val)
   -- Build into pending buffer; swapped to live list on next VMAPH
   if S.vmap_pois_expecting then
@@ -410,6 +418,16 @@ M.VMAPL = function(val)
       end
     end
   end
+  -- If vmap_pois is still empty but the pending buffer has data, promote it
+  -- immediately rather than waiting for the next VMAPH heartbeat cycle.
+  if S.vmap_pois_pending and #S.vmap_pois_pending > 0
+     and #(S.vmap_pois or {}) == 0 then
+    S.vmap_pois      = S.vmap_pois_pending
+    S.vmap_pois_keys = S.vmap_pois_pending_keys or {}
+    S.vmap_pois_pending = nil
+    S.vmap_pois_pending_keys = {}
+    S.vmap_pois_expecting = true
+  end
 end
 
 -- LEGACY 2580. Empty branch in LEGACY -- registered as a no-op so
@@ -420,5 +438,42 @@ M.VMAPL_END = function(val) end
 M.FLEET_RENOWN = function(val)
   S.fleet_renown = tonumber(val) or 0
 end
+
+-- Pattern-dispatched keys (LEGACY matches these with key:match(...) rather
+-- than an exact elseif branch). Registered by init.lua via
+-- protocol.pattern_handler, not protocol.handler -- these fn's receive the
+-- key itself (to extract the embedded row index) as well as the value.
+
+-- LEGACY 1322-1325 (`^VCR%d%d$`)
+local function vcr_row(key, val)
+  local ridx = tonumber(key:sub(4)) or 0
+  S.mip_voyage_seen = true
+  S.voyage_chart_rows[ridx + 1] = val or ""
+end
+
+-- LEGACY 2571-2573 (`^VMR%d%d$`)
+local function vmr_row(key, val)
+  local ridx = tonumber(key:sub(4)) or 0
+  S.vmap_rows[ridx + 1] = val
+end
+
+-- LEGACY 2574-2576 (`^MEE%d%d$`)
+local function mee_row(key, val)
+  local ridx = tonumber(key:sub(4)) or 0
+  S.vmap_east_edges[ridx + 1] = val
+end
+
+-- LEGACY 2577-2579 (`^MES%d%d$`)
+local function mes_row(key, val)
+  local ridx = tonumber(key:sub(4)) or 0
+  S.vmap_south_edges[ridx + 1] = val
+end
+
+M._patterns = {
+  { pattern = "^VCR%d%d$", fn = vcr_row },
+  { pattern = "^VMR%d%d$", fn = vmr_row },
+  { pattern = "^MEE%d%d$", fn = mee_row },
+  { pattern = "^MES%d%d$", fn = mes_row },
+}
 
 return M

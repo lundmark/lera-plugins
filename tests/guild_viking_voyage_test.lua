@@ -63,7 +63,12 @@ end
 local protocol = require("protocol")
 local S = require("state").S
 local voyage = require("handlers.voyage")
-for key, fn in pairs(voyage) do protocol.handler(key, fn) end
+for key, fn in pairs(voyage) do
+  if key ~= "_patterns" then protocol.handler(key, fn) end
+end
+for _, p in ipairs(voyage._patterns or {}) do
+  protocol.pattern_handler(p.pattern, p.fn)
+end
 
 -- SHIPS (LEGACY 1102): name|tier|state|target|return|sid|crew|convoy|convoy_size|
 --   convoy_bonus|saga_title|saga_raids|held|durability  (>=5 fields required)
@@ -170,6 +175,15 @@ protocol.ingest("VCHH", "8|4|open")
 check("vchh dims", S.voyage_chart_width == 8 and S.voyage_chart_height == 4)
 check("vchh mode", S.voyage_chart_mode == "open")
 check("vchh rows presized", #S.voyage_chart_rows == 4 and S.voyage_chart_rows[1] == "" and S.voyage_chart_rows[4] == "")
+
+-- VCR%d%d (LEGACY 1322-1325, pattern-dispatched): row content keyed by a
+-- 2-digit row index embedded in the key itself (0-indexed -> 1-indexed).
+S.mip_voyage_seen = false
+protocol.ingest("VCR00", "~~~~~~~~")
+protocol.ingest("VCR07", "..~~S~~.")
+check("vcr row 0 lands at index 1", S.voyage_chart_rows[1] == "~~~~~~~~")
+check("vcr07 payload routes to row 8", S.voyage_chart_rows[8] == "..~~S~~.")
+check("vcr sets mip_voyage_seen", S.mip_voyage_seen == true)
 
 -- VQPATH (LEGACY 1326): comma-separated queue entries, cap 100
 protocol.ingest("VQPATH", "N,N,E,SE")
@@ -281,27 +295,47 @@ check("vmaph dims", S.vmap_w == 10 and S.vmap_h == 8)
 check("vmaph player pos", S.vmap_px == 3 and S.vmap_py == 4)
 check("vmaph expecting", S.vmap_pois_expecting == true)
 
--- VMAPL (LEGACY 2549): type|name|x|y|owner entries, semicolon-separated, into the
--- pending buffer (dedup by "x,y"), promoted to the live list on next VMAPH.
+-- VMR%d%d / MEE%d%d / MES%d%d (LEGACY 2571-2579, pattern-dispatched): row and
+-- edge content keyed by a 2-digit row index embedded in the key itself.
+protocol.ingest("VMR00", "..#..")
+protocol.ingest("VMR01", "#....")
+protocol.ingest("MEE00", "10101")
+protocol.ingest("MES00", "01010")
+check("vmr rows land at 1-indexed positions", S.vmap_rows[1] == "..#.." and S.vmap_rows[2] == "#....")
+check("vmap east edges", S.vmap_east_edges[1] == "10101")
+check("vmap south edges", S.vmap_south_edges[1] == "01010")
+
+-- VMAPL (LEGACY 2549) + the LEGACY 2659-2668 promotion check (ported into
+-- this same handler -- see the fix report's mapping note): type|name|x|y|owner
+-- entries, semicolon-separated, into the pending buffer (dedup by "x,y").
+-- vmap_pois is still empty at this point (never populated before in this
+-- suite), so LEGACY's "promote immediately rather than waiting for the next
+-- VMAPH" branch fires within this very ingest call -- no second VMAPH needed.
 protocol.ingest("VMAPL", "town|Havn|3|4|PlayerA;fort|Alpha|5|2|")
-check("vmapl pending count", #S.vmap_pois_pending == 2)
-check("vmapl pending fields", S.vmap_pois_pending[1].type == "town" and S.vmap_pois_pending[1].name == "Havn"
-      and S.vmap_pois_pending[1].x == 3 and S.vmap_pois_pending[1].y == 4
-      and S.vmap_pois_pending[1].owner == "PlayerA")
-check("vmapl pending owner default", S.vmap_pois_pending[2].owner == "")
-check("vmapl live not yet swapped", #S.vmap_pois == 0)
+check("vmapl promoted immediately", #S.vmap_pois == 2 and S.vmap_pois[1].type == "town"
+      and S.vmap_pois[1].name == "Havn" and S.vmap_pois[1].x == 3 and S.vmap_pois[1].y == 4
+      and S.vmap_pois[1].owner == "PlayerA")
+check("vmapl promoted owner default", S.vmap_pois[2].owner == "")
+check("vmapl pending cleared after promotion", S.vmap_pois_pending == nil)
+check("vmapl expecting reset after promotion", S.vmap_pois_expecting == true)
 
--- VMAPL dedup: same "x,y" key is not inserted twice
-protocol.ingest("VMAPL", "town|Havn|3|4|PlayerA")
-check("vmapl dedup", #S.vmap_pois_pending == 2)
+-- A second VMAPL starts a fresh pending batch (vmap_pois_expecting was reset
+-- true by the promotion above) and, since vmap_pois is no longer empty, this
+-- time it stays pending rather than auto-promoting. Also exercises dedup:
+-- two entries sharing the same "x,y" key within one packet only keep the first.
+protocol.ingest("VMAPL", "town|Havn|3|4|PlayerA;fort|Beta|9|9|;fort|BetaDup|9|9|PlayerC")
+check("vmapl second batch stays pending", #S.vmap_pois_pending == 2
+      and S.vmap_pois_pending[2].name == "Beta")
+check("vmapl dedup drops repeated x,y", #S.vmap_pois == 2)  -- unchanged from the earlier promotion
 
--- Next VMAPH swaps the pending batch into the live list.
+-- Next VMAPH swaps the still-pending batch into the live list; same
+-- dimensions preserve vmap_rows/edges.
 protocol.ingest("VMAPH", "10|8|3|4")
-check("vmaph swap", #S.vmap_pois == 2 and S.vmap_pois[1].name == "Havn")
-check("vmaph rows preserved on same dims", S.vmap_w == 10 and S.vmap_h == 8)
+check("vmaph swap", #S.vmap_pois == 2 and S.vmap_pois[2].name == "Beta")
+check("vmaph rows preserved on same dims", S.vmap_w == 10 and S.vmap_h == 8
+      and S.vmap_rows[1] == "..#..")
 
 -- VMAPH with changed dimensions resets rows/edges
-S.vmap_rows[1] = "existing row"
 protocol.ingest("VMAPH", "12|9|0|0")
 check("vmaph reset rows on dim change", S.vmap_rows[1] == nil)
 check("vmaph new dims", S.vmap_w == 12 and S.vmap_h == 9)
@@ -310,6 +344,24 @@ check("vmaph new dims", S.vmap_w == 12 and S.vmap_h == 9)
 -- doesn't record it as unknown; state is untouched.
 protocol.ingest("VMAPL_END", "")
 check("vmapl_end no-op", S.vmap_w == 12)
+
+-- Pattern-tier dispatch precedence and unknown-key accounting (using
+-- synthetic keys -- not real LEGACY telemetry -- since none of this module's
+-- registered patterns collide with each other or with any exact key).
+local precedence_calls = {}
+protocol.handler("ZQTEST01", function(v) precedence_calls[#precedence_calls + 1] = "exact:" .. v end)
+protocol.pattern_handler("^ZQTEST%d%d$",
+  function(k, v) precedence_calls[#precedence_calls + 1] = "pattern:" .. k .. ":" .. v end)
+protocol.ingest("ZQTEST01", "hello")
+check("exact beats pattern when both match", #precedence_calls == 1 and precedence_calls[1] == "exact:hello")
+protocol.ingest("ZQTEST02", "world")
+check("pattern still dispatches a key with no exact match",
+      #precedence_calls == 2 and precedence_calls[2] == "pattern:ZQTEST02:world")
+
+local unknown_before = protocol.stats().unknown.ZQNOPE or 0
+protocol.ingest("ZQNOPE", "x")
+check("unknown still counted when neither tier matches",
+      (protocol.stats().unknown.ZQNOPE or 0) == unknown_before + 1)
 
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING VOYAGE TESTS PASSED")
