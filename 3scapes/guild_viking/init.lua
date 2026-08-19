@@ -3,6 +3,10 @@
 local state_mod = require("state")
 local protocol = require("protocol")
 
+for key, fn in pairs(require("handlers.trade")) do
+  if key ~= "_market_seam" then protocol.handler(key, fn) end
+end
+
 local M = {}
 M.name = "guild_viking"
 M.version = "0.1"
