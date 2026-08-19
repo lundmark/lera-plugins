@@ -1,6 +1,7 @@
 -- Guild Viking plugin: stage 1 foundation (protocol, state, notifications,
 -- persistence, /vik). Window pages arrive in stage 2 and read this state.
 local state_mod = require("state")
+local protocol = require("protocol")
 
 local M = {}
 M.name = "guild_viking"
@@ -10,8 +11,20 @@ function M.state()
   return state_mod.S
 end
 
-function M.on_load() end
-function M.on_unload() end
+local mip_id, gmcp_id, sweep_id
+
+function M.on_load()
+  mip_id = mip.on("BBE", function(text) protocol.on_bbe(text) end)
+  gmcp_id = gmcp.on("Viking", function(pkg, data) protocol.on_gmcp(pkg, data) end)
+  sweep_id = timer.every(100, function() protocol.sweep(lera.time()) end)
+end
+
+function M.on_unload()
+  mip.off(mip_id)
+  gmcp.remove(gmcp_id)
+  timer.remove(sweep_id)
+end
+
 function M.on_connect() end
 
 function M.on_disconnect()

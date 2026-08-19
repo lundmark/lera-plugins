@@ -74,5 +74,67 @@ check("plugin state accessor", M.state() == S)
 check("hooks exist", type(M.on_load) == "function" and type(M.on_unload) == "function"
       and type(M.on_connect) == "function" and type(M.on_disconnect) == "function")
 
+-- ---- protocol: dispatch, batching, latch ------------------------------------
+local protocol = require("protocol")
+
+local seen = {}
+protocol.handler("TESTKEY", function(v) seen[#seen + 1] = v end)
+check("duplicate handler rejected", not pcall(protocol.handler, "TESTKEY", function() end))
+
+local before_dirty = dirty_count
+protocol.ingest("TESTKEY", "abc")
+check("ingest dispatches", seen[1] == "abc")
+check("ingest marks dirty", dirty_count > before_dirty)
+
+protocol.ingest("NOSUCH", "x")
+check("unknown counted", protocol.stats().unknown.NOSUCH == 1)
+
+-- erroring parser: counted, does not break later ingest
+protocol.handler("BOOMKEY", function() error("boom") end)
+protocol.ingest("BOOMKEY", "x")
+protocol.ingest("TESTKEY", "after")
+check("parser error counted", protocol.stats().errors.BOOMKEY == 1)
+check("dispatch survives parser error", seen[#seen] == "after")
+
+-- BBE adapter: plain pairs
+seen = {}
+protocol.on_bbe("TESTKEY^^one^^TESTKEY^^two^^")
+check("bbe splits pairs", #seen == 2 and seen[1] == "one" and seen[2] == "two")
+
+-- KEY_NofTOTAL: instant reassembly on completion, in numeric order
+seen = {}
+protocol.on_bbe("TESTKEY_2of2^^beta^^")
+check("incomplete batch held", #seen == 0 and protocol.stats().batches_pending == 1)
+protocol.on_bbe("TESTKEY_1of2^^alpha^^")
+check("batch reassembled in order", #seen == 1 and seen[1] == "alphabeta")
+check("batch cleared", protocol.stats().batches_pending == 0)
+
+-- legacy KEY_N (no total): only the sweep dispatches it
+seen = {}
+protocol.on_bbe("TESTKEY_1^^a^^TESTKEY_2^^b^^")
+check("numbered-without-total held", #seen == 0)
+protocol.sweep(1000)   -- first sight: records timestamp, dispatches complete run
+check("sweep dispatches contiguous run", #seen == 1 and seen[1] == "ab")
+
+-- stale partial: dropped after 2s
+seen = {}
+protocol.on_bbe("TESTKEY_2of3^^x^^")
+protocol.sweep(1000)
+check("partial survives young sweep", protocol.stats().batches_pending == 1)
+protocol.sweep(1003)
+check("stale partial dropped", protocol.stats().batches_pending == 0 and #seen == 0)
+
+-- source latch: auto starts on mip; gmcp latches on first real message
+check("source default auto", protocol.source() == "auto")
+seen = {}
+protocol.on_gmcp("Viking", "TESTKEY^^viagmcp^^")
+check("gmcp latches and ingests", seen[1] == "viagmcp" and protocol.stats().latched)
+protocol.on_bbe("TESTKEY^^viamip^^")
+check("mip suppressed after latch", #seen == 1 and protocol.stats().suppressed >= 1)
+protocol.source("mip")
+protocol.on_bbe("TESTKEY^^mipforced^^")
+check("forced mip overrides latch", seen[#seen] == "mipforced")
+protocol.source("auto")
+
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING TESTS PASSED")
