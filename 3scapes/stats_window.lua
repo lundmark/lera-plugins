@@ -15,6 +15,21 @@ local mercenary = nil
 local guild_plugin = nil
 local kill_trigger = nil
 
+local guild_names = { "guild_druid" }
+
+-- Let a guild plugin volunteer itself for the guild-stats section (stage-0
+-- API; guild_viking registers from on_setup). Resets the cached probe so the
+-- next render sees the newcomer.
+function M.register_guild(name)
+  if type(name) ~= "string" or name == "" then return false end
+  guild_plugin = nil
+  for _, existing in ipairs(guild_names) do
+    if existing == name then return true end
+  end
+  guild_names[#guild_names + 1] = name
+  return true
+end
+
 --------------------------------------------------------------------------------
 -- Configuration
 --------------------------------------------------------------------------------
@@ -373,12 +388,13 @@ function M.render(rect, opts)
 
   -- Render guild stats if a guild plugin is available
   if config.show_guild and remaining_h > 0 then
-    -- Try to find a guild plugin (guild_druid, guild_*, etc.)
+    -- Try to find a guild plugin (guild_druid, then any registered guild)
     if not guild_plugin then
-      guild_plugin = plugin.get("guild_druid")
+      for _, name in ipairs(guild_names) do
+        guild_plugin = plugin.get(name)
+        if guild_plugin then break end
+      end
     end
-    -- Could add more guild plugins here:
-    -- if not guild_plugin then guild_plugin = plugin.get("guild_ranger") end
 
     if guild_plugin and guild_plugin.render_guild_stats and guild_plugin.has_data and guild_plugin.has_data() then
       -- Add separator before guild section
@@ -458,7 +474,10 @@ function M.on_load()
   -- Try to get dependencies
   player_stats = plugin.get("player_stats")
   mercenary = plugin.get("mercenary")
-  guild_plugin = plugin.get("guild_druid")
+  for _, name in ipairs(guild_names) do
+    guild_plugin = plugin.get(name)
+    if guild_plugin then break end
+  end
   kill_trigger = plugin.get("kill_trigger")
 end
 
