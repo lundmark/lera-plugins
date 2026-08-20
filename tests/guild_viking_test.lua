@@ -54,7 +54,18 @@ gmcp = {
   fire = function(pkg, data) gmcp_handlers[pkg](pkg, data) end,
 }
 trigger = { add = function() return 1 end, remove = function() end }
-timer = { every = function() return 1 end, remove = function() end }
+-- Fix 1 regression: capture every timer.every registration (interval, fn) so
+-- the sweep timer's callback can be fired directly with realistic
+-- millisecond-scale lera.time() values, the same way mip/gmcp stubs above
+-- capture their callbacks for wiring tests.
+local timer_regs = {}
+timer = {
+  every = function(interval, fn)
+    timer_regs[#timer_regs + 1] = { interval = interval, fn = fn }
+    return #timer_regs
+  end,
+  remove = function() end,
+}
 -- Task 10: capture the ^resetvikxp$ registration so later cases can fire it
 -- directly, the same way mip/gmcp stubs above capture their callbacks.
 local registered_resetvikxp = nil
@@ -93,7 +104,7 @@ end)())
 -- ---- state defaults ---------------------------------------------------------
 local state_mod = require("state")
 local S = state_mod.S
-check("state hp default", S.hp == 0 or S.hp ~= nil)
+check("state hp default", S.hp == 0)
 check("state carts table", type(S.carts) == "table" and #S.carts == 0)
 check("state price_history table", type(S.price_history) == "table")
 check("state blot_total", S.blot_total == 9)
@@ -175,6 +186,19 @@ check("stale partial dropped", protocol.stats().batches_pending == 0 and #seen =
 
 -- source latch: auto starts on mip; gmcp latches on first real message
 check("source default auto", protocol.source() == "auto")
+
+-- Fix 3: an empty or garbage GMCP message (no ^^-delimited pairs) must NOT
+-- latch -- only a real message should flip auto mode over to gmcp, so mip
+-- keeps flowing until genuine Viking GMCP traffic actually arrives.
+check("not latched before any gmcp message", protocol.stats().latched == false)
+protocol.on_gmcp("Viking", "")
+check("empty gmcp message does not latch", protocol.stats().latched == false)
+protocol.on_gmcp("Viking", "no delimiters here")
+check("delimiter-less gmcp message does not latch", protocol.stats().latched == false)
+seen = {}
+protocol.on_bbe("TESTKEY^^stillmip^^")
+check("mip still flows after empty/garbage gmcp messages", seen[1] == "stillmip")
+
 seen = {}
 protocol.on_gmcp("Viking", "TESTKEY^^viagmcp^^")
 check("gmcp latches and ingests", seen[1] == "viagmcp" and protocol.stats().latched)
@@ -183,6 +207,24 @@ check("mip suppressed after latch", #seen == 1 and protocol.stats().suppressed >
 protocol.source("mip")
 protocol.on_bbe("TESTKEY^^mipforced^^")
 check("forced mip overrides latch", seen[#seen] == "mipforced")
+protocol.source("auto")
+
+-- Forced gmcp direction: source("gmcp") suppresses BBE unconditionally, with
+-- no latch involved at all (the forced-mode branch in active_source() never
+-- consults gmcp_latched).
+protocol.source("gmcp")
+local latched_before_forced = protocol.stats().latched
+seen = {}
+local suppressed_before_forced = protocol.stats().suppressed
+protocol.on_bbe("TESTKEY^^shouldnotarrive^^")
+check("forced gmcp suppresses bbe", #seen == 0
+      and protocol.stats().suppressed == suppressed_before_forced + 1)
+check("forced gmcp direction does not touch the latch",
+      protocol.stats().latched == latched_before_forced)
+-- Restore a clean, unlatched source state for the tests below: source("mip")
+-- clears gmcp_latched explicitly, then source("auto") returns to auto mode
+-- without re-touching it (mirrors the existing reset further down this file).
+protocol.source("mip")
 protocol.source("auto")
 
 -- LEGACY quirk, ported faithfully (guild_viking.lua:2932-2942, "dispatch
@@ -210,6 +252,36 @@ check("mip BBE wiring feeds the payload, not the packet sequence number",
 seen = {}
 gmcp.fire("Viking", "TESTKEY^^gmcpwired^^")
 check("gmcp Viking wiring feeds protocol.on_gmcp", seen[#seen] == "gmcpwired")
+
+-- Fix 1 regression: init.lua's sweep timer must divide lera.time()'s
+-- milliseconds down to seconds before calling protocol.sweep, so a known-total
+-- batch gets the full ~2s grace period LEGACY intends, not ~2ms. Drive the
+-- captured sweep callback directly (it takes no arguments -- it reads
+-- lera.time() itself, exactly as init.lua wires it), controlling the
+-- millisecond-scale wall clock it sees via the lera.time stub.
+local sweep_reg
+for _, r in ipairs(timer_regs) do
+  if r.interval == 100 then sweep_reg = r end
+end
+check("sweep timer registered at 100ms", sweep_reg ~= nil)
+
+local real_lera_time = lera.time
+protocol.source("mip")   -- force mip: an earlier gmcp wiring test may have re-latched gmcp
+seen = {}
+lera.time = function() return 100000 end          -- simulated wall clock: 100.000s
+protocol.on_bbe("TESTKEY_2of3^^x^^")               -- incomplete known-total batch arrives
+sweep_reg.fn()
+check("fresh known-total batch survives first sweep", protocol.stats().batches_pending == 1)
+lera.time = function() return 100100 end          -- +100ms of real time
+sweep_reg.fn()
+check("known-total batch NOT dropped after 100ms of real time",
+      protocol.stats().batches_pending == 1 and #seen == 0)
+lera.time = function() return 103000 end          -- +3s of real time
+sweep_reg.fn()
+check("known-total batch dropped after >2s of real time",
+      protocol.stats().batches_pending == 0 and #seen == 0)
+lera.time = real_lera_time
+protocol.source("auto")
 
 -- Restore a clean, unlatched source state for later test files.
 protocol.source("mip")
@@ -284,7 +356,11 @@ assert_trigger("push_relic_found", "A relic is hauled aboard.", nil,
   "Voyage: a rare relic was recovered!")
 
 -- push_voyage_pause fallback when no capture arrives (mirrors LEGACY's
--- `wildcards[1] or "Voyage paused"`).
+-- `wildcards[1] or "Voyage paused"`). Defensive/unreachable in practice: the
+-- trigger pattern's capture group is `(.*)`, which always participates in a
+-- real match (at worst as an empty string, which is truthy in Lua), so the
+-- real trigger engine can never hand this fn a nil c1. Calling fn() directly
+-- with no second argument, as below, is the only way to exercise this branch.
 push_records = {}
 find_trigger("push_voyage_pause").fn("[Viking-Voyage]")
 check("voyage_pause fallback message",

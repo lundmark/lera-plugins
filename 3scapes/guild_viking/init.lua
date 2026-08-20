@@ -147,7 +147,10 @@ function M.on_load()
   mip_id = mip.on("BBE", function(key, code, data) protocol.on_bbe(data) end)
   fff_id = mip.on("FFF", function(key, code, data) combat.on_composite(data) end)
   gmcp_id = gmcp.on("Viking", function(pkg, data) protocol.on_gmcp(pkg, data) end)
-  sweep_id = timer.every(100, function() protocol.sweep(lera.time()) end)
+  -- protocol.sweep's grace period is measured in seconds (LEGACY parity, see
+  -- protocol.lua's sweep comment); lera.time() is milliseconds, so it must be
+  -- divided down here at the call site rather than changing sweep()'s contract.
+  sweep_id = timer.every(100, function() protocol.sweep(lera.time() / 1000) end)
   for _, t in ipairs(combat.triggers) do
     combat_trigger_ids[#combat_trigger_ids + 1] = trigger.add(t.pattern, t.fn)
   end
@@ -172,7 +175,7 @@ function M.on_load()
   if id then
     vik_command_id = id
   else
-    print("[guild_viking] /vik registration failed: " .. tostring(err))
+    print("[vik] /vik registration failed: " .. tostring(err))
   end
 
   resetvikxp_id = alias.add("^resetvikxp$", function() do_resetxp() end)

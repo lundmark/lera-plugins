@@ -260,10 +260,14 @@ local market = require("market")
 trade._market_seam.on_tgoods = market.on_tgoods
 
 -- Two TGOODS fixtures at different timestamps: history appends oldest-first
--- (LEGACY 360-372, record_price_history).
-lera.time = function() return 1000 end
+-- (LEGACY 360-372, record_price_history). market.lua stamps with os.time()
+-- (epoch seconds, matching LEGACY), not lera.time() (monotonic ms since
+-- process start) -- price_history is the persisted artifact, so it must be
+-- comparable across sessions. Stub the real os.time for these fixtures.
+local real_os_time = os.time
+os.time = function() return 1000 end
 protocol.ingest("TGOODS", "0=t:3:10:20:5:8")
-lera.time = function() return 2000 end
+os.time = function() return 2000 end
 protocol.ingest("TGOODS", "0=t:3:10:20:6:9")
 local hist = S.price_history[0].timber
 check("price history count", #hist == 2)
@@ -272,16 +276,17 @@ check("price history oldest first", hist[1].t == 1000 and hist[1].b == 5 and his
 
 -- De-duplicated: an unchanged buy/sell does not append another sample
 -- (LEGACY:369, "one sample per market shift").
-lera.time = function() return 3000 end
+os.time = function() return 3000 end
 protocol.ingest("TGOODS", "0=t:3:10:20:6:9")
 check("price history dedup", #S.price_history[0].timber == 2)
 
 -- Rolling-window trim at LEGACY's PRICE_HIST_MAX = 48 (LEGACY:357): the 49th
 -- distinct sample drops the oldest, leaving exactly 48, boundary at 48/49.
 for i = 1, 49 do
-  lera.time = function() return i end
+  os.time = function() return i end
   protocol.ingest("TGOODS", string.format("9=i:2:50:60:%d:%d", i, i + 100))
 end
+os.time = real_os_time
 local trimmed = S.price_history[9].iron
 check("price history trim count", #trimmed == 48)
 check("price history trim drops oldest", trimmed[1].t == 2 and trimmed[1].b == 2

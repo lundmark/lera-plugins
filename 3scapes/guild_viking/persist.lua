@@ -8,11 +8,9 @@ local protocol = require("protocol")
 local M = {}
 
 function M.save()
-  local settings = { source = protocol.source() }
   store.set({
-    settings = settings,
+    settings = { source = protocol.source() },
     price_history = market.snapshot().price_history,
-    source = protocol.source(),
   })
   store.save()
 end
@@ -27,7 +25,6 @@ function M.load()
   end
 
   local source = data.settings and data.settings.source
-  if not source then source = data.source end
   if source then protocol.source(source) end
 end
 

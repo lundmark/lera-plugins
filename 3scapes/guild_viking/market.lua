@@ -16,10 +16,10 @@ local PRICE_HIST_MAX = 48
 
 -- LEGACY:360-372 (record_price_history). De-duplicated: only appends when
 -- buy or sell actually changed, so history holds one sample per market
--- shift rather than one per packet. LEGACY timestamps with os.time(); this
--- uses lera.time() instead per the brief (the test suite stubs lera.time,
--- and lera.time() reflects the same wall clock outside tests, so behavior
--- is unchanged in production).
+-- shift rather than one per packet. Timestamps with os.time() (epoch
+-- seconds), matching LEGACY exactly: price_history is the persisted
+-- artifact, and lera.time() (monotonic ms since process start) would be
+-- incomparable across sessions.
 function M.on_tgoods(lin, good, buy, sell)
   if not buy or not sell then return end
   local ph = S.price_history
@@ -29,7 +29,7 @@ function M.on_tgoods(lin, good, buy, sell)
   if not arr then arr = {}; ph[lin][good] = arr end
   local last = arr[#arr]
   if last and last.b == buy and last.s == sell then return end
-  arr[#arr + 1] = { t = lera.time(), b = buy, s = sell }
+  arr[#arr + 1] = { t = os.time(), b = buy, s = sell }
   while #arr > PRICE_HIST_MAX do table.remove(arr, 1) end
 end
 
@@ -82,7 +82,7 @@ end
 
 -- Persisted subset for Task 10's store wiring: the rolling price history is
 -- the only state this module owns that needs to survive a reload (LEGACY's
--- comment at guild_viking.lua:134, "auto-persisted via OnPluginSaveState").
+-- comment at guild_viking.lua:182, "auto-persisted via OnPluginSaveState").
 function M.snapshot()
   return { price_history = S.price_history }
 end

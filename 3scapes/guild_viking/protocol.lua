@@ -119,7 +119,13 @@ end
 
 function protocol.on_gmcp(package, data)
   if type(data) ~= "string" then return end
-  if source_mode ~= "mip" and not gmcp_latched then gmcp_latched = true end
+  -- Latch only on a real message: a cheap pre-check for at least one
+  -- ^^-delimited pair, so an empty or garbage payload (no pairs at all)
+  -- cannot flip auto mode away from mip before genuine Viking GMCP traffic
+  -- has actually arrived.
+  if source_mode ~= "mip" and not gmcp_latched and data:find("^^", 1, true) then
+    gmcp_latched = true
+  end
   if active_source() ~= "gmcp" then
     stats.suppressed = stats.suppressed + 1
     return
@@ -137,6 +143,13 @@ end
 -- incomplete (a complete one dispatches instantly from feed() above); give
 -- it up to 2 seconds from first sight to finish before dropping it whole
 -- (guild_viking.lua:2896-2931, `_mip_batch_ts`, guild_viking.lua:489).
+-- `now` is SECONDS (LEGACY semantics); the caller (init.lua's sweep timer)
+-- divides lera.time()'s milliseconds down before calling in.
+-- Note: the no-total branch above differs slightly from LEGACY in timing,
+-- not outcome -- LEGACY arms a fixed 0.1s one-shot timer per batch, while
+-- this sweep is a free-running 100ms timer that dispatches whatever no-total
+-- batch it finds pending, so a batch can dispatch sooner than LEGACY's fixed
+-- delay depending on poll phase. Known, accepted.
 function protocol.sweep(now)
   for root_key in pairs(batches) do
     if batch_totals[root_key] then

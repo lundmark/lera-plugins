@@ -153,26 +153,28 @@ local hp_bar_2 = trigger_handlers[3]
 
 S.vis_session, S.kap_session, S.soe_session, S.aud_session = 0, 0, 0, 0
 S.xp_session_start = nil
-hp_bar_2.fn("G[100(10)|200(20)|300(30)|400(40)] L[5|10(50%)] E[wolf|low|3]",
-  "100", "10", "200", "20", "300", "30", "400", "40", "5", "10", "50", "wolf", "low", "3")
+-- mldng (11) is deliberately distinct from vis_gain (10): a c2/c10 capture
+-- index swap in the trigger parser would otherwise pass this fixture.
+hp_bar_2.fn("G[100(10)|200(20)|300(30)|400(40)] L[5|11(50%)] E[wolf|low|3]",
+  "100", "10", "200", "20", "300", "30", "400", "40", "5", "11", "50", "wolf", "low", "3")
 check("hp_bar_2 base fields", S.vis == 100 and S.vis_gain == 10 and S.kap == 200
       and S.kap_gain == 20 and S.soe == 300 and S.soe_gain == 30 and S.aud == 400
-      and S.aud_gain == 40 and S.ldng == 5 and S.mldng == 10 and S.lrst == 50)
+      and S.aud_gain == 40 and S.ldng == 5 and S.mldng == 11 and S.lrst == 50)
 check("hp_bar_2 enemy fields", S.en5 == "wolf" and S.ens == "low" and S.rndz == 3)
 check("hp_bar_2 combat true when enemy present", S.combat == true)
 check("hp_bar_2 session accumulates on first sample", S.vis_session == 10 and S.kap_session == 20
       and S.soe_session == 30 and S.aud_session == 40 and S.xp_session_start ~= nil)
 
 local session_start_after_first = S.xp_session_start
-hp_bar_2.fn("G[110(10)|220(20)|330(30)|440(40)] L[5|10(50%)] E[wolf|low|4]",
-  "110", "10", "220", "20", "330", "30", "440", "40", "5", "10", "50", "wolf", "low", "4")
+hp_bar_2.fn("G[110(10)|220(20)|330(30)|440(40)] L[5|11(50%)] E[wolf|low|4]",
+  "110", "10", "220", "20", "330", "30", "440", "40", "5", "11", "50", "wolf", "low", "4")
 check("hp_bar_2 session accumulates across two invocations", S.vis_session == 20
       and S.kap_session == 40 and S.soe_session == 60 and S.aud_session == 80)
 check("hp_bar_2 xp_session_start does not reset once set",
       S.xp_session_start == session_start_after_first)
 
-hp_bar_2.fn("G[110(0)|220(0)|330(0)|440(0)] L[5|10(50%)] E[None|]",
-  "110", "0", "220", "0", "330", "0", "440", "0", "5", "10", "50", "None", "", nil)
+hp_bar_2.fn("G[110(0)|220(0)|330(0)|440(0)] L[5|11(50%)] E[None|]",
+  "110", "0", "220", "0", "330", "0", "440", "0", "5", "11", "50", "None", "", nil)
 check("hp_bar_2 zero-gain round does not accumulate", S.vis_session == 20
       and S.kap_session == 40 and S.soe_session == 60 and S.aud_session == 80)
 check("hp_bar_2 combat false when enemy is None", S.combat == false)
@@ -232,4 +234,4 @@ check("hp_bar_3_cont with no pending open is a no-op", #S.stfx == before_swallow
       and S.stfx[1].name == "ein")
 
 if failures > 0 then os.exit(1) end
-print("ALL GUILD_VIKING_COMBAT TESTS PASSED")
+print("ALL GUILD_VIKING COMBAT TESTS PASSED")
