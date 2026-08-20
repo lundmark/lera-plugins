@@ -1,6 +1,6 @@
 [scope]
-revision = 2
-approved_on = "2026-08-20"
+revision = 1
+approved_on = "2026-08-10"
 digest = "a6c761b000661806102e90501c8bfdd5b9066797c37f1e7b6dfe2e5163876e94"
 
 [[current_plugins]]
@@ -38,6 +38,7 @@ key = "guild_viking"
 path = "3scapes/guild_viking/init.lua"
 target_keys = ["guild_viking"]
 fixtures = []
+notes = "Directory plugin: init.lua is the mapped entry module. The guild_viking_* rows below register its other source files purely so their paths satisfy the current-refs path check (current_paths is built from every current_plugins path in this file); each carries no separate target mapping of its own."
 
 [[current_plugins]]
 key = "guild_viking_combat"
