@@ -253,5 +253,78 @@ check("vfind offers", #S.vfind.offers == 1 and S.vfind.offers[1].name == "Erik")
 check("vfind auctions", #S.vfind.auctions == 1 and S.vfind.auctions[1].name == "Sven"
       and S.vfind.auctions[1].reserve == 200)
 
+-- market.lua: price history recording, rolling-window trim, statistics,
+-- trend, and demand-cycle color (LEGACY guild_viking.lua:357-418), wired
+-- through handlers/trade.lua's _market_seam.on_tgoods.
+local market = require("market")
+trade._market_seam.on_tgoods = market.on_tgoods
+
+-- Two TGOODS fixtures at different timestamps: history appends oldest-first
+-- (LEGACY 360-372, record_price_history).
+lera.time = function() return 1000 end
+protocol.ingest("TGOODS", "0=t:3:10:20:5:8")
+lera.time = function() return 2000 end
+protocol.ingest("TGOODS", "0=t:3:10:20:6:9")
+local hist = S.price_history[0].timber
+check("price history count", #hist == 2)
+check("price history oldest first", hist[1].t == 1000 and hist[1].b == 5 and hist[1].s == 8
+      and hist[2].t == 2000 and hist[2].b == 6 and hist[2].s == 9)
+
+-- De-duplicated: an unchanged buy/sell does not append another sample
+-- (LEGACY:369, "one sample per market shift").
+lera.time = function() return 3000 end
+protocol.ingest("TGOODS", "0=t:3:10:20:6:9")
+check("price history dedup", #S.price_history[0].timber == 2)
+
+-- Rolling-window trim at LEGACY's PRICE_HIST_MAX = 48 (LEGACY:357): the 49th
+-- distinct sample drops the oldest, leaving exactly 48, boundary at 48/49.
+for i = 1, 49 do
+  lera.time = function() return i end
+  protocol.ingest("TGOODS", string.format("9=i:2:50:60:%d:%d", i, i + 100))
+end
+local trimmed = S.price_history[9].iron
+check("price history trim count", #trimmed == 48)
+check("price history trim drops oldest", trimmed[1].t == 2 and trimmed[1].b == 2
+      and trimmed[48].t == 49 and trimmed[48].b == 49)
+
+-- Statistics (LEGACY 375-393): hand-computed from the two-sample timber
+-- history above (buy 5,6 / sell 8,9 -> bavg=5.5, savg=8.5).
+local stats = market.price_stats(0, "timber")
+check("price stats", stats.n == 2 and stats.bmin == 5 and stats.bmax == 6
+      and stats.bavg == 5.5 and stats.smin == 8 and stats.smax == 9 and stats.savg == 8.5)
+check("price stats missing good", market.price_stats(0, "nosuchgood") == nil)
+
+-- Trend vs that same average (LEGACY 397-407): thr = max(1, avg*0.04) = 1
+-- here, so cur=7 crosses above and cur=4 crosses below.
+local arrow_up, col_up = market.price_trend(7, stats.bavg, true)
+check("price trend up is bad for buy", arrow_up == "^" and col_up == 0xFF4444)
+local arrow_down, col_down = market.price_trend(4, stats.bavg, true)
+check("price trend down is good for buy", arrow_down == "v" and col_down == 0x00FF00)
+local arrow_flat = market.price_trend(stats.bavg, stats.bavg, true)
+check("price trend flat", arrow_flat == "=")
+local arrow_nil, col_nil = market.price_trend(100, nil, true)
+check("price trend nil avg", arrow_nil == " " and col_nil == 0x999999)
+
+-- Demand-cycle color helper (LEGACY 409-418).
+check("demand cycle color spring", market.demand_cycle_color("Spring Growth") == 0x88DD44)
+check("demand cycle color summer", market.demand_cycle_color("Summer Heat") == 0x44CCDD)
+check("demand cycle color autumn", market.demand_cycle_color("Autumn Harvest") == 0x4488DD)
+check("demand cycle color fall alias", market.demand_cycle_color("Fall Frenzy") == 0x4488DD)
+check("demand cycle color winter", market.demand_cycle_color("Winter Frost") == 0xCCCCCC)
+check("demand cycle color calm", market.demand_cycle_color("Calm Season") == 0xCCCC00)
+check("demand cycle color unknown default", market.demand_cycle_color("") == 0xCCCC00)
+
+-- snapshot()/restore() round-trip: the persisted subset is price_history.
+local snap = market.snapshot()
+check("snapshot has price_history", snap.price_history == S.price_history)
+local saved = S.price_history
+S.price_history = {}
+market.restore(snap)
+check("restore round-trips", S.price_history == saved)
+market.restore(nil)
+check("restore nil-safe", S.price_history == saved)
+
+trade._market_seam.on_tgoods = nil
+
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING TRADE TESTS PASSED")

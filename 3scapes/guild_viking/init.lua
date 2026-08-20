@@ -3,9 +3,16 @@
 local state_mod = require("state")
 local protocol = require("protocol")
 
-for key, fn in pairs(require("handlers.trade")) do
+local trade = require("handlers.trade")
+for key, fn in pairs(trade) do
   if key ~= "_market_seam" then protocol.handler(key, fn) end
 end
+
+-- Task 7: price history / demand metrics. LEGACY's MARKET branch never
+-- calls record_price_history (only TGOODS does -- see market.lua's header
+-- comment), so on_market is intentionally left unset.
+local market = require("market")
+trade._market_seam.on_tgoods = market.on_tgoods
 
 local voyage = require("handlers.voyage")
 for key, fn in pairs(voyage) do
