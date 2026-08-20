@@ -2,6 +2,7 @@
 -- persistence, /vik). Window pages arrive in stage 2 and read this state.
 local state_mod = require("state")
 local protocol = require("protocol")
+local command = require("command")
 
 local trade = require("handlers.trade")
 for key, fn in pairs(trade) do
@@ -51,6 +52,11 @@ local combat = require("combat")
 -- and every trigger fn is a safe no-op, if push_notify isn't loaded.
 local notify = require("notify")
 
+-- Task 10: cross-session persistence (price history + transport source).
+local persist = require("persist")
+
+local S = state_mod.S
+
 local M = {}
 M.name = "guild_viking"
 M.version = "0.1"
@@ -62,6 +68,80 @@ end
 local mip_id, fff_id, gmcp_id, sweep_id, countdown_id
 local combat_trigger_ids = {}
 local notify_trigger_ids = {}
+local vik_command_id, resetvikxp_id, kill_listener_id
+
+-- LEGACY plugins/guild_viking.xml:175-186 (`resetvikxp` alias), also reached
+-- via `/vik resetxp`. viking_window.update() is dropped -- stage 2 territory.
+local function do_resetxp()
+  S.vis_session = 0
+  S.kap_session = 0
+  S.soe_session = 0
+  S.aud_session = 0
+  S.xp_session_start = nil
+  buffer.color_print(nil, "DAA520", "Viking XP session counter reset.")
+  ui.dirty()
+end
+
+local function print_status()
+  local st = protocol.stats()
+  buffer.color_print(nil, "DAA520", string.format(
+    "Viking: source=%s latch=%s ingested=%d suppressed=%d pending_batches=%d",
+    st.source, tostring(st.latched), st.ingested, st.suppressed, st.batches_pending))
+
+  local unknown = {}
+  for k, n in pairs(st.unknown) do unknown[#unknown + 1] = { key = k, n = n } end
+  table.sort(unknown, function(a, b) return a.n > b.n end)
+  if #unknown > 0 then
+    local parts = {}
+    for i = 1, math.min(5, #unknown) do
+      parts[#parts + 1] = unknown[i].key .. "=" .. unknown[i].n
+    end
+    buffer.color_print(nil, "DAA520", "  unknown: " .. table.concat(parts, " "))
+  else
+    buffer.color_print(nil, "DAA520", "  unknown: none")
+  end
+
+  local err_total, err_keys = 0, 0
+  for _, n in pairs(st.errors) do
+    err_total = err_total + n
+    err_keys = err_keys + 1
+  end
+  buffer.color_print(nil, "DAA520", string.format(
+    "  parser errors: %d (%d key%s)", err_total, err_keys, err_keys == 1 and "" or "s"))
+end
+
+-- Dispatches /vik's subcommands. `args` is everything after "/vik " (may be
+-- ""); an unknown or empty subcommand prints usage.
+function M.vik_command(args)
+  args = args or ""
+  local sub, rest = args:match("^%s*(%S*)%s*(.-)%s*$")
+  sub = sub or ""
+
+  if sub == "status" then
+    print_status()
+  elseif sub == "trace" then
+    local want
+    if rest == "on" then want = true
+    elseif rest == "off" then want = false end
+    local now = protocol.trace(want)
+    buffer.color_print(nil, "DAA520", "Viking protocol trace: " .. (now and "on" or "off"))
+  elseif sub == "save" then
+    persist.save()
+    buffer.color_print(nil, "DAA520", "Viking guild data saved.")
+  elseif sub == "source" then
+    if rest == "mip" or rest == "gmcp" or rest == "auto" then
+      protocol.source(rest)
+      buffer.color_print(nil, "DAA520", "Viking transport source set to " .. rest .. ".")
+    else
+      buffer.color_print(nil, "DAA520", "Usage: /vik source mip|gmcp|auto")
+    end
+  elseif sub == "resetxp" then
+    do_resetxp()
+  else
+    buffer.color_print(nil, "DAA520",
+      "Usage: /vik [status | trace | save | source mip|gmcp|auto | resetxp]")
+  end
+end
 
 function M.on_load()
   mip_id = mip.on("BBE", function(key, code, data) protocol.on_bbe(data) end)
@@ -75,9 +155,51 @@ function M.on_load()
     notify_trigger_ids[#notify_trigger_ids + 1] = trigger.add(t.pattern, t.fn)
   end
   countdown_id = timer.every(1000, function() notify.countdown_tick() end)
+
+  persist.load()
+
+  local id, err = command.register({
+    name = "/vik",
+    usage = "/vik [status | trace | save | source mip|gmcp|auto | resetxp]",
+    summary = "Viking guild data and controls",
+    description = "Stage-1 surface: ingestion status and counters (status), "
+      .. "message tracing (trace), explicit save (save), transport selection "
+      .. "(source), and the saga-XP session reset (resetxp; the bare "
+      .. "'resetvikxp' alias does the same).",
+    accepts_args = true,
+    handler = function(args) M.vik_command(args or "") end,
+  })
+  if id then
+    vik_command_id = id
+  else
+    print("[guild_viking] /vik registration failed: " .. tostring(err))
+  end
+
+  resetvikxp_id = alias.add("^resetvikxp$", function() do_resetxp() end)
 end
 
 function M.on_setup()
+  local sw = plugin.get("stats_window")
+  if sw and sw.register_guild then
+    sw.register_guild("guild_viking")
+  end
+
+  local kt = plugin.get("kill_trigger")
+  if kt and kt.on_monster_died then
+    -- Ported from LEGACY guild_viking.lua:2676-2682
+    -- (guild.events.on_monster_died): clear the combat display fields and
+    -- re-poll the hp-bar prompt so the UI reflects "no longer fighting"
+    -- immediately rather than waiting for the next server update.
+    kill_listener_id = kt.on_monster_died(function(killer, victim)
+      S.combat = false
+      S.combat_rounds = 0
+      S.estatus_pct = 0
+      S.mob_name_full = "None"
+      mud.send("!hp")
+      ui.dirty()
+    end)
+  end
+
   local pushn = plugin.get("push_notify")
   if pushn then
     pushn.register_channel("viking", { priority = 0 })
@@ -86,25 +208,81 @@ function M.on_setup()
 end
 
 function M.on_unload()
+  persist.save()
+
   mip.off(mip_id)
   mip.off(fff_id)
   gmcp.remove(gmcp_id)
   timer.remove(sweep_id)
   timer.remove(countdown_id)
-  for _, id in ipairs(combat_trigger_ids) do
-    trigger.remove(id)
+  for _, tid in ipairs(combat_trigger_ids) do
+    trigger.remove(tid)
   end
   combat_trigger_ids = {}
-  for _, id in ipairs(notify_trigger_ids) do
-    trigger.remove(id)
+  for _, tid in ipairs(notify_trigger_ids) do
+    trigger.remove(tid)
   end
   notify_trigger_ids = {}
+
+  if vik_command_id then
+    command.unregister(vik_command_id)
+    vik_command_id = nil
+  end
+  if resetvikxp_id then
+    alias.remove(resetvikxp_id)
+    resetvikxp_id = nil
+  end
+
+  if kill_listener_id then
+    local kt = plugin.get("kill_trigger")
+    if kt and kt.remove_kill_listener then
+      kt.remove_kill_listener(kill_listener_id)
+    end
+    kill_listener_id = nil
+  end
 end
 
 function M.on_connect() end
 
 function M.on_disconnect()
+  persist.save()
   state_mod.reset_connection()
+end
+
+-- ---------------------------------------------------------------------------
+-- stats_window contract (CLAUDE.md "Plugins" section, stats_window.lua
+-- ~374-400): has_data() gates whether render_guild_stats is called at all.
+-- Stage-1 minimal: saga XP with per-session deltas and ledung. Stage 2
+-- replaces this with the full window page.
+-- ---------------------------------------------------------------------------
+
+function M.has_data()
+  return protocol.stats().ingested > 0
+end
+
+local function rect_dims(rect)
+  if type(rect.x) == "function" then
+    return rect:x(), rect:y(), rect:w(), rect:h()
+  end
+  return rect.x, rect.y, rect.w, rect.h
+end
+
+function M.render_guild_stats(rect, opts)
+  opts = opts or {}
+  local x, y, w, h = rect_dims(rect)
+  if w <= 0 or h <= 0 then return 0 end
+
+  local lines = {
+    string.format("Vis:%d(+%d) Kap:%d(+%d)", S.vis, S.vis_session, S.kap, S.kap_session),
+    string.format("Soe:%d(+%d) Aud:%d(+%d)", S.soe, S.soe_session, S.aud, S.aud_session),
+    string.format("Ldng:%d/%d", S.ldng, S.mldng),
+  }
+
+  local n = math.min(#lines, h)
+  for i = 1, n do
+    ui.text(ui.rect(x, y + i - 1, w, 1), lines[i])
+  end
+  return n
 end
 
 return M

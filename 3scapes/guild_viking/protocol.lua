@@ -11,6 +11,7 @@ local stats = { ingested = 0, unknown = {}, errors = {}, suppressed = 0 }
 local reported_errors = {}
 local source_mode = "auto"   -- "mip" | "gmcp" | "auto"
 local gmcp_latched = false
+local trace_on = false   -- diagnostic: /vik trace -- off by default, silent otherwise
 
 function protocol.handler(key, fn)
   if handlers[key] then error("duplicate handler: " .. key) end
@@ -49,6 +50,7 @@ local function dispatch(key, fn, ...)
 end
 
 function protocol.ingest(key, value)
+  if trace_on then print("[vik] ingest " .. key) end
   local fn = handlers[key]
   if fn then
     dispatch(key, fn, value)
@@ -154,6 +156,14 @@ function protocol.source(mode)
     if mode ~= "auto" then gmcp_latched = (mode == "gmcp") end
   end
   return source_mode
+end
+
+-- Diagnostic trace, mirroring gmcp.trace's convention: no argument reports
+-- the current setting, true/false sets it. Off by default; printed lines go
+-- through protocol.ingest above so both exact and pattern/unknown keys show.
+function protocol.trace(on)
+  if on ~= nil then trace_on = on and true or false end
+  return trace_on
 end
 
 function protocol.stats()

@@ -55,12 +55,25 @@ gmcp = {
 }
 trigger = { add = function() return 1 end, remove = function() end }
 timer = { every = function() return 1 end, remove = function() end }
-alias = { add = function() return 1 end, remove = function() end }
+-- Task 10: capture the ^resetvikxp$ registration so later cases can fire it
+-- directly, the same way mip/gmcp stubs above capture their callbacks.
+local registered_resetvikxp = nil
+alias = {
+  add = function(pattern, fn)
+    registered_resetvikxp = { pattern = pattern, fn = fn }
+    return 1
+  end,
+  remove = function() end,
+}
 plugin = { get = function() return nil end }
 local real_require = require
+-- Task 10: capture the spec passed to command.register so later cases can
+-- dispatch through the registered /vik handler directly.
+local registered_vik = nil
 require = function(name)
   if name == "command" then
-    return { register = function() return 1 end, unregister = function() return true end,
+    return { register = function(spec) registered_vik = spec; return 1 end,
+             unregister = function() return true end,
              get = function() return nil end, list = function() return {} end }
   end
   return real_require(name)
@@ -399,6 +412,97 @@ S.voyage_status = nil
 cd_before = dirty_count
 notify.countdown_tick()
 check("idle tick does not mark dirty", dirty_count == cd_before)
+
+-- ---- persist: price_history + source survive save/load (Task 10) -----------
+local persist = require("persist")
+
+S.price_history = { [1] = { fish = { { t = 100, b = 2, s = 3 } } } }
+protocol.source("gmcp")
+persist.save()
+S.price_history = {}
+protocol.source("auto")
+persist.load()
+check("history restored", S.price_history[1] and S.price_history[1].fish[1].b == 2)
+check("source restored", protocol.source() == "gmcp")
+protocol.source("mip")
+protocol.source("auto")
+
+-- ---- /vik registration + dispatch (Task 10) ---------------------------------
+-- M.on_load() ran once already (above); it registered the real /vik command
+-- and resetvikxp alias, captured by the stubs upgraded at the top of this file.
+check("vik registered", registered_vik ~= nil and registered_vik.name == "/vik")
+check("vik accepts args", registered_vik.accepts_args == true)
+
+local ok_status = pcall(registered_vik.handler, "status", "/vik")
+check("vik status dispatches without error", ok_status)
+
+registered_vik.handler("source gmcp", "/vik")
+check("source set via command", protocol.source() == "gmcp")
+registered_vik.handler("source auto", "/vik")
+check("source reset via command", protocol.source() == "auto")
+
+local ok_badsource = pcall(registered_vik.handler, "source bogus", "/vik")
+check("vik source with bad mode does not error", ok_badsource and protocol.source() == "auto")
+
+local ok_empty = pcall(registered_vik.handler, "", "/vik")
+check("vik empty args falls back to usage without error", ok_empty)
+
+local ok_unknown = pcall(registered_vik.handler, "bogus", "/vik")
+check("vik unknown subcommand falls back to usage without error", ok_unknown)
+
+-- ---- /vik resetxp: session counters reset (XML alias body, lines 175-186) --
+S.vis_session, S.kap_session, S.soe_session, S.aud_session = 10, 20, 30, 40
+S.xp_session_start = 12345
+registered_vik.handler("resetxp", "/vik")
+check("resetxp clears sessions", S.vis_session == 0 and S.kap_session == 0
+      and S.soe_session == 0 and S.aud_session == 0)
+check("resetxp clears session start", S.xp_session_start == nil)
+
+-- ---- resetvikxp alias: same reset path --------------------------------------
+check("resetvikxp alias registered", registered_resetvikxp ~= nil
+      and registered_resetvikxp.pattern == "^resetvikxp$")
+S.vis_session = 99
+registered_resetvikxp.fn()
+check("resetvikxp alias resets sessions", S.vis_session == 0)
+
+-- ---- /vik trace: toggles protocol.trace, off by default, silent otherwise --
+check("trace off by default", protocol.trace() == false)
+registered_vik.handler("trace on", "/vik")
+check("trace on via /vik", protocol.trace() == true)
+local ok_trace_ingest = pcall(protocol.ingest, "TESTKEY", "traced")
+check("ingest with trace on does not error", ok_trace_ingest)
+registered_vik.handler("trace off", "/vik")
+check("trace off via /vik", protocol.trace() == false)
+
+-- ---- /vik save: delegates to persist.save -----------------------------------
+S.price_history[2] = { wool = { { t = 200, b = 5, s = 6 } } }
+local ok_save = pcall(registered_vik.handler, "save", "/vik")
+check("vik save dispatches without error", ok_save)
+
+-- ---- stats_window contract: has_data / render_guild_stats -------------------
+check("has_data is a function", type(M.has_data) == "function")
+check("render_guild_stats is a function", type(M.render_guild_stats) == "function")
+check("has_data true after ingestion", M.has_data() == true)
+
+ui.rect = function(x, y, w, h) return { x = x, y = y, w = w, h = h } end
+ui.text = function() end
+
+S.vis, S.vis_session, S.kap, S.kap_session = 100, 5, 200, 10
+S.soe, S.soe_session, S.aud, S.aud_session = 300, 15, 400, 20
+S.ldng, S.mldng = 3, 4
+
+local used_clipped = M.render_guild_stats({ x = 0, y = 0, w = 40, h = 2 }, {})
+check("render_guild_stats clips to rect height", used_clipped == 2, used_clipped)
+
+local used_full = M.render_guild_stats({ x = 0, y = 0, w = 40, h = 10 }, {})
+check("render_guild_stats returns lines used", used_full == 3, used_full)
+
+check("render_guild_stats zero height returns 0",
+      M.render_guild_stats({ x = 0, y = 0, w = 40, h = 0 }, {}) == 0)
+
+-- ---- on_unload: full cleanup, must not error (Task 10; call LAST) ----------
+local ok_unload = pcall(M.on_unload)
+check("on_unload does not error", ok_unload)
 
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING TESTS PASSED")
