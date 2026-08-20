@@ -36,6 +36,66 @@ Not rechecked at the public validation level:
 - Path: `3scapes/guild_druid.lua`
 - Approved targets: `guild_druid`
 
+### `guild_viking`
+
+- Path: `3scapes/guild_viking/init.lua`
+- Approved targets: `guild_viking`
+
+### `guild_viking_combat`
+
+- Path: `3scapes/guild_viking/combat.lua`
+- Approved targets: None
+
+### `guild_viking_handlers_city`
+
+- Path: `3scapes/guild_viking/handlers/city.lua`
+- Approved targets: None
+
+### `guild_viking_handlers_kingdom`
+
+- Path: `3scapes/guild_viking/handlers/kingdom.lua`
+- Approved targets: None
+
+### `guild_viking_handlers_trade`
+
+- Path: `3scapes/guild_viking/handlers/trade.lua`
+- Approved targets: None
+
+### `guild_viking_handlers_voyage`
+
+- Path: `3scapes/guild_viking/handlers/voyage.lua`
+- Approved targets: None
+
+### `guild_viking_market`
+
+- Path: `3scapes/guild_viking/market.lua`
+- Approved targets: None
+
+### `guild_viking_notify`
+
+- Path: `3scapes/guild_viking/notify.lua`
+- Approved targets: None
+
+### `guild_viking_persist`
+
+- Path: `3scapes/guild_viking/persist.lua`
+- Approved targets: None
+
+### `guild_viking_protocol`
+
+- Path: `3scapes/guild_viking/protocol.lua`
+- Approved targets: None
+
+### `guild_viking_state`
+
+- Path: `3scapes/guild_viking/state.lua`
+- Approved targets: None
+
+### `guild_viking_util`
+
+- Path: `3scapes/guild_viking/util.lua`
+- Approved targets: None
+
 ### `help`
 
 - Path: `generic/help.lua`
@@ -664,17 +724,17 @@ Not rechecked at the public validation level:
 - `sii_xml_05_automatic_interface_alias` (command): not_converted — Expose the guild Sii automatic-control alias.
 - `sii_xml_06_embedded_bootstrap` (state): not_converted — Load the owning guild Sii Lua behavior from the approved guild Sii descriptor.
 
-### `guild_viking` — not_converted
+### `guild_viking` — plugin_gap
 
-- Current plugins: None
-- Feature statuses: not_converted=51
-- `viking_base_01_dependencies_state_and_core_helpers` (state): not_converted — Initialize guild-Viking dependencies, persistent state, labels, and core helpers.
-- `viking_base_02_market_history_and_demand_metrics` (state): not_converted — Track guild-Viking market history, price statistics, trends, and demand cycles.
+- Current plugins: `guild_viking`
+- Feature statuses: not_converted=39, parity=12
+- `viking_base_01_dependencies_state_and_core_helpers` (state): parity — Initialize guild-Viking dependencies, persistent state, labels, and core helpers.
+- `viking_base_02_market_history_and_demand_metrics` (state): parity — Track guild-Viking market history, price statistics, trends, and demand cycles.
 - `viking_base_03_status_bar_callbacks` (rendering): not_converted — Render guild-Viking health and progress status callbacks.
-- `viking_base_04_core_persistence_and_lifecycle` (persistence): not_converted — Persist guild-Viking core state and handle its plugin lifecycle.
-- `viking_base_04_mip_event_dispatch` (callback): not_converted — Dispatch guild-Viking event notifications from protocol state.
-- `viking_base_04_protocol_ingestion_and_guild_state` (protocol): not_converted — Ingest the complete guild-Viking protocol payload and maintain coupled guild state.
-- `viking_base_05_events_timers_and_batch_processing` (callback): not_converted — Handle guild-Viking events, countdowns, and protocol batches.
+- `viking_base_04_core_persistence_and_lifecycle` (persistence): parity — Persist guild-Viking core state and handle its plugin lifecycle.
+- `viking_base_04_mip_event_dispatch` (callback): parity — Dispatch guild-Viking event notifications from protocol state.
+- `viking_base_04_protocol_ingestion_and_guild_state` (protocol): parity — Ingest the complete guild-Viking protocol payload and maintain coupled guild state.
+- `viking_base_05_events_timers_and_batch_processing` (callback): parity — Handle guild-Viking events, countdowns, and protocol batches.
 - `viking_base_05_market_movers_and_trade_rows` (rendering): not_converted — Compute guild-Viking market movers and trade-row presentation data.
 - `viking_base_06_automated_voyage_planning` (callback): not_converted — Plan and advance guild-Viking automated voyages.
 - `viking_base_07_autotrader_bridge_and_raid_automation` (callback): not_converted — Bridge guild-Viking autotrader context and run automated raids.
@@ -712,12 +772,12 @@ Not rechecked at the public validation level:
 - `viking_trader_04_route_plan_construction` (protocol): not_converted — Construct a complete guild-Viking autotrader route plan.
 - `viking_trader_05_configuration_and_command_interface` (command): not_converted — Configure and command the guild-Viking autotrader.
 - `viking_trader_06_transactional_tick_and_status` (callback): not_converted — Execute fail-closed guild-Viking autotrader transactions and report status.
-- `viking_xml_01_metadata` (state): not_converted — Declare the guild-Viking plugin metadata.
-- `viking_xml_02_status_and_return_triggers` (trigger): not_converted — Dispatch guild-Viking status and return events.
-- `viking_xml_03_voyage_and_raid_event_triggers` (trigger): not_converted — Dispatch guild-Viking voyage and raid events.
-- `viking_xml_04_war_and_reward_event_triggers` (trigger): not_converted — Dispatch guild-Viking war, capture, loss, and reward events.
-- `viking_xml_05_update_timer` (timer): not_converted — Schedule guild-Viking periodic interface updates.
-- `viking_xml_06_window_alias` (alias): not_converted — Expose the guild-Viking window command alias.
+- `viking_xml_01_metadata` (state): parity — Declare the guild-Viking plugin metadata.
+- `viking_xml_02_status_and_return_triggers` (trigger): parity — Dispatch guild-Viking status and return events.
+- `viking_xml_03_voyage_and_raid_event_triggers` (trigger): parity — Dispatch guild-Viking voyage and raid events.
+- `viking_xml_04_war_and_reward_event_triggers` (trigger): parity — Dispatch guild-Viking war, capture, loss, and reward events.
+- `viking_xml_05_update_timer` (timer): parity — Schedule guild-Viking periodic interface updates.
+- `viking_xml_06_window_alias` (alias): parity — Expose the guild-Viking window command alias.
 - `viking_xml_07_embedded_window_controls` (public_api): not_converted — Implement embedded guild-Viking window controls.
 
 ### `guild_warders` — not_converted

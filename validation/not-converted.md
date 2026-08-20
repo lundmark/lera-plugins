@@ -17,7 +17,6 @@
 - `guild_necromancers` — 33 approved features
 - `guild_priests` — 30 approved features
 - `guild_sii` — 30 approved features
-- `guild_viking` — 51 approved features
 - `guild_warders` — 21 approved features
 - `guild_witches` — 30 approved features
 - `party_interface` — 13 approved features

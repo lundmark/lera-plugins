@@ -1,7 +1,7 @@
 [scope]
-revision = 1
-approved_on = "2026-08-10"
-digest = "4b8f48163fc47a3efb32173e988b02b12138029bccfe962d5b0383bcc7d2e4ce"
+revision = 2
+approved_on = "2026-08-20"
+digest = "a6c761b000661806102e90501c8bfdd5b9066797c37f1e7b6dfe2e5163876e94"
 
 [[current_plugins]]
 key = "autologin"
@@ -31,6 +31,78 @@ fixtures = ["deadmans-threshold-config"]
 key = "guild_druid"
 path = "3scapes/guild_druid.lua"
 target_keys = ["guild_druid"]
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking"
+path = "3scapes/guild_viking/init.lua"
+target_keys = ["guild_viking"]
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_combat"
+path = "3scapes/guild_viking/combat.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_handlers_city"
+path = "3scapes/guild_viking/handlers/city.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_handlers_kingdom"
+path = "3scapes/guild_viking/handlers/kingdom.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_handlers_trade"
+path = "3scapes/guild_viking/handlers/trade.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_handlers_voyage"
+path = "3scapes/guild_viking/handlers/voyage.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_market"
+path = "3scapes/guild_viking/market.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_notify"
+path = "3scapes/guild_viking/notify.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_persist"
+path = "3scapes/guild_viking/persist.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_protocol"
+path = "3scapes/guild_viking/protocol.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_state"
+path = "3scapes/guild_viking/state.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_util"
+path = "3scapes/guild_viking/util.lua"
+target_keys = []
 fixtures = []
 
 [[current_plugins]]
@@ -7323,7 +7395,7 @@ local_key = "guild_sii-sii_xml_06_embedded_bootstrap-manual"
 
 [[legacy_targets]]
 key = "guild_viking"
-current_plugins = []
+current_plugins = ["guild_viking"]
 
 [[legacy_targets.sources]]
 kind = "lua"
@@ -7346,31 +7418,31 @@ feature_keys = []
 [[legacy_targets.features]]
 key = "viking_base_01_dependencies_state_and_core_helpers"
 category = "state"
-status = "not_converted"
+status = "parity"
 summary = "Initialize guild-Viking dependencies, persistent state, labels, and core helpers."
-current_refs = []
+current_refs = ["3scapes/guild_viking/state.lua:1", "3scapes/guild_viking/util.lua:5"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete dependency, state-default, label, and core-helper region for guild-Viking behavior."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-20"
+reviewed_scope = "Compared guild_viking's state.lua defaults and util.lua's split helper against LEGACY's guild_viking.lua dependency, state-default, label, and core-helper region."
+result = "guild_viking/state.lua and util.lua reproduce the complete dependency, state-default, and core-helper responsibility with LEGACY parity."
+outcome = "pass"
 local_key = "guild_viking-viking_base_01_dependencies_state_and_core_helpers-manual"
 
 [[legacy_targets.features]]
 key = "viking_base_02_market_history_and_demand_metrics"
 category = "state"
-status = "not_converted"
+status = "parity"
 summary = "Track guild-Viking market history, price statistics, trends, and demand cycles."
-current_refs = []
+current_refs = ["3scapes/guild_viking/market.lua:23", "3scapes/guild_viking/market.lua:73"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete price-history, statistics, trend, and demand-cycle helpers for the guild-Viking market."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-20"
+reviewed_scope = "Compared guild_viking's market.lua price-history, statistics, trend, and demand-cycle-color helpers against LEGACY's guild_viking.lua market region."
+result = "guild_viking/market.lua reproduces LEGACY's record_price_history, price_stats, price_trend, and demand_cycle_color helpers with matching semantics."
+outcome = "pass"
 local_key = "guild_viking-viking_base_02_market_history_and_demand_metrics-manual"
 
 [[legacy_targets.features]]
@@ -7391,61 +7463,61 @@ local_key = "guild_viking-viking_base_03_status_bar_callbacks-manual"
 [[legacy_targets.features]]
 key = "viking_base_04_core_persistence_and_lifecycle"
 category = "persistence"
-status = "not_converted"
+status = "parity"
 summary = "Persist guild-Viking core state and handle its plugin lifecycle."
-current_refs = []
+current_refs = ["3scapes/guild_viking/persist.lua:10", "3scapes/guild_viking/persist.lua:20", "3scapes/guild_viking/init.lua:146", "3scapes/guild_viking/init.lua:210", "3scapes/guild_viking/init.lua:247"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking save, restore, connect, enable, disable, install, and close lifecycle region."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-20"
+reviewed_scope = "Compared guild_viking's persist.lua save/load and init.lua's on_load, on_unload, and on_disconnect lifecycle against LEGACY's guild_viking.lua save, restore, connect, and close lifecycle region."
+result = "guild_viking/persist.lua and init.lua implement the stage-1 save, restore, connect, and disconnect lifecycle with LEGACY parity for the persisted subset (price history and transport source)."
+outcome = "pass"
 local_key = "guild_viking-viking_base_04_core_persistence_and_lifecycle-manual"
 
 [[legacy_targets.features]]
 key = "viking_base_04_mip_event_dispatch"
 category = "callback"
-status = "not_converted"
+status = "parity"
 summary = "Dispatch guild-Viking event notifications from protocol state."
-current_refs = []
+current_refs = ["3scapes/guild_viking/protocol.lua:112", "3scapes/guild_viking/init.lua:147"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking event-notification dispatcher and its owning notification state."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-20"
+reviewed_scope = "Compared guild_viking's protocol.lua on_bbe entry point and init.lua's mip.on('BBE', ...) registration against LEGACY's guild_viking.lua MIP event-notification dispatcher."
+result = "guild_viking/protocol.lua's on_bbe feeds MIP BBE payloads into ingest(), wired from init.lua exactly as LEGACY's mip_info dispatcher wired guild.events."
+outcome = "pass"
 local_key = "guild_viking-viking_base_04_mip_event_dispatch-manual"
 
 [[legacy_targets.features]]
 key = "viking_base_04_protocol_ingestion_and_guild_state"
 category = "protocol"
-status = "not_converted"
+status = "parity"
 summary = "Ingest the complete guild-Viking protocol payload and maintain coupled guild state."
-current_refs = []
+current_refs = ["3scapes/guild_viking/protocol.lua:52", "3scapes/guild_viking/handlers/trade.lua:29", "3scapes/guild_viking/handlers/voyage.lua:13", "3scapes/guild_viking/handlers/kingdom.lua:13", "3scapes/guild_viking/handlers/city.lua:14"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking protocol-ingestion callback with all coupled state branches."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-20"
+reviewed_scope = "Compared guild_viking's protocol.lua ingest/dispatch core and the handlers/trade.lua, voyage.lua, kingdom.lua, and city.lua modules against LEGACY's guild_viking.lua protocol-ingestion callback and its coupled state branches."
+result = "guild_viking/protocol.lua plus its four handler modules reproduce LEGACY's key/value ingestion and coupled guild-state updates for trade, voyage, kingdom, and city data."
+outcome = "pass"
 local_key = "guild_viking-viking_base_04_protocol_ingestion_and_guild_state-manual"
 
 [[legacy_targets.features]]
 key = "viking_base_05_events_timers_and_batch_processing"
 category = "callback"
-status = "not_converted"
+status = "parity"
 summary = "Handle guild-Viking events, countdowns, and protocol batches."
-current_refs = []
+current_refs = ["3scapes/guild_viking/protocol.lua:79", "3scapes/guild_viking/protocol.lua:140", "3scapes/guild_viking/notify.lua:156"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking death, subscription, countdown, and batch-processing callbacks."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-20"
+reviewed_scope = "Compared guild_viking's protocol.lua batch/sweep logic and notify.lua's countdown_tick against LEGACY's guild_viking.lua death, subscription, countdown, and batch-processing callbacks."
+result = "guild_viking/protocol.lua's feed/sweep batching and notify.lua's countdown_tick reproduce LEGACY's return_in-style countdown and batch-completion semantics for the stage-1 scope."
+outcome = "pass"
 local_key = "guild_viking-viking_base_05_events_timers_and_batch_processing-manual"
 
 [[legacy_targets.features]]
@@ -8006,91 +8078,91 @@ local_key = "guild_viking-viking_trader_06_transactional_tick_and_status-manual"
 [[legacy_targets.features]]
 key = "viking_xml_01_metadata"
 category = "state"
-status = "not_converted"
+status = "parity"
 summary = "Declare the guild-Viking plugin metadata."
-current_refs = []
+current_refs = ["3scapes/guild_viking/init.lua:61"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking plugin metadata element."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-20"
+reviewed_scope = "Compared guild_viking's init.lua module identity (M.name, M.version) against LEGACY's guild_viking plugin metadata element."
+result = "guild_viking/init.lua declares equivalent plugin metadata to LEGACY's plugin element."
+outcome = "pass"
 local_key = "guild_viking-viking_xml_01_metadata-manual"
 
 [[legacy_targets.features]]
 key = "viking_xml_02_status_and_return_triggers"
 category = "trigger"
-status = "not_converted"
+status = "parity"
 summary = "Dispatch guild-Viking status and return events."
-current_refs = []
+current_refs = ["3scapes/guild_viking/combat.lua:284", "3scapes/guild_viking/notify.lua:103"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking status and return trigger elements."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-20"
+reviewed_scope = "Compared guild_viking's combat.lua hp-bar triggers and notify.lua's cart/longship-return triggers against LEGACY's guild_viking status and return trigger elements."
+result = "guild_viking/combat.lua and notify.lua reproduce all 8 hp-bar screen-scrape triggers and the 5 cart/longship-return push triggers with matching patterns."
+outcome = "pass"
 local_key = "guild_viking-viking_xml_02_status_and_return_triggers-manual"
 
 [[legacy_targets.features]]
 key = "viking_xml_03_voyage_and_raid_event_triggers"
 category = "trigger"
-status = "not_converted"
+status = "parity"
 summary = "Dispatch guild-Viking voyage and raid events."
-current_refs = []
+current_refs = ["3scapes/guild_viking/notify.lua:57", "3scapes/guild_viking/notify.lua:66", "3scapes/guild_viking/notify.lua:71"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking voyage and raid trigger elements."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-20"
+reviewed_scope = "Compared guild_viking's notify.lua voyage-node, voyage-pause, and raid-return triggers against LEGACY's guild_viking voyage and raid trigger elements."
+result = "guild_viking/notify.lua reproduces the voyage-node, voyage-pause, and raid-return push triggers with matching patterns and messages."
+outcome = "pass"
 local_key = "guild_viking-viking_xml_03_voyage_and_raid_event_triggers-manual"
 
 [[legacy_targets.features]]
 key = "viking_xml_04_war_and_reward_event_triggers"
 category = "trigger"
-status = "not_converted"
+status = "parity"
 summary = "Dispatch guild-Viking war, capture, loss, and reward events."
-current_refs = []
+current_refs = ["3scapes/guild_viking/notify.lua:75", "3scapes/guild_viking/notify.lua:89", "3scapes/guild_viking/notify.lua:99"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking war, capture, loss, and reward trigger elements."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-20"
+reviewed_scope = "Compared guild_viking's notify.lua war, capture, loss, and reward triggers against LEGACY's guild_viking war and reward trigger elements."
+result = "guild_viking/notify.lua reproduces the town-captured, war-declared, realm-sacked, battle-lost, recruit-found, and relic-found push triggers with matching patterns."
+outcome = "pass"
 local_key = "guild_viking-viking_xml_04_war_and_reward_event_triggers-manual"
 
 [[legacy_targets.features]]
 key = "viking_xml_05_update_timer"
 category = "timer"
-status = "not_converted"
+status = "parity"
 summary = "Schedule guild-Viking periodic interface updates."
-current_refs = []
+current_refs = ["3scapes/guild_viking/notify.lua:156", "3scapes/guild_viking/init.lua:157"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking periodic update timer element."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-20"
+reviewed_scope = "Compared guild_viking's notify.lua countdown_tick and init.lua's per-second timer registration against LEGACY's guild_viking periodic update timer element."
+result = "guild_viking/init.lua registers a 1-second timer.every calling notify.lua's countdown_tick, reproducing LEGACY's periodic update cadence for the stage-1 countdown fields."
+outcome = "pass"
 local_key = "guild_viking-viking_xml_05_update_timer-manual"
 
 [[legacy_targets.features]]
 key = "viking_xml_06_window_alias"
 category = "alias"
-status = "not_converted"
+status = "parity"
 summary = "Expose the guild-Viking window command alias."
-current_refs = []
+current_refs = ["3scapes/guild_viking/init.lua:75", "3scapes/guild_viking/init.lua:178"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking window alias and its child send element."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-20"
+reviewed_scope = "Compared guild_viking's init.lua resetvikxp alias against LEGACY's guild_viking window alias and its child send element, the only alias in that plugin's definition."
+result = "guild_viking/init.lua registers the bare resetvikxp alias and reproduces LEGACY's resetvikxp alias body, resetting session XP counters and printing the confirmation message; the viewer update call is dropped as stage-2 territory."
+outcome = "pass"
 local_key = "guild_viking-viking_xml_06_window_alias-manual"
 
 [[legacy_targets.features]]
