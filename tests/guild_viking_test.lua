@@ -202,5 +202,203 @@ check("gmcp Viking wiring feeds protocol.on_gmcp", seen[#seen] == "gmcpwired")
 protocol.source("mip")
 protocol.source("auto")
 
+-- ---- notify: push triggers + countdown_tick (Task 9) -----------------------
+local notify = require("notify")
+
+check("notify has 15 trigger entries", #notify.triggers == 15, #notify.triggers)
+
+local function find_trigger(name)
+  for _, t in ipairs(notify.triggers) do
+    if t.name == name then return t end
+  end
+  error("no trigger named " .. name)
+end
+
+-- nil-pushn safety: every trigger fn must no-op without error before
+-- set_push is ever called.
+for _, t in ipairs(notify.triggers) do
+  local ok = pcall(t.fn, "some matching line", "cap")
+  check("nil-pushn safe: " .. t.name, ok)
+end
+
+local push_records = {}
+local pushn_stub = {
+  notify = function(channel, message)
+    push_records[#push_records + 1] = { channel = channel, message = message }
+  end,
+}
+notify.set_push(pushn_stub)
+
+local function assert_trigger(name, line, capture, want_message)
+  push_records = {}
+  local t = find_trigger(name)
+  t.fn(line, capture)
+  local rec = push_records[1]
+  check(name .. " channel", rec and rec.channel == "viking", rec and rec.channel)
+  check(name .. " message", rec and rec.message == want_message, rec and rec.message)
+end
+
+assert_trigger("push_cart_return", "Cart returned from Aldby.", nil,
+  "Cart returned from trade route.")
+assert_trigger("push_longship_return", "The longship returned from the island.", nil,
+  "Longship returned from island with thralls.")
+assert_trigger("push_longship_saved", "The Northwind was saved from the deep by the Iron Hull perk.", nil,
+  "Longship saved by Iron Hull perk.")
+assert_trigger("push_longship_tattoo", "The Northwind returned with a foreign tattoo pattern.", nil,
+  "Longship returned with tattoo pattern.")
+assert_trigger("push_longship_thralls", "The Northwind returned with 3 thralls.", nil,
+  "Longship returned with thralls.")
+assert_trigger("push_voyage_node", "A hidden harbor rises off the port bow.", "hidden harbor",
+  "Voyage: hidden harbor reached - resolve needed.")
+assert_trigger("push_voyage_pause", "[Viking-Voyage] Spoiled casks are found below deck.",
+  "Spoiled casks are found below deck.",
+  "Voyage: Spoiled casks are found below deck.")
+assert_trigger("push_raid_return", "Your raiders returned from Wessex with plunder.", nil,
+  "Raid returned with spoils.")
+assert_trigger("push_town_captured", "Eastgate falls! The town is taken.", "Eastgate",
+  "War: Eastgate has fallen to your rule!")
+assert_trigger("push_war_declared", "Ivar declares war and gathers a host.", "Ivar",
+  "War: Ivar marches on your realm -- answer or sue for peace.")
+assert_trigger("push_realm_sacked", "A raiding party sacks your holdings.", nil,
+  "War: your holdings were sacked -- you left an incoming war unanswered.")
+assert_trigger("push_battle_lost", "[War] Defeat. Your host was routed.", nil,
+  "Battle: your host was defeated.")
+assert_trigger("push_recruit_found", "A wanderer is looking for a hall to serve.", nil,
+  "Kaupstefna: a specialist wanderer is available to hire (vfind).")
+assert_trigger("push_recruit_found_2", "A wanderer came seeking a hall.", nil,
+  "Kaupstefna: a specialist wanderer is available to hire (vfind).")
+assert_trigger("push_relic_found", "A relic is hauled aboard.", nil,
+  "Voyage: a rare relic was recovered!")
+
+-- push_voyage_pause fallback when no capture arrives (mirrors LEGACY's
+-- `wildcards[1] or "Voyage paused"`).
+push_records = {}
+find_trigger("push_voyage_pause").fn("[Viking-Voyage]")
+check("voyage_pause fallback message",
+      push_records[1] and push_records[1].message == "Voyage: Voyage paused")
+
+-- ---- countdown_tick ---------------------------------------------------------
+
+-- Carts: decrement while > 1; drop entries that would land at/under 1
+-- (a cart never visibly shows "1").
+S.carts = { { return_in = 5, halfway_in = 3 }, { return_in = 2 }, { return_in = 1 } }
+local cd_before = dirty_count
+notify.countdown_tick()
+check("cart decremented", S.carts[1] and S.carts[1].return_in == 4 and S.carts[1].halfway_in == 2)
+check("carts at/under 1 removed this tick", #S.carts == 1)
+check("countdown fires exactly one dirty for the whole tick", dirty_count == cd_before + 1)
+
+-- Courier runs: same family as carts.
+S.courier.runs = { { return_in = 3 }, { return_in = 1 } }
+notify.countdown_tick()
+check("courier run decremented", S.courier.runs[1].return_in == 2)
+check("courier run at 1 removed", #S.courier.runs == 1)
+
+-- Spy: secs clamps to 0 at the boundary tick; sab_secs floors at 0 and
+-- clears sab_pct when it does; cd_secs floors at 0; scouts decrement/prune
+-- like carts.
+S.spy = { tier = 1, mode = "raid", village = "x", secs = 1, sab_pct = 40, sab_secs = 1, cd_secs = 3,
+          scouts = { { secs = 3 }, { secs = 1 } } }
+notify.countdown_tick()
+check("spy secs clamps to 0", S.spy.secs == 0)
+check("spy sab_secs floors and clears pct", S.spy.sab_secs == 0 and S.spy.sab_pct == 0)
+check("spy cd_secs decremented", S.spy.cd_secs == 2)
+check("spy scout decremented and pruned", #S.spy.scouts == 1 and S.spy.scouts[1].secs == 2)
+
+-- Training: decrements while > 1; never reaches 0 via the tick.
+S.train = { tier = 1, name = "Axework", stat = "str", trained = 0, secs = 1 }
+notify.countdown_tick()
+check("train stuck at 1", S.train.secs == 1)
+S.train.secs = 3
+notify.countdown_tick()
+check("train decremented", S.train.secs == 2)
+
+-- Cart/ship upgrades and settler projects: floor at 0, no removal ever.
+S.cart_upgrades = { { cart_id = 1, secs_left = 2 } }
+S.ship_upgrades = { { name = "hull", secs_left = 1 } }
+S.settler_projects = { { id = 1, secs_left = 1 } }
+notify.countdown_tick()
+check("cart upgrade decremented", S.cart_upgrades[1].secs_left == 1)
+check("ship upgrade floors at 0, kept", S.ship_upgrades[1].secs_left == 0 and #S.ship_upgrades == 1)
+check("settler project floors at 0, kept",
+      S.settler_projects[1].secs_left == 0 and #S.settler_projects == 1)
+
+-- Incoming fills: same family as carts.
+S.incoming_fills = { { good = "wool", arrives_in = 2 } }
+notify.countdown_tick()
+check("incoming fill at/under 1 removed this tick", #S.incoming_fills == 0)
+
+-- next_tick_in / demand_cycle_in: floor at 0.
+S.next_tick_in = 1
+S.demand_cycle_in = 1
+notify.countdown_tick()
+check("next_tick_in floors at 0", S.next_tick_in == 0)
+check("demand_cycle_in floors at 0", S.demand_cycle_in == 0)
+
+-- God power: recomputed from an absolute target while one is set, else a
+-- plain per-second decrement floored at 0.
+S.god_power_next_at = os.time() + 50
+S.god_power_next = 999
+notify.countdown_tick()
+local gp_expected = S.god_power_next_at - os.time()
+check("god power recomputed from target", S.god_power_next == gp_expected)
+S.god_power_next_at = 0
+S.god_power_next = 3
+notify.countdown_tick()
+check("god power plain decrement", S.god_power_next == 2)
+
+-- Dispatch cooldown (Cartwright's Cadence): absolute-time recompute.
+S.dispatch_cd_expires_at = os.time() + 40
+S.dispatch_cd = 999
+notify.countdown_tick()
+local cd_expected = S.dispatch_cd_expires_at - os.time()
+check("dispatch cooldown recomputed from target", S.dispatch_cd == cd_expected)
+
+-- Ships / voyage longships: floor at 0, docked (0) entries kept.
+S.ships = { { name = "Northwind", return_in = 1 } }
+S.voyage_longships = { { name = "Southwind", return_in = 1 } }
+notify.countdown_tick()
+check("ship floors at 0, kept", S.ships[1].return_in == 0 and #S.ships == 1)
+check("voyage longship floors at 0, kept",
+      S.voyage_longships[1].return_in == 0 and #S.voyage_longships == 1)
+
+-- Voyage status next_move (Sea tab countdown).
+S.voyage_status = { next_move = 2 }
+notify.countdown_tick()
+check("voyage next_move decremented", S.voyage_status.next_move == 1)
+
+-- Pending builds: decrement while > 0; drop only at exactly 0; keep nil and
+-- negative (the -1 "awaiting mats" sentinel) untouched.
+S.pending_builds = { { bldg_id = 1, complete_at_secs = 1 }, { bldg_id = 2, complete_at_secs = -1 },
+                     { bldg_id = 3, complete_at_secs = nil } }
+notify.countdown_tick()
+check("pending build at 1 removed this tick", #S.pending_builds == 2)
+check("pending build sentinel/nil kept",
+      S.pending_builds[1].complete_at_secs == -1 and S.pending_builds[2].complete_at_secs == nil)
+
+-- Route builds: decrement while > 0, removed the instant it reaches <= 0;
+-- an entry already at 0 is left untouched (decrement and removal share the
+-- same > 0 gate).
+S.route_builds = { ["road:1"] = { vid = 1, complete_at_secs = 1 },
+                   ["fort:2"] = { vid = 2, complete_at_secs = 0 } }
+notify.countdown_tick()
+check("route build at 1 removed", S.route_builds["road:1"] == nil)
+check("route build already at 0 left alone",
+      S.route_builds["fort:2"] ~= nil and S.route_builds["fort:2"].complete_at_secs == 0)
+
+-- Idle tick: nothing counting down anywhere -> no dirty call, tick stays cheap.
+S.carts, S.courier.runs, S.incoming_fills, S.pending_builds = {}, {}, {}, {}
+S.route_builds, S.cart_upgrades, S.ship_upgrades, S.settler_projects = {}, {}, {}, {}
+S.ships, S.voyage_longships = {}, {}
+S.spy = { tier = 0, mode = "", village = "", secs = 0, sab_pct = 0, sab_secs = 0, cd_secs = 0, scouts = {} }
+S.train = { tier = 0, name = "", stat = "", trained = 0, secs = 0 }
+S.next_tick_in, S.demand_cycle_in = 0, 0
+S.god_power_next, S.god_power_next_at = 0, 0
+S.dispatch_cd, S.dispatch_cd_expires_at = 0, nil
+S.voyage_status = nil
+cd_before = dirty_count
+notify.countdown_tick()
+check("idle tick does not mark dirty", dirty_count == cd_before)
+
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING TESTS PASSED")

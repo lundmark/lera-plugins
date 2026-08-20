@@ -45,6 +45,12 @@ end
 -- Critical here.
 local combat = require("combat")
 
+-- Task 9: push notifications + the per-second countdown timer. `pushn` is
+-- looked up in on_setup (plugins load before on_setup runs, per CLAUDE.md's
+-- Push API producer pattern) and handed to notify.set_push; it stays nil,
+-- and every trigger fn is a safe no-op, if push_notify isn't loaded.
+local notify = require("notify")
+
 local M = {}
 M.name = "guild_viking"
 M.version = "0.1"
@@ -53,8 +59,9 @@ function M.state()
   return state_mod.S
 end
 
-local mip_id, fff_id, gmcp_id, sweep_id
+local mip_id, fff_id, gmcp_id, sweep_id, countdown_id
 local combat_trigger_ids = {}
+local notify_trigger_ids = {}
 
 function M.on_load()
   mip_id = mip.on("BBE", function(key, code, data) protocol.on_bbe(data) end)
@@ -64,6 +71,18 @@ function M.on_load()
   for _, t in ipairs(combat.triggers) do
     combat_trigger_ids[#combat_trigger_ids + 1] = trigger.add(t.pattern, t.fn)
   end
+  for _, t in ipairs(notify.triggers) do
+    notify_trigger_ids[#notify_trigger_ids + 1] = trigger.add(t.pattern, t.fn)
+  end
+  countdown_id = timer.every(1000, function() notify.countdown_tick() end)
+end
+
+function M.on_setup()
+  local pushn = plugin.get("push_notify")
+  if pushn then
+    pushn.register_channel("viking", { priority = 0 })
+    notify.set_push(pushn)
+  end
 end
 
 function M.on_unload()
@@ -71,10 +90,15 @@ function M.on_unload()
   mip.off(fff_id)
   gmcp.remove(gmcp_id)
   timer.remove(sweep_id)
+  timer.remove(countdown_id)
   for _, id in ipairs(combat_trigger_ids) do
     trigger.remove(id)
   end
   combat_trigger_ids = {}
+  for _, id in ipairs(notify_trigger_ids) do
+    trigger.remove(id)
+  end
+  notify_trigger_ids = {}
 end
 
 function M.on_connect() end
