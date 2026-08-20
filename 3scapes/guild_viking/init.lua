@@ -38,6 +38,13 @@ for _, p in ipairs(city._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
 end
 
+-- Task 8: combat composite + hp-bar triggers. FFF is a separate MIP composite
+-- from BBE (not routed through protocol.lua's key/value dispatch), so it gets
+-- its own mip.on registration. The callback is 3-arg (key, code, data); data
+-- is the third argument, not the second -- binding the wrong one was a past
+-- Critical here.
+local combat = require("combat")
+
 local M = {}
 M.name = "guild_viking"
 M.version = "0.1"
@@ -46,18 +53,28 @@ function M.state()
   return state_mod.S
 end
 
-local mip_id, gmcp_id, sweep_id
+local mip_id, fff_id, gmcp_id, sweep_id
+local combat_trigger_ids = {}
 
 function M.on_load()
   mip_id = mip.on("BBE", function(key, code, data) protocol.on_bbe(data) end)
+  fff_id = mip.on("FFF", function(key, code, data) combat.on_composite(data) end)
   gmcp_id = gmcp.on("Viking", function(pkg, data) protocol.on_gmcp(pkg, data) end)
   sweep_id = timer.every(100, function() protocol.sweep(lera.time()) end)
+  for _, t in ipairs(combat.triggers) do
+    combat_trigger_ids[#combat_trigger_ids + 1] = trigger.add(t.pattern, t.fn)
+  end
 end
 
 function M.on_unload()
   mip.off(mip_id)
+  mip.off(fff_id)
   gmcp.remove(gmcp_id)
   timer.remove(sweep_id)
+  for _, id in ipairs(combat_trigger_ids) do
+    trigger.remove(id)
+  end
+  combat_trigger_ids = {}
 end
 
 function M.on_connect() end
