@@ -317,6 +317,22 @@ local M = dofile("3scapes/guild_viking/init.lua")
 M.on_load()
 check("vik registered", registered_vik ~= nil and registered_vik.name == "/vik")
 
+-- An unregistered popup name still routes through popups.toggle (prints its
+-- own message) rather than falling through to the bare page-key switch.
+-- "war" is the probe: by Task 5, popups.lua has self-registered map/sea/
+-- voyage/cityplan for real (see the bottom of popups.lua), so "war" is the
+-- only POPUP_NAMES member still unregistered at this point in the file --
+-- right up until the throwaway stub below registers it for the
+-- page/popup-collision tests that follow. Whichever POPUP_NAMES member is
+-- the last to land keeps being the natural probe here.
+window.set_page("stats")
+printed = {}
+registered_vik.handler("war", "/vik")
+check("/vik war (unregistered) does not switch the pane",
+      window.current_page() == "stats" and is_open_flag == false)
+check("/vik war (unregistered) printed popups.lua's message",
+      #printed >= 1 and printed[#printed]:find("war", 1, true) ~= nil, printed[#printed])
+
 -- Stage 1 registers no named popups yet; register a throwaway "war" module
 -- directly through popups.lua (the same singleton init.lua's dispatch uses)
 -- so the routing itself can be exercised ahead of Task 6's real content.
@@ -367,16 +383,6 @@ check("/vik page with no key prints usage", #printed >= 1 and printed[#printed]:
 printed = {}
 registered_vik.handler("pop", "/vik")
 check("/vik pop with no key prints usage", #printed >= 1 and printed[#printed]:find("Usage", 1, true) ~= nil)
-
--- an unregistered popup name still routes through popups.toggle (prints its
--- own message) rather than falling through to the bare page-key switch
-window.set_page("stats")
-printed = {}
-registered_vik.handler("cityplan", "/vik")
-check("/vik cityplan (unregistered) does not switch the pane",
-      window.current_page() == "stats" and is_open_flag == false)
-check("/vik cityplan (unregistered) printed popups.lua's message",
-      #printed >= 1 and printed[#printed]:find("cityplan", 1, true) ~= nil, printed[#printed])
 
 pcall(M.on_unload)
 

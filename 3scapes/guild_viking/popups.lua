@@ -192,5 +192,6 @@ end
 popups.register("map", require("popups.map"))
 popups.register("sea", require("popups.sea"))
 popups.register("voyage", require("popups.voyage"))
+popups.register("cityplan", require("popups.cityplan"))
 
 return popups
