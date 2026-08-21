@@ -356,8 +356,12 @@ local function campaigns_lines(add, width, w)
     local mx = (c.max and c.max > 0) and c.max or 100
     local pct = math.floor((c.defense or 0) * 100 / mx)
     if pct < 0 then pct = 0 elseif pct > 100 then pct = 100 end
-    add(pagelib.trunc(string.format("%s%-16s%s %s %d%%",
-      C.white, c.town, pagelib.RESET, pagelib.bar(20, pct, 100, campaign_defense_color(pct)), pct), width))
+    -- pct readout (0xCCCCCC, grey either byte order) wrapped in C.white --
+    -- see the module header's Campaigns workbook bullet, which already
+    -- documented this as C.white; the code had left it unwrapped/plain.
+    add(pagelib.trunc(string.format("%s%-16s%s %s %s%d%%%s",
+      C.white, c.town, pagelib.RESET, pagelib.bar(20, pct, 100, campaign_defense_color(pct)),
+      C.white, pct, pagelib.RESET), width))
   end
   add(pagelib.trunc(C.dim .. "Win sieges to break defence, then take the town." .. pagelib.RESET, width))
 end

@@ -260,11 +260,12 @@ function window.render(rect, opts)
   end
 end
 
--- A down inside a recorded tab span switches page and returns true; every
--- other event (including a down elsewhere, e.g. the body) returns false so
+-- A LEFT down inside a recorded tab span switches page and returns true;
+-- every other event (a down with a different/no button, e.g. a middle- or
+-- right-click on a tab, or a down elsewhere, e.g. the body) returns false so
 -- the pane never falsely claims an interaction it didn't handle.
 function window.on_pointer(event)
-  if event.kind ~= "down" then return false end
+  if event.kind ~= "down" or event.button ~= "left" then return false end
   for _, s in ipairs(tab_spans) do
     if event.y == s.row and event.x >= s.col_start and event.x < s.col_end then
       return window.set_page(s.key)

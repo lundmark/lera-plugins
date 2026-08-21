@@ -115,6 +115,16 @@ local down_on_farm = { kind = "down", button = "left", x = 12, y = 0,
 check("down on Farm's tab span switches page", window.on_pointer(down_on_farm) == true)
 check("current_page is now farm", window.current_page() == "farm")
 
+-- Fix 3: only a LEFT down on a tab switches pages; a middle (or right)
+-- button on the exact same span must fall through false and leave the
+-- current page untouched, same as a down elsewhere in the pane.
+window.set_page("stats")
+local middle_down_on_farm = { kind = "down", button = "middle", x = 12, y = 0,
+                              inside = true, width = 100, height = 5 }
+check("middle-button down on Farm's tab span returns false",
+      window.on_pointer(middle_down_on_farm) == false)
+check("current_page unchanged by a middle-button tab down", window.current_page() == "stats")
+
 window.set_page("stats")
 local down_in_body = { kind = "down", button = "left", x = 5, y = 2,
                         inside = true, width = 100, height = 5 }
