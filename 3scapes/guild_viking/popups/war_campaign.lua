@@ -201,14 +201,27 @@ end
 -- surfaces the same information (which stack is selected, and its queued
 -- waypoints in order) as one status line instead, since maplib has no path
 -- overlay primitive.
-local function queue_status_line()
+--
+-- The SOURCE of that path list is ported verbatim from LEGACY's own
+-- fallback, not just the local echo: `local qpath = (viking_camp_selected
+-- and viking_camp_selected.id and wm.queues and
+-- wm.queues[viking_camp_selected.id]) or (viking_camp_selected and
+-- viking_camp_queue or {})` (13957-13959) -- the SERVER-echoed queue
+-- (`wm.queues[id]`, fed by the WMQ handler and committed at WMEND) wins
+-- whenever present, and the local click-echo (`queue`) is only a
+-- fallback for the brief window before the server round-trips a fresh
+-- WMQ/WMEND. Reading only the local echo (as this function used to)
+-- would show a stale, ever-growing waypoint list instead of the
+-- server-truth queue actually draining as the host arrives at each tile.
+local function queue_status_line(wm)
   if not selected then return nil end
-  if #queue == 0 then
+  local qpath = (wm.queues and wm.queues[selected.id]) or queue
+  if #qpath == 0 then
     return C.cyan .. "Selected " .. selected.id ..
       " -- click a cell to queue a move, its own tile to hold & clear" .. RESET
   end
   local parts = {}
-  for _, q in ipairs(queue) do parts[#parts + 1] = q.sq end
+  for _, q in ipairs(qpath) do parts[#parts + 1] = q.sq end
   return C.cyan .. "Queued for " .. selected.id .. ": " .. table.concat(parts, " -> ") .. RESET
 end
 
@@ -257,7 +270,7 @@ function M.lines(width)
       (sp.deeds == 1) and "" or "s", RESET), width)
   end
 
-  local qline = queue_status_line()
+  local qline = queue_status_line(wm)
   if qline then out[#out + 1] = pagelib.trunc(qline, width) end
 
   return out

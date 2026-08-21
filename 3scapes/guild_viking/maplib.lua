@@ -51,6 +51,24 @@
 -- consumer needs a wider reservation than the existing sizing already gives
 -- it.
 --
+-- FOOTGUN, recorded here rather than only at each caller: the sizing is
+-- `#tostring(h - 1)` (the 0-based max row index's OWN digit count) --
+-- correct for a letter `row_label` (always 1 char) and for the DEFAULT
+-- `tostring` 0-based numeric label (same value, so same digit count by
+-- construction). A caller that instead supplies a 1-based NUMERIC
+-- `row_label` (e.g. `function(r) return tostring(r + 1) end`, to match a
+-- game's 1-based row-naming convention) gets a MISMATCH exactly at a
+-- power-of-ten row count: at `h == 10`, `h - 1 == 9` sizes the field to 1
+-- digit, but the actual displayed label for the last row is `"10"` (2
+-- digits) and silently truncates. `popups/war_campaign.lua` and
+-- `popups/war_battle.lua` hit this while porting guild_viking's 1-based
+-- "vcampaign"/"vbattle" row numbering, and sidestepped it by omitting
+-- `row_headers` entirely (hover text carries the cell name instead) rather
+-- than fixing the sizing here -- a future caller that DOES want 1-based
+-- numeric row headers on a grid that can reach a power-of-ten row count
+-- will need to either widen this calculation (size from the label text,
+-- not just the 0-based count) or accept the same truncation risk.
+--
 -- Selection: `cell.sel` wraps the glyph field in reverse video ("\27[7m"
 -- .. field .. "\27[27m"), matching window.lua/menu.lua's existing reverse-
 -- video idiom elsewhere in this plugin (toggle, not a full SGR reset, so it
@@ -82,6 +100,9 @@ local function layout(grid, opts)
 
   local row_header_width = 0
   if row_headers then
+    -- Sized from the 0-based row COUNT, not from whatever `opts.row_label`
+    -- actually renders -- see the header comment's FOOTGUN note: a 1-based
+    -- numeric row_label can outgrow this at a power-of-ten row count.
     local max_row = h > 0 and (h - 1) or 0
     row_header_width = #tostring(max_row)
     if row_header_width < 1 then row_header_width = 1 end

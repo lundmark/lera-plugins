@@ -173,6 +173,21 @@ local function seed_wmap(t)
     end
     protocol.ingest("WMO", table.concat(parts, ";"))
   end
+  -- WMQ (LEGACY 1994): "A:A1;B2|F:C3" -- queued paths per unit, 1-based
+  -- col-letter/row squares. `t.queues` is `{ [id] = { "A1", "B2", ... } }`;
+  -- an id with no entry (or an explicitly empty array) is simply omitted
+  -- from the wire string, matching the real WMQ parser's own
+  -- `if id and sqs and sqs ~= ""` gate (an id present with zero squares
+  -- never reaches S.wm_pending.queues at all).
+  if t.queues then
+    local parts = {}
+    for id, sqs in pairs(t.queues) do
+      if #sqs > 0 then
+        parts[#parts + 1] = id .. ":" .. table.concat(sqs, ";")
+      end
+    end
+    protocol.ingest("WMQ", table.concat(parts, "|"))
+  end
   protocol.ingest("WMEND", tostring(#(t.rows or {})))
 end
 
@@ -382,6 +397,71 @@ check("clicking own tile sends 'vcampaign hold'", #send_calls == 1 and send_call
 check("deselect clears the queue status line",
   not find_plain(war_campaign.lines(WIDTH), "Selected A") and not find_plain(war_campaign.lines(WIDTH), "Queued for A"))
 
+-- =============================================================================
+-- war_campaign: queue status line prefers the SERVER-echoed queue
+-- (S.war_map.queues[id], fed by WMQ/WMEND) over the local click-echo,
+-- mirroring LEGACY's own `(wm.queues and wm.queues[id]) or (local queue)`
+-- fallback (guild_viking.lua:13957-13959) exactly. Without this, a
+-- multi-waypoint march would show a stale, ever-growing local list
+-- instead of the shrinking server truth as the host actually arrives at
+-- each tile.
+-- =============================================================================
+reset_all()
+seed_wmap({
+  dim = 3, rows = { "...", "...", "..." },
+  units = { { id = "A", c = 0, r = 0, size = 10 } },
+})
+war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
+check("selected A ahead of the server-queue precedence check", find_plain(war_campaign.lines(WIDTH), "Selected A"))
+
+-- Queue ONE local waypoint (sq "B2") before any server echo exists -- the
+-- status line should show this local echo while wm.queues is absent.
+send_calls = {}
+war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(1, 1))
+check("local echo shown while no server queue exists yet",
+  find_plain(war_campaign.lines(WIDTH), "Queued for A: B2"))
+
+-- Server echoes back a DIFFERENT, longer queue via WMQ/WMEND (same grid,
+-- same unit, so WMEND still commits) -- the status line must show the
+-- SERVER's waypoints (C3 -> D4), not the stale local "B2".
+seed_wmap({
+  dim = 3, rows = { "...", "...", "..." },
+  units = { { id = "A", c = 0, r = 0, size = 10 } },
+  queues = { A = { "C3", "D4" } },
+})
+check("server queue present: status line shows the SERVER's waypoints, not the local echo",
+  find_plain(war_campaign.lines(WIDTH), "Queued for A: C3 -> D4")
+  and not find_plain(war_campaign.lines(WIDTH), "Queued for A: B2"))
+
+-- Drain: the server reports the host has arrived at C3, leaving only D4 --
+-- the status line must SHRINK to match, not keep showing C3.
+seed_wmap({
+  dim = 3, rows = { "...", "...", "..." },
+  units = { { id = "A", c = 0, r = 0, size = 10 } },
+  queues = { A = { "D4" } },
+})
+check("server queue drains: status line shrinks to the remaining waypoint",
+  find_plain(war_campaign.lines(WIDTH), "Queued for A: D4")
+  and not find_plain(war_campaign.lines(WIDTH), "C3"))
+
+-- Server queue clears entirely (no WMQ entry for "A" in this burst at
+-- all) -- falls back to the local echo (still "B2", untouched throughout).
+seed_wmap({
+  dim = 3, rows = { "...", "...", "..." },
+  units = { { id = "A", c = 0, r = 0, size = 10 } },
+})
+check("S.war_map.queues.A is absent once the server stops echoing it",
+  S.war_map.queues == nil or S.war_map.queues.A == nil)
+check("server queue cleared: falls back to the local echo",
+  find_plain(war_campaign.lines(WIDTH), "Queued for A: B2"))
+
+-- Clean up: deselect via the current stack position (0,0) before the next
+-- section re-seeds its own fixtures.
+send_calls = {}
+war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
+check("cleanup deselect after the server-queue precedence block",
+  not find_plain(war_campaign.lines(WIDTH), "Selected A"))
+
 -- Right-click (non-left) consumes but never acts.
 send_calls = {}
 local ok_right = war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "right" },
@@ -531,6 +611,50 @@ send_calls = {}
 menu_select(last_menu_open, "Not your deploy zone")
 check("the decorative item never sends", #send_calls == 0)
 
+-- Regression: an ENEMY occupying a cell INSIDE your own deploy zone still
+-- gets the reserve-deploy/fortify branch, not "Not your deploy zone" --
+-- LEGACY's own `elseif info.in_dz then` check (13457) never looks at
+-- `info.unit` at all, so an enemy sitting in your dz is bug-for-bug
+-- offered as if the cell were empty. Ported as-is (not "fixed"), on a
+-- fresh minimal 1x1 board so the enemy occupies the ENTIRE dz. No
+-- reset_all() here -- seed_battle() alone fully replaces S.battle, and
+-- the deploy battle seeded above is restored right after this check so
+-- the tests that follow keep seeing its original width=3 shape.
+seed_battle({
+  phase = "deploy", target = "Fjordvik", width = 1, height = 1, dz = 1,
+  terrain_rows = { "." }, works_rows = { "." },
+  units = {
+    { side = "N", label = "Squatting Raider", size = 4, coord = "A1", morale = 50, utype = "foe_raiders" },
+    { side = "R", label = "Reserve Skirm", size = 5, uid = 55, cost = 10, leader = "Bjorn" },
+  },
+})
+last_menu_open = nil
+war_battle.on_pointer({ kind = "up", button = "right" }, bfixed_ctx(0, 0))
+check("enemy-occupied in-dz cell still offers the reserve-deploy branch (bug-for-bug)",
+  last_menu_open ~= nil and not menu_has_label(last_menu_open, "Not your deploy zone")
+  and menu_has_label(last_menu_open, "Deploy 5x Reserve Skirm")
+  and menu_has_label(last_menu_open, "Fortify: Stakes"),
+  last_menu_open and table.concat(menu_item_labels(last_menu_open), " | "))
+send_calls = {}
+menu_select(last_menu_open, "Deploy 5x Reserve Skirm")
+check("selecting the reserve item there sends the exact deploy command (ignoring the occupant)",
+  #send_calls == 1 and send_calls[1] == "vbattle deploy 55 A1", send_calls[1])
+
+-- Restore the original width=3/height=2 deploy battle for the tests below.
+seed_battle({
+  phase = "deploy", target = "Fjordvik", mode = "field", width = 3, height = 2, dz = 1,
+  budget = 100, spent = 20, war_points = 15,
+  terrain_rows = { "..#", "^*w" },
+  works_rows = { "v.u", "..." },
+  units = {
+    { side = "Y", label = "Huscarl Guard", size = 8, coord = "A2", morale = 80,
+      utype = "huscarls", bid = 101 },
+    { side = "N", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
+      utype = "foe_raiders", ord = 2 },
+    { side = "R", label = "Reserve Skirm", size = 5, uid = 55, cost = 10, leader = "Bjorn" },
+  },
+})
+
 -- Left-click anywhere on the deploy board just closes any open menu.
 last_menu_open = { items = { { label = "x", value = false } }, on_select = function() end }
 menu_close_count = 0
@@ -658,15 +782,26 @@ check("both war_map.active and battle present: composite delegates to war_battle
 check("composite geometry delegates to war_battle",
   war.geometry(WIDTH) ~= nil and war.grid_line_offset(WIDTH) == war_battle.grid_line_offset(WIDTH))
 
--- End the battle: composite falls back to the campaign map.
-S.battle = nil
+-- End the battle: composite falls back to the campaign map. Cleared via
+-- the real BATTLE handler (active=0), not a direct S.battle poke -- same
+-- standing lesson as every fixture in this file: state transitions go
+-- through protocol.ingest so the handler's own clearing logic (here,
+-- kingdom.lua's `M.BATTLE` setting `S.battle = nil` whenever `active ~=
+-- "1"`) is what's actually exercised.
+protocol.ingest("BATTLE", table.concat({ 0, "", "", 0, "", "", "", "", "", "", "" }, "|"))
+check("BATTLE active=0 cleared S.battle via the real handler", S.battle == nil)
 check("battle cleared, war_map still active: composite delegates to war_campaign",
   table.concat(war.lines(WIDTH), "\n") == table.concat(war_campaign.lines(WIDTH), "\n"))
 check("composite grid_line_offset delegates to war_campaign",
   war.grid_line_offset(WIDTH) == war_campaign.grid_line_offset(WIDTH))
 
--- Neither active: a plain fallback line.
-S.war_map = nil
+-- Neither active: a plain fallback line. Cleared via the real WMAP/WMEND
+-- handlers (active=0), same reasoning as the BATTLE clear just above --
+-- `seed_wmap({ active = false })` sends WMAP active=0 then WMEND, and
+-- kingdom.lua's `M.WMEND` sets `S.war_map = nil` whenever
+-- `wm_pending.active` is false, regardless of row count.
+seed_wmap({ active = false })
+check("WMAP active=0 + WMEND cleared S.war_map via the real handlers", S.war_map == nil)
 local neither = war.lines(WIDTH)
 check("neither active: single fallback line", #neither == 1
   and find_plain(neither, "No campaign or battle underway."), neither[1])
