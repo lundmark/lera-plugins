@@ -117,7 +117,7 @@ local C = pagelib.C
 
 local M = {}
 
-local GRID_PLACEHOLDER = "Battle map: /vik war (stage 3)"
+local GRID_PLACEHOLDER = "Battle map: /vik war"
 
 -- ---------------------------------------------------------------------------
 -- Campaign Map (guild_viking.lua:13620-14016, UNGATED -- war_map.active)

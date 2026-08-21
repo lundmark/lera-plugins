@@ -499,7 +499,7 @@ function M.lines(width)
   -- City Plan grid: excluded per the task brief, replaced with one placeholder
   -- line, gated the same as LEGACY (show_city_plan).
   if page_opts.get("show_city_plan") then
-    add(pagelib.trunc("City plan: /vik cityplan (stage 3)", width))
+    add(pagelib.trunc("City plan: /vik cityplan", width))
   end
 
   return lines

@@ -46,6 +46,11 @@ local page_opts = require("page_opts")
 local window = require("window")
 local stats_page = require("pages.stats")
 
+-- Stage 3: named-popup registry + /vik pop. No popup registers here yet
+-- (map/sea/voyage/cityplan/war arrive in Tasks 3-6) -- see popups.lua's
+-- header comment.
+local popups = require("popups")
+
 -- Task 8: combat composite + hp-bar triggers. FFF is a separate MIP composite
 -- from BBE (not routed through protocol.lua's key/value dispatch), so it gets
 -- its own mip.on registration. The callback is 3-arg (key, code, data); data
@@ -194,14 +199,22 @@ local function set_opt(rest)
   buffer.color_print(nil, "DAA520", "Viking: " .. opt .. " = " .. (new_val and "on" or "off"))
 end
 
+-- The five named popups /vik toggles (map/sea/voyage/cityplan/war). "war"
+-- also names a pane page (window.PAGES) -- the binding ruling (plan Task 1)
+-- is that the bare key toggles the POPUP; `/vik page war` reaches the pane.
+local POPUP_NAMES = { map = true, sea = true, voyage = true, cityplan = true, war = true }
+
 -- Dispatches /vik's subcommands. `args` is everything after "/vik " (may be
 -- ""); an unknown or empty subcommand prints usage. A bare arg matching one
 -- of window.PAGES' keys (case-insensitively) switches the pane's current
--- page, same as clicking its tab.
+-- page, same as clicking its tab -- EXCEPT "war", which the bare form routes
+-- to its popup instead (see POPUP_NAMES above); `/vik page war` is the
+-- explicit pane route for it.
 function M.vik_command(args)
   args = args or ""
   local sub, rest = args:match("^%s*(%S*)%s*(.-)%s*$")
   sub = sub or ""
+  local sub_lower = sub:lower()
 
   if sub == "status" then
     print_status()
@@ -227,11 +240,28 @@ function M.vik_command(args)
     print_opts()
   elseif sub == "set" then
     set_opt(rest)
-  elseif sub ~= "" and window.set_page(sub:lower()) then
-    buffer.color_print(nil, "DAA520", "Viking page: " .. sub:lower())
+  elseif POPUP_NAMES[sub_lower] then
+    popups.toggle(sub_lower)
+  elseif sub_lower == "page" then
+    local key = rest:lower()
+    if key ~= "" and window.set_page(key) then
+      buffer.color_print(nil, "DAA520", "Viking page: " .. key)
+    else
+      buffer.color_print(nil, "DAA520", "Usage: /vik page <page>")
+    end
+  elseif sub_lower == "pop" then
+    local key = rest:lower()
+    if key == "" then
+      buffer.color_print(nil, "DAA520", "Usage: /vik pop <page>")
+    else
+      popups.open_page(key)
+    end
+  elseif sub ~= "" and window.set_page(sub_lower) then
+    buffer.color_print(nil, "DAA520", "Viking page: " .. sub_lower)
   else
     buffer.color_print(nil, "DAA520",
       "Usage: /vik [status | trace | save | source mip|gmcp|auto | resetxp | "
+      .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
       .. "<page> | opts | set <opt> on|off|toggle]")
   end
 end
@@ -265,16 +295,22 @@ function M.on_load()
   local id, err = command.register({
     name = "/vik",
     usage = "/vik [status | trace | save | source mip|gmcp|auto | resetxp | "
+      .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
       .. "<page> | opts | set <opt> on|off|toggle]",
     summary = "Viking guild data, pane, and controls",
     description = "Ingestion status and counters (status), message tracing "
       .. "(trace), explicit save (save), transport selection (source), the "
       .. "saga-XP session reset (resetxp; the bare 'resetvikxp' alias does "
-      .. "the same), switching the pane to a page by key -- stats, city, "
-      .. "farm, builds, people, goods, bonds, ranks, court, army, war, or "
-      .. "trade -- (same as clicking its tab), listing every page option "
-      .. "with its current value (opts), and flipping one page option "
-      .. "(set).",
+      .. "the same), toggling a named popup open or closed -- map, sea, "
+      .. "voyage, cityplan, or war -- (map/sea/voyage/cityplan arrive in "
+      .. "later stages; toggling one before then reports it unavailable), "
+      .. "opening any pane page as a detached popup (pop <page>), "
+      .. "switching the pane to a page by key -- stats, city, farm, "
+      .. "builds, people, goods, bonds, ranks, court, army, war, or trade "
+      .. "-- (page <page>; a bare <page> does the same, same as clicking "
+      .. "its tab, EXCEPT 'war', whose bare form toggles the popup instead "
+      .. "-- use 'page war' for the pane), listing every page option with "
+      .. "its current value (opts), and flipping one page option (set).",
     accepts_args = true,
     handler = function(args) M.vik_command(args or "") end,
   })

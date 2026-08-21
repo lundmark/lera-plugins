@@ -137,7 +137,7 @@ check("monument row shows the seeded inscription",
       city_all:find("Saga of the North Wind", 1, true) ~= nil)
 
 check("city plan placeholder line present",
-      city_all:find("City plan: /vik cityplan %(stage 3%)") ~= nil)
+      city_all:find("City plan: /vik cityplan", 1, true) ~= nil)
 
 -- ---- city page: mode separation (no trade-only headers) --------------------
 local trade_only_headers = {
