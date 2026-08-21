@@ -154,61 +154,84 @@ local function no_data_lines(add, width)
 end
 
 -- ---------------------------------------------------------------------------
--- Market Movers (guild_viking.lua:3376-3437 build_mover_rows's movers part;
--- rendering shape from draw_mover_row, :3507-3540)
+-- BGR decode workbook for Movers/Refined/Auto-Trade row colors below.
+-- guild_viking.lua:301 documents "MUSHclient WindowText colors are BGR
+-- (0xBBGGRR)" -- verified against its own worked example two lines later
+-- (ci=0xCCCC00 for "@cyan" decodes Blue=CC,Green=CC,Red=00 -> R0/G204/B204,
+-- i.e. cyan). Every literal below is decoded the same way (leftmost byte =
+-- Blue, middle = Green, rightmost = Red), then mapped to the nearest
+-- pagelib.C entry -- pagelib has no true blue, so a blue-leaning decode maps
+-- to cyan, its nearest neighbor. Where a name and its decode disagree (e.g.
+-- "off" 0x5566FF decodes to strong red, not the cyan a "cool/inactive" guess
+-- would suggest), the DECODE wins, same precedent as pages/people.lua's
+-- Designations legend note.
+--   0xFFCC33 (rank number, both rows)      -> R33/G204/B255  -> cyan
+--   0xAAAAAA (town name, mover row)        -> grey           -> white
+--   0x66CCFF (mover buy price; refsell     -> R255/G204/B102 -> yellow
+--             "have N")
+--   0x66FF66 (mover sell price; refsell    -> R102/G255/B102 -> bright_green
+--             town + unit price)
+--   0x00FF88 (profit / realisable value)   -> R136/G255/B0   -> bright_green
+--   0x777777 / 0x888888 (margin, "no       -> grey           -> dim
+--             stock", "Demand:", "->")
+--   0xFF9933 (refsell "N blocked")         -> R51/G153/B255  -> cyan
+--   0x00FF00 (HOT tag)                     -> R0/G255/B0     -> bright_green
+--   0x556677 (job dash "- ")               -> muted grey     -> dim
+--   0xFFCC00 (job "sell " label)           -> R0/G204/B255   -> cyan
+--   0x00CC66 (job "buy " label)            -> R102/G204/B0   -> green
+--   0xCCCCCC / 0xAAAAAA (job qty, job buy  -> light grey     -> white
+--             town tag)
 -- ---------------------------------------------------------------------------
 
+-- Market Movers (guild_viking.lua:3376-3437 build_mover_rows's movers part;
+-- rendering shape from draw_mover_row, :3507-3540).
 local function mover_row(width, rank, a)
   local left = string.format("%s%2d.%s %s%-12s%s",
-    C.yellow, rank, pagelib.RESET, cc.good_color(a.good), cc.good_label(a.good), pagelib.RESET)
+    C.cyan, rank, pagelib.RESET, cc.good_color(a.good), cc.good_label(a.good), pagelib.RESET)
   local buy = string.format("%s%-10s%s %s%4d%s",
-    C.dim, town_short(a.buy_lin), pagelib.RESET, C.bright_cyan, a.buy, pagelib.RESET)
+    C.white, town_short(a.buy_lin), pagelib.RESET, C.yellow, a.buy, pagelib.RESET)
   local sell = string.format("%s%-10s%s %s%4d%s",
-    C.bright_green, town_short(a.sell_lin), pagelib.RESET, C.bright_green, a.sell, pagelib.RESET)
+    C.white, town_short(a.sell_lin), pagelib.RESET, C.bright_green, a.sell, pagelib.RESET)
   local tail = string.format("%s+%dd%s  %s(%d/u)%s",
     C.bright_green, a.profit or 0, pagelib.RESET, C.dim, a.margin or 0, pagelib.RESET)
   local hot_tag = market.mover_is_hot(a.sell, a.sell_lin, a.good)
     and ("  " .. C.bright_green .. "HOT" .. pagelib.RESET) or ""
-  return pagelib.trunc(left .. " " .. buy .. " -> " .. sell .. "  " .. tail .. hot_tag, width)
+  return pagelib.trunc(left .. " " .. buy .. C.dim .. " -> " .. pagelib.RESET .. sell .. "  " .. tail
+    .. hot_tag, width)
 end
 
--- ---------------------------------------------------------------------------
 -- Refined Goods (guild_viking.lua:3376-3437's refined part; rendering shape
--- from draw_refsell_row, :3544-3572)
--- ---------------------------------------------------------------------------
-
+-- from draw_refsell_row, :3544-3572).
 local function refsell_row(width, rank, r)
-  local left = string.format("%s%2d.%s %s%-12s%s -> %s%-10s%s %s%d/u%s",
-    C.yellow, rank, pagelib.RESET, cc.good_color(r.good), cc.good_label(r.good), pagelib.RESET,
-    C.bright_green, town_short(r.sell_lin), pagelib.RESET, C.bright_green, r.sell, pagelib.RESET)
+  local left = string.format("%s%2d.%s %s%-12s%s%s -> %s%s%-10s%s %s%d/u%s",
+    C.cyan, rank, pagelib.RESET, cc.good_color(r.good), cc.good_label(r.good), pagelib.RESET,
+    C.dim, pagelib.RESET, C.bright_green, town_short(r.sell_lin), pagelib.RESET,
+    C.bright_green, r.sell, pagelib.RESET)
   local stock
   if (r.stock or 0) > 0 then
     stock = string.format("%shave %d%s  %s(~%dd)%s",
-      C.bright_cyan, r.stock, pagelib.RESET, C.bright_green, r.value or 0, pagelib.RESET)
+      C.yellow, r.stock, pagelib.RESET, C.bright_green, r.value or 0, pagelib.RESET)
   else
     stock = C.dim .. "no stock" .. pagelib.RESET
   end
   local demand = string.format("%sDemand: %d%s", C.dim, r.demand or 0, pagelib.RESET)
   local blocked = (r.blocked or 0) > 0
-    and string.format("  %s%d blocked%s", C.yellow, r.blocked, pagelib.RESET) or ""
+    and string.format("  %s%d blocked%s", C.cyan, r.blocked, pagelib.RESET) or ""
   return pagelib.trunc(left .. "  " .. stock .. "  " .. demand .. blocked, width)
 end
 
--- ---------------------------------------------------------------------------
 -- Auto-Trade status / log (guild_viking.lua:3376-3437's at_line part;
--- job-segment shape from at_build_job_segs, :3288-3306)
--- ---------------------------------------------------------------------------
-
+-- job-segment shape from at_build_job_segs, :3288-3306).
 local function job_row(width, j, indent)
   local pad = string.rep(" ", indent or 4)
   local out = C.dim .. "- " .. pagelib.RESET
   out = out .. ((j.mode == "sell")
-    and (C.yellow .. "sell " .. pagelib.RESET)
-    or (C.bright_green .. "buy " .. pagelib.RESET))
+    and (C.cyan .. "sell " .. pagelib.RESET)
+    or (C.green .. "buy " .. pagelib.RESET))
   out = out .. C.white .. (j.qty or 0) .. "x " .. pagelib.RESET
   out = out .. cc.good_color(j.good) .. cc.good_label(j.good) .. pagelib.RESET
   if j.mode == "buy" and j.btown_lin then
-    out = out .. "  " .. C.dim .. town_short(j.btown_lin) .. pagelib.RESET
+    out = out .. "  " .. C.white .. town_short(j.btown_lin) .. pagelib.RESET
   elseif j.stock then
     out = out .. "  " .. C.dim .. "(stock)" .. pagelib.RESET
   end
@@ -221,25 +244,43 @@ local function job_row(width, j, indent)
   return pagelib.trunc(pad .. out, width)
 end
 
+-- BGR decode workbook for the status/log block (guild_viking.lua:3427-3478
+-- "st" segments + log entries; leftmost byte = Blue, middle = Green,
+-- rightmost = Red, see the workbook above):
+--   0x8899AA / 0x667788 (labels: "Auto-Trade "/"Margin "/"Reserve "/
+--     "Carts "/"Last run:"/"Auto-Trade Log:") -> muted neutral -> dim
+--     (pagelib.kv's dim-label convention, not decoded individually: all are
+--     muted greys/tans with no polarity signal of their own)
+--   0x00FF66 ("ON")                        -> R102/G255/B0   -> bright_green
+--   0x5566FF ("off")                       -> R255/G102/B85  -> bright_red
+--   0x66CCFF (">=N" margin value)          -> R255/G204/B102 -> yellow
+--   0xFFCC66 (reserve/carts value; log "N  -> R102/G204/B255 -> cyan
+--     jobs" count)
+--   0xFF99FF ("Pack")                      -> R255/G153/B255 -> magenta
+--   0x66FF88 ("Use-stock")                 -> R136/G255/B102 -> bright_green
+--   0xFFAA55 ("Idle: <status>")            -> R85/G170/B255  -> cyan
+--   0x66AACC (log entry timestamp)         -> R204/G170/B102 -> yellow
+--   0x99AAB8 (legacy plain-string log       -> light neutral  -> white
+--     entry)
 local function autotrade_status_lines(add, width)
   local at = S.autotrade or {}
   local on = page_opts.get("auto_trade")
 
   add("")
   local parts = {
-    C.dim .. "Auto-Trade " .. pagelib.RESET .. (on and (C.bright_green .. "ON") or (C.cyan .. "off"))
+    C.dim .. "Auto-Trade " .. pagelib.RESET .. (on and (C.bright_green .. "ON") or (C.bright_red .. "off"))
       .. pagelib.RESET,
-    C.dim .. "Margin " .. pagelib.RESET .. C.bright_cyan .. ">=" .. tostring(at.min_margin or 3)
+    C.dim .. "Margin " .. pagelib.RESET .. C.yellow .. ">=" .. tostring(at.min_margin or 3)
       .. pagelib.RESET,
-    C.dim .. "Reserve " .. pagelib.RESET .. C.yellow .. tostring(at.reserve or 0) .. pagelib.RESET,
-    C.dim .. "Carts " .. pagelib.RESET .. C.yellow .. tostring(at.max_carts or 2) .. pagelib.RESET,
+    C.dim .. "Reserve " .. pagelib.RESET .. C.cyan .. tostring(at.reserve or 0) .. pagelib.RESET,
+    C.dim .. "Carts " .. pagelib.RESET .. C.cyan .. tostring(at.max_carts or 2) .. pagelib.RESET,
   }
   if at.pack then parts[#parts + 1] = C.magenta .. "Pack" .. pagelib.RESET end
   if at.use_stock then parts[#parts + 1] = C.bright_green .. "Use-stock" .. pagelib.RESET end
   add(pagelib.trunc(table.concat(parts, "   "), width))
 
   if on and at.status and at.status ~= "" then
-    add(pagelib.trunc(C.yellow .. "Idle: " .. at.status .. pagelib.RESET, width))
+    add(pagelib.trunc(C.cyan .. "Idle: " .. at.status .. pagelib.RESET, width))
   end
 
   if at.last_jobs and #at.last_jobs > 0 then
@@ -266,14 +307,14 @@ local function autotrade_status_lines(add, width)
       local e = at.log[li]
       if type(e) == "table" and e.jobs then
         add(pagelib.trunc(string.format("  %s%s  %s%d %s%s",
-          C.bright_cyan, e.t or "", C.yellow, #e.jobs, (#e.jobs == 1 and "job" or "jobs"),
+          C.yellow, e.t or "", C.cyan, #e.jobs, (#e.jobs == 1 and "job" or "jobs"),
           pagelib.RESET), width))
         for _, j in ipairs(e.jobs) do
           add(job_row(width, j, 6))
         end
       else
         -- Legacy plain-string entry from an older session (LEGACY:3477-3479).
-        add(pagelib.trunc("    " .. C.dim .. tostring(e) .. pagelib.RESET, width))
+        add(pagelib.trunc("    " .. C.white .. tostring(e) .. pagelib.RESET, width))
       end
     end
   end
@@ -352,6 +393,13 @@ local function trend_color(hex)
   return C.dim
 end
 
+-- "B:"/"S:" label decode (guild_viking.lua:10897,10900): 0xAA88FF ->
+-- R255/G136/B170 (magenta-ish) and 0x88CCFF -> R255/G204/B136 (gold) --
+-- mapped to magenta and yellow respectively. "Sup:"/"Dem:" labels
+-- (0x44AAFF/0x44CC88) and their values (0x999999, uniformly grey regardless
+-- of magnitude in LEGACY) collapse to pagelib.kv's plain dim-label
+-- convention rather than being decoded individually: neither carries a
+-- polarity signal of its own the way AFF_COLOR or the trend arrows do.
 local function price_row(width, good, gd, lin)
   local score = gd.score or 0
   local aff_label = AFF_LABEL[score] or ""
@@ -365,16 +413,19 @@ local function price_row(width, good, gd, lin)
     cc.good_color(good), cc.good_label(good), pagelib.RESET,
     aff_color, aff_label, pagelib.RESET,
     C.magenta, gd.buy or 0, pagelib.RESET, bc, ba, pagelib.RESET,
-    C.cyan, gd.sell or 0, pagelib.RESET, sc, sa, pagelib.RESET,
+    C.yellow, gd.sell or 0, pagelib.RESET, sc, sa, pagelib.RESET,
     C.dim, gd.supply or 0, pagelib.RESET,
     C.dim, gd.demand or 0, pagelib.RESET), width)
 end
 
+-- Lineage header color (guild_viking.lua:10820): 0x00CCFF decodes
+-- Blue=00/Green=CC/Red=FF -> R255/G204/B0 (gold), not the cyan its hex
+-- digits might suggest at a glance -- see the price-row workbook above.
 local function price_rows_lines(add, width)
   for lin = 0, 13 do
     local gdata = S.trade_goods[lin]
     if gdata and next(gdata) then
-      add(pagelib.trunc(C.bright_cyan .. (LIN_NAMES[lin] or ("Lineage " .. lin)) .. pagelib.RESET, width))
+      add(pagelib.trunc(C.yellow .. (LIN_NAMES[lin] or ("Lineage " .. lin)) .. pagelib.RESET, width))
       for _, good in ipairs(GOOD_ORDER) do
         local gd = gdata[good]
         if gd then
