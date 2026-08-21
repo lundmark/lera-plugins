@@ -70,6 +70,19 @@ function popups.register(name, module)
   registry[name] = module
 end
 
+-- Introspection helper: sorted array of the names currently registered.
+-- Cheap and honest -- it reads the same `registry` table popups.toggle()
+-- consults, so a name missing here really is unreachable via /vik, not
+-- just absent from some separate manifest. Used by init.lua's
+-- M.popup_names() (the headless sandbox check's probe that this file's
+-- five self-registrations at the bottom actually ran).
+function popups.names()
+  local names = {}
+  for name in pairs(registry) do names[#names + 1] = name end
+  table.sort(names)
+  return names
+end
+
 -- Wraps a pure lines(width) builder (plus an optional on_pointer) in a
 -- scrolling wm.popup renderer. The cached line count feeding the scroller's
 -- clamp is pass-guarded exactly like window.lua's own render(): only the

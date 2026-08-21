@@ -390,6 +390,215 @@ printed = {}
 registered_vik.handler("pop", "/vik")
 check("/vik pop with no key prints usage", #printed >= 1 and printed[#printed]:find("Usage", 1, true) ~= nil)
 
+-- =============================================================================
+-- Task 7: end-to-end popup pass -- real content, real popup-inner dimensions
+-- =============================================================================
+-- Earlier cases in this file install stub renderer modules under "map"/
+-- "sea"/"voyage"/"war" (to exercise popups.lua's wrapper mechanics in
+-- isolation from any popup's own content) -- re-register the REAL content
+-- modules here. require() is cached, so this recovers the exact module
+-- objects popups.lua's own self-registration installed at file-load time;
+-- only the REGISTRY entries above were ever overwritten, never the modules.
+popups.register("map", require("popups.map"))
+popups.register("sea", require("popups.sea"))
+popups.register("voyage", require("popups.voyage"))
+popups.register("cityplan", require("popups.cityplan"))
+popups.register("war", require("popups.war"))
+
+local pagelib = require("pagelib")
+local protocol = require("protocol")
+
+-- menu stub (require("menu") facade: open/close/is_open), same idiom as the
+-- per-popup suites -- sea/voyage/cityplan/war's on_pointer open a menu on
+-- some inputs (e.g. voyage's "[Actions]" line, cityplan's right-click
+-- context menu); nothing below deliberately targets those inputs, but a
+-- coincidental hit must not error for want of this stub.
+local last_menu_open = nil
+package.loaded["menu"] = {
+  open = function(opts) last_menu_open = opts end,
+  close = function() last_menu_open = nil end,
+  is_open = function() return last_menu_open ~= nil end,
+}
+
+-- ---- broad state slice: real content for every named popup -----------------
+-- Borrowed seed shapes from the per-popup suites (production handlers via
+-- protocol.ingest, never hand-poked S) -- init.lua's top-level requires,
+-- already run above via `M = dofile(...)`, registered handlers.voyage/
+-- handlers.city/handlers.kingdom/handlers.trade with protocol.handler, so
+-- these ingests drive the real handler code, not a test-local shortcut.
+
+-- vmap (map popup): guild_viking_popup_map_test.lua's seed_vmap shape.
+protocol.ingest("VMAPH", "4|4|1|1")
+protocol.ingest("VMR00", "ph..")
+protocol.ingest("VMR01", "AfW.")
+protocol.ingest("VMR02", "..X.")
+protocol.ingest("VMR03", "....")
+protocol.ingest("VMAPL", "capital|asgard|0|0|")
+page_opts.set("show_map_towns", true)
+
+-- chart + voyage status (sea + voyage popups):
+-- guild_viking_popup_sea_test.lua's VOYAGE/VCHH/VCR/VSAILED/VQPATH/VSAGA/
+-- VMEM seed.
+protocol.ingest("VOYAGE",
+  "sailing|1|Ormen|Raid Fjordholm|raid|3|5|6|20|20|80|70|60|10|4|5|12|30|Kraken|2|40||" ..
+  "storm|Erik|proud|brave,loyal|swift,sturdy")
+protocol.ingest("FLEET_RENOWN", "1500")
+protocol.ingest("VCHH", "4|4|test")
+protocol.ingest("VCR00", "S#H?")
+protocol.ingest("VCR01", "OMBD")
+protocol.ingest("VCR02", "++XY")
+protocol.ingest("VCR03", "VCA*")
+protocol.ingest("VSAILED", "1,0")
+protocol.ingest("VQPATH", "N,N,E,SE")
+protocol.ingest("VSAGA", "Captain style: bold;The fleet set sail.")
+protocol.ingest("VMEM", "Remembered the reefs of Fjordholm.")
+page_opts.set("show_sea_voyage", true)
+page_opts.set("show_sea_chart", true)
+page_opts.set("show_sea_queue", true)
+page_opts.set("show_sea_saga", true)
+page_opts.set("show_sea_memory", true)
+
+-- city plan (cityplan popup): guild_viking_popup_cityplan_test.lua's
+-- seed_cplan shape (margin defaults to 0 here, same as that helper, so
+-- the grid's interior origin (0,0) is directly hit-testable).
+protocol.ingest("CPLAN", "1|3|1|20|1|0|0|6|0|0")
+protocol.ingest("CPT00", "...")
+protocol.ingest("CPT01", ".H.")
+protocol.ingest("CPT02", "...")
+protocol.ingest("CPB", "hall|1|1|1|1|e|H|Great Hall")
+protocol.ingest("CPEND", "3")
+page_opts.set("show_city_plan", true)
+page_opts.set("show_city_plan_legend", true)
+
+-- war map + battle (war popup): guild_viking_popup_war_test.lua's
+-- seed_wmap/seed_battle shape. Battle takes priority over the campaign map
+-- once S.battle is present (popups/war.lua's active_module()), so seeding
+-- both exercises that composite's real precedence, not just one branch.
+protocol.ingest("WMAP", "1|3|7|offense|0|Jorvik|0|0")
+protocol.ingest("WMR00", "f.w")
+protocol.ingest("WMR01", "H..")
+protocol.ingest("WMR02", "...")
+protocol.ingest("WMO", "A:0,2,10,N")
+protocol.ingest("WMEND", "3")
+protocol.ingest("BATTLE", table.concat({
+  1, "deploy", 1, 15, "field", "Fjordvik", "100:20", "3:2:1",
+  "..#^*w", "v.u...",
+  "Y,Huscarl Guard,8,A2,80,huscarls,,101,0",
+}, "|"))
+page_opts.set("show_war_battle", true)
+
+-- ---- five named popups: toggle open, render at both sizes, width
+-- discipline (raw module lines), pointer smoke, wrapper scroll -------------
+local NAMED_POPUPS = {
+  { name = "map", mod = require("popups.map") },
+  { name = "sea", mod = require("popups.sea") },
+  { name = "voyage", mod = require("popups.voyage") },
+  { name = "cityplan", mod = require("popups.cityplan") },
+  { name = "war", mod = require("popups.war") },
+}
+local POPUP_SIZES = { { w = 76, h = 22 }, { w = 36, h = 10 } }
+
+for _, entry in ipairs(NAMED_POPUPS) do
+  local name, mod = entry.name, entry.mod
+  for _, sz in ipairs(POPUP_SIZES) do
+    local w, h = sz.w, sz.h
+    local label = name .. " at " .. w .. "x" .. h
+
+    check(label .. ": toggle opens", popups.toggle(name) == true)
+    local renderer = opens[#opens].renderer
+
+    reset_drawn()
+    local ok_render = pcall(renderer.render, make_rect(0, 0, w, h), { title = mod.title })
+    check(label .. ": render does not error", ok_render)
+    check(label .. ": render drew at least one content row", #drawn.ansi > 0)
+
+    -- Width discipline measured on the RAW module lines (pre-trunc) -- the
+    -- honest measure. The wrapper's own render() runs every line through
+    -- pagelib.trunc before drawing it, which would quietly hide a module
+    -- bug that emits an over-width line; mod.lines(w) is what the module
+    -- itself actually produced.
+    local raw_lines = mod.lines(w)
+    local over_width = 0
+    for _, l in ipairs(raw_lines) do
+      if pagelib.visible_width(l) > w then over_width = over_width + 1 end
+    end
+    check(label .. ": raw module lines respect " .. w .. " cols of width discipline",
+      over_width == 0, over_width)
+
+    -- Pointer smoke: one in-bounds down dispatches without error, one
+    -- out-of-bounds no-ops. map/sea/cityplan/war are grid-based (geometry +
+    -- grid_line_offset); the wrapper-local (0, grid_line_offset(w)) maps to
+    -- the grid's own (0,0) origin (verified against the per-popup suites'
+    -- own maplib convention), which is real seeded content for all four.
+    -- voyage has no grid, only its "[Actions]" line (actions_line_index).
+    local in_ev
+    if mod.grid_line_offset then
+      in_ev = { kind = "down", button = "left", x = 0, y = mod.grid_line_offset(w),
+                inside = true, width = w, height = h }
+    elseif mod.actions_line_index then
+      local idx = mod.actions_line_index(w)
+      in_ev = { kind = "down", button = "left", x = 0, y = (idx and idx - 1) or 0,
+                inside = true, width = w, height = h }
+    else
+      in_ev = { kind = "down", button = "left", x = 0, y = 0, inside = true, width = w, height = h }
+    end
+    local ok_in = pcall(renderer.on_pointer, in_ev)
+    check(label .. ": in-bounds pointer down dispatches without error", ok_in)
+
+    local out_ev = { kind = "down", button = "left", x = w + 500, y = h + 500,
+                      inside = false, width = w, height = h }
+    local ok_out, result_out = pcall(renderer.on_pointer, out_ev)
+    check(label .. ": out-of-bounds pointer down does not error", ok_out)
+    check(label .. ": out-of-bounds pointer down no-ops (does not consume)",
+      result_out ~= true, result_out)
+
+    -- Wrapper scroll +-5 renders without error.
+    local ok_scroll = pcall(function()
+      renderer.scroll(5)
+      renderer.render(make_rect(0, 0, w, h), { title = mod.title })
+      renderer.scroll(-5)
+      renderer.render(make_rect(0, 0, w, h), { title = mod.title })
+    end)
+    check(label .. ": wrapper scroll +-5 renders without error", ok_scroll)
+
+    -- Single-popup invariant: toggle-close before the next size/popup.
+    check(label .. ": toggle closes", popups.toggle(name) == true)
+    check(label .. ": popup closed after toggle-close", is_open_flag == false)
+  end
+end
+
+-- ---- /vik pop over all twelve pane pages at both sizes (render + scroll,
+-- no pointer) -----------------------------------------------------------
+for _, page in ipairs(window.PAGES) do
+  for _, sz in ipairs(POPUP_SIZES) do
+    local w, h = sz.w, sz.h
+    local label = "pop " .. page.key .. " at " .. w .. "x" .. h
+
+    check(label .. ": open_page opens", popups.open_page(page.key) == true)
+    local renderer = opens[#opens].renderer
+
+    reset_drawn()
+    local ok_render = pcall(renderer.render, make_rect(0, 0, w, h), { title = page.label })
+    check(label .. ": render does not error", ok_render)
+    check(label .. ": render drew at least one content row", #drawn.ansi > 0)
+
+    local ok_scroll = pcall(function()
+      renderer.scroll(5)
+      renderer.render(make_rect(0, 0, w, h), { title = page.label })
+      renderer.scroll(-5)
+      renderer.render(make_rect(0, 0, w, h), { title = page.label })
+    end)
+    check(label .. ": wrapper scroll +-5 renders without error", ok_scroll)
+
+    -- Single-popup invariant: close before the next page/size (open_page
+    -- always replaces whatever is open, but closing explicitly here keeps
+    -- this loop's own invariant obvious rather than relying on the next
+    -- iteration's open() to tear the previous one down).
+    check(label .. ": popup closes", package.loaded["wm"].popup.close() == true)
+  end
+end
+check("all twelve pages closed cleanly", is_open_flag == false)
+
 pcall(M.on_unload)
 
 if failures > 0 then os.exit(1) end

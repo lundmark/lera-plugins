@@ -266,6 +266,15 @@ function M.vik_command(args)
   end
 end
 
+-- Introspection helper (Task 7): sorted array of the popup names popups.lua
+-- has actually self-registered right now -- the cheapest honest probe that
+-- popups.lua's map/sea/voyage/cityplan/war registrations ran, for a
+-- headless sandbox check that has no MUD connection to drive any of them
+-- open through /vik.
+function M.popup_names()
+  return popups.names()
+end
+
 function M.on_load()
   mip_id = mip.on("BBE", function(key, code, data) protocol.on_bbe(data) end)
   fff_id = mip.on("FFF", function(key, code, data) combat.on_composite(data) end)
