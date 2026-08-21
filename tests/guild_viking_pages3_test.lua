@@ -1,8 +1,10 @@
 -- guild_viking pane page unit tests: Task 6's pages/people.lua (LEGACY's
 -- draw_page5, guild_viking.lua:9748-10663). Also hosts Task 7's pages
--- (bonds/ranks/court) once they land, per the plan's shared-harness note.
--- Run from the lera-plugins repo root with LERA_ROOT pointing at a built
--- Lera checkout.
+-- (pages/bonds.lua: draw_page8, guild_viking.lua:12756-12831;
+-- pages/ranks.lua: draw_page9, guild_viking.lua:12832-13212;
+-- pages/court.lua: draw_page_court, guild_viking.lua:13236-13304), per the
+-- plan's shared-harness note. Run from the lera-plugins repo root with
+-- LERA_ROOT pointing at a built Lera checkout.
 package.path = "3scapes/guild_viking/?.lua;" .. package.path
 
 local failures = 0
@@ -24,6 +26,9 @@ local state = require("state")
 local page_opts = require("page_opts")
 local cc = require("pages.city_common")
 local people_page = require("pages.people")
+local bonds_page = require("pages.bonds")
+local ranks_page = require("pages.ranks")
+local court_page = require("pages.court")
 
 local S = state.S
 local C = pagelib.C
@@ -499,6 +504,274 @@ do
     if vw > WIDTH then width_ok = false; widest = vw end
   end
   check("people: every row's visible width is <= the requested width", width_ok, widest)
+end
+
+-- =============================================================================
+-- pages/bonds.lua (Task 7) -- LEGACY draw_page8 (guild_viking.lua:12756-12831)
+-- =============================================================================
+
+S.hird_by_id = {
+  [1] = { name = "Ragnar Ironside" },
+  [2] = { name = "Skoll" },  -- single-word name: abbrev() returns it unabbreviated
+}
+S.bonds_list = {
+  { id_a = 1, id_b = 2, ticks = 850000, tier = 3 },  -- 850000-600000 / (2160000-600000) = 16%
+  { id_a = 3, id_b = 4, ticks = 30000, tier = 0 },   -- unknown ids -> "#3"/"#4"; 30000/50000 = 60%
+}
+page_opts.set("show_bonds_list", true)
+
+local bonds_lines = bonds_page.lines(WIDTH)
+local bonds_all = joined(bonds_lines)
+
+check("bonds: Fellowship Bonds header present", find_line(bonds_lines, "Fellowship Bonds") ~= nil)
+
+-- Strongest bond (tier 3, higher ticks) sorts first.
+local pair1_idx = find_line(bonds_lines, "R. Ironside")
+check("bonds: strongest pair (R. Ironside + Skoll) present and abbreviated",
+      pair1_idx ~= nil and bonds_lines[pair1_idx]:find("Skoll", 1, true) ~= nil, bonds_all)
+check("bonds: tier label Blood-Sworn present for tier 3", bonds_all:find("Blood%-Sworn") ~= nil, bonds_all)
+check("bonds: tier-3 bar/percent matches pagelib.bar(24, 16, 100, C.cyan)",
+      bonds_all:find(pagelib.bar(24, 16, 100, C.cyan), 1, true) ~= nil
+      and bonds_all:find("16%%", 1) ~= nil, bonds_all)
+
+check("bonds: unknown hird ids render as #3 / #4",
+      bonds_all:find("#3", 1, true) ~= nil and bonds_all:find("#4", 1, true) ~= nil, bonds_all)
+check("bonds: tier label Strangers present for tier 0", bonds_all:find("Strangers", 1, true) ~= nil)
+check("bonds: tier-0 bar/percent matches pagelib.bar(24, 60, 100, C.dim)",
+      bonds_all:find(pagelib.bar(24, 60, 100, C.dim), 1, true) ~= nil
+      and bonds_all:find("60%%", 1) ~= nil, bonds_all)
+
+-- Ordering: the tier-3 pair (higher ticks) must appear before the tier-0 pair.
+do
+  local i3 = find_line(bonds_lines, "R. Ironside")
+  local i0 = find_line(bonds_lines, "#3")
+  check("bonds: sorted by ticks descending (tier-3 pair before tier-0 pair)",
+        i3 ~= nil and i0 ~= nil and i3 < i0, bonds_all)
+end
+
+do
+  local empty_bonds = S.bonds_list
+  S.bonds_list = {}
+  check("bonds: 'No bonds data yet' shown when bonds_list is empty",
+        find_line(bonds_page.lines(WIDTH), "No bonds data yet") ~= nil)
+  S.bonds_list = empty_bonds
+end
+
+page_opts.set("show_bonds_list", false)
+check("bonds: Fellowship Bonds header disappears when show_bonds_list is off",
+      find_line(bonds_page.lines(WIDTH), "Fellowship Bonds") == nil)
+page_opts.set("show_bonds_list", true)
+
+do
+  local all_lines = bonds_page.lines(WIDTH)
+  local width_ok, widest = true, nil
+  for _, l in ipairs(all_lines) do
+    local vw = pagelib.visible_width(l)
+    if vw > WIDTH then width_ok = false; widest = vw end
+  end
+  check("bonds: every row's visible width is <= the requested width", width_ok, widest)
+end
+
+-- =============================================================================
+-- pages/ranks.lua (Task 7) -- LEGACY draw_page9 (guild_viking.lua:12832-13212)
+-- =============================================================================
+
+S.standings = {
+  [1] = { name = "Own Lineage", score = 50, label = "Neutral", is_own = true },
+  [2] = { name = "Rival Lineage", score = 620, label = "Allied", is_own = false },
+  [3] = { name = "Foe Lineage", score = -350, label = "Feud", is_own = false },
+}
+page_opts.set("show_ranks_standings", true)
+
+local standings_lines_l = ranks_page.lines(WIDTH)
+local standings_all = joined(standings_lines_l)
+
+check("ranks: Lineage Standings header present", find_line(standings_lines_l, "Lineage Standings") ~= nil)
+
+-- Own lineage sorts first regardless of score.
+do
+  local own_idx = find_line(standings_lines_l, "Own Lineage")
+  local rival_idx = find_line(standings_lines_l, "Rival Lineage")
+  check("ranks: own lineage sorts before a higher-scoring rival",
+        own_idx ~= nil and rival_idx ~= nil and own_idx < rival_idx, standings_all)
+  check("ranks: own lineage row is marked with '*'",
+        own_idx ~= nil and standings_lines_l[own_idx]:find("%* ") ~= nil, standings_all)
+end
+
+check("ranks: own lineage score (+50) present", standings_all:find("+50", 1, true) ~= nil, standings_all)
+check("ranks: Allied rival (score +620, clamped bar) present",
+      standings_all:find("Rival Lineage", 1, true) ~= nil and standings_all:find("+620", 1, true) ~= nil
+      and standings_all:find("Allied", 1, true) ~= nil, standings_all)
+check("ranks: Feud foe (score -350) present",
+      standings_all:find("Foe Lineage", 1, true) ~= nil and standings_all:find("%-350") ~= nil
+      and standings_all:find("Feud", 1, true) ~= nil, standings_all)
+
+-- Exact bar assertion for the own-lineage row: score 50 -> normalized
+-- (50 - (-500)) / 1000 = 55%.
+check("ranks: own-lineage bar matches pagelib.bar(18, 550, 1000, C.yellow) exactly",
+      standings_all:find(pagelib.bar(18, 550, 1000, C.yellow), 1, true) ~= nil, standings_all)
+
+do
+  local saved = S.standings
+  S.standings = {}
+  check("ranks: 'No standings data yet' shown when standings is empty",
+        find_line(ranks_page.lines(WIDTH), "No standings data yet") ~= nil)
+  S.standings = saved
+end
+
+page_opts.set("show_ranks_standings", false)
+check("ranks: Lineage Standings header disappears when show_ranks_standings is off",
+      find_line(ranks_page.lines(WIDTH), "Lineage Standings") == nil)
+page_opts.set("show_ranks_standings", true)
+
+-- ---- Village Trade Reputation --------------------------------------------
+
+S.village_rep = {
+  [2] = { name = "Holmgard", rep = 150, rank = 2, start_at = 100, next_at = 300 },  -- (150-100)/(300-100) = 25%
+  [1] = { name = "Vestergotland", rep = 999, rank = 7, start_at = 500, next_at = 0 },  -- MAX rank
+}
+page_opts.set("show_ranks_village_rep", true)
+
+local vrep_lines_l = ranks_page.lines(WIDTH)
+local vrep_all = joined(vrep_lines_l)
+
+check("ranks: Village Trade Reputation header present",
+      find_line(vrep_lines_l, "Village Trade Reputation") ~= nil)
+
+-- Sorted by lineage id ascending: id 1 (Vestergotland) before id 2 (Holmgard).
+do
+  local vester_idx = find_line(vrep_lines_l, "Vestergotland")
+  local holm_idx = find_line(vrep_lines_l, "Holmgard")
+  check("ranks: village rep sorted by lineage id ascending (Vestergotland before Holmgard)",
+        vester_idx ~= nil and holm_idx ~= nil and vester_idx < holm_idx, vrep_all)
+end
+
+check("ranks: Holmgard shows rank Kaupmadur and progress 50/200",
+      vrep_all:find("Holmgard", 1, true) ~= nil and vrep_all:find("Kaupmadur", 1, true) ~= nil
+      and vrep_all:find("50/200", 1, true) ~= nil, vrep_all)
+check("ranks: Vestergotland at max rank (Jarl) shows MAX",
+      vrep_all:find("Vestergotland", 1, true) ~= nil and vrep_all:find("Jarl", 1, true) ~= nil
+      and vrep_all:find("MAX", 1, true) ~= nil, vrep_all)
+
+do
+  local saved = S.village_rep
+  S.village_rep = {}
+  check("ranks: Village Trade Reputation section absent when village_rep is empty",
+        find_line(ranks_page.lines(WIDTH), "Village Trade Reputation") == nil)
+  S.village_rep = saved
+end
+
+page_opts.set("show_ranks_village_rep", false)
+check("ranks: Village Trade Reputation header disappears when show_ranks_village_rep is off",
+      find_line(ranks_page.lines(WIDTH), "Village Trade Reputation") == nil)
+page_opts.set("show_ranks_village_rep", true)
+
+do
+  local all_lines = ranks_page.lines(WIDTH)
+  local width_ok, widest = true, nil
+  for _, l in ipairs(all_lines) do
+    local vw = pagelib.visible_width(l)
+    if vw > WIDTH then width_ok = false; widest = vw end
+  end
+  check("ranks: every row's visible width is <= the requested width", width_ok, widest)
+end
+
+-- =============================================================================
+-- pages/court.lua (Task 7) -- LEGACY draw_page_court (guild_viking.lua:13236-13304)
+-- =============================================================================
+
+check("court: 'No court data' fallback shown when state.dynasty is nil",
+      find_line(court_page.lines(WIDTH), "No court data") ~= nil)
+
+S.dynasty = {
+  realm = "Norvik", house = "Ulfsson",
+  spouse = { name = "Astrid", house = "Ulfsson", age = 34, rank = 2 },
+  heir = "Bjorn",
+  living = 2, cap = 4,
+  children = {
+    { name = "Bjorn", gender = "male", age = 16, adult = true, trait = "bold", role = "warrior" },
+    { name = "Freya", gender = "female", age = 8, adult = false, trait = "", role = nil },
+  },
+}
+page_opts.set("show_court_consort", true)
+page_opts.set("show_court_children", true)
+
+local court_lines = court_page.lines(WIDTH)
+local court_all = joined(court_lines)
+
+check("court: realm/house title present", find_line(court_lines, "Norvik") ~= nil
+      and court_all:find("House Ulfsson", 1, true) ~= nil, court_all)
+
+check("court: Consort header present", find_line(court_lines, "Consort") ~= nil)
+check("court: spouse name (Astrid) and house/age (Ulfsson, age 34) present",
+      court_all:find("Astrid", 1, true) ~= nil and court_all:find("House Ulfsson", 1, true) ~= nil
+      and court_all:find("age 34", 1, true) ~= nil, court_all)
+check("court: lineage-match description present (rank == 2)",
+      court_all:find("lineage match %-%- their house rides with you, %+2 heirs") ~= nil, court_all)
+
+check("court: Children header shows living/cap (2 / 4)",
+      find_line(court_lines, "Children") ~= nil and court_all:find("2 / 4", 1, true) ~= nil, court_all)
+check("court: children living/cap bar matches pagelib.bar(20, 2, 4, C.green) exactly",
+      court_all:find(pagelib.bar(20, 2, 4, C.green), 1, true) ~= nil, court_all)
+
+local bjorn_idx = find_line(court_lines, "Bjorn")
+check("court: heir row (Bjorn) present with meta and [HEIR] tag",
+      bjorn_idx ~= nil and court_lines[bjorn_idx]:find("male, age 16, bold, warrior", 1, true) ~= nil
+      and court_lines[bjorn_idx]:find("%[HEIR%]") ~= nil, court_all)
+
+local freya_idx = find_line(court_lines, "Freya")
+check("court: non-adult non-heir row (Freya) present with 'child' tag",
+      freya_idx ~= nil and court_lines[freya_idx]:find("female, age 8", 1, true) ~= nil
+      and court_lines[freya_idx]:find("child", 1, true) ~= nil
+      and court_lines[freya_idx]:find("%[HEIR%]") == nil, court_all)
+
+-- ---- Consort gate + unmarried fallback -----------------------------------
+
+page_opts.set("show_court_consort", false)
+local no_consort = court_page.lines(WIDTH)
+check("court: Consort header disappears when show_court_consort is off",
+      find_line(no_consort, "Consort") == nil)
+check("court: Children header stays when only Consort is off",
+      find_line(no_consort, "Children") ~= nil)
+page_opts.set("show_court_consort", true)
+
+do
+  local saved_spouse = S.dynasty.spouse
+  S.dynasty.spouse = nil
+  local unmarried = court_page.lines(WIDTH)
+  check("court: empty-seat prompt shown when unmarried",
+        find_line(unmarried, "The seat beside you is empty.") ~= nil, joined(unmarried))
+  check("court: 'vcourt wed' hint present when unmarried",
+        joined(unmarried):find("vcourt wed lineage", 1, true) ~= nil, joined(unmarried))
+  S.dynasty.spouse = saved_spouse
+end
+
+-- ---- Children gate + no-children fallback --------------------------------
+
+page_opts.set("show_court_children", false)
+local no_children = court_page.lines(WIDTH)
+check("court: Children header disappears when show_court_children is off",
+      find_line(no_children, "Children") == nil)
+check("court: Consort header stays when only Children is off",
+      find_line(no_children, "Consort") ~= nil)
+page_opts.set("show_court_children", true)
+
+do
+  local saved_kids, saved_living = S.dynasty.children, S.dynasty.living
+  S.dynasty.children, S.dynasty.living = {}, 0
+  check("court: '(none yet)' shown when the children list is empty",
+        find_line(court_page.lines(WIDTH), "(none yet)") ~= nil)
+  S.dynasty.children, S.dynasty.living = saved_kids, saved_living
+end
+
+do
+  local all_lines = court_page.lines(WIDTH)
+  local width_ok, widest = true, nil
+  for _, l in ipairs(all_lines) do
+    local vw = pagelib.visible_width(l)
+    if vw > WIDTH then width_ok = false; widest = vw end
+  end
+  check("court: every row's visible width is <= the requested width", width_ok, widest)
 end
 
 if failures > 0 then os.exit(1) end
