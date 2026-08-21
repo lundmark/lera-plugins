@@ -7,10 +7,31 @@
 -- A renderer module registered here has the shape:
 --   { lines = function(width) -> array of strings, PURE,
 --     on_pointer = function(ev, ctx) -> bool|nil, OPTIONAL,
+--     geometry = function(width) -> maplib geom | nil, OPTIONAL,
+--     grid_line_offset = function(width) -> integer, REQUIRED iff geometry is,
 --     title = "..." }
 -- `lines` must read only its own view's state (page state / page_opts);
 -- `on_pointer` may mud.send, mutate the view's own module-local state, open
 -- require("menu"), and ui.dirty() -- see the plan's Global Constraints.
+--
+-- ctx.cell_from_xy contract (grid views: map/sea/cityplan/war): a module
+-- that draws a maplib grid inside its `lines(width)` output can also expose
+-- `geometry(width)` -- the SAME grid + opts handed to maplib.geometry, so
+-- hit-testing can never drift from what was actually drawn -- plus
+-- `grid_line_offset(width)`, the count of lines the module renders ABOVE the
+-- grid (headers, position readout, legend, ...) at that width. When both are
+-- present, the wrapper below builds `ctx.cell_from_xy(x, y)`: `x`/`y` are
+-- wrapper-local coordinates in the SAME space as the `ev.x`/`ev.y` a pointer
+-- event already carries (0-based, relative to the popup's own top-left --
+-- see CLAUDE.md's "Pane Pointer Input"), and it returns whatever
+-- `geom.cell_at` returns (a `c, r` pair, or nil for anything outside the
+-- grid). The mapping accounts for the wrapper's own scroll offset (the
+-- module's `lines` may be scrolled within the popup) and the module's
+-- pre-grid lines, so the module itself never has to know about scrolling:
+-- `gy = y + scroll_offset - grid_line_offset(width)`, then
+-- `geom.cell_at(x, gy)`. A module with no grid (or no data to grid right
+-- now) simply omits `geometry`/`grid_line_offset` and `ctx.cell_from_xy` is
+-- nil, exactly like today.
 local scroller = require("scroller")
 local pagelib = require("pagelib")
 local window = require("window")
@@ -41,8 +62,9 @@ end
 -- size can never reclamp -- and silently move -- the local user's scroll
 -- offset (see window.lua's render() comment for the full rationale; this is
 -- the identical mechanism, reused here for the same reason).
-local function wrap(lines_fn, on_pointer_fn)
+local function wrap(lines_fn, on_pointer_fn, geometry_fn, grid_line_offset_fn)
   local last_count = 0
+  local last_width = 0
   local sc = scroller.make_top_scroller(function() return last_count end)
 
   local wrapper = {}
@@ -53,6 +75,7 @@ local function wrap(lines_fn, on_pointer_fn)
     local lines = lines_fn(w)
     if lera.render_pass() ~= "remote" then
       last_count = #lines
+      last_width = w
       sc.set_height(h)
     end
     local offset = sc.offset()
@@ -68,21 +91,34 @@ local function wrap(lines_fn, on_pointer_fn)
   wrapper.scroll_to_bottom = sc.scroll_to_bottom
   wrapper.following_tail = sc.following_tail
 
-  -- ctx is deliberately extensible: cell_from_xy (a maplib hit-test) joins
-  -- it once Task 2's maplib exists for the grid views to consume.
+  -- ctx.cell_from_xy joins ctx only when the module supplies both
+  -- geometry() and grid_line_offset() -- see the ctx.cell_from_xy contract
+  -- above. `last_width` is whatever the most recent LOCAL render pass drew
+  -- at (pass-guarded exactly like last_count, above), which is the only
+  -- render a real pointer event can ever follow.
   if on_pointer_fn then
     function wrapper.on_pointer(ev)
-      return on_pointer_fn(ev, {
+      local ctx = {
         close = function() require("wm").popup.close() end,
-      })
+      }
+      if geometry_fn and grid_line_offset_fn then
+        ctx.cell_from_xy = function(x, y)
+          local geom = geometry_fn(last_width)
+          if not geom then return nil end
+          local line_offset = grid_line_offset_fn(last_width)
+          return geom.cell_at(x, y + sc.offset() - line_offset)
+        end
+      end
+      return on_pointer_fn(ev, ctx)
     end
   end
 
   return wrapper
 end
 
-local function open_wrapper(title, lines_fn, on_pointer_fn, on_close_fn)
-  local wrapper = wrap(lines_fn, on_pointer_fn)
+local function open_wrapper(title, lines_fn, on_pointer_fn, on_close_fn, geometry_fn,
+                             grid_line_offset_fn)
+  local wrapper = wrap(lines_fn, on_pointer_fn, geometry_fn, grid_line_offset_fn)
   require("wm").popup.open(wrapper, {
     title = title,
     width = 0.9,
@@ -110,7 +146,7 @@ function popups.toggle(name)
 
   open_wrapper(mod.title, mod.lines, mod.on_pointer, function()
     if shown_name == name then shown_name = nil end
-  end)
+  end, mod.geometry, mod.grid_line_offset)
   shown_name = name
   return true
 end
@@ -134,5 +170,9 @@ function popups.open_page(page_key)
   end)
   return true
 end
+
+-- Named-popup content, one require+register line per task (Tasks 3-6),
+-- same self-registration pattern window.lua uses for window.PAGES.
+popups.register("map", require("popups.map"))
 
 return popups
