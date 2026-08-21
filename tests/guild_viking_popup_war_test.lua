@@ -359,7 +359,7 @@ seed_wmap({
 })
 
 local ok_down = war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true }, fixed_ctx(0, 2))
-check("down on a bcamp cell is NOT consumed (LEGACY wires no MouseDown)", ok_down == nil, ok_down)
+check("down on a bcamp cell IS consumed (fix round 2: capture requires it)", ok_down == true, ok_down)
 check("down never sends", #send_calls == 0)
 
 local ok_move = war_campaign.on_pointer({ kind = "move", x = 0, y = 0, inside = true }, fixed_ctx(0, 2))
@@ -477,6 +477,41 @@ check("clicking empty ground with no selection never sends", #send_calls == 0)
 check("clicking empty ground with no selection selects nothing",
   not find_plain(war_campaign.lines(WIDTH), "Selected"))
 
+-- =============================================================================
+-- war_campaign: per-module smoke (a real down+up pair on the SAME cell
+-- still selects/queues) + cross-target drag (fix round 2, Important #1: a
+-- down on one cell followed by an up on a DIFFERENT cell must not queue a
+-- waypoint for either). The fixture still active here is the one the
+-- server-queue precedence block above left in place: dim=3, unit "A" at
+-- (0,0) (not the (0,2) fixture from the earlier select/queue section).
+-- =============================================================================
+send_calls = {}
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
+war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
+check("down+up on the SAME own-stack cell selects it, via a real down+up pair",
+  find_plain(war_campaign.lines(WIDTH), "Selected A") and #send_calls == 0)
+
+send_calls = {}
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(2, 2))
+war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(1, 1))
+check("a down/up pair landing on DIFFERENT cells does not queue a waypoint",
+  #send_calls == 0, send_calls[1])
+
+-- The mismatched drag neither cleared nor consumed the selection above: a
+-- genuinely matched down+up right after it still queues the exact waypoint.
+send_calls = {}
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(1, 1))
+war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(1, 1))
+check("selection survives the mismatched drag: the next matched click still queues",
+  #send_calls == 1 and send_calls[1] == "vcampaign queue A B2", send_calls[1])
+
+-- Cleanup: deselect via the stack's own (unmoved) position before the
+-- sections below re-seed their own fixtures.
+send_calls = {}
+war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
+check("cleanup deselect after the smoke/cross-target block",
+  not find_plain(war_campaign.lines(WIDTH), "Selected A"))
+
 -- Stale-selection revalidation: re-seed a war_map where "A" no longer
 -- exists; selecting it first via a fresh seed, then re-seeding without it,
 -- then clicking must clear the stale selection instead of crashing.
@@ -555,6 +590,33 @@ check("legend: unit-type key letters present", find_plain(blines, "huscarl") and
 check("legend: terrain key present", find_plain(blines, "fjord") and find_plain(blines, "rampart"))
 check("command/fraegd line", find_plain(blines, "Command 20/100") and find_plain(blines, "Fraegd 15"))
 check("actions line (deploy phase)", find_plain(blines, "[Actions] Begin Battle | Abandon"))
+
+-- =============================================================================
+-- war_battle: deploy-phase [Actions] menu -- "Begin Battle" sends the exact
+-- command (fix round 2, Important #2: previously untested; only the
+-- turn-phase "Advance Turn"/"Abandon" pair had send-exactness coverage).
+-- =============================================================================
+do
+  local deploy_idx = war_battle.actions_line_index(WIDTH)
+  check("deploy actions_line_index is non-nil while deploying", deploy_idx ~= nil)
+  last_menu_open = nil
+  war_battle.on_pointer({ kind = "down", width = WIDTH },
+    { line_from_y = function() return deploy_idx end })
+  check("a down on the deploy [Actions] line opens the actions menu", last_menu_open ~= nil)
+  check("deploy-phase actions menu offers Begin Battle + Abandon",
+    menu_has_label(last_menu_open, "Begin Battle") and menu_has_label(last_menu_open, "Abandon"))
+  send_calls = {}
+  menu_select(last_menu_open, "Begin Battle")
+  check("selecting Begin Battle sends 'vbattle begin' exactly",
+    #send_calls == 1 and send_calls[1] == "vbattle begin", send_calls[1])
+  -- Clean up the down-target tracker's leftover "actions" record (a
+  -- module-local singleton, like war_campaign's `selected`) via a
+  -- synthesized cancel, matching how popup.lua itself clears a captured
+  -- renderer's record when the popup closes mid-interaction -- otherwise
+  -- the very next section's grid up-events below would mismatch against
+  -- this stale "actions" target and never fire.
+  war_battle.on_pointer({ kind = "cancel" }, {})
+end
 
 -- =============================================================================
 -- war_battle: deploy-phase right-click menus (own unit / empty in-dz with
@@ -710,6 +772,41 @@ check("right-up never sends", #send_calls == 0)
 war_battle.on_pointer({ kind = "up", button = "left" }, bfixed_ctx(1, 0))
 check("post-cancel click on the enemy cell does not order a move (nothing was selected)",
   #send_calls == 0)
+
+-- =============================================================================
+-- war_battle: per-module smoke -- a real down+up pair on the SAME cell still
+-- works end to end (fix round 2, Important #1: down now consumes and
+-- records a target, so this proves that didn't break the ordinary case).
+-- =============================================================================
+send_calls = {}
+war_battle.on_pointer({ kind = "down", button = "left" }, bfixed_ctx(0, 1))
+war_battle.on_pointer({ kind = "up", button = "left" }, bfixed_ctx(0, 1))
+check("down+up on the SAME own-unit cell selects it", #send_calls == 0)
+war_battle.on_pointer({ kind = "down", button = "left" }, bfixed_ctx(1, 0))
+war_battle.on_pointer({ kind = "up", button = "left" }, bfixed_ctx(1, 0))
+check("down+up on the SAME target cell sends the exact order command",
+  #send_calls == 1 and send_calls[1] == "vbattle order 201 B2", send_calls[1])
+
+-- =============================================================================
+-- war_battle: cross-target drag -- a down on one cell followed by an up on
+-- a DIFFERENT cell must not fire the up cell's action (fix round 2,
+-- Important #1). Re-select Shieldwall (matched down+up on A1), then down on
+-- the empty cell B1 but release over the enemy at B2 -- if down/up cells
+-- were not required to match, this would incorrectly send a move order.
+-- =============================================================================
+war_battle.on_pointer({ kind = "down", button = "left" }, bfixed_ctx(0, 1))
+war_battle.on_pointer({ kind = "up", button = "left" }, bfixed_ctx(0, 1))
+send_calls = {}
+war_battle.on_pointer({ kind = "down", button = "left" }, bfixed_ctx(1, 1))
+war_battle.on_pointer({ kind = "up", button = "left" }, bfixed_ctx(1, 0))
+check("a down/up pair landing on DIFFERENT cells does not fire the up cell's action",
+  #send_calls == 0, send_calls[1])
+-- The mismatched drag neither cleared nor consumed the earlier selection: a
+-- genuinely matched down+up on B2 right after it still sends the order.
+war_battle.on_pointer({ kind = "down", button = "left" }, bfixed_ctx(1, 0))
+war_battle.on_pointer({ kind = "up", button = "left" }, bfixed_ctx(1, 0))
+check("selection survives the mismatched drag: the next matched click still orders the move",
+  #send_calls == 1 and send_calls[1] == "vbattle order 201 B2", send_calls[1])
 
 -- Hover text on move.
 war_battle.on_pointer({ kind = "move", x = 0, y = 0 }, bfixed_ctx(0, 1))

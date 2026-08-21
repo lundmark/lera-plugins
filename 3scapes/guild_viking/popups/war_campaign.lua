@@ -61,6 +61,7 @@
 local pagelib = require("pagelib")
 local maplib = require("maplib")
 local state = require("state")
+local track = require("popups.pointer_track").tracker()
 
 local S = state.S
 local C = pagelib.C
@@ -397,15 +398,28 @@ end
 
 -- viking_campaign_click's hotspot (13936-13938) wires ONLY a MouseUp
 -- callback -- no MouseOver/MouseDown at all, unlike popups/cityplan.lua's
--- cpt_* hotspots (which wire viking_cityplan_down). A mouse-down on a
--- bcamp_* cell is therefore left UNCONSUMED here (`return nil`), matching
--- LEGACY exactly; only the "move" (hover) and "up" (click) cases act.
--- Every non-left mouse-up also does nothing at all in LEGACY (the early
--- `bit.band(flags, hotspot_got_lh_mouse) == 0 -> return` guard at the very
--- top of viking_campaign_click) -- ported as "still consume the cell, but
--- take no action", the same "consume without acting" convention
--- popups/cityplan.lua's own on_pointer already uses for its non-actionable
--- branches.
+-- cpt_* hotspots (which wire viking_cityplan_down). CORRECTED (fix round 2,
+-- Critical #1): registering no MouseDown handler in MUSHclient does not
+-- mean the mousedown is left unconsumed -- the miniwin runtime still
+-- captures it internally so the matching MouseUp can be delivered to the
+-- SAME hotspot. lera's popup layer (scripts/default/popup.lua) has no such
+-- internal capture: a down must return `true` for the popup to hold the
+-- pointer at all, or the eventual "up" is never dispatched here to begin
+-- with (swallowed one layer up, in popup.lua's own capture bookkeeping) --
+-- which is exactly what made this whole click-to-move flow unreachable end
+-- to end despite `on_click` itself being correct in isolation. The down
+-- case below therefore consumes (returns true) and records which cell it
+-- hit via `track` (popups/pointer_track.lua); "up" only invokes `on_click`
+-- when its own cell matches that record -- the "hotspot that took the
+-- mousedown gets the mouseup" rule, reproduced despite the popup layer's
+-- coarser button-only capture (see pointer_track.lua's header comment for
+-- why this also defuses a cross-target drag and the war composite's
+-- mid-drag mode-flip race). Every non-left mouse-up still does nothing at
+-- all in LEGACY (the early `bit.band(flags, hotspot_got_lh_mouse) == 0 ->
+-- return` guard at the very top of viking_campaign_click) -- ported as
+-- "still consume the cell, but take no action", the same "consume without
+-- acting" convention popups/cityplan.lua's own on_pointer already uses for
+-- its non-actionable branches.
 function M.on_pointer(ev, ctx)
   if not ctx.cell_from_xy then return nil end
   local wm = S.war_map
@@ -413,26 +427,57 @@ function M.on_pointer(ev, ctx)
   local dim = wm.dim or #(wm.rows or {})
   if dim < 1 or #(wm.rows or {}) < 1 then return nil end
 
+  if ev.kind == "cancel" then
+    track.clear()
+    return nil
+  end
+
   if ev.kind == "move" then
     local c, r = ctx.cell_from_xy(ev.x, ev.y)
-    if not c then return nil end
+    if not c then
+      -- Fix round 2, Minor: clear a stale hover line on an off-grid move
+      -- rather than leaving the last on-grid cell's tooltip showing.
+      if hover ~= "" then hover = ""; ui.dirty() end
+      return nil
+    end
     hover = hover_text(wm, c, r)
     ui.dirty()
     return nil
   end
 
-  if ev.kind == "up" then
+  if ev.kind == "down" then
     local c, r = ctx.cell_from_xy(ev.x, ev.y)
     if not c then return nil end
-    if ev.button == "left" then
-      on_click(wm, c, r)
-    end
+    track.record({ kind = "cell", c = c, r = r })
     hover = hover_text(wm, c, r)
     ui.dirty()
     return true
   end
 
+  if ev.kind == "up" then
+    local c, r = ctx.cell_from_xy(ev.x, ev.y)
+    if not c then return nil end
+    if ev.button == "left" and track.matches({ kind = "cell", c = c, r = r }) then
+      on_click(wm, c, r)
+    end
+    hover = hover_text(wm, c, r)
+    ui.dirty()
+    track.clear()
+    return true
+  end
+
   return nil
+end
+
+-- Called by popups.lua's registry when this popup closes (fix round 2,
+-- Minor: "clear hover on close"), so a stale tooltip from wherever the
+-- pointer last was doesn't show immediately on the next open, before any
+-- fresh move/down arrives. `selected`/`queue` are deliberately NOT cleared
+-- here -- they mirror LEGACY's own viking_camp_selected/viking_camp_queue,
+-- which persist across the window being shown/hidden, not just this popup
+-- being open.
+function M.reset()
+  hover = ""
 end
 
 return M

@@ -47,6 +47,7 @@
 local pagelib = require("pagelib")
 local maplib = require("maplib")
 local state = require("state")
+local track = require("popups.pointer_track").tracker()
 
 local S = state.S
 local C = pagelib.C
@@ -269,12 +270,19 @@ function M.lines(width)
   return out
 end
 
--- Same "width-invariant in practice" reasoning as popups/sea.lua's own
--- ACTIONS_PROBE_WIDTH: nothing rendered before the actions line ever
--- reflows by width (pagelib.trunc/header/legend/maplib.render all emit a
--- fixed number of output lines regardless of width), so on_pointer below
--- can call this with a fixed representative width rather than needing the
--- wrapper's actual last-rendered width.
+-- UNLIKE popups/sea.lua's own ACTIONS_PROBE_WIDTH precedent, this module's
+-- actions line is NOT width-invariant (fix round 2, Critical #2): the
+-- legend built by legend_lines (maplib.legend(width, UNIT_LEGEND) /
+-- maplib.legend(width, TERRAIN_LEGEND)) sits ABOVE the actions line and
+-- wraps by width, so the actions line's own index shifts with it -- verified
+-- directly, e.g. this module's own deploy-battle fixture yields index 11 at
+-- width 76 vs index 9 at width >= 86 (the popup's real inner width at the
+-- default gui_cols=100 is ~88). on_pointer below therefore MUST thread the
+-- pointer event's own `ev.width` (every popup-local pointer event carries
+-- one, see scripts/default/popup.lua's local_event) through to this
+-- function instead of relying on a fixed probe -- ACTIONS_PROBE_WIDTH
+-- remains only as the fallback for a caller with no width to hand (a
+-- direct test call, or an `ev` from a stub that omits `width`).
 local ACTIONS_PROBE_WIDTH = 76
 function M.actions_line_index(width)
   local _, idx = build_lines(width or ACTIONS_PROBE_WIDTH)
@@ -403,6 +411,21 @@ local function handle_click(b, gc, gr, button)
     return
   end
 
+  -- Stale-selection revalidation (fix round 2, Minor -- mirrors
+  -- war_campaign.lua's on_click revalidation of `selected` against
+  -- wm.units): a unit selected in an earlier turn may since have died or
+  -- been reassigned a new bid by the server, so `selected.bid` must be
+  -- confirmed to still exist among this battle's own units before it can
+  -- be used to send an order -- otherwise a stale selection could order a
+  -- unit that no longer exists.
+  if selected then
+    local still = false
+    for _, uu in ipairs(b.units or {}) do
+      if uu.bid == selected.bid then still = true; break end
+    end
+    if not still then selected = nil end
+  end
+
   if not selected then
     if u and u.side == "you" then
       selected = { bid = u.bid, coord = u.coord }
@@ -420,13 +443,32 @@ end
 -- bcell_* hotspots wire BOTH a MouseDown (viking_battle_down, unconditional
 -- `return true`) and a MouseUp (viking_battle_click) -- unlike
 -- war_campaign's bcamp_* cells, a battle-board "down" IS consumed here.
+--
+-- Down-target recording (fix round 2, Important #1, via
+-- popups/pointer_track.lua): a down on the [Actions] line records
+-- { kind = "actions" }; a down on a grid cell records { kind = "cell", c=,
+-- r= }. "up" only invokes the grid click handler when its own cell matches
+-- the recorded target -- without this, a down on [Actions] (which opens the
+-- menu immediately, on the down itself) followed by a drag that releases
+-- over the grid would ALSO fire handle_click for whatever cell the release
+-- landed on, a genuine cross-target send this fix closes.
 function M.on_pointer(ev, ctx)
   local b = S.battle
   if not b then return nil end
 
+  if ev.kind == "cancel" then
+    track.clear()
+    return nil
+  end
+
   if ev.kind == "down" and ctx.line_from_y then
-    local idx = M.actions_line_index()
+    -- Critical #2 fix: thread the pointer event's own width through to
+    -- actions_line_index instead of relying on the fixed probe -- see that
+    -- function's header comment for why this module's actions line is NOT
+    -- width-invariant the way popups/sea.lua's is.
+    local idx = M.actions_line_index(ev.width)
     if idx and ctx.line_from_y(ev.y) == idx then
+      track.record({ kind = "actions" })
       open_actions_menu(b)
       return true
     end
@@ -436,7 +478,11 @@ function M.on_pointer(ev, ctx)
 
   if ev.kind == "move" then
     local gc, gr = ctx.cell_from_xy(ev.x, ev.y)
-    if not gc then return nil end
+    if not gc then
+      -- Fix round 2, Minor: clear a stale hover line on an off-grid move.
+      if hover ~= "" then hover = ""; ui.dirty() end
+      return nil
+    end
     hover = hover_text(b, gc, gr)
     ui.dirty()
     return nil
@@ -445,6 +491,7 @@ function M.on_pointer(ev, ctx)
   if ev.kind == "down" then
     local gc, gr = ctx.cell_from_xy(ev.x, ev.y)
     if not gc then return nil end
+    track.record({ kind = "cell", c = gc, r = gr })
     hover = hover_text(b, gc, gr)
     ui.dirty()
     return true
@@ -452,13 +499,27 @@ function M.on_pointer(ev, ctx)
 
   if ev.kind == "up" then
     local gc, gr = ctx.cell_from_xy(ev.x, ev.y)
-    if not gc then return nil end
-    handle_click(b, gc, gr, ev.button)
+    if not gc then
+      track.clear()
+      return nil
+    end
+    if track.matches({ kind = "cell", c = gc, r = gr }) then
+      handle_click(b, gc, gr, ev.button)
+    end
     ui.dirty()
+    track.clear()
     return true
   end
 
   return nil
+end
+
+-- Called by popups.lua's registry when this popup closes (fix round 2,
+-- Minor: "clear hover on close"). `selected` is deliberately NOT cleared
+-- here -- it mirrors LEGACY's state.battle_selected, which persists across
+-- the window being shown/hidden while a battle continues underneath.
+function M.reset()
+  hover = ""
 end
 
 return M
