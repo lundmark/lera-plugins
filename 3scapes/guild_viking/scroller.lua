@@ -53,7 +53,7 @@ function scroller.make_top_scroller(count_fn)
   -- scroller's "at rest" position is the TOP: following_tail() == true here
   -- means offset() == 0, i.e. showing the page from its first line. Same
   -- name, same wm.assign contract, opposite physical direction -- see the
-  -- module-level comment above.
+  -- module-level comment above make_top_scroller.
   function sc.following_tail()
     clamp()
     return offset == 0
