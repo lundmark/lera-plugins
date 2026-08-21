@@ -72,13 +72,15 @@ end
 -- "vvoyage launch <ship> reroll") are pixel-rectangle hotspots with no grid
 -- to hang a click on under this popup's ctx.cell_from_xy-only contract
 -- (popups.lua exposes grid-cell hit-testing, not line/column hit-testing for
--- arbitrary text buttons) -- dropped-with-reason, same class as the other
--- standalone button hotspots on this page (resolve/clear/end, see
--- popups/sea.lua's header comment): the command is an ordinary MUD command
--- the player can already type, and its exact text is rendered here so the
--- option is legible even without a click. 0x666666 -> C.dim (see above);
--- ship-name label color 0xFFDD88 (guild_viking.lua:14993) -> R=88,G=DD,B=FF,
--- light blue -> C.bright_cyan (pagelib.C has no blue).
+-- arbitrary text buttons). They ARE live in this port, just not as a
+-- per-ship click here: M.actions()/M.open_actions_menu() below expose them
+-- (and the other three standalone button hotspots on this page -- resolve/
+-- end/clear) through one clickable "[Actions]" line, using ctx.line_from_y
+-- instead of a grid cell. The exact command text is ALSO rendered here as
+-- plain text (so the option stays legible even without opening the menu).
+-- 0x666666 -> C.dim (see above); ship-name label color 0xFFDD88
+-- (guild_viking.lua:14993) -> R=88,G=DD,B=FF, light blue -> C.bright_cyan
+-- (pagelib.C has no blue).
 -- ---------------------------------------------------------------------------
 function M.no_voyage_lines(width)
   local out = { pagelib.trunc(C.dim .. "No active voyage" .. RESET, width) }
@@ -169,8 +171,9 @@ function M.status_lines(width)
 
   -- Awaiting Resolution (guild_viking.lua:15034-15095). The resolve/end
   -- buttons are, again, pixel hotspots with no grid to hang a click on --
-  -- dropped-with-reason (see popups/sea.lua's header comment); their exact
-  -- command text is surfaced here so a player can type it directly.
+  -- live via M.actions()/M.open_actions_menu() below (the "[Actions]" line
+  -- instead of a per-button hotspot); their exact command text is ALSO
+  -- surfaced here so a player can read (or type) it without opening the menu.
   local wait_txt = M.wait_label(S.voyage_wait)
   if wait_txt ~= "" then
     out[#out + 1] = pagelib.kv(width, "Awaiting Resolution:", wait_txt, C.bright_cyan)
@@ -198,8 +201,8 @@ end
 
 -- ---------------------------------------------------------------------------
 -- Queue (guild_viking.lua:15207-15229, gated show_sea_queue). The Clear
--- button (btn_clr_queue -> "vvoyage clear") is a pixel hotspot,
--- dropped-with-reason like the others above.
+-- button (btn_clr_queue -> "vvoyage clear") is a pixel hotspot, live via
+-- M.actions()/M.open_actions_menu() below, same as the others above.
 --
 -- The "x,y" -> coord_label conversion branch below (guild_viking.lua:
 -- 15222-15224) is ported verbatim but is DEAD CODE in practice: VQPATH's
@@ -267,6 +270,85 @@ function M.memory_lines(width)
     end
   end
   return out
+end
+
+-- ---------------------------------------------------------------------------
+-- [Actions] line: the fix-round-1 remedy for the four standalone button
+-- hotspots neither popup could hit-test through maplib's grid-only
+-- ctx.cell_from_xy (reroll 14989-14994, resolve 15060-15069, end voyage
+-- 15079-15090, clear queue 15214-15220). Each item's VISIBILITY condition
+-- below is ported verbatim from its own LEGACY button's drawing condition
+-- (not just "does the command exist"); popups/sea.lua and popups/voyage.lua
+-- both call M.actions()/M.actions_line()/M.open_actions_menu() so the two
+-- popups can never disagree about what's clickable right now.
+-- ---------------------------------------------------------------------------
+function M.actions()
+  local items = {}
+  if not S.voyage_status then
+    -- Reroll (14962-14995): one item per DOCKED ship with a ship_id,
+    -- shown ONLY while there is no active voyage (this whole branch is the
+    -- no-active-voyage fallback).
+    for _, sh in ipairs(S.voyage_longships or {}) do
+      if (sh.state or "") == "docked" and (sh.ship_id or 0) > 0 then
+        items[#items + 1] = {
+          label = "Reroll " .. sh.name .. " contracts (5000 daler)",
+          value = "vvoyage launch " .. sh.name .. " reroll",
+        }
+      end
+    end
+    return items
+  end
+
+  -- Resolve (15034-15069): one item per resolve option, shown only while
+  -- awaiting a resolution (voyage_wait non-empty).
+  if M.wait_label(S.voyage_wait) ~= "" then
+    for _, opt in ipairs(S.voyage_resolve_options or {}) do
+      items[#items + 1] = { label = "Resolve: " .. opt, value = "vvoyage resolve " .. opt }
+    end
+    -- End Voyage (15071-15090): shown at a harbor node -- LEGACY's own
+    -- `_at_harbor` condition -- regardless of whether any resolve options
+    -- are ALSO on offer (`#resolve_options > 0 or _at_harbor`).
+    if S.voyage_wait == "harbor" then
+      items[#items + 1] = { label = "End Voyage", value = "vvoyage end" }
+    end
+  end
+
+  -- Clear Queue (15207-15220): drawn as part of the Queue section itself,
+  -- so it shares that section's own gate (show_sea_queue) and is offered
+  -- regardless of whether the queue currently holds anything (LEGACY draws
+  -- the button unconditionally inside the gated Queue block).
+  if page_opts.get("show_sea_queue") then
+    items[#items + 1] = { label = "Clear Queue", value = "vvoyage clear" }
+  end
+  return items
+end
+
+-- Single-line summary + click target for M.actions() above. Returns {} (no
+-- line at all, not a dead click target with nothing behind it) when there
+-- is nothing to act on right now.
+function M.actions_line(width)
+  local items = M.actions()
+  if #items == 0 then return {} end
+  return {
+    pagelib.trunc(
+      C.bright_cyan .. "[Actions] " .. #items .. " available - click to open" .. RESET, width),
+  }
+end
+
+-- Opens the [Actions] menu and sends the exact LEGACY command for whichever
+-- item is selected -- shared by popups/sea.lua and popups/voyage.lua's
+-- on_pointer. `items` already has the { label =, value = } shape
+-- require("menu") wants (value defaults its own `search` to `label`).
+-- No-op (never opens an empty menu) when there is nothing to act on.
+function M.open_actions_menu()
+  local items = M.actions()
+  if #items == 0 then return false end
+  require("menu").open({
+    items = items,
+    title = "Voyage Actions",
+    on_select = function(value) mud.send(value) end,
+  })
+  return true
 end
 
 return M

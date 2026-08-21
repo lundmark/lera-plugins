@@ -32,6 +32,21 @@
 -- `geom.cell_at(x, gy)`. A module with no grid (or no data to grid right
 -- now) simply omits `geometry`/`grid_line_offset` and `ctx.cell_from_xy` is
 -- nil, exactly like today.
+--
+-- ctx.line_from_y contract (any module with `on_pointer`, grid or not): a
+-- non-grid clickable line -- a text row that is itself the whole hit target,
+-- like guild_viking's sea/voyage popups' single "[Actions]" line -- has no
+-- cell to look up, only an ABSOLUTE 1-based index into the module's own
+-- `lines(width)` output. `ctx.line_from_y(y)` converts a pointer event's
+-- wrapper-local `y` into that index: `y + scroll_offset + 1` (the wrapper
+-- draws `lines[offset+1 .. offset+h]` at screen rows `0 .. h-1`, so screen
+-- row `y` is 1-based line index `y + offset + 1` -- the same derivation
+-- `cell_from_xy` documents, one step short of subtracting a grid offset).
+-- Unlike `cell_from_xy`, this is always present on `ctx` whenever the module
+-- has `on_pointer` at all -- it needs no companion module hook the way
+-- `cell_from_xy` needs `geometry`/`grid_line_offset`, since a module that
+-- wants to hit-test a specific line already knows (or can derive) that
+-- line's own index from its own `lines(width)` construction.
 local scroller = require("scroller")
 local pagelib = require("pagelib")
 local window = require("window")
@@ -100,6 +115,7 @@ local function wrap(lines_fn, on_pointer_fn, geometry_fn, grid_line_offset_fn)
     function wrapper.on_pointer(ev)
       local ctx = {
         close = function() require("wm").popup.close() end,
+        line_from_y = function(y) return y + sc.offset() + 1 end,
       }
       if geometry_fn and grid_line_offset_fn then
         ctx.cell_from_xy = function(x, y)

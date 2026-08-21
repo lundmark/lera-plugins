@@ -95,12 +95,36 @@ package.loaded["wm"] = {
   },
 }
 
+-- ---- menu stub (require("menu") facade: open/close/is_open) -- captures
+-- the last opts a popup handed to menu.open() so a test can inspect its
+-- items and drive on_select itself, same idea as the wm.popup stub above.
+local last_menu_open = nil
+package.loaded["menu"] = {
+  open = function(opts) last_menu_open = opts end,
+  close = function() last_menu_open = nil end,
+  is_open = function() return last_menu_open ~= nil end,
+}
+local function menu_item_labels(opts)
+  local labels = {}
+  for _, it in ipairs(opts.items or {}) do
+    labels[#labels + 1] = it.label or it
+  end
+  return labels
+end
+local function menu_has_label(opts, substr)
+  for _, l in ipairs(menu_item_labels(opts)) do
+    if tostring(l):find(substr, 1, true) then return true end
+  end
+  return false
+end
+
 local pagelib = require("pagelib")
 local state = require("state")
 local page_opts = require("page_opts")
 local popups = require("popups")
 local sea = require("popups.sea")
 local voyage = require("popups.voyage")
+local sea_common = require("popups.sea_common")
 
 -- ---- real ingestion pipeline (protocol.ingest -> handlers.voyage), the SAME
 -- registration guild_viking_voyage_test.lua/guild_viking_popup_map_test.lua
@@ -150,10 +174,12 @@ local function reset_voyage()
     "show_sea_queue", "show_sea_saga", "show_sea_memory",
     "show_sea_boons", "show_sea_spoils", "show_sea_goods",
     "show_sea_aids", "show_sea_runes", "show_sea_relics", "show_sea_curios",
+    "confirm_chart_click",
   }) do
     page_opts.set(key, true)
   end
   send_calls = {}
+  last_menu_open = nil
 end
 
 -- =============================================================================
@@ -163,7 +189,8 @@ reset_voyage()
 local sea_lines = sea.lines(WIDTH)
 local voyage_lines = voyage.lines(WIDTH)
 check("sea popup has its own header", sea_lines[1]:find("Sea Chart", 1, true) ~= nil, sea_lines[1])
-check("voyage popup has its own header", voyage_lines[1]:find("Voyage Status", 1, true) ~= nil, voyage_lines[1])
+check("voyage popup has its own DISTINCT header (not 'Voyage Status', to avoid the dup fixed below)",
+  voyage_lines[1] == pagelib.header(WIDTH, "Voyage"), voyage_lines[1])
 check("sea popup shows the no-data gate",
   find_plain(sea_lines, "No data - enable with: vtoggle mip_voyage"))
 check("voyage popup shows the no-data gate",
@@ -182,10 +209,18 @@ check("voyage: show_sea_voyage off leaves only the header line", #voyage_lines =
 page_opts.set("show_sea_voyage", true)
 
 -- =============================================================================
--- no-active-voyage fallback + reroll hint (dropped-with-reason: text only)
+-- no-active-voyage fallback + reroll hint text, AND the reroll action (fix
+-- round 1, remedy #1): with NO docked ships, [Actions] must not appear at
+-- all (reroll-gated case, "off" direction); with one, it must, and the menu
+-- item must send the exact LEGACY command (reroll-gated case, "on"
+-- direction).
 -- =============================================================================
 reset_voyage()
 protocol.ingest("VOYAGE_WAIT", "")
+sea_lines = sea.lines(WIDTH)
+check("sea: no docked ships -> no [Actions] line at all", not find_plain(sea_lines, "[Actions]"))
+check("sea: no docked ships -> actions_line_index is nil", sea.actions_line_index(WIDTH) == nil)
+
 protocol.ingest("LONGSHIP",
   "7|Ormen|2|docked|Havn|0|4|1|1|proud|Erik|brave|swift|Saga of Ormen|3")
 sea_lines = sea.lines(WIDTH)
@@ -196,6 +231,45 @@ check("sea: reroll hint surfaces the exact command text",
   find_plain(sea_lines, "vvoyage launch <ship> reroll"))
 check("voyage: no-active-voyage fallback text", find_plain(voyage_lines, "No active voyage"))
 check("voyage: reroll hint names the docked ship", find_plain(voyage_lines, "Ormen"))
+
+check("sea: [Actions] line present once a docked ship exists", find_plain(sea_lines, "[Actions]"))
+check("voyage: [Actions] line present once a docked ship exists", find_plain(voyage_lines, "[Actions]"))
+
+do
+  local items = sea_common.actions()
+  check("actions(): exactly one reroll item for the one docked ship", #items == 1, #items)
+  check("actions(): reroll item's exact LEGACY command",
+    items[1].value == "vvoyage launch Ormen reroll", items[1].value)
+end
+
+-- Clicking the [Actions] line opens the menu with that reroll item, and
+-- selecting it sends the exact command.
+send_calls = {}
+last_menu_open = nil
+local sea_actions_idx = sea.actions_line_index(WIDTH)
+check("sea: actions_line_index is non-nil once an action exists", sea_actions_idx ~= nil)
+local ok_actions = sea.on_pointer({ kind = "down", x = 0, y = sea_actions_idx - 1 },
+  { line_from_y = function(y) return y + 1 end })
+check("sea: down on the [Actions] line consumes the event", ok_actions == true)
+check("sea: down on the [Actions] line opened the menu", last_menu_open ~= nil)
+check("sea: menu offers the reroll item", menu_has_label(last_menu_open, "Reroll Ormen"))
+last_menu_open.on_select("vvoyage launch Ormen reroll")
+check("sea: selecting the reroll item sends the exact LEGACY command",
+  #send_calls == 1 and send_calls[1] == "vvoyage launch Ormen reroll", send_calls[1])
+
+send_calls = {}
+last_menu_open = nil
+local voyage_actions_idx = voyage.actions_line_index(WIDTH)
+check("voyage: actions_line_index is non-nil once an action exists", voyage_actions_idx ~= nil)
+local ok_voyage_actions = voyage.on_pointer({ kind = "down", x = 0, y = voyage_actions_idx - 1 },
+  { line_from_y = function(y) return y + 1 end })
+check("voyage: down on the [Actions] line consumes the event", ok_voyage_actions == true)
+check("voyage: selecting the reroll item from the voyage popup sends the same command",
+  (function()
+    if not last_menu_open then return false end
+    last_menu_open.on_select("vvoyage launch Ormen reroll")
+    return #send_calls == 1 and send_calls[1] == "vvoyage launch Ormen reroll"
+  end)())
 
 -- =============================================================================
 -- Voyage Status fields (shared by both popups)
@@ -232,8 +306,44 @@ for _, name in ipairs({ "sea", "voyage" }) do
   check(name .. ": crew traits", find_plain(lines, "brave") and find_plain(lines, "loyal"))
 end
 
+-- Fix round 1, Important #2: /vik voyage with an active voyage must not
+-- duplicate "Voyage Status" (the module's own top header used to be the
+-- same string as common.status_lines' section header). Count occurrences
+-- in the ACTIVE-voyage output; must be exactly 1 (the section header only
+-- -- the module's own top header is "Voyage" now, a distinct string).
+do
+  local count = 0
+  for _, l in ipairs(voyage_lines) do
+    if l:find("Voyage Status", 1, true) then count = count + 1 end
+  end
+  check("voyage popup with an active voyage shows 'Voyage Status' exactly once (no dup header)",
+    count == 1, count)
+  -- Sanity: the one occurrence is the section header sea_common.status_lines
+  -- renders, not some other coincidental text.
+  check("the one 'Voyage Status' occurrence is the section header itself",
+    find_exact(voyage_lines, pagelib.header(WIDTH, "Voyage Status")))
+end
+-- Same invariant holds for /vik sea (its own top header is "Sea Chart", a
+-- different string from "Voyage Status" to begin with, so this was never at
+-- risk there -- checked anyway for completeness/regression coverage).
+do
+  local count = 0
+  for _, l in ipairs(sea_lines) do
+    if l:find("Voyage Status", 1, true) then count = count + 1 end
+  end
+  check("sea popup with an active voyage shows 'Voyage Status' exactly once", count == 1, count)
+end
+
+-- Resolve/end/clear actions do NOT exist yet here (voyage_wait is "" and
+-- show_sea_queue is on, so only Clear Queue would show -- checked as its
+-- own gate below, once Queue's own section test has run).
+
 -- =============================================================================
--- Awaiting Resolution + harbor End Voyage hint (shared by both popups)
+-- Awaiting Resolution + harbor End Voyage hint (shared by both popups),
+-- AND the resolve/end actions (fix round 1, remedy #1): resolve-gated case,
+-- "off" direction (no wait -> no resolve/end items, checked just above via
+-- comment) and "on" direction (awaiting harbor resolution -> both a Resolve
+-- item per option AND an End Voyage item).
 -- =============================================================================
 protocol.ingest("VOYAGE_WAIT", "harbor")
 protocol.ingest("VRESOLVE", "trade,explore")
@@ -247,6 +357,45 @@ for _, name in ipairs({ "sea", "voyage" }) do
   check(name .. ": resolve option command hint", find_plain(lines, "vvoyage resolve <option>"))
   check(name .. ": harbor end-voyage hint", find_plain(lines, "vvoyage end"))
 end
+
+do
+  -- One item per resolve option, plus End Voyage (harbor), plus Clear
+  -- Queue (show_sea_queue is still on from reset_voyage() -- Clear Queue's
+  -- own gate is independent of voyage_wait, see sea_common.lua's M.actions).
+  local items = sea_common.actions()
+  check("actions(): resolve-gated 'on' -- resolve options + End Voyage + Clear Queue",
+    #items == 4, #items)
+  check("actions(): resolve item 1 sends the exact LEGACY command",
+    items[1].value == "vvoyage resolve trade", items[1].value)
+  check("actions(): resolve item 2 sends the exact LEGACY command",
+    items[2].value == "vvoyage resolve explore", items[2].value)
+  check("actions(): End Voyage item sends the exact LEGACY command",
+    items[3].label == "End Voyage" and items[3].value == "vvoyage end", items[3].value)
+  check("actions(): Clear Queue item still present alongside resolve/end",
+    items[4].label == "Clear Queue" and items[4].value == "vvoyage clear", items[4].value)
+end
+
+-- Selecting a resolve option through the real menu-open path sends the
+-- exact command.
+send_calls = {}
+last_menu_open = nil
+sea_common.open_actions_menu()
+check("open_actions_menu offers 'Resolve: explore'", menu_has_label(last_menu_open, "Resolve: explore"))
+last_menu_open.on_select("vvoyage resolve explore")
+check("selecting 'Resolve: explore' sends the exact command",
+  #send_calls == 1 and send_calls[1] == "vvoyage resolve explore", send_calls[1])
+
+-- resolve-gated "off" direction, with an active voyage: no wait -> resolve
+-- and end-voyage items disappear (Clear Queue, gated separately, may still
+-- be present -- isolate by turning the queue gate off here too).
+page_opts.set("show_sea_queue", false)
+protocol.ingest("VOYAGE_WAIT", "")
+do
+  local items = sea_common.actions()
+  check("actions(): resolve-gated 'off' (no wait, queue gate off) -- no items at all",
+    #items == 0, #items)
+end
+page_opts.set("show_sea_queue", true)
 protocol.ingest("VOYAGE_WAIT", "") -- back to no-wait for later cases
 
 -- =============================================================================
@@ -278,6 +427,15 @@ for _, name in ipairs({ "sea", "voyage" }) do
   check(name .. ": crew memory line", find_plain(lines, "Remembered the reefs of Fjordholm."))
 end
 
+-- Clear Queue action tracks the Queue section's own gate (show_sea_queue),
+-- not the queue's contents (LEGACY draws the Clear button unconditionally
+-- inside the gated Queue block, even when "No queued movement").
+do
+  local items = sea_common.actions()
+  check("actions(): Clear Queue present while show_sea_queue is on", #items == 1
+    and items[1].label == "Clear Queue" and items[1].value == "vvoyage clear", #items)
+end
+
 page_opts.set("show_sea_queue", false)
 page_opts.set("show_sea_saga", false)
 page_opts.set("show_sea_memory", false)
@@ -290,6 +448,7 @@ for _, name in ipairs({ "sea", "voyage" }) do
   check(name .. ": Crew Memory header hidden when show_sea_memory is off",
     not find_plain(lines, "Crew Memory"))
 end
+check("actions(): Clear Queue gone when show_sea_queue is off", #sea_common.actions() == 0)
 page_opts.set("show_sea_queue", true)
 page_opts.set("show_sea_saga", true)
 page_opts.set("show_sea_memory", true)
@@ -381,7 +540,9 @@ check("chart row B: O/M/B/D fold to '~' display with distinct colors",
 local chart_section_header = pagelib.header(WIDTH, "Chart")
 check("voyage popup never renders the chart section", not find_exact(voyage.lines(WIDTH), chart_section_header))
 check("voyage popup exposes no grid hooks (no chart to hit-test)",
-  voyage.geometry == nil and voyage.grid_line_offset == nil and voyage.on_pointer == nil)
+  voyage.geometry == nil and voyage.grid_line_offset == nil)
+check("voyage popup DOES expose on_pointer now (fix round 1: the [Actions] line)",
+  type(voyage.on_pointer) == "function")
 
 -- Legend gate.
 check("chart legend shown by default", find_plain(sea_lines, "aurora calm"))
@@ -433,10 +594,42 @@ check("down over a chart cell consumes the event (matches viking_voyage_chart_do
   ok_down == true)
 check("down never sends anything (the real action waits for mouse-up)", #send_calls == 0)
 
+-- Fix round 1, Important #3: page_opts.confirm_chart_click defaults TRUE
+-- (matching LEGACY) -- mouse-up must open a 2-item confirm menu, NOT send
+-- immediately, while it's on.
+check("confirm_chart_click defaults to true", page_opts.get("confirm_chart_click") == true)
+send_calls = {}
+last_menu_open = nil
+local ok_up_confirm = sea.on_pointer({ kind = "up", x = 0, y = 0, inside = true }, fixed_ctx(2, 0))
+check("up over the chart cell consumes the event even when confirming", ok_up_confirm == true)
+check("up does NOT send immediately while confirm_chart_click is on", #send_calls == 0)
+check("up opens a confirm menu while confirm_chart_click is on", last_menu_open ~= nil)
+check("confirm menu names the coord and node (matches LEGACY's msgbox message)",
+  menu_has_label(last_menu_open, "Queue course to A03") and menu_has_label(last_menu_open, "Harbor"))
+check("confirm menu offers a Cancel item", menu_has_label(last_menu_open, "Cancel"))
+check("confirm menu has exactly two items", #last_menu_open.items == 2, #last_menu_open.items)
+
+-- Selecting "Cancel" (value "no") must not send.
+last_menu_open.on_select("no")
+check("selecting Cancel on the confirm menu never sends", #send_calls == 0)
+
+-- Re-open and select the "yes" item -> sends the exact queue command.
+sea.on_pointer({ kind = "up", x = 0, y = 0, inside = true }, fixed_ctx(2, 0))
+last_menu_open.on_select("yes")
+check("selecting the confirm menu's 'yes' item sends 'vvoyage queue A03'",
+  #send_calls == 1 and send_calls[1] == "vvoyage queue A03", send_calls[1])
+
+-- Now with confirm_chart_click OFF: mouse-up sends immediately, same as
+-- this port's original (pre-fix-round-1) unconditional-send behavior.
+page_opts.set("confirm_chart_click", false)
+send_calls = {}
+last_menu_open = nil
 local ok_up = sea.on_pointer({ kind = "up", x = 0, y = 0, inside = true }, fixed_ctx(2, 0))
 check("up over the SAME chart cell consumes the event", ok_up == true)
-check("up sends exactly 'vvoyage queue A03' (row 0 -> 'A', col 2 -> 1-based '03')",
+check("with confirm_chart_click off, up sends immediately: exactly 'vvoyage queue A03'",
   #send_calls == 1 and send_calls[1] == "vvoyage queue A03", send_calls[1])
+check("with confirm_chart_click off, up never opens a menu", last_menu_open == nil)
+page_opts.set("confirm_chart_click", true)
 
 -- out-of-grid: no ctx.cell_from_xy match at all.
 send_calls = {}
@@ -468,8 +661,10 @@ for _, l in ipairs(voyage.lines(WIDTH)) do
 end
 
 -- =============================================================================
--- ctx.cell_from_xy wiring through the real popups.lua wrapper (stubbed
--- wm.popup) -- same contract Task 3's map popup exercises.
+-- ctx.cell_from_xy / ctx.line_from_y wiring through the real popups.lua
+-- wrapper (stubbed wm.popup) -- same ctx.cell_from_xy contract Task 3's map
+-- popup exercises, extended here (fix round 1) to also cover ctx.line_from_y,
+-- including under a NON-ZERO scroll offset.
 -- =============================================================================
 is_open_flag = false
 opens = {}
@@ -490,6 +685,38 @@ hover_lines = sea.lines(WIDTH)
 check("wrapper's ctx.cell_from_xy reaches row A through the real popups.lua wrapper",
   find_plain(hover_lines, "Harbor") or find_plain(hover_lines, "Uncharted") or true)
 
+-- ctx.line_from_y at zero scroll: current state (no docked ships, no wait,
+-- show_sea_queue on) leaves exactly one action, "Clear Queue".
+local sea_idx = sea.actions_line_index(WIDTH)
+check("sea popup has an [Actions] line to test line_from_y against (Clear Queue)", sea_idx ~= nil)
+last_menu_open = nil
+send_calls = {}
+renderer.on_pointer({ kind = "down", x = 0, y = sea_idx - 1, inside = true })
+check("wrapper's ctx.line_from_y at zero scroll opens the actions menu",
+  last_menu_open ~= nil and menu_has_label(last_menu_open, "Clear Queue"))
+
+-- Scroll the wrapper down (offset ~= 0) and re-check: the SAME action line
+-- must be found at its NEW wrapper-local y (index - 1 - scroll_amount),
+-- confirming ctx.line_from_y's `y + scroll_offset + 1` formula tracks scroll
+-- rather than always reading the unscrolled position.
+local scroll_amount = 1
+renderer.scroll(scroll_amount)
+reset_drawn()
+renderer.render(make_rect(0, 0, WIDTH, rect_h), { title = "Sea Chart" })
+last_menu_open = nil
+send_calls = {}
+local scrolled_y = sea_idx - 1 - scroll_amount
+check("scrolled wrapper-local y for the actions line stays on screen", scrolled_y >= 0, scrolled_y)
+renderer.on_pointer({ kind = "down", x = 0, y = scrolled_y, inside = true })
+check("wrapper's ctx.line_from_y under a non-zero scroll offset still resolves to the actions line",
+  last_menu_open ~= nil and menu_has_label(last_menu_open, "Clear Queue"))
+
+-- A wrapper-local y that does NOT correspond to the actions line (even
+-- after accounting for scroll) must open nothing.
+last_menu_open = nil
+renderer.on_pointer({ kind = "down", x = 0, y = scrolled_y + 5, inside = true })
+check("a wrapper-local y away from the actions line opens nothing", last_menu_open == nil)
+
 if is_open_flag then package.loaded["wm"].popup.close() end
 
 is_open_flag = false
@@ -497,8 +724,19 @@ opens = {}
 check("popups.toggle('voyage') opens (voyage self-registers in popups.lua)",
   popups.toggle("voyage") == true)
 local voyage_renderer = opens[#opens].renderer
-check("voyage wrapper has NO on_pointer (the module supplies none)",
-  voyage_renderer.on_pointer == nil)
+check("voyage wrapper DOES expose on_pointer now (fix round 1: the [Actions] line)",
+  type(voyage_renderer.on_pointer) == "function")
+
+reset_drawn()
+voyage_renderer.render(make_rect(0, 0, WIDTH, rect_h), { title = "Voyage" })
+local voyage_idx = voyage.actions_line_index(WIDTH)
+check("voyage popup has an [Actions] line too (Clear Queue)", voyage_idx ~= nil)
+last_menu_open = nil
+send_calls = {}
+voyage_renderer.on_pointer({ kind = "down", x = 0, y = voyage_idx - 1, inside = true })
+check("voyage wrapper's ctx.line_from_y opens the actions menu",
+  last_menu_open ~= nil and menu_has_label(last_menu_open, "Clear Queue"))
+
 if is_open_flag then package.loaded["wm"].popup.close() end
 
 if failures > 0 then os.exit(1) end

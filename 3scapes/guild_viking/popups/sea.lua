@@ -53,27 +53,32 @@
 --     13068-13070) and updates the hover line; mouse-up sends
 --     "vvoyage queue <coord>" (matches viking_voyage_chart_click's Send,
 --     LEGACY 13074-13100) via ctx.cell_from_xy, same pattern as
---     popups/map.lua's hover line. The optional confirm-before-send modal
---     (page_opts.confirm_chart_click -> utils.msgbox, LEGACY 13082-13094)
---     is MUSHclient-native modal chrome with no lera equivalent --
---     dropped-with-reason: the action it guards is cheap and reversible
---     (a misqueued waypoint is cleared with "vvoyage clear", itself visible
---     in the Queue section), and building an async yes/no confirmation via
---     require("menu") for a single click is disproportionate chrome for
---     what the modal actually protects.
+--     popups/map.lua's hover line. The confirm-before-send modal
+--     (page_opts.confirm_chart_click, default TRUE -> utils.msgbox, LEGACY
+--     13082-13094) IS ported: since lera has no native modal, mouse-up opens
+--     a 2-item require("menu") ("Queue course to <coord> (<node>)" / "Cancel")
+--     when the opt is on, and sends immediately (as before this fix round)
+--     only when the opt is off -- see M.on_pointer below. One disclosed lera
+--     liberty: the hover line ALSO updates on mouse-down here, not just
+--     move. LEGACY's hover is the OS-native hotspot tooltip (the `Tooltip`
+--     argument to WindowAddHotspot), which needs no help from a click to
+--     already be showing; this port's hover is a rendered text line with no
+--     such native assist, so refreshing it on down as well as move keeps a
+--     touch/click-only interaction (no preceding hover move event) from
+--     landing on stale hover text.
 --   btn_reroll_<ship_id> (14989-14994), btn_resolve_<i> (15060-15069),
 --   btn_voyage_end (15079-15090), btn_clr_queue (15214-15220): pixel
---     rectangle buttons, none shaped like a grid cell. popups.lua's ctx
---     contract exposes ONLY grid-cell hit-testing (ctx.cell_from_xy, backed
---     by maplib.geometry) -- there is no line/column hit-test capability
---     for arbitrary text buttons, and adding one would extend popups.lua's
---     shared ctx contract beyond this task's file list. Each is
---     dropped-with-reason in sea_common.lua at its point of use: the
---     underlying command (vvoyage launch <ship> reroll / vvoyage resolve
---     <opt> / vvoyage end / vvoyage clear) is an ordinary MUD command the
---     player can already type, and every module renders its exact text so
---     the option stays legible without a click -- same fidelity class as
---     popups/map.lua's dead vmap_poi_locations right-click.
+--     rectangle buttons, none shaped like a grid cell -- popups.lua's
+--     ctx.cell_from_xy (backed by maplib.geometry) cannot hit-test them.
+--     LIVE via a different mechanism: sea_common.lua's M.actions() ports
+--     each button's own visibility condition and command verbatim; both
+--     this module and popups/voyage.lua render one "[Actions]" summary line
+--     in the voyage-status section and hit-test THAT single line with the
+--     new ctx.line_from_y (popups.lua), opening require("menu") with
+--     whichever of the four commands currently apply. Each command's exact
+--     text is ALSO rendered as plain text at its point of origin (the
+--     no-voyage reroll hint, the Awaiting Resolution options, the harbor
+--     hint) so it stays legible without opening the menu.
 local pagelib = require("pagelib")
 local maplib = require("maplib")
 local state = require("state")
@@ -356,7 +361,7 @@ local function format_aid_name(raw)
     return w:sub(1, 1):upper() .. w:sub(2):lower()
   end))
 end
--- AID_TIER_COLORS (guild_viking.lua:15296-15300) -- BGR decode matches the
+-- AID_TIER_COLORS (guild_viking.lua:15250-15255) -- BGR decode matches the
 -- table's own inline comments exactly (no author-comment slip here, unlike
 -- popups/map.lua's "*" finding): super rare 0x00CCCC -> yellow (comment
 -- says "gold/yellow", matches); ultra rare 0xFF55FF -> magenta (matches);
@@ -420,20 +425,36 @@ end
 -- Assembly. pre_chart_lines is shared by lines()/grid_line_offset() (and
 -- geometry(), transitively via the same three-gate re-check) so they can
 -- never drift -- same discipline popups/map.lua's pre_grid_lines follows.
+--
+-- Second return value: the 1-based index of the "[Actions]" line within the
+-- returned array, or nil when M.actions() has nothing to offer right now
+-- (see sea_common.lua). M.actions_line_index(width) below is the same
+-- "pure function of width" shape M.grid_line_offset uses, kept in lockstep
+-- with `out` by construction (both come out of this one function) so the
+-- rendered line and the hit-test index can never drift apart -- exactly the
+-- discipline the ctx.cell_from_xy contract already requires of
+-- geometry()/grid_line_offset().
 -- ---------------------------------------------------------------------------
 local function pre_chart_lines(width)
   local out = { pagelib.header(width, "Sea Chart") }
   if not S.mip_voyage_seen then
     for _, l in ipairs(common.mip_gate_lines(width)) do out[#out + 1] = l end
-    return out
+    return out, nil
   end
-  if not page_opts.get("show_sea_voyage") then return out end
+  if not page_opts.get("show_sea_voyage") then return out, nil end
   if not S.voyage_status then
     for _, l in ipairs(common.no_voyage_lines(width)) do out[#out + 1] = l end
-    return out
+  else
+    for _, l in ipairs(common.status_lines(width)) do out[#out + 1] = l end
   end
-  for _, l in ipairs(common.status_lines(width)) do out[#out + 1] = l end
-  return out
+
+  local actions_idx = nil
+  local action_lines = common.actions_line(width)
+  if #action_lines > 0 then
+    for _, l in ipairs(action_lines) do out[#out + 1] = l end
+    actions_idx = #out
+  end
+  return out, actions_idx
 end
 
 -- True once pre_chart_lines has reached the "voyage is active" branch --
@@ -506,11 +527,43 @@ function M.geometry(width)
   return maplib.geometry(make_chart_grid(), chart_grid_opts())
 end
 
--- Pointer: mirrors LEGACY's two-phase ch_<coord> hotspot (mouse-down
+-- Absolute 1-based line index of the "[Actions]" line (pre_chart_lines'
+-- second return value), or nil when there's nothing to act on right now.
+-- Unlike grid_line_offset, nothing this module renders BEFORE the actions
+-- line ever reflows by width in this design (pagelib.trunc/kv/pair_line
+-- always emit exactly one output line regardless of width; only the
+-- LEGEND, which sits AFTER the actions line, ever wraps) -- so the index
+-- returned here is width-invariant in practice, verified by this module's
+-- test asserting the same index at two very different widths. on_pointer
+-- below therefore calls this with a fixed representative width rather than
+-- needing the wrapper's actual last-rendered width, which (unlike
+-- geometry()/grid_line_offset(), which the wrapper threads `last_width`
+-- into itself) ctx.line_from_y's contract does not hand back to the module.
+local ACTIONS_PROBE_WIDTH = 76
+function M.actions_line_index(width)
+  local _, idx = pre_chart_lines(width or ACTIONS_PROBE_WIDTH)
+  return idx
+end
+
+-- Pointer: the "[Actions]" line (reroll/resolve/end/clear, see
+-- sea_common.lua) is checked first via ctx.line_from_y, since it sits
+-- above the chart and a click there has nothing to do with the grid. The
+-- chart itself mirrors LEGACY's two-phase ch_<coord> hotspot (mouse-down
 -- consumes with no action, matching viking_voyage_chart_down; mouse-up
--- sends the queue command, matching viking_voyage_chart_click) plus a
--- hover-line update on move, same convention as popups/map.lua's on_pointer.
+-- sends the queue command -- behind a confirm menu when
+-- page_opts.confirm_chart_click is on, matching viking_voyage_chart_click's
+-- utils.msgbox guard -- LEGACY 13074-13100) plus a hover-line update on
+-- move (and on down -- see this module's header comment for why), same
+-- convention as popups/map.lua's on_pointer.
 function M.on_pointer(ev, ctx)
+  if ev.kind == "down" and ctx.line_from_y then
+    local idx = M.actions_line_index()
+    if idx and ctx.line_from_y(ev.y) == idx then
+      common.open_actions_menu()
+      return true
+    end
+  end
+
   if not ctx.cell_from_xy then return nil end
 
   if ev.kind == "move" then
@@ -533,7 +586,23 @@ function M.on_pointer(ev, ctx)
   if ev.kind == "up" then
     local c, r = ctx.cell_from_xy(ev.x, ev.y)
     if not c then return nil end
-    mud.send("vvoyage queue " .. chart_coord(c, r))
+    local coord = chart_coord(c, r)
+    if page_opts.get("confirm_chart_click") then
+      local node = CHART_NODES[chart_sym(c, r)]
+      local what = " (" .. ((node and node.name) or "Uncharted") .. ")"
+      require("menu").open({
+        items = {
+          { label = "Queue course to " .. coord .. what, value = "yes" },
+          { label = "Cancel", value = "no" },
+        },
+        title = "Plot Voyage Course",
+        on_select = function(value)
+          if value == "yes" then mud.send("vvoyage queue " .. coord) end
+        end,
+      })
+    else
+      mud.send("vvoyage queue " .. coord)
+    end
     return true
   end
 
