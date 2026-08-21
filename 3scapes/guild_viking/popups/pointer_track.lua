@@ -1,7 +1,9 @@
--- Down-target recording, shared by every interactive popup module
--- (war_campaign, war_battle, cityplan, sea, voyage -- Important #1's "apply
--- uniformly across all five" ruling; map has no click action to protect and
--- does not need a tracker).
+-- Down-target recording, shared by the interactive popup modules that need
+-- it (war_campaign, war_battle, cityplan, sea). map never consumes a
+-- "down" at all (hover-only), so popup.lua never captures a gesture for
+-- it and it needs no tracker; voyage's [Actions] line is its only
+-- clickable target, so there is no second target for a mismatched up to
+-- land on. Both are documented inline in their own modules.
 --
 -- Real MUSHclient/miniwin hotspot semantics: a mouseup is only delivered to
 -- the SAME hotspot that took the matching mousedown, even for a hotspot with
@@ -24,16 +26,27 @@
 -- "cancel" (synthesized by popup.lua when the popup closes mid-drag) and
 -- after every "up", matched or not.
 --
--- Fail-open by design: when NOTHING has been recorded (down_recorded is
--- false -- either no down ever happened, or the record was already
--- consumed/cleared by a prior up), matches() returns true unconditionally.
--- This is what a bare "up" with no preceding "down" needs -- exactly the
--- shape every module's own direct-call unit tests use (they drive on_pointer
--- with "up" events on their own, never simulating a full down+up capture
--- sequence) -- and it is also exactly correct for the real dispatch path:
--- popup.lua only ever delivers an "up" WITHOUT a preceding "down" having
--- been recorded by THIS module when no capture existed for this event at
--- all, in which case there is no target to compare against anyway.
+-- FAIL-CLOSED (fix round 3 -- flipped from an earlier fail-open default).
+-- When NOTHING has been recorded (down_recorded is false -- either no down
+-- ever happened, or the record was already consumed/cleared by a prior
+-- up), matches() now returns FALSE: no recorded down means no target to
+-- have matched, so nothing may act. The earlier fail-open default existed
+-- only to let each module's own direct-call unit tests drive "up" events
+-- on their own, without simulating a full down+up sequence -- a testing
+-- convenience, not a real requirement, and it was actively wrong for the
+-- real dispatch path: popups/war.lua's composite re-resolves which
+-- sub-module is "active" on every call, so a battle ending mid-drag (down
+-- consumed by war_battle, `S.battle` cleared before the up arrives) could
+-- route that up to war_campaign, whose OWN tracker never recorded that
+-- down -- fail-open let it act anyway, firing a real command for a
+-- gesture it was never part of. war.lua's own gesture-pinning (see its
+-- header comment) now keeps a captured gesture routed to the module that
+-- actually took the down, but this tracker is a second, independent line
+-- of defense: even a mis-routed up must still fail to act when this
+-- specific module recorded no matching down of its own. Audited on this
+-- flip: none of the four modules that hold a tracker (war_campaign,
+-- war_battle, cityplan, sea) has any legitimate on_pointer path that
+-- relies on acting without a recorded down of its own.
 local M = {}
 
 local function same(a, b)
@@ -59,7 +72,7 @@ function M.tracker()
   end
 
   function t.matches(target)
-    if not down_recorded then return true end
+    if not down_recorded then return false end
     return same(down_target, target)
   end
 

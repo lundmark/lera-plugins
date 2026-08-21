@@ -613,7 +613,12 @@ check("confirm menu has exactly two items", #last_menu_open.items == 2, #last_me
 last_menu_open.on_select("no")
 check("selecting Cancel on the confirm menu never sends", #send_calls == 0)
 
--- Re-open and select the "yes" item -> sends the exact queue command.
+-- Re-open and select the "yes" item -> sends the exact queue command. Fix
+-- round 3: track.matches() is now fail-CLOSED, so this second "up" needs
+-- its own matching "down" immediately first (the earlier down at (2,0)
+-- was already consumed -- and the tracker cleared -- by the up right
+-- above this comment).
+sea.on_pointer({ kind = "down", x = 0, y = 0, inside = true }, fixed_ctx(2, 0))
 sea.on_pointer({ kind = "up", x = 0, y = 0, inside = true }, fixed_ctx(2, 0))
 last_menu_open.on_select("yes")
 check("selecting the confirm menu's 'yes' item sends 'vvoyage queue A03'",
@@ -624,6 +629,7 @@ check("selecting the confirm menu's 'yes' item sends 'vvoyage queue A03'",
 page_opts.set("confirm_chart_click", false)
 send_calls = {}
 last_menu_open = nil
+sea.on_pointer({ kind = "down", x = 0, y = 0, inside = true }, fixed_ctx(2, 0))
 local ok_up = sea.on_pointer({ kind = "up", x = 0, y = 0, inside = true }, fixed_ctx(2, 0))
 check("up over the SAME chart cell consumes the event", ok_up == true)
 check("with confirm_chart_click off, up sends immediately: exactly 'vvoyage queue A03'",

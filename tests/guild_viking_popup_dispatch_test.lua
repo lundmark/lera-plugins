@@ -388,5 +388,163 @@ do
   check("scenario C: popup closed cleanly", real_popup.is_open() == false)
 end
 
+-- =============================================================================
+-- Scenario D (fix round 3, completing Important #1: the war COMPOSITE's own
+-- mid-drag mode-flip race). A real down on a battle unit is captured
+-- (war_battle consumes, popup.lua captures) while a campaign selection
+-- already exists; `S.battle` is then cleared MID-DRAG (a battle ending is
+-- exactly the real-world trigger); the matching up must still be routed to
+-- war_battle (the module that took the down), NOT re-resolved to
+-- war_campaign via the composite's live active_module() -- which would
+-- otherwise let a stale campaign selection turn this up into a real
+-- "vcampaign queue ..." send for a gesture war_campaign was never part of.
+-- Before popups/war.lua's gesture pinning, this was reachable even with
+-- war_campaign's own down-consumption fix (Critical #1) applied: the down
+-- was consumed by war_battle, not war_campaign, so war_campaign's OWN
+-- tracker never recorded anything for this gesture at all -- exactly the
+-- fail-open gap pointer_track.lua's contract now closes as a second,
+-- independent line of defense, with war.lua's pin as the first.
+-- =============================================================================
+do
+  -- Scenario C's own fixture left S.battle set (it never clears it) --
+  -- clear it first via the real handler, so this scenario genuinely starts
+  -- with no battle and the campaign as the only live mode.
+  protocol.ingest("BATTLE", table.concat({ 0, "", "", 0, "", "", "", "", "", "", "" }, "|"))
+  check("no leftover battle from an earlier scenario", S.battle == nil)
+
+  seed_wmap({
+    dim = 2, rows = { "..", ".." },
+    units = { { id = "A", c = 0, r = 0, size = 10 } },
+  })
+  check("war_map seeded and active (scenario D)", S.war_map ~= nil and S.war_map.active == true)
+  check("popups.toggle('war') opens the campaign map (no battle yet)",
+    popups.toggle("war") == true)
+
+  local root_w, root_h = 100, 30
+  local root = ui.rect(0, 0, root_w, root_h)
+  real_popup.render(root)
+  local _, _, bw = box_geometry(root_w, root_h)
+  local inner_w = bw - 2
+  local off_c = war_campaign.grid_line_offset(inner_w)
+  local scol, srow = to_screen(root_w, root_h, cell_lx(0), off_c + 0)
+
+  -- war_campaign.selected/queue are module-local singletons that persist
+  -- across scenarios by design (see war_campaign.lua's own M.reset() doc
+  -- comment) -- scenario A left "A" selected. Clear that first with a real
+  -- click on its own (still-unmoved) cell, which war_campaign.lua's
+  -- on_click reads as "hold" (deselect) rather than a fresh select, exactly
+  -- like every other suite's own "cleanup deselect" step.
+  real_popup.handle_pointer({ kind = "down", button = "left", x = scol, y = srow })
+  real_popup.handle_pointer({ kind = "up", button = "left", x = scol, y = srow })
+  check("cleanup: no stale selection carried in from an earlier scenario",
+    not find_plain(war_campaign.lines(inner_w), "Selected A"))
+
+  -- Legitimately select "A" on the campaign grid, via a real matched
+  -- down+up pair, while the campaign is the only mode live -- this is the
+  -- pre-existing selection a mis-routed up would otherwise act against.
+  real_popup.handle_pointer({ kind = "down", button = "left", x = scol, y = srow })
+  real_popup.handle_pointer({ kind = "up", button = "left", x = scol, y = srow })
+  check("campaign selection established before the battle exists",
+    find_plain(war_campaign.lines(inner_w), "Selected A"))
+
+  -- A battle now starts (composite mode flips to war_battle -- battle takes
+  -- priority -- on the NEXT pointer dispatch; no re-render is needed, since
+  -- neither the popup's box geometry nor the wrapper's last_width changed).
+  seed_battle({
+    phase = "turn", turn = 4, target = "Fjordvik", width = 2, height = 2, dz = 1,
+    budget = 100, spent = 40, war_points = 22,
+    terrain_rows = { "..", ".." },
+    units = {
+      { side = "Y", label = "Shieldwall", size = 10, coord = "A1", morale = 70,
+        utype = "shieldwall", bid = 201 },
+      { side = "N", label = "Levy Rabble", size = 12, coord = "B2", morale = 40,
+        utype = "foe_levy" },
+    },
+  })
+  local off_b = war_battle.grid_line_offset(inner_w)
+  check("campaign and battle pre-grid line counts coincide (both headers-only) " ..
+    "-- the scenario's own premise: the SAME screen row is a valid cell in BOTH grids",
+    off_c == off_b, off_c .. " vs " .. off_b)
+
+  -- Real down on the battle's own unit (gc=0, gr=1, "A1") -- consumed by
+  -- war_battle, pinning this gesture to it.
+  local dcol, drow = to_screen(root_w, root_h, cell_lx(0), off_b + 1)
+  send_calls = {}
+  check("a REAL down on the battle unit consumes (war_battle, battle takes priority)",
+    real_popup.handle_pointer({ kind = "down", button = "left", x = dcol, y = drow }) == true)
+  check("the down never sends", #send_calls == 0)
+
+  -- MID-DRAG: the battle ends. Cleared via the real BATTLE handler
+  -- (active=0), not a direct S.battle poke -- same standing lesson as every
+  -- fixture in the per-popup suites: state transitions go through
+  -- protocol.ingest so kingdom.lua's own `S.battle = nil` clearing logic is
+  -- what's actually exercised, matching guild_viking_popup_war_test.lua's
+  -- own "BATTLE active=0" clear exactly.
+  protocol.ingest("BATTLE", table.concat({ 0, "", "", 0, "", "", "", "", "", "", "" }, "|"))
+  check("S.battle is nil mid-drag", S.battle == nil)
+  check("S.war_map is still active mid-drag (the mode active_module() would flip to)",
+    S.war_map.active == true)
+
+  -- The matching up, released at the SAME screen position as the down.
+  -- Without gesture pinning, the composite would re-resolve active_module()
+  -- to war_campaign now and dispatch the up there -- war_campaign's own
+  -- tracker never recorded this down (war_battle did), and pointer_track's
+  -- fail-open default used to let it act anyway.
+  send_calls = {}
+  real_popup.handle_pointer({ kind = "up", button = "left", x = dcol, y = drow })
+  check("the up after a mid-drag mode flip sends NOTHING", #send_calls == 0, send_calls[1])
+  check("the up after a mid-drag mode flip does not touch the campaign's selection/queue at all",
+    find_plain(war_campaign.lines(inner_w), "Selected A")
+    and not find_plain(war_campaign.lines(inner_w), "Queued for A"))
+
+  real_popup.close()
+  check("scenario D: popup closed cleanly", real_popup.is_open() == false)
+end
+
+-- =============================================================================
+-- Scenario D positive control: the SAME battle, with NO mid-drag mode
+-- flip, still behaves normally end to end through the real dispatch path
+-- -- gesture pinning must not disturb the ordinary, undisturbed case.
+-- =============================================================================
+do
+  seed_battle({
+    phase = "turn", turn = 4, target = "Fjordvik", width = 2, height = 2, dz = 1,
+    budget = 100, spent = 40, war_points = 22,
+    terrain_rows = { "..", ".." },
+    units = {
+      { side = "Y", label = "Shieldwall", size = 10, coord = "A1", morale = 70,
+        utype = "shieldwall", bid = 201 },
+      { side = "N", label = "Levy Rabble", size = 12, coord = "B2", morale = 40,
+        utype = "foe_levy" },
+    },
+  })
+  check("popups.toggle('war') opens the battle board (positive control)",
+    popups.toggle("war") == true)
+
+  local root_w, root_h = 100, 30
+  local root = ui.rect(0, 0, root_w, root_h)
+  real_popup.render(root)
+  local _, _, bw = box_geometry(root_w, root_h)
+  local inner_w = bw - 2
+  local off = war_battle.grid_line_offset(inner_w)
+
+  -- Select the own unit, then order it to the enemy cell -- both as real
+  -- matched down+up pairs, with S.battle untouched throughout.
+  local scol, srow = to_screen(root_w, root_h, cell_lx(0), off + 1)
+  send_calls = {}
+  real_popup.handle_pointer({ kind = "down", button = "left", x = scol, y = srow })
+  real_popup.handle_pointer({ kind = "up", button = "left", x = scol, y = srow })
+  check("positive control: selecting the own unit never sends", #send_calls == 0)
+
+  local ecol, erow = to_screen(root_w, root_h, cell_lx(1), off + 0)
+  real_popup.handle_pointer({ kind = "down", button = "left", x = ecol, y = erow })
+  real_popup.handle_pointer({ kind = "up", button = "left", x = ecol, y = erow })
+  check("positive control: ordering the unit sends the exact command with no mode flip in play",
+    #send_calls == 1 and send_calls[1] == "vbattle order 201 B2", send_calls[1])
+
+  real_popup.close()
+  check("scenario D positive control: popup closed cleanly", real_popup.is_open() == false)
+end
+
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING POPUP DISPATCH TESTS PASSED")

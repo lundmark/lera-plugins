@@ -367,7 +367,11 @@ check("move does not consume", ok_move == nil)
 check("move over own stack shows hover with 'host (you)'",
   find_plain(war_campaign.lines(WIDTH), "host (you)"))
 
--- Click own stack at (0,2) -> selects "A" (sq A3), no send yet.
+-- Click own stack at (0,2) -> selects "A" (sq A3), no send yet. Fix round
+-- 3: track.matches() is now fail-CLOSED, so every "up" below that expects
+-- an action needs its own matching "down" immediately first -- a real
+-- gesture, not just an up sent cold.
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 2))
 local ok_select = war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" },
   fixed_ctx(0, 2))
 check("left-up on own stack consumes", ok_select == true)
@@ -377,11 +381,13 @@ check("selected-but-no-queue status line", find_plain(war_campaign.lines(WIDTH),
 
 -- Queue waypoint 1: (2,1) -> sq "C2".
 send_calls = {}
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(2, 1))
 war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(2, 1))
 check("queuing waypoint 1 sends the exact command", #send_calls == 1 and send_calls[1] == "vcampaign queue A C2",
   send_calls[1])
 
 -- Queue waypoint 2: (1,0) -> sq "B1".
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(1, 0))
 war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(1, 0))
 check("queuing waypoint 2 sends the exact command", #send_calls == 2 and send_calls[2] == "vcampaign queue A B1",
   send_calls[2])
@@ -391,6 +397,7 @@ check("queue status line lists both waypoints in order",
 -- Click the selected stack's OWN (still unmoved) tile (0,2) -> deselect,
 -- clear the queue, send "vcampaign hold".
 send_calls = {}
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 2))
 war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 2))
 check("clicking own tile sends 'vcampaign hold'", #send_calls == 1 and send_calls[1] == "vcampaign hold",
   send_calls[1])
@@ -411,12 +418,14 @@ seed_wmap({
   dim = 3, rows = { "...", "...", "..." },
   units = { { id = "A", c = 0, r = 0, size = 10 } },
 })
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
 war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
 check("selected A ahead of the server-queue precedence check", find_plain(war_campaign.lines(WIDTH), "Selected A"))
 
 -- Queue ONE local waypoint (sq "B2") before any server echo exists -- the
 -- status line should show this local echo while wm.queues is absent.
 send_calls = {}
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(1, 1))
 war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(1, 1))
 check("local echo shown while no server queue exists yet",
   find_plain(war_campaign.lines(WIDTH), "Queued for A: B2"))
@@ -458,20 +467,29 @@ check("server queue cleared: falls back to the local echo",
 -- Clean up: deselect via the current stack position (0,0) before the next
 -- section re-seeds its own fixtures.
 send_calls = {}
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
 war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
 check("cleanup deselect after the server-queue precedence block",
   not find_plain(war_campaign.lines(WIDTH), "Selected A"))
 
--- Right-click (non-left) consumes but never acts.
+-- Right-click (non-left) consumes but never acts. No preceding down needed
+-- for the outcome (the action gate excludes any non-left button before
+-- track.matches() is ever consulted), but sending one anyway keeps this a
+-- genuine down+up gesture like every other case here.
 send_calls = {}
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "right" }, fixed_ctx(0, 2))
 local ok_right = war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "right" },
   fixed_ctx(0, 2))
 check("right-up consumes the cell", ok_right == true)
 check("right-up never sends nor selects", #send_calls == 0
   and not find_plain(war_campaign.lines(WIDTH), "Selected"))
 
--- Clicking an empty/enemy-free tile with nothing selected is a no-op.
+-- Clicking an empty/enemy-free tile with nothing selected is a no-op --
+-- exercised via a real matched down+up so on_click's own "no selection,
+-- no unit here" branch actually runs, rather than vacuously no-oping
+-- because the fail-closed tracker blocked entry to on_click altogether.
 send_calls = {}
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(1, 1))
 war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(1, 1))
 check("clicking empty ground with no selection never sends", #send_calls == 0)
 check("clicking empty ground with no selection selects nothing",
@@ -508,6 +526,7 @@ check("selection survives the mismatched drag: the next matched click still queu
 -- Cleanup: deselect via the stack's own (unmoved) position before the
 -- sections below re-seed their own fixtures.
 send_calls = {}
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
 war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
 check("cleanup deselect after the smoke/cross-target block",
   not find_plain(war_campaign.lines(WIDTH), "Selected A"))
@@ -517,11 +536,13 @@ check("cleanup deselect after the smoke/cross-target block",
 -- then clicking must clear the stale selection instead of crashing.
 reset_all()
 seed_wmap({ dim = 2, rows = { "..", ".." }, units = { { id = "A", c = 0, r = 0, size = 10 } } })
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
 war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
 check("selected A ahead of the revalidation check", find_plain(war_campaign.lines(WIDTH), "Selected A"))
 reset_all()
 seed_wmap({ dim = 2, rows = { "..", ".." }, units = { { id = "F", c = 1, r = 1, size = 5 } } })
 send_calls = {}
+war_campaign.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
 war_campaign.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(0, 0))
 check("stale 'A' selection is revalidated away (no crash, no stray send)", #send_calls == 0)
 check("stale selection no longer shown", not find_plain(war_campaign.lines(WIDTH), "Selected A"))
@@ -626,9 +647,12 @@ local function bfixed_ctx(gc, gr)
   return { cell_from_xy = function() return gc, gr end, line_from_y = function(y) return y end }
 end
 
--- Right-click own unit at A2 (gc=0, gr=0) -> "Undeploy Huscarl Guard".
+-- Right-click own unit at A2 (gc=0, gr=0) -> "Undeploy Huscarl Guard". Fix
+-- round 3: track.matches() is now fail-CLOSED, so every "up" below needs
+-- its own matching "down" immediately first.
 send_calls = {}
 last_menu_open = nil
+war_battle.on_pointer({ kind = "down", button = "right" }, bfixed_ctx(0, 0))
 local ok_undeploy = war_battle.on_pointer({ kind = "up", button = "right" }, bfixed_ctx(0, 0))
 check("right-up on own unit consumes", ok_undeploy == true)
 check("undeploy menu offers exactly 2 items (Undeploy + Cancel)",
@@ -641,6 +665,7 @@ check("selecting Undeploy sends the exact command",
 -- Right-click empty in-dz cell B1 (gc=1, gr=1) -> reserve deploy + fortify + cancel.
 send_calls = {}
 last_menu_open = nil
+war_battle.on_pointer({ kind = "down", button = "right" }, bfixed_ctx(1, 1))
 war_battle.on_pointer({ kind = "up", button = "right" }, bfixed_ctx(1, 1))
 check("in-dz empty-cell menu offers 4 items (1 reserve + 2 fortify + cancel)",
   last_menu_open ~= nil and #last_menu_open.items == 4, last_menu_open and #last_menu_open.items)
@@ -651,11 +676,13 @@ check("selecting the reserve item sends the exact deploy command",
 
 send_calls = {}
 last_menu_open = nil
+war_battle.on_pointer({ kind = "down", button = "right" }, bfixed_ctx(1, 1))
 war_battle.on_pointer({ kind = "up", button = "right" }, bfixed_ctx(1, 1))
 menu_select(last_menu_open, "Fortify: Stakes")
 check("Fortify: Stakes sends the exact command",
   #send_calls == 1 and send_calls[1] == "vbattle fortify stakes B1", send_calls[1])
 send_calls = {}
+war_battle.on_pointer({ kind = "down", button = "right" }, bfixed_ctx(1, 1))
 war_battle.on_pointer({ kind = "up", button = "right" }, bfixed_ctx(1, 1))
 menu_select(last_menu_open, "Fortify: Dugout")
 check("Fortify: Dugout sends the exact command",
@@ -664,6 +691,7 @@ check("Fortify: Dugout sends the exact command",
 -- Right-click the enemy-occupied, non-dz cell C2 (gc=2, gr=0) -> "Not your
 -- deploy zone" + Cancel (LEGACY ignores the occupant here -- ported as-is).
 last_menu_open = nil
+war_battle.on_pointer({ kind = "down", button = "right" }, bfixed_ctx(2, 0))
 war_battle.on_pointer({ kind = "up", button = "right" }, bfixed_ctx(2, 0))
 check("non-dz cell menu offers 'Not your deploy zone' + Cancel",
   last_menu_open ~= nil and #last_menu_open.items == 2
@@ -691,6 +719,7 @@ seed_battle({
   },
 })
 last_menu_open = nil
+war_battle.on_pointer({ kind = "down", button = "right" }, bfixed_ctx(0, 0))
 war_battle.on_pointer({ kind = "up", button = "right" }, bfixed_ctx(0, 0))
 check("enemy-occupied in-dz cell still offers the reserve-deploy branch (bug-for-bug)",
   last_menu_open ~= nil and not menu_has_label(last_menu_open, "Not your deploy zone")
@@ -721,6 +750,7 @@ seed_battle({
 last_menu_open = { items = { { label = "x", value = false } }, on_select = function() end }
 menu_close_count = 0
 send_calls = {}
+war_battle.on_pointer({ kind = "down", button = "left" }, bfixed_ctx(1, 1))
 local ok_left_close = war_battle.on_pointer({ kind = "up", button = "left" }, bfixed_ctx(1, 1))
 check("left-up in deploy phase consumes", ok_left_close == true)
 check("left-up closes any open menu", menu_close_count == 1)
@@ -745,30 +775,39 @@ seed_battle({
 })
 check("battle turn-phase committed", S.battle ~= nil and S.battle.phase == "turn")
 
+-- Fix round 3: track.matches() is now fail-CLOSED, so every "up" below
+-- needs its own matching "down" immediately first -- a real gesture.
 send_calls = {}
+war_battle.on_pointer({ kind = "down", button = "left" }, bfixed_ctx(0, 1))
 local ok_pick = war_battle.on_pointer({ kind = "up", button = "left" }, bfixed_ctx(0, 1))
 check("left-up on own unit (turn phase) consumes", ok_pick == true)
 check("selecting a unit never sends", #send_calls == 0)
 
+war_battle.on_pointer({ kind = "down", button = "left" }, bfixed_ctx(1, 0))
 war_battle.on_pointer({ kind = "up", button = "left" }, bfixed_ctx(1, 0))
 check("left-up on a different cell sends the exact order command",
   #send_calls == 1 and send_calls[1] == "vbattle order 201 B2", send_calls[1])
 
 -- Re-select, then click the SAME cell -> deselect, no send.
+war_battle.on_pointer({ kind = "down", button = "left" }, bfixed_ctx(0, 1))
 war_battle.on_pointer({ kind = "up", button = "left" }, bfixed_ctx(0, 1))
 send_calls = {}
+war_battle.on_pointer({ kind = "down", button = "left" }, bfixed_ctx(0, 1))
 war_battle.on_pointer({ kind = "up", button = "left" }, bfixed_ctx(0, 1))
 check("clicking the same cell twice deselects without sending", #send_calls == 0)
 
 -- Re-select, then right-click -> cancels selection and closes any menu.
+war_battle.on_pointer({ kind = "down", button = "left" }, bfixed_ctx(0, 1))
 war_battle.on_pointer({ kind = "up", button = "left" }, bfixed_ctx(0, 1))
 menu_close_count = 0
 send_calls = {}
+war_battle.on_pointer({ kind = "down", button = "right" }, bfixed_ctx(0, 1))
 war_battle.on_pointer({ kind = "up", button = "right" }, bfixed_ctx(0, 1))
 check("right-up cancels the selection", menu_close_count == 1)
 check("right-up never sends", #send_calls == 0)
 -- Confirm the cancel actually cleared selection: clicking a bare cell next
 -- with nothing selected and no own unit there must not send an order.
+war_battle.on_pointer({ kind = "down", button = "left" }, bfixed_ctx(1, 0))
 war_battle.on_pointer({ kind = "up", button = "left" }, bfixed_ctx(1, 0))
 check("post-cancel click on the enemy cell does not order a move (nothing was selected)",
   #send_calls == 0)
@@ -914,10 +953,16 @@ seed_wmap({
   dim = 2, rows = { "..", ".." },
   units = { { id = "A", c = 0, r = 0, size = 10 } },
 })
+-- Fix round 3: track.matches() is now fail-CLOSED, so a real down through
+-- the COMPOSITE's own on_pointer must precede each up -- also exercises
+-- war.lua's own gesture pinning (the down's consumed result pins this
+-- gesture to war_campaign, per its header comment).
 send_calls = {}
+war.on_pointer({ kind = "down", button = "left" }, fixed_ctx(0, 0))
 war.on_pointer({ kind = "up", button = "left" }, fixed_ctx(0, 0))
 check("composite on_pointer delegates the select to war_campaign",
   find_plain(war_campaign.lines(WIDTH), "Selected A"))
+war.on_pointer({ kind = "down", button = "left" }, fixed_ctx(1, 1))
 war.on_pointer({ kind = "up", button = "left" }, fixed_ctx(1, 1))
 check("composite on_pointer delegates the queue-and-send to war_campaign",
   #send_calls == 1 and send_calls[1] == "vcampaign queue A B2", send_calls[1])
@@ -927,6 +972,7 @@ check("composite on_pointer delegates the queue-and-send to war_campaign",
 -- war_map with a unit at the same coordinates -- otherwise that section's
 -- first click would DESELECT (this leftover selection's stack is still at
 -- (0,0)) instead of selecting fresh, exactly the semantics being tested.
+war.on_pointer({ kind = "down", button = "left" }, fixed_ctx(0, 0))
 war.on_pointer({ kind = "up", button = "left" }, fixed_ctx(0, 0))
 check("cleanup click deselects", not find_plain(war_campaign.lines(WIDTH), "Selected A"))
 
@@ -956,6 +1002,7 @@ local pre_offset = war_campaign.grid_line_offset(WIDTH)
 local wrapper_y_row0 = pre_offset
 check("row 0 is within the visible rect at zero scroll", wrapper_y_row0 < rect_h, wrapper_y_row0)
 send_calls = {}
+renderer.on_pointer({ kind = "down", x = 0, y = wrapper_y_row0, inside = true, button = "left" })
 renderer.on_pointer({ kind = "up", x = 0, y = wrapper_y_row0, inside = true, button = "left" })
 check("wrapper's ctx.cell_from_xy maps wrapper-local (x,y) to grid cell (0,0), selecting the host",
   find_plain(war_campaign.lines(WIDTH), "Selected A"))

@@ -456,7 +456,15 @@ function M.on_pointer(ev, ctx)
 
   if ev.kind == "up" then
     local c, r = ctx.cell_from_xy(ev.x, ev.y)
-    if not c then return nil end
+    if not c then
+      -- Fix round 3: clear the tracker here too, matching cityplan.lua/
+      -- sea.lua/war_battle.lua's own off-grid-up early return and
+      -- pointer_track.lua's own documented contract -- an off-grid release
+      -- still ends the gesture, so the next down must start fresh rather
+      -- than comparing against a stale record.
+      track.clear()
+      return nil
+    end
     if ev.button == "left" and track.matches({ kind = "cell", c = c, r = r }) then
       on_click(wm, c, r)
     end

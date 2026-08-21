@@ -444,9 +444,12 @@ check("left-up closes any open tile menu (matches viking_cityplan_click's non-ri
   menu_close_count == 1)
 check("left-up never sends anything nor opens a menu", #send_calls == 0 and last_menu_open == nil)
 
--- up, right button, OCCUPIED plot -> "Lift <name>" + Cancel, selecting Lift sends
+-- up, right button, OCCUPIED plot -> "Lift <name>" + Cancel, selecting Lift
+-- sends. Fix round 3: track.matches() is now fail-CLOSED, so every "up"
+-- below needs its own matching "down" immediately first.
 send_calls = {}
 last_menu_open = nil
+cityplan.on_pointer({ kind = "down", x = 0, y = 0, inside = true }, fixed_ctx(0, 0))
 local ok_up_occ = cityplan.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "right" },
   fixed_ctx(0, 0))
 check("right-up over an occupied plot consumes the event", ok_up_occ == true)
@@ -461,6 +464,7 @@ check("selecting 'Lift Longhouse' sends 'vplan lift b1'",
 -- up, right button, EMPTY plot -> "Place  <name>" per unplaced (sorted) + Cancel
 send_calls = {}
 last_menu_open = nil
+cityplan.on_pointer({ kind = "down", x = 0, y = 0, inside = true }, fixed_ctx(1, 0))
 local ok_up_empty = cityplan.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "right" },
   fixed_ctx(1, 0))
 check("right-up over an empty plot consumes the event", ok_up_empty == true)
@@ -478,6 +482,7 @@ check("selecting 'Place  Forge' sends 'vplan place b2 A2' (cellname for (1,0))",
 -- Cancel / "Nothing left to place" never send.
 send_calls = {}
 last_menu_open = nil
+cityplan.on_pointer({ kind = "down", x = 0, y = 0, inside = true }, fixed_ctx(1, 0))
 cityplan.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "right" }, fixed_ctx(1, 0))
 menu_select(last_menu_open, "Cancel")
 check("selecting Cancel never sends", #send_calls == 0)
@@ -507,6 +512,7 @@ check("the mismatched drag never sends anything", #send_calls == 0)
 reset_cityplan()
 seed_cplan({ dim = 1, margin = 0, rows = { "." } })
 last_menu_open = nil
+cityplan.on_pointer({ kind = "down", x = 0, y = 0, inside = true }, fixed_ctx(0, 0))
 cityplan.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "right" }, fixed_ctx(0, 0))
 check("with no unplaced buildings, the menu offers 'Nothing left to place' + Cancel",
   last_menu_open ~= nil and #last_menu_open.items == 2
