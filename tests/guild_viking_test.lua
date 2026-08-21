@@ -22,8 +22,23 @@ store = {
   set = function(d) stored = d end,
   save = function() end,
 }
-lera = { time = function() return 1000 end, version = function() return "test" end }
-buffer = { color_print = function() end }
+lera = { time = function() return 1000 end, version = function() return "test" end,
+         render_pass = function() return "local" end }
+-- Captures each color_print call's text segments (positions 3, 6, 9, ... of
+-- its bg/fg/text triplets), joined, as one entry -- lets later cases (the
+-- Task 2 "/vik opts" dispatch) assert on printed content instead of just
+-- that a call happened without erroring.
+local printed = {}
+buffer = {
+  color_print = function(...)
+    local args = { ... }
+    local parts = {}
+    for i = 3, #args, 3 do
+      parts[#parts + 1] = tostring(args[i])
+    end
+    printed[#printed + 1] = table.concat(parts)
+  end,
+}
 mud = { send = function() end }
 -- mip/gmcp stubs capture registrations and can fire them with the real wire
 -- shapes, so wiring bugs (e.g. binding the wrong callback argument) show up
@@ -491,17 +506,32 @@ check("idle tick does not mark dirty", dirty_count == cd_before)
 
 -- ---- persist: price_history + source survive save/load (Task 10) -----------
 local persist = require("persist")
+-- Task 2: page_opts.lua and window.lua, required here for the persistence
+-- round-trip extension below (page_opts + current page).
+local page_opts = require("page_opts")
+local window = require("window")
 
 S.price_history = { [1] = { fish = { { t = 100, b = 2, s = 3 } } } }
 protocol.source("gmcp")
+-- Task 2 extension: flip a page option and switch pages before saving, so
+-- the round-trip below also covers persist's new page_opts/page fields
+-- (mirrors LEGACY's SetVariable("popt_"..k) + SetVariable("page", ...)).
+page_opts.set("show_stats_buffs", false)
+window.set_page("goods")
 persist.save()
 S.price_history = {}
 protocol.source("auto")
+page_opts.set("show_stats_buffs", true)   -- flip back so load is what restores it
+window.set_page("stats")
 persist.load()
 check("history restored", S.price_history[1] and S.price_history[1].fish[1].b == 2)
 check("source restored", protocol.source() == "gmcp")
+check("page_opts restored", page_opts.get("show_stats_buffs") == false)
+check("page restored", window.current_page() == "goods")
 protocol.source("mip")
 protocol.source("auto")
+page_opts.set("show_stats_buffs", true)
+window.set_page("stats")
 
 -- ---- /vik registration + dispatch (Task 10) ---------------------------------
 -- M.on_load() ran once already (above); it registered the real /vik command
@@ -525,6 +555,32 @@ check("vik empty args falls back to usage without error", ok_empty)
 
 local ok_unknown = pcall(registered_vik.handler, "bogus", "/vik")
 check("vik unknown subcommand falls back to usage without error", ok_unknown)
+
+-- ---- /vik: stage-2 page switching + page options (Task 2) ------------------
+window.set_page("city")   -- somewhere other than stats, so the dispatch below
+                          -- proves it actually switches rather than no-op'ing
+registered_vik.handler("stats", "/vik")
+check("/vik stats switches page", window.current_page() == "stats")
+
+check("page_opts.set rejects an unknown key directly", page_opts.set("no_such_opt", true) == false)
+
+check("show_stats_xp defaults to true", page_opts.get("show_stats_xp") == true)
+registered_vik.handler("set show_stats_xp off", "/vik")
+check("/vik set show_stats_xp off flips it", page_opts.get("show_stats_xp") == false)
+
+printed = {}
+registered_vik.handler("opts", "/vik")
+local opts_text = table.concat(printed, "\n")
+check("/vik opts output contains the flipped option",
+      opts_text:find("show_stats_xp = off", 1, true) ~= nil, opts_text)
+
+local before_unknown_opt = page_opts.get("show_stats_xp")
+local ok_set_unknown = pcall(registered_vik.handler, "set no_such_opt on", "/vik")
+check("/vik set with an unknown opt does not error", ok_set_unknown)
+check("unknown opt refused, nothing else disturbed",
+      page_opts.get("show_stats_xp") == before_unknown_opt)
+
+registered_vik.handler("set show_stats_xp on", "/vik")   -- restore for later tests
 
 -- ---- /vik resetxp: session counters reset (XML alias body, lines 175-186) --
 S.vis_session, S.kap_session, S.soe_session, S.aud_session = 10, 20, 30, 40

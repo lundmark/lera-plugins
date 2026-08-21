@@ -39,6 +39,12 @@ for _, p in ipairs(city._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
 end
 
+-- Stage 2: page options + the tab bar / page shell (window.lua). Required
+-- after the handlers so the state they populate is available to the pages
+-- window.lua registers, even though no page reads it until Task 3+.
+local page_opts = require("page_opts")
+local window = require("window")
+
 -- Task 8: combat composite + hp-bar triggers. FFF is a separate MIP composite
 -- from BBE (not routed through protocol.lua's key/value dispatch), so it gets
 -- its own mip.on registration. The callback is 3-arg (key, code, data); data
@@ -110,8 +116,44 @@ local function print_status()
     "  parser errors: %d (%d key%s)", err_total, err_keys, err_keys == 1 and "" or "s"))
 end
 
+-- `/vik opts`: list every page option with its current value.
+local function print_opts()
+  local lines = {}
+  for _, o in ipairs(page_opts.all()) do
+    lines[#lines + 1] = o.key .. " = " .. (o.value and "on" or "off")
+  end
+  buffer.color_print(nil, "DAA520", table.concat(lines, "\n"))
+end
+
+-- `/vik set <opt> on|off|toggle`: validated flip of one page option.
+local function set_opt(rest)
+  local opt, mode = rest:match("^(%S+)%s+(%S+)$")
+  if not opt then
+    buffer.color_print(nil, "DAA520", "Usage: /vik set <opt> on|off|toggle")
+    return
+  end
+  local current = page_opts.get(opt)
+  if current == nil then
+    buffer.color_print(nil, "DAA520", "Viking: unknown page option '" .. opt .. "'")
+    return
+  end
+  local new_val
+  if mode == "on" then new_val = true
+  elseif mode == "off" then new_val = false
+  elseif mode == "toggle" then new_val = not current
+  end
+  if new_val == nil then
+    buffer.color_print(nil, "DAA520", "Usage: /vik set <opt> on|off|toggle")
+    return
+  end
+  page_opts.set(opt, new_val)
+  buffer.color_print(nil, "DAA520", "Viking: " .. opt .. " = " .. (new_val and "on" or "off"))
+end
+
 -- Dispatches /vik's subcommands. `args` is everything after "/vik " (may be
--- ""); an unknown or empty subcommand prints usage.
+-- ""); an unknown or empty subcommand prints usage. A bare arg matching one
+-- of window.PAGES' keys (case-insensitively) switches the pane's current
+-- page, same as clicking its tab.
 function M.vik_command(args)
   args = args or ""
   local sub, rest = args:match("^%s*(%S*)%s*(.-)%s*$")
@@ -137,9 +179,16 @@ function M.vik_command(args)
     end
   elseif sub == "resetxp" then
     do_resetxp()
+  elseif sub == "opts" then
+    print_opts()
+  elseif sub == "set" then
+    set_opt(rest)
+  elseif sub ~= "" and window.set_page(sub:lower()) then
+    buffer.color_print(nil, "DAA520", "Viking page: " .. sub:lower())
   else
     buffer.color_print(nil, "DAA520",
-      "Usage: /vik [status | trace | save | source mip|gmcp|auto | resetxp]")
+      "Usage: /vik [status | trace | save | source mip|gmcp|auto | resetxp | "
+      .. "<page> | opts | set <opt> on|off|toggle]")
   end
 end
 
@@ -163,12 +212,17 @@ function M.on_load()
 
   local id, err = command.register({
     name = "/vik",
-    usage = "/vik [status | trace | save | source mip|gmcp|auto | resetxp]",
-    summary = "Viking guild data and controls",
-    description = "Stage-1 surface: ingestion status and counters (status), "
-      .. "message tracing (trace), explicit save (save), transport selection "
-      .. "(source), and the saga-XP session reset (resetxp; the bare "
-      .. "'resetvikxp' alias does the same).",
+    usage = "/vik [status | trace | save | source mip|gmcp|auto | resetxp | "
+      .. "<page> | opts | set <opt> on|off|toggle]",
+    summary = "Viking guild data, pane, and controls",
+    description = "Ingestion status and counters (status), message tracing "
+      .. "(trace), explicit save (save), transport selection (source), the "
+      .. "saga-XP session reset (resetxp; the bare 'resetvikxp' alias does "
+      .. "the same), switching the pane to a page by key -- stats, city, "
+      .. "farm, builds, people, goods, bonds, ranks, court, army, war, or "
+      .. "trade -- (same as clicking its tab), listing every page option "
+      .. "with its current value (opts), and flipping one page option "
+      .. "(set).",
     accepts_args = true,
     handler = function(args) M.vik_command(args or "") end,
   })
@@ -286,6 +340,33 @@ function M.render_guild_stats(rect, opts)
     ui.text(ui.rect(x, y + i - 1, w, 1), lines[i])
   end
   return n
+end
+
+-- ---------------------------------------------------------------------------
+-- wm.assign renderer contract (CLAUDE.md "Pane Pointer Input" / "Pane
+-- Scrolling"): a profile can `wm.assign("viking", plugin_table)` directly --
+-- wm auto-discovers render/on_pointer/scroll/scroll_to_bottom/following_tail
+-- on the assigned table, and every one of these just delegates to window.lua.
+-- ---------------------------------------------------------------------------
+
+function M.render(rect, opts)
+  return window.render(rect, opts)
+end
+
+function M.on_pointer(event)
+  return window.on_pointer(event)
+end
+
+function M.scroll(delta)
+  return window.scroll(delta)
+end
+
+function M.scroll_to_bottom()
+  return window.scroll_to_bottom()
+end
+
+function M.following_tail()
+  return window.following_tail()
 end
 
 return M
