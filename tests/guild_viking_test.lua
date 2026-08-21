@@ -68,7 +68,20 @@ gmcp = {
   -- real shape: callback(package, data)
   fire = function(pkg, data) gmcp_handlers[pkg](pkg, data) end,
 }
-trigger = { add = function() return 1 end, remove = function() end }
+-- Task 3: captures every trigger.add registration (pattern, fn, opts) with
+-- an incrementing id, and every trigger.remove'd id -- so the hp-bar gag
+-- tests below can assert the opts a REAL /vik set gag_status_lines
+-- re-registration actually passed, and that the old ids were torn down.
+local trigger_regs, trigger_reg_count = {}, 0
+local removed_trigger_ids = {}
+trigger = {
+  add = function(pattern, fn, opts)
+    trigger_reg_count = trigger_reg_count + 1
+    trigger_regs[trigger_reg_count] = { pattern = pattern, fn = fn, opts = opts }
+    return trigger_reg_count
+  end,
+  remove = function(id) removed_trigger_ids[id] = true end,
+}
 -- Fix 1 regression: capture every timer.every registration (interval, fn) so
 -- the sweep timer's callback can be fired directly with realistic
 -- millisecond-scale lera.time() values, the same way mip/gmcp stubs above
@@ -620,26 +633,128 @@ S.price_history[2] = { wool = { { t = 200, b = 5, s = 6 } } }
 local ok_save = pcall(registered_vik.handler, "save", "/vik")
 check("vik save dispatches without error", ok_save)
 
--- ---- stats_window contract: has_data / render_guild_stats -------------------
+-- ---- stats_window contract: has_data / render_guild_stats (Task 3) ---------
+-- Stage 2: render_guild_stats draws a truncated view of pages.stats.lines(w)
+-- itself (not a separate, hand-rolled 3-line summary), via ui.text_ansi.
 check("has_data is a function", type(M.has_data) == "function")
 check("render_guild_stats is a function", type(M.render_guild_stats) == "function")
 check("has_data true after ingestion", M.has_data() == true)
 
 ui.rect = function(x, y, w, h) return { x = x, y = y, w = w, h = h } end
 ui.text = function() end
+local ansi_drawn = {}
+ui.text_ansi = function(r, s) ansi_drawn[#ansi_drawn + 1] = s end
+
+local stats_page = require("pages.stats")
 
 S.vis, S.vis_session, S.kap, S.kap_session = 100, 5, 200, 10
 S.soe, S.soe_session, S.aud, S.aud_session = 300, 15, 400, 20
 S.ldng, S.mldng = 3, 4
 
+local full_stats_lines = stats_page.lines(40)
+check("(setup) the full stats page has more lines than a 2-row rect fits",
+      #full_stats_lines > 2, #full_stats_lines)
+
+ansi_drawn = {}
 local used_clipped = M.render_guild_stats({ x = 0, y = 0, w = 40, h = 2 }, {})
 check("render_guild_stats clips to rect height", used_clipped == 2, used_clipped)
+check("render_guild_stats draws exactly the rows it reports using",
+      #ansi_drawn == used_clipped, #ansi_drawn)
+check("render_guild_stats's first drawn row matches pages.stats.lines(w)[1]",
+      ansi_drawn[1] == full_stats_lines[1], ansi_drawn[1])
 
-local used_full = M.render_guild_stats({ x = 0, y = 0, w = 40, h = 10 }, {})
-check("render_guild_stats returns lines used", used_full == 3, used_full)
+ansi_drawn = {}
+local used_full = M.render_guild_stats({ x = 0, y = 0, w = 40, h = 1000 }, {})
+check("render_guild_stats returns <= rect height", used_full <= 1000, used_full)
+check("a tall-enough rect gets every produced line",
+      used_full == #full_stats_lines, used_full)
+check("first drawn row still matches pages.stats.lines(w)[1] (plain-field rect)",
+      ansi_drawn[1] == full_stats_lines[1], ansi_drawn[1])
+
+-- Dual rect-shape handling (rect_dims): a plain-field rect (rect.x/.y/.w/.h,
+-- used above) and a colon-method rect (rect:x()/.../rect:h(), conui's real
+-- shape, used by window.lua/pages) must both work identically.
+local function make_colon_rect(x, y, w, h)
+  return { x = function() return x end, y = function() return y end,
+           w = function() return w end, h = function() return h end }
+end
+ansi_drawn = {}
+local used_colon = M.render_guild_stats(make_colon_rect(0, 0, 40, 1000), {})
+check("render_guild_stats works with a colon-method rect", used_colon == #full_stats_lines, used_colon)
+check("colon-method rect's first drawn row matches pages.stats.lines(w)[1]",
+      ansi_drawn[1] == full_stats_lines[1], ansi_drawn[1])
 
 check("render_guild_stats zero height returns 0",
       M.render_guild_stats({ x = 0, y = 0, w = 40, h = 0 }, {}) == 0)
+
+-- ---- hp-bar gagging: registration reads gag_status_lines, re-registers on --
+-- flip (Task 3's stage-1 ruling, see init.lua's combat_trigger_opts/
+-- register_combat_triggers/reregister_combat_triggers). M.on_load() (above)
+-- already registered the 8 combat.triggers once with the default
+-- gag_status_lines = true.
+local function combat_regs_since(from_id)
+  local out = {}
+  for id = from_id + 1, trigger_reg_count do
+    out[#out + 1] = trigger_regs[id]
+  end
+  return out
+end
+
+check("gag_status_lines defaults to true", page_opts.get("gag_status_lines") == true)
+
+-- on_load's register_combat_triggers() runs BEFORE the notify.triggers loop
+-- (init.lua), so the 8 combat triggers are always ids 1-8, whatever else
+-- trigger.add gets called for afterward (notify.triggers registers 15 more
+-- of its own right after -- which is why combat_regs_since(0) would
+-- over-capture here; ids 1-8 specifically are combat's).
+local first_8 = {}
+for id = 1, 8 do first_8[id] = trigger_regs[id] end
+check("exactly 8 combat triggers were registered on_load (ids 1-8)",
+      #first_8 == 8, #first_8)
+local all_gagged_by_default = true
+for _, r in ipairs(first_8) do
+  if not (r.opts and r.opts.omit_from_output == true) then all_gagged_by_default = false end
+end
+check("all 8 combat triggers registered gagged (omit_from_output) by default",
+      all_gagged_by_default)
+
+-- Only the 8 combat trigger ids (1-8) are expected to be torn down by a
+-- gag flip -- notify's 15 triggers (registered right after, in the same
+-- on_load) are a different subsystem entirely and must be left alone.
+local combat_ids_before_flip = { 1, 2, 3, 4, 5, 6, 7, 8 }
+
+registered_vik.handler("set gag_status_lines off", "/vik")
+check("gag_status_lines flipped off", page_opts.get("gag_status_lines") == false)
+
+local all_old_ids_removed = true
+for _, id in ipairs(combat_ids_before_flip) do
+  if not removed_trigger_ids[id] then all_old_ids_removed = false end
+end
+check("flipping the opt removes the old 8 combat trigger registrations",
+      all_old_ids_removed)
+check("notify's triggers were NOT removed by the gag flip",
+      not removed_trigger_ids[9], removed_trigger_ids[9])
+
+local reregistered_off = combat_regs_since(trigger_reg_count - 8)
+check("re-registration adds exactly 8 new triggers", #reregistered_off == 8, #reregistered_off)
+local none_gagged_after_off = true
+for _, r in ipairs(reregistered_off) do
+  if r.opts ~= nil then none_gagged_after_off = false end
+end
+check("re-registered triggers carry no omit_from_output once the opt is off",
+      none_gagged_after_off)
+
+local reg_count_before_on = trigger_reg_count
+registered_vik.handler("set gag_status_lines on", "/vik")
+check("gag_status_lines flipped back on", page_opts.get("gag_status_lines") == true)
+local reregistered_on = combat_regs_since(reg_count_before_on)
+check("flipping back on re-registers 8 more triggers", #reregistered_on == 8, #reregistered_on)
+local all_gagged_after_on = true
+for _, r in ipairs(reregistered_on) do
+  if not (r.opts and r.opts.omit_from_output == true) then all_gagged_after_on = false end
+end
+check("re-registered triggers are gagged again once the opt is back on",
+      all_gagged_after_on)
 
 -- ---- on_unload: full cleanup, must not error (Task 10; call LAST) ----------
 local ok_unload = pcall(M.on_unload)

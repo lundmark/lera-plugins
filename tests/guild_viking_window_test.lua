@@ -59,7 +59,7 @@ for i, exp in ipairs(expected_pages) do
   if not got or got.key ~= exp.key or got.label ~= exp.label then pages_ok = false end
 end
 check("PAGES keys/labels match the twelve stage-2 pages", pages_ok)
-check("every PAGES entry starts on pages.placeholder", (function()
+check("every PAGES entry is a valid page module (stats real, the rest placeholder)", (function()
   for _, p in ipairs(window.PAGES) do
     if type(p.mod) ~= "table" or type(p.mod.lines) ~= "function" then return false end
   end
@@ -206,6 +206,47 @@ check("local window unchanged after an intervening remote render at a different 
       after_window[1] == before_window[1] and after_window[2] == before_window[2]
       and after_window[3] == before_window[3] and after_window[4] == before_window[4],
       after_window[1])
+
+-- ---- Finding 4 (carried into Task 3 review): a remote pass at a DIFFERENT
+-- width, for a page whose line COUNT itself depends on width (stats is the
+-- first such page), must not mutate the shared last_lines cache a later
+-- local render's scroller clamp depends on -- the count axis, distinct from
+-- Finding 1's height axis above.
+window.set_page("stats")
+render_pass = "local"
+local wide_lines, narrow_lines = {}, {}
+for i = 1, 50 do wide_lines[i] = "W" .. i end
+for i = 1, 5 do narrow_lines[i] = "N" .. i end
+find_page("stats").mod = {
+  lines = function(w) return (w >= 50) and wide_lines or narrow_lines end,
+}
+
+reset_drawn()
+window.render(make_rect(0, 0, 100, 5), {})  -- W1 = 100: wide_lines (50 rows)
+window.scroll_to_bottom()                   -- offset -> 46 (50 - body_h 4)
+reset_drawn()
+window.render(make_rect(0, 0, 100, 5), {})  -- "before": window at W1 = 100
+check("(setup) before window ends at W50",
+      drawn.ansi[5] and drawn.ansi[5].s:find("^W50%s") ~= nil, drawn.ansi[5] and drawn.ansi[5].s)
+local before_count_window = { drawn.ansi[2].s, drawn.ansi[3].s, drawn.ansi[4].s, drawn.ansi[5].s }
+
+render_pass = "remote"
+reset_drawn()
+-- W2 = 20: narrow_lines (only 5 rows) -- if last_lines were updated here
+-- unguarded, count() would drop from 50 to 5 and the next local render's
+-- clamp would yank the offset back down, even though only a remote
+-- viewer's own width differed.
+local ok_remote_count = pcall(window.render, make_rect(0, 0, 20, 5), {})
+check("remote render at a different width (different line count) does not error", ok_remote_count)
+
+render_pass = "local"
+reset_drawn()
+window.render(make_rect(0, 0, 100, 5), {})  -- render locally again at the SAME W1
+local after_count_window = { drawn.ansi[2].s, drawn.ansi[3].s, drawn.ansi[4].s, drawn.ansi[5].s }
+check("local window unchanged after an intervening remote render at a different width",
+      after_count_window[1] == before_count_window[1] and after_count_window[2] == before_count_window[2]
+      and after_count_window[3] == before_count_window[3] and after_count_window[4] == before_count_window[4],
+      after_count_window[1])
 
 -- ---- Finding 2a (review round 1): a down on a WRAPPED (row>0) tab span ----
 -- switches page and returns true. A 30-wide rect wraps the twelve labels

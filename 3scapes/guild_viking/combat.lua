@@ -48,6 +48,18 @@ local STFX_META = {
 }
 local STFX_DEFAULT = { cat="DoT", cs="#FF5555", ci=0x5555FF }
 
+-- LEGACY guild_viking.lua:335-337 (STFX_CAT_ORDER/STFX_CAT_LABELS): category
+-- grouping order and display labels for the Stats page's active-effects
+-- section (pages/stats.lua). Exported (not duplicated) per the plan's
+-- preference -- the page reads the same metadata combat.lua already derives
+-- stfx entries' `cat` field from, so the two can never drift apart. Colors
+-- are NOT exported: LEGACY's STFX_CAT_COLORS/per-effect `ci` are BGR pixel
+-- hex, which has no faithful ANSI equivalent worth the complexity (Global
+-- Constraints: "exact hex fidelity is NOT required") -- pages/stats.lua maps
+-- each category to a pagelib.C name instead.
+M.STFX_CAT_ORDER  = { "Def", "Heal", "Off", "Pwr", "DoT" }
+M.STFX_CAT_LABELS = { Def="Def", Heal="Heal", Off="Off", Pwr="Pwr", DoT="DoT" }
+
 -- ---------------------------------------------------------------------------
 -- FFF composite: a `~`-separated tag stream from send_mip_city()'s combat
 -- leg. LEGACY 868-905 (guild.events.mip_info).

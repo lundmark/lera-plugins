@@ -44,6 +44,7 @@ end
 -- window.lua registers, even though no page reads it until Task 3+.
 local page_opts = require("page_opts")
 local window = require("window")
+local stats_page = require("pages.stats")
 
 -- Task 8: combat composite + hp-bar triggers. FFF is a separate MIP composite
 -- from BBE (not routed through protocol.lua's key/value dispatch), so it gets
@@ -86,6 +87,46 @@ local function do_resetxp()
   S.xp_session_start = nil
   buffer.color_print(nil, "DAA520", "Viking XP session counter reset.")
   ui.dirty()
+end
+
+-- Hp-bar gagging (stage-1 ruling, landed here per Task 3): the 8 combat/
+-- hp-bar triggers (combat.triggers) go into the main output buffer raw
+-- unless gagged -- LEGACY never printed them there either (they only ever
+-- fed its detached window), and now that the Stats page (pages/stats.lua)
+-- shows the same data in the pane, gagging keeps lera's main output as quiet
+-- as LEGACY's was. `page_opts.get("gag_status_lines")` is read fresh each
+-- time this registers, so a later re-registration (below) picks up a
+-- changed setting without a reconnect/reload.
+local function combat_trigger_opts()
+  if page_opts.get("gag_status_lines") then
+    return { omit_from_output = true }
+  end
+  return nil
+end
+
+local function register_combat_triggers()
+  local opts = combat_trigger_opts()
+  for _, t in ipairs(combat.triggers) do
+    combat_trigger_ids[#combat_trigger_ids + 1] = trigger.add(t.pattern, t.fn, opts)
+  end
+end
+
+local function unregister_combat_triggers()
+  for _, tid in ipairs(combat_trigger_ids) do
+    trigger.remove(tid)
+  end
+  combat_trigger_ids = {}
+end
+
+-- `/vik set gag_status_lines on|off` needs the new setting to take effect
+-- immediately rather than only on the next reconnect: simplest fix is to
+-- tear the 8 triggers down and re-add them reading the option fresh. Called
+-- once from on_load (via register_combat_triggers directly, since there's
+-- nothing to tear down yet) and again from set_opt below whenever that one
+-- option changes.
+local function reregister_combat_triggers()
+  unregister_combat_triggers()
+  register_combat_triggers()
 end
 
 local function print_status()
@@ -147,6 +188,9 @@ local function set_opt(rest)
     return
   end
   page_opts.set(opt, new_val)
+  if opt == "gag_status_lines" then
+    reregister_combat_triggers()
+  end
   buffer.color_print(nil, "DAA520", "Viking: " .. opt .. " = " .. (new_val and "on" or "off"))
 end
 
@@ -200,9 +244,7 @@ function M.on_load()
   -- protocol.lua's sweep comment); lera.time() is milliseconds, so it must be
   -- divided down here at the call site rather than changing sweep()'s contract.
   sweep_id = timer.every(100, function() protocol.sweep(lera.time() / 1000) end)
-  for _, t in ipairs(combat.triggers) do
-    combat_trigger_ids[#combat_trigger_ids + 1] = trigger.add(t.pattern, t.fn)
-  end
+  register_combat_triggers()
   for _, t in ipairs(notify.triggers) do
     notify_trigger_ids[#notify_trigger_ids + 1] = trigger.add(t.pattern, t.fn)
   end
@@ -272,10 +314,7 @@ function M.on_unload()
   gmcp.remove(gmcp_id)
   timer.remove(sweep_id)
   timer.remove(countdown_id)
-  for _, tid in ipairs(combat_trigger_ids) do
-    trigger.remove(tid)
-  end
-  combat_trigger_ids = {}
+  unregister_combat_triggers()
   for _, tid in ipairs(notify_trigger_ids) do
     trigger.remove(tid)
   end
@@ -309,8 +348,8 @@ end
 -- ---------------------------------------------------------------------------
 -- stats_window contract (CLAUDE.md "Plugins" section, stats_window.lua
 -- ~374-400): has_data() gates whether render_guild_stats is called at all.
--- Stage-1 minimal: saga XP with per-session deltas and ledung. Stage 2
--- replaces this with the full window page.
+-- Stage 2: the SAME builder the Stats pane page uses (pages/stats.lua),
+-- truncated to the widget's rect -- not a separate, narrower summary.
 -- ---------------------------------------------------------------------------
 
 function M.has_data()
@@ -329,15 +368,10 @@ function M.render_guild_stats(rect, opts)
   local x, y, w, h = rect_dims(rect)
   if w <= 0 or h <= 0 then return 0 end
 
-  local lines = {
-    string.format("Vis:%d(+%d) Kap:%d(+%d)", S.vis, S.vis_session, S.kap, S.kap_session),
-    string.format("Soe:%d(+%d) Aud:%d(+%d)", S.soe, S.soe_session, S.aud, S.aud_session),
-    string.format("Ldng:%d/%d", S.ldng, S.mldng),
-  }
-
+  local lines = stats_page.lines(w)
   local n = math.min(#lines, h)
   for i = 1, n do
-    ui.text(ui.rect(x, y + i - 1, w, 1), lines[i])
+    ui.text_ansi(ui.rect(x, y + i - 1, w, 1), lines[i])
   end
   return n
 end

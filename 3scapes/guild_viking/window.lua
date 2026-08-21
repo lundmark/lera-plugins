@@ -13,9 +13,10 @@ local window = {}
 -- lands (Tasks 3-9); Task 12's audit removes pages/placeholder.lua once
 -- nothing references it any more.
 local placeholder = require("pages.placeholder")
+local stats_page = require("pages.stats")
 
 window.PAGES = {
-  { key = "stats",  label = "Stats",  mod = placeholder },
+  { key = "stats",  label = "Stats",  mod = stats_page },
   { key = "city",   label = "City",   mod = placeholder },
   { key = "farm",   label = "Farm",   mod = placeholder },
   { key = "builds", label = "Builds", mod = placeholder },
@@ -214,22 +215,26 @@ function window.render(rect, opts)
 
   local page = pages_by_key[current_key]
   local lines = page.mod.lines(w)
-  last_lines[current_key] = lines
 
   local sc = scrollers[current_key]
-  -- Only the LOCAL render pass may adjust the scroller's height-based clamp.
-  -- The scroll offset itself is a single Lua-side value shared across render
-  -- targets by design (CLAUDE.md "Pane Scrolling" WebSocket note: a
-  -- Lua-scrolled wm pane has no local/remote gate). But a remote WebSocket
-  -- viewer can be sized independently of the local pane (CLAUDE.md "Resize
-  -- semantics"), so if a remote pass were allowed to call set_height too, a
-  -- differently-sized remote render could reclamp -- and silently move --
-  -- the offset the LOCAL user chose, purely as a side effect of the remote
-  -- client's own screen size. Skipping set_height on a remote pass leaves
-  -- the persisted clamp (and therefore the offset) exactly as the last local
-  -- render left it; the remote pass still reads that same offset and windows
-  -- its OWN body_h against it below, it just never mutates the shared state.
+  -- Only the LOCAL render pass may adjust the scroller's height-based clamp,
+  -- or update the cached `lines` that clamp's count() reads. The scroll
+  -- offset itself is a single Lua-side value shared across render targets by
+  -- design (CLAUDE.md "Pane Scrolling" WebSocket note: a Lua-scrolled wm
+  -- pane has no local/remote gate). But a remote WebSocket viewer can be
+  -- sized independently of the local pane (CLAUDE.md "Resize semantics"),
+  -- AND -- for a page whose line count is width-sensitive, stats being the
+  -- first -- can produce a different total line count at its own width. If
+  -- either leaked into the shared clamp, a remote render could reclamp --
+  -- and silently move -- the offset the LOCAL user chose, purely as a side
+  -- effect of the remote client's own screen size or width. Skipping both on
+  -- a remote pass leaves the persisted clamp (and therefore the offset)
+  -- exactly as the last local render left it; the remote pass still reads
+  -- that same offset and windows its OWN `lines`/body_h against it below
+  -- (see the loop after `offset` is read), it just never mutates the shared
+  -- state.
   if lera.render_pass() ~= "remote" then
+    last_lines[current_key] = lines
     sc.set_height(body_h)
   end
   local offset = sc.offset()
