@@ -174,5 +174,7 @@ end
 -- Named-popup content, one require+register line per task (Tasks 3-6),
 -- same self-registration pattern window.lua uses for window.PAGES.
 popups.register("map", require("popups.map"))
+popups.register("sea", require("popups.sea"))
+popups.register("voyage", require("popups.voyage"))
 
 return popups

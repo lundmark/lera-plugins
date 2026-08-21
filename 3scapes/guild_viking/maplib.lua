@@ -39,6 +39,18 @@
 -- formed by the header line's row-header field; it is ignored otherwise
 -- (there is no corner without both headers).
 --
+-- `opts.col_label(c)`/`opts.row_label(r)`: optional formatters overriding
+-- the header text for column `c` / row `r` (default `tostring`), added for
+-- the sea chart's nautical A01..P16 coordinate scheme (letters for rows,
+-- 1-based 2-digit numbers for columns) -- every OTHER consumer (map.lua's
+-- 0-based numeric headers, this file's own tests) omits them and sees
+-- byte-identical output to before this existed. `row_header_width` is still
+-- sized from the numeric row COUNT, not from the label text -- a
+-- single-character letter label always fits inside that width with room to
+-- spare for any grid this file is used on (capped at 16 rows today), so no
+-- consumer needs a wider reservation than the existing sizing already gives
+-- it.
+--
 -- Selection: `cell.sel` wraps the glyph field in reverse video ("\27[7m"
 -- .. field .. "\27[27m"), matching window.lua/menu.lua's existing reverse-
 -- video idiom elsewhere in this plugin (toggle, not a full SGR reset, so it
@@ -99,6 +111,8 @@ local function layout(grid, opts)
     east_edge = opts.east_edge,
     south_edge = opts.south_edge,
     origin_label = opts.origin_label,
+    col_label = opts.col_label or tostring,
+    row_label = opts.row_label or tostring,
   }
 end
 
@@ -142,7 +156,7 @@ local function build_header_line(L)
     parts[#parts + 1] = " "
   end
   for c = 0, L.w - 1 do
-    parts[#parts + 1] = pagelib.trunc(tostring(c), 2)
+    parts[#parts + 1] = pagelib.trunc(L.col_label(c), 2)
     parts[#parts + 1] = " "
   end
   return table.concat(parts)
@@ -151,7 +165,7 @@ end
 local function build_cell_line(L, r)
   local parts = {}
   if L.row_headers then
-    parts[#parts + 1] = pagelib.trunc(tostring(r), L.row_header_width)
+    parts[#parts + 1] = pagelib.trunc(L.row_label(r), L.row_header_width)
     parts[#parts + 1] = " "
   end
   local grid = L.grid
