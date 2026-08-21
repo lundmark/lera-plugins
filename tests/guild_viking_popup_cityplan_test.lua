@@ -482,6 +482,27 @@ cityplan.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "right"
 menu_select(last_menu_open, "Cancel")
 check("selecting Cancel never sends", #send_calls == 0)
 
+-- =============================================================================
+-- per-module smoke + cross-target drag (fix round 2, Important #1): a real
+-- down+up pair on the SAME plot still opens that plot's own context menu;
+-- a down on one plot followed by an up on a DIFFERENT plot must NOT open
+-- either plot's menu (LEGACY's "hotspot that took the mousedown gets the
+-- mouseup" rule).
+-- =============================================================================
+last_menu_open = nil
+cityplan.on_pointer({ kind = "down", x = 0, y = 0, inside = true }, fixed_ctx(1, 0))
+cityplan.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "right" }, fixed_ctx(1, 0))
+check("down+up on the SAME empty plot opens its own place menu",
+  last_menu_open ~= nil and menu_has_label(last_menu_open, "Forge"))
+
+last_menu_open = nil
+send_calls = {}
+cityplan.on_pointer({ kind = "down", x = 0, y = 0, inside = true }, fixed_ctx(0, 0))
+cityplan.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "right" }, fixed_ctx(1, 0))
+check("a down on one plot followed by an up on a DIFFERENT plot opens no menu",
+  last_menu_open == nil)
+check("the mismatched drag never sends anything", #send_calls == 0)
+
 -- Empty plot with NO unplaced buildings -> "Nothing left to place" + Cancel.
 reset_cityplan()
 seed_cplan({ dim = 1, margin = 0, rows = { "." } })

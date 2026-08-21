@@ -631,6 +631,31 @@ check("with confirm_chart_click off, up sends immediately: exactly 'vvoyage queu
 check("with confirm_chart_click off, up never opens a menu", last_menu_open == nil)
 page_opts.set("confirm_chart_click", true)
 
+-- =============================================================================
+-- Cross-target drag (fix round 2, Important #1): a down on the [Actions]
+-- line (which opens the actions menu immediately, on the down itself)
+-- followed by an up landing on a chart cell must NOT ALSO queue a course
+-- for that cell -- only the target that took the mousedown gets the
+-- mouseup. confirm_chart_click stays on (its default) so a matched up would
+-- open a confirm menu rather than sending immediately; the assertion below
+-- is about `send_calls`, which only a "yes" selection on that confirm menu
+-- would ever populate, so an empty send_calls after the up is conclusive
+-- either way.
+-- =============================================================================
+last_menu_open = nil
+local sea_idx2 = sea.actions_line_index(WIDTH)
+check("actions_line_index is still non-nil here", sea_idx2 ~= nil)
+sea.on_pointer({ kind = "down", width = WIDTH, y = sea_idx2 - 1 },
+  { line_from_y = function(y) return y + 1 end })
+check("down on the [Actions] line opened the actions menu", last_menu_open ~= nil)
+send_calls = {}
+last_menu_open = nil
+sea.on_pointer({ kind = "up", x = 0, y = 0, inside = true }, fixed_ctx(2, 0))
+check("an up on a chart cell after a down on [Actions] opens no confirm menu",
+  last_menu_open == nil)
+check("an up on a chart cell after a down on [Actions] never sends a queue command",
+  #send_calls == 0)
+
 -- out-of-grid: no ctx.cell_from_xy match at all.
 send_calls = {}
 local oob_ctx = { cell_from_xy = function() return nil end, close = function() end }

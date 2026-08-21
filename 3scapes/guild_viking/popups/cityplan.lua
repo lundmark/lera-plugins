@@ -62,6 +62,7 @@ local pagelib = require("pagelib")
 local maplib = require("maplib")
 local state = require("state")
 local page_opts = require("page_opts")
+local track = require("popups.pointer_track").tracker()
 
 local S = state.S
 local C = pagelib.C
@@ -471,15 +472,33 @@ end
 -- (right-click opens the tile menu; anything else just closes any open
 -- menu and consumes) -- plus the hover-line update on move/down, same
 -- pattern as popups/map.lua's and popups/sea.lua's on_pointer.
+--
+-- Down-target recording (fix round 2, Important #1, via
+-- popups/pointer_track.lua): a down over a plot records its (c, r); the
+-- right-click context menu (whose item set and title are keyed to the
+-- SPECIFIC plot clicked) only opens when the up's plot matches -- a drag
+-- from one plot's down to a different plot's up must not open the wrong
+-- plot's menu. The left-click "close any open menu" branch has no such
+-- per-plot content, so it stays unconditional -- there is nothing for a
+-- cross-target drag to get wrong there.
 function M.on_pointer(ev, ctx)
   if not ctx.cell_from_xy then return nil end
   local cp = S.city_plan
   if not (cp and cp.dim) then return nil end
   local _, _, margin = plan_geometry(cp)
 
+  if ev.kind == "cancel" then
+    track.clear()
+    return nil
+  end
+
   if ev.kind == "move" then
     local c, r, ix, iy = locate(cp, ctx, ev.x, ev.y)
-    if not c then return nil end
+    if not c then
+      -- Fix round 2, Minor: clear a stale hover line on an off-grid move.
+      if hover ~= "" then hover = ""; ui.dirty() end
+      return nil
+    end
     hover = hover_text(cp, c, r, ix, iy, plot_at(cp, margin, c, r))
     ui.dirty()
     return nil
@@ -488,6 +507,7 @@ function M.on_pointer(ev, ctx)
   if ev.kind == "down" then
     local c, r, ix, iy = locate(cp, ctx, ev.x, ev.y)
     if not c then return nil end
+    track.record({ kind = "cell", c = c, r = r })
     hover = hover_text(cp, c, r, ix, iy, plot_at(cp, margin, c, r))
     ui.dirty()
     return true
@@ -495,17 +515,29 @@ function M.on_pointer(ev, ctx)
 
   if ev.kind == "up" then
     local c, r, ix, iy = locate(cp, ctx, ev.x, ev.y)
-    if not c then return nil end
+    if not c then
+      track.clear()
+      return nil
+    end
     if ev.button == "right" then
-      local occ = plot_at(cp, margin, c, r)
-      open_context_menu(cp, cellname(ix, iy), occ)
+      if track.matches({ kind = "cell", c = c, r = r }) then
+        local occ = plot_at(cp, margin, c, r)
+        open_context_menu(cp, cellname(ix, iy), occ)
+      end
     else
       require("menu").close()
     end
+    track.clear()
     return true
   end
 
   return nil
+end
+
+-- Called by popups.lua's registry when this popup closes (fix round 2,
+-- Minor: "clear hover on close").
+function M.reset()
+  hover = ""
 end
 
 return M

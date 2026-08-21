@@ -46,9 +46,9 @@ local page_opts = require("page_opts")
 local window = require("window")
 local stats_page = require("pages.stats")
 
--- Stage 3: named-popup registry + /vik pop. No popup registers here yet
--- (map/sea/voyage/cityplan/war arrive in Tasks 3-6) -- see popups.lua's
--- header comment.
+-- Stage 3: named-popup registry + /vik pop. map/sea/voyage/cityplan/war
+-- all self-register (popups.lua's own require+register block) -- see that
+-- file's header comment for the renderer-module contract.
 local popups = require("popups")
 
 -- Task 8: combat composite + hp-bar triggers. FFF is a separate MIP composite
@@ -310,9 +310,9 @@ function M.on_load()
     description = "Ingestion status and counters (status), message tracing "
       .. "(trace), explicit save (save), transport selection (source), the "
       .. "saga-XP session reset (resetxp; the bare 'resetvikxp' alias does "
-      .. "the same), toggling a named popup open or closed -- map, sea, "
-      .. "voyage, cityplan, or war -- (map/sea/voyage/cityplan arrive in "
-      .. "later stages; toggling one before then reports it unavailable), "
+      .. "the same), toggling a named popup open or closed -- map (Territory "
+      .. "Map), sea (Sea Chart), voyage (Voyage Status), cityplan (City "
+      .. "Plan), or war (Campaign Map / Battle Board) --, "
       .. "opening any pane page as a detached popup (pop <page>), "
       .. "switching the pane to a page by key -- stats, city, farm, "
       .. "builds, people, goods, bonds, ranks, court, army, war, or trade "

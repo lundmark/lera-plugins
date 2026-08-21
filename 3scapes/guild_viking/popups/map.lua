@@ -45,6 +45,16 @@
 -- defensive than "trust the row string for everything," and an explicit
 -- reading of the task brief's three separate bullets (grid / POI overlay /
 -- player marker) rather than one combined glyph source.
+--
+-- Disposition of the plan's "pointer drag pans, wheel zooms where legacy
+-- zoomed" (design doc, Stage 3): "pan" here is the popup wrapper's own
+-- scroller (popups.lua's `wrap()`, wheel-driven, same as every other board
+-- popup) -- there is no drag-to-pan gesture, since this module (see above)
+-- fires no click/drag interaction at all in the text-view branch. "Zoom"
+-- never applies: LEGACY's zoom is pixel/icon-branch `cell_w` machinery
+-- (the graphical Wang-tile rendering this task does not port, same ruling
+-- as every other popup's show_*_icons disclosure) with no text-grid
+-- equivalent -- there is nothing here for a zoom gesture to do.
 local pagelib = require("pagelib")
 local maplib = require("maplib")
 local state = require("state")
@@ -383,7 +393,12 @@ end
 -- hotspots at all on this page in the text-view branch, so there is no
 -- click (or even a live hover) to port; on_pointer only ever updates
 -- `hover` (a lera addition) and never returns true (never consumes the
--- event) and never calls mud.send.
+-- event) and never calls mud.send. No down-target tracker
+-- (popups/pointer_track.lua) here, unlike cityplan/sea/war_campaign/
+-- war_battle: this module never consumes a "down" at all, so the popup
+-- layer never establishes a capture for it and "up" is never even
+-- dispatched here -- there is no click action for a cross-target drag to
+-- misfire.
 -- ---------------------------------------------------------------------------
 
 local function cell_tip(poi_at, c, r)
@@ -409,10 +424,23 @@ function M.on_pointer(ev, ctx)
   if not ctx.cell_from_xy then return nil end
   if ev.kind ~= "move" and ev.kind ~= "down" then return nil end
   local c, r = ctx.cell_from_xy(ev.x, ev.y)
-  if not c then return nil end
+  if not c then
+    -- Fix round 2, Minor: clear a stale hover line on an off-grid MOVE
+    -- only -- not "down", which stays a pure no-op (never touches hover),
+    -- matching this module's own existing "out-of-grid click leaves the
+    -- hover line unchanged" contract.
+    if ev.kind == "move" and hover ~= "" then hover = ""; ui.dirty() end
+    return nil
+  end
   hover = cell_tip(poi_lookup(), c, r)
   ui.dirty()
   return nil
+end
+
+-- Called by popups.lua's registry when this popup closes (fix round 2,
+-- Minor: "clear hover on close").
+function M.reset()
+  hover = ""
 end
 
 return M

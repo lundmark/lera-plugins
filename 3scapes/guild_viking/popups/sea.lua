@@ -85,6 +85,7 @@ local state = require("state")
 local page_opts = require("page_opts")
 local common = require("popups.sea_common")
 local cc = require("pages.city_common")
+local track = require("popups.pointer_track").tracker()
 
 local S = state.S
 local C = pagelib.C
@@ -533,12 +534,16 @@ end
 -- line ever reflows by width in this design (pagelib.trunc/kv/pair_line
 -- always emit exactly one output line regardless of width; only the
 -- LEGEND, which sits AFTER the actions line, ever wraps) -- so the index
--- returned here is width-invariant in practice, verified by this module's
--- test asserting the same index at two very different widths. on_pointer
--- below therefore calls this with a fixed representative width rather than
--- needing the wrapper's actual last-rendered width, which (unlike
--- geometry()/grid_line_offset(), which the wrapper threads `last_width`
--- into itself) ctx.line_from_y's contract does not hand back to the module.
+-- returned here IS genuinely width-invariant in practice (confirmed on
+-- review during fix round 2, alongside popups/war_battle.lua's own actions
+-- line, which is NOT -- see that module's actions_line_index comment for
+-- the contrasting case and the exact indices that differ there). Verified
+-- by this module's test asserting the same index at two very different
+-- widths. on_pointer below still threads the pointer event's own
+-- `ev.width` through for defense in depth / uniformity with the other
+-- action-line modules rather than relying on this invariance holding
+-- forever; ACTIONS_PROBE_WIDTH remains the fallback for a caller with no
+-- width to hand.
 local ACTIONS_PROBE_WIDTH = 76
 function M.actions_line_index(width)
   local _, idx = pre_chart_lines(width or ACTIONS_PROBE_WIDTH)
@@ -555,10 +560,23 @@ end
 -- utils.msgbox guard -- LEGACY 13074-13100) plus a hover-line update on
 -- move (and on down -- see this module's header comment for why), same
 -- convention as popups/map.lua's on_pointer.
+-- Down-target recording (fix round 2, Important #1, via
+-- popups/pointer_track.lua): a down on the [Actions] line records
+-- { kind = "actions" }; a down on a chart cell records { kind = "cell",
+-- c=, r= }. "up" only queues a course when its own cell matches the
+-- recorded target -- a down on [Actions] followed by a drag that releases
+-- over the chart must not ALSO queue a course for whatever cell the
+-- release landed on.
 function M.on_pointer(ev, ctx)
+  if ev.kind == "cancel" then
+    track.clear()
+    return nil
+  end
+
   if ev.kind == "down" and ctx.line_from_y then
-    local idx = M.actions_line_index()
+    local idx = M.actions_line_index(ev.width)
     if idx and ctx.line_from_y(ev.y) == idx then
+      track.record({ kind = "actions" })
       common.open_actions_menu()
       return true
     end
@@ -571,6 +589,10 @@ function M.on_pointer(ev, ctx)
     if c then
       hover = chart_hover_text(c, r)
       ui.dirty()
+    elseif hover ~= "" then
+      -- Fix round 2, Minor: clear a stale hover line on an off-grid move.
+      hover = ""
+      ui.dirty()
     end
     return nil
   end
@@ -578,6 +600,7 @@ function M.on_pointer(ev, ctx)
   if ev.kind == "down" then
     local c, r = ctx.cell_from_xy(ev.x, ev.y)
     if not c then return nil end
+    track.record({ kind = "cell", c = c, r = r })
     hover = chart_hover_text(c, r)
     ui.dirty()
     return true
@@ -585,7 +608,13 @@ function M.on_pointer(ev, ctx)
 
   if ev.kind == "up" then
     local c, r = ctx.cell_from_xy(ev.x, ev.y)
-    if not c then return nil end
+    if not c then
+      track.clear()
+      return nil
+    end
+    local acted = track.matches({ kind = "cell", c = c, r = r })
+    track.clear()
+    if not acted then return true end
     local coord = chart_coord(c, r)
     if page_opts.get("confirm_chart_click") then
       local node = CHART_NODES[chart_sym(c, r)]
@@ -607,6 +636,12 @@ function M.on_pointer(ev, ctx)
   end
 
   return nil
+end
+
+-- Called by popups.lua's registry when this popup closes (fix round 2,
+-- Minor: "clear hover on close").
+function M.reset()
+  hover = ""
 end
 
 return M

@@ -87,10 +87,16 @@ function M.lines(width)
   return out
 end
 
--- Same width-invariance rationale as popups/sea.lua's M.actions_line_index:
+-- Same width-invariance rationale as popups/sea.lua's M.actions_line_index
+-- (re-confirmed on review during fix round 2, contrasted there with
+-- popups/war_battle.lua's actions line, which is NOT width-invariant):
 -- nothing pre_lines renders ever reflows by width (no wrapping happens
 -- anywhere in this module's output), so a fixed probe width is safe here
 -- too -- verified by this module's own two-different-widths test case.
+-- ACTIONS_PROBE_WIDTH remains the fallback for a caller with no width to
+-- hand; on_pointer below still threads the pointer event's own `ev.width`
+-- through for defense in depth / uniformity with the other action-line
+-- modules.
 local ACTIONS_PROBE_WIDTH = 76
 function M.actions_line_index(width)
   local _, idx = pre_lines(width or ACTIONS_PROBE_WIDTH)
@@ -99,10 +105,13 @@ end
 
 -- Pointer: the "[Actions]" line is this module's ONLY clickable content
 -- (no chart, no grid) -- see popups/sea.lua's header comment for the full
--- hotspot enumeration/port table this line covers.
+-- hotspot enumeration/port table this line covers. No down-target tracker
+-- here: unlike sea/cityplan/map/war_campaign/war_battle, this module has
+-- exactly one clickable target, so there is no cross-target drag for a
+-- tracker to defend against.
 function M.on_pointer(ev, ctx)
   if ev.kind ~= "down" or not ctx.line_from_y then return nil end
-  local idx = M.actions_line_index()
+  local idx = M.actions_line_index(ev.width)
   if not idx or ctx.line_from_y(ev.y) ~= idx then return nil end
   common.open_actions_menu()
   return true

@@ -411,6 +411,24 @@ check("out-of-grid click leaves the hover line unchanged", after_hover == before
 check("out-of-grid click never sends anything to the MUD", #send_calls == 0)
 
 -- =============================================================================
+-- per-module smoke (fix round 2, Important #1's "apply uniformly" audit):
+-- map has no click action to protect (on_pointer never consumes a "down"),
+-- so there is no cross-target drag to test here -- but a down+move+down
+-- sequence on the SAME cell must still behave exactly like a bare move,
+-- with no crash, no consumption, and no send, confirming the audit's
+-- conclusion that this module needs no down-target tracker.
+-- =============================================================================
+send_calls = {}
+local ok_down_same = map.on_pointer({ kind = "down", x = 0, y = 0, inside = true }, fixed_ctx(0, 1))
+check("down on a cell does not consume (map has no click action)",
+  ok_down_same == nil or ok_down_same == false)
+map.on_pointer({ kind = "move", x = 0, y = 0, inside = true }, fixed_ctx(0, 1))
+local ok_up_same = map.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" },
+  fixed_ctx(0, 1))
+check("a subsequent up on the SAME cell does not consume either", ok_up_same == nil or ok_up_same == false)
+check("down+move+up on the same cell never sends anything", #send_calls == 0)
+
+-- =============================================================================
 -- ctx.cell_from_xy wiring through the real popups.lua wrapper (stubbed
 -- wm.popup) -- the contract Tasks 4-6 reuse.
 -- =============================================================================

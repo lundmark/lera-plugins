@@ -9,6 +9,11 @@
 --     on_pointer = function(ev, ctx) -> bool|nil, OPTIONAL,
 --     geometry = function(width) -> maplib geom | nil, OPTIONAL,
 --     grid_line_offset = function(width) -> integer, REQUIRED iff geometry is,
+--     reset = function() -> clears any module-local hover/tooltip state,
+--       OPTIONAL (fix round 2, Minor). popups.toggle's own on_close calls
+--       this (when present) so a stale tooltip from wherever the pointer
+--       last was doesn't show immediately on the NEXT open, before any
+--       fresh move/down arrives -- see e.g. popups/map.lua's M.reset.
 --     title = "..." }
 -- `lines` must read only its own view's state (page state / page_opts);
 -- `on_pointer` may mud.send, mutate the view's own module-local state, open
@@ -63,9 +68,9 @@ local registry = {}
 local shown_name = nil
 
 -- Registers (or replaces) a named popup's renderer module. map/sea/voyage/
--- cityplan/war register here in Tasks 3-6; nothing does yet in Task 1, so
--- toggling any of those names currently prints the "no such popup" message
--- below until its task lands.
+-- cityplan/war all self-register at the bottom of this file (see the
+-- require+register block there); an unrecognized name still prints the
+-- "no such popup" message below, but every one of these five is shipped.
 function popups.register(name, module)
   registry[name] = module
 end
@@ -132,6 +137,11 @@ local function wrap(lines_fn, on_pointer_fn, geometry_fn, grid_line_offset_fn)
       }
       if geometry_fn and grid_line_offset_fn then
         ctx.cell_from_xy = function(x, y)
+          -- last_width stays 0 until the first non-degenerate local render
+          -- (wrapper.render's own `w <= 0 or h <= 0` guard, above, skips
+          -- setting it) -- guard here too, rather than handing a module's
+          -- geometry_fn a width of 0 before any real render has happened.
+          if last_width <= 0 then return nil end
           local geom = geometry_fn(last_width)
           if not geom then return nil end
           local line_offset = grid_line_offset_fn(last_width)
@@ -175,6 +185,10 @@ function popups.toggle(name)
 
   open_wrapper(mod.title, mod.lines, mod.on_pointer, function()
     if shown_name == name then shown_name = nil end
+    -- Fix round 2, Minor: clear the module's own hover/tooltip state on
+    -- close, whatever closed it (a second toggle, Escape, an outside
+    -- click, or being replaced) -- see this file's header comment.
+    if mod.reset then mod.reset() end
   end, mod.geometry, mod.grid_line_offset)
   shown_name = name
   return true
