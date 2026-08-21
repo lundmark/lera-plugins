@@ -25,7 +25,10 @@ local pagelib = require("pagelib")
 local state = require("state")
 local page_opts = require("page_opts")
 local combat = require("combat")
+local cc = require("pages.city_common")
 local stats_page = require("pages.stats")
+local farm_page = require("pages.farm")
+local builds_page = require("pages.builds")
 
 local S = state.S
 
@@ -170,6 +173,226 @@ for _, l in ipairs(lines) do
   end
 end
 check("every row's visible width is <= the requested width", width_ok, widest)
+
+-- =============================================================================
+-- pages/farm.lua (Task 5) -- LEGACY draw_page3 (guild_viking.lua:9115-9370)
+-- =============================================================================
+
+local C = pagelib.C
+
+-- ---- seed farm state --------------------------------------------------------
+S.season = "spring"
+S.weather = "storm"
+S.weather_str = 3
+S.farm_wmod = 15
+S.farm_plots = {
+  { coord = "A1", shroom = "fly_agaric_t1", time_left = 0, fertilized = 0, wilt_left = -1 },
+  { coord = "A2", shroom = "lions_mane_t2", time_left = 3600, fertilized = 1, wilt_left = -1 },
+}
+S.city_water = 40
+S.city_fert = 25
+S.blot_status = "open"
+S.blot_reset_in = 3661
+S.blot_filled = 4
+S.blot_total = 9
+
+page_opts.set("show_farm_weather", true)
+page_opts.set("show_farm_plots", true)
+page_opts.set("show_farm_blot", true)
+
+local farm_lines = farm_page.lines(WIDTH)
+local farm_all = joined(farm_lines)
+
+check("farm: non-empty", #farm_lines > 5, #farm_lines)
+
+-- ---- Weather section ---------------------------------------------------
+check("farm: Weather header present", find_line(farm_lines, "Weather") ~= nil)
+check("farm: season (Spring) present", farm_all:find("Spring", 1, true) ~= nil)
+check("farm: weather type (Storm) present", farm_all:find("Storm", 1, true) ~= nil)
+check("farm: weather strength (Heavy) present", farm_all:find("Heavy", 1, true) ~= nil)
+
+page_opts.set("show_farm_weather", false)
+local farm_no_weather = farm_page.lines(WIDTH)
+check("farm: Weather header disappears when show_farm_weather is off",
+      find_line(farm_no_weather, "Weather") == nil)
+page_opts.set("show_farm_weather", true)
+
+-- ---- Mushroom Farm section ------------------------------------------------
+check("farm: Mushroom Farm header present", find_line(farm_lines, "Mushroom Farm") ~= nil)
+check("farm: growth modifier row (+15%) present", farm_all:find("+15%% growth rate") ~= nil)
+
+local a1_idx = find_line(farm_lines, "A1")
+check("farm: plot row for A1 present", a1_idx ~= nil, farm_all)
+if a1_idx then
+  check("farm: A1 (ready, unfertilized) shows RDY",
+        farm_lines[a1_idx]:find("RDY", 1, true) ~= nil, farm_lines[a1_idx])
+end
+
+local a2_idx = find_line(farm_lines, "A2")
+check("farm: plot row for A2 present", a2_idx ~= nil, farm_all)
+if a2_idx then
+  local a2_line = farm_lines[a2_idx]
+  check("farm: A2 shows the fertilized marker on its shroom name",
+        a2_line:find("Lion's Mane%*") ~= nil, a2_line)
+  check("farm: A2 shows its growing time (1h)", a2_line:find("1h", 1, true) ~= nil, a2_line)
+end
+
+-- (ANSI resets sit between the label and the value, so match each
+-- substring independently rather than one pattern spanning both.)
+local water_idx = find_line(farm_lines, "Water:")
+check("farm: Water reserve value (40) present",
+      water_idx ~= nil and farm_lines[water_idx]:find("40", 1, true) ~= nil, farm_all)
+check("farm: Fertilizer reserve value (25) present",
+      water_idx ~= nil and farm_lines[water_idx]:find("Fertilizer:", 1, true) ~= nil
+      and farm_lines[water_idx]:find("25", 1, true) ~= nil, farm_all)
+
+page_opts.set("show_farm_plots", false)
+local farm_no_plots = farm_page.lines(WIDTH)
+check("farm: Mushroom Farm header disappears when show_farm_plots is off",
+      find_line(farm_no_plots, "Mushroom Farm") == nil)
+check("farm: plot rows disappear too", find_line(farm_no_plots, "A1") == nil)
+check("farm: water/fertilizer line disappears too",
+      find_line(farm_no_plots, "Fertilizer:") == nil)
+page_opts.set("show_farm_plots", true)
+
+-- ---- Blot Grove section ----------------------------------------------------
+check("farm: Blot Grove header present", find_line(farm_lines, "Blot Grove") ~= nil)
+check("farm: blot status (open) present", farm_all:find("Status: ", 1, true) ~= nil
+      and farm_all:find("open", 1, true) ~= nil)
+check("farm: blot trees (4/9) present", farm_all:find("4/9", 1, true) ~= nil)
+
+local expected_blot_bar = pagelib.bar(WIDTH, 4, 9, C.cyan)
+check("farm: blot fill bar matches pagelib.bar(width, 4, 9, cyan) exactly",
+      find_line(farm_lines, expected_blot_bar) ~= nil, farm_all)
+
+check("farm: blot reset countdown (1h1m) present", farm_all:find("1h1m", 1, true) ~= nil, farm_all)
+
+page_opts.set("show_farm_blot", false)
+local farm_no_blot = farm_page.lines(WIDTH)
+check("farm: Blot Grove header disappears when show_farm_blot is off",
+      find_line(farm_no_blot, "Blot Grove") == nil)
+page_opts.set("show_farm_blot", true)
+
+-- ---- width discipline -------------------------------------------------------
+do
+  local width_ok, widest = true, nil
+  for _, l in ipairs(farm_lines) do
+    local vw = pagelib.visible_width(l)
+    if vw > WIDTH then width_ok = false; widest = vw end
+  end
+  check("farm: every row's visible width is <= the requested width", width_ok, widest)
+end
+
+-- =============================================================================
+-- pages/builds.lua (Task 5) -- LEGACY draw_page4 (guild_viking.lua:9426-9746)
+-- =============================================================================
+
+-- ---- seed builds state ------------------------------------------------------
+S.pending_builds = {
+  { bldg_id = "warehouse", tier = 2, mats_total = 10, mats_done = 3,
+    complete_at_secs = -1, total_build_secs = 0,
+    mats = { { good = "timber", done = 3, need = 10 } } },
+}
+S.ship_upgrades = {
+  { name = "Ormen", tier = 3, secs_left = -1, mats_total = 5, mats_done = 2,
+    mats = { { good = "iron", done = 2, need = 5 } } },
+}
+S.bdmg = { { bldg_id = "palisade", pct = 72 } }
+S.staff_list = {
+  { name = "Ragnar", assigned_to = "0", stat_key = "combat",
+    stats = { combat = 10, trade = 2 }, trait = "berserker", loyalty = 4,
+    age = "young", arrive_at = 0 },
+}
+
+page_opts.set("show_builds_construction", true)
+page_opts.set("show_builds_upgrades", true)
+page_opts.set("show_builds_damage", true)
+page_opts.set("show_builds_staff", true)
+
+local builds_lines = builds_page.lines(WIDTH)
+local builds_all = joined(builds_lines)
+
+check("builds: non-empty", #builds_lines > 5, #builds_lines)
+
+-- ---- Construction section ---------------------------------------------------
+check("builds: Construction header present", find_line(builds_lines, "Construction") ~= nil)
+check("builds: pending build row names the building (Warehouse) and tier (T2)",
+      builds_all:find("Warehouse", 1, true) ~= nil and builds_all:find("T2", 1, true) ~= nil,
+      builds_all)
+check("builds: pending build row shows aggregate mats progress (Mats 3/10)",
+      builds_all:find("Mats 3/10", 1, true) ~= nil, builds_all)
+
+-- Exact progress-bar assertion: the per-good material row for timber 3/10
+-- must equal pagelib.bar's own output for that ratio, hand-composed the
+-- same way pages/builds.lua's mat_row does.
+local expected_mat_color = pagelib.pct_color(3, 10)
+local expected_mat_bar = pagelib.bar(12, 3, 10, expected_mat_color)
+local expected_mat_row = pagelib.trunc(string.format("  %s%-12s%s %d/%d %s",
+  cc.good_color("timber"), cc.good_label("timber"), pagelib.RESET, 3, 10, expected_mat_bar), WIDTH)
+check("builds: timber mat row (3/10) matches the exact pagelib.bar output",
+      find_line(builds_lines, expected_mat_row) ~= nil, builds_all)
+check("builds: pct_color(3,10) is the 'red' tier (0.3 is > 0.25, <= 0.5)",
+      expected_mat_color == C.red, expected_mat_color)
+
+page_opts.set("show_builds_construction", false)
+local builds_no_constr = builds_page.lines(WIDTH)
+check("builds: Construction header disappears when show_builds_construction is off",
+      find_line(builds_no_constr, "Construction") == nil)
+page_opts.set("show_builds_construction", true)
+
+-- ---- Ship Upgrades section --------------------------------------------------
+check("builds: Ship Upgrades header present", find_line(builds_lines, "Ship Upgrades") ~= nil)
+check("builds: upgrade row names the ship (Ormen) and target tier (Drakkar)",
+      builds_all:find("Ormen", 1, true) ~= nil and builds_all:find("Drakkar", 1, true) ~= nil,
+      builds_all)
+check("builds: upgrade mats row (iron 2/5) present",
+      builds_all:find("[Ii]ron", 1) ~= nil and builds_all:find("2/5", 1, true) ~= nil, builds_all)
+
+page_opts.set("show_builds_upgrades", false)
+local builds_no_upg = builds_page.lines(WIDTH)
+check("builds: Ship Upgrades header disappears when show_builds_upgrades is off",
+      find_line(builds_no_upg, "Ship Upgrades") == nil)
+page_opts.set("show_builds_upgrades", true)
+
+-- ---- Damage section ----------------------------------------------------------
+check("builds: Damage header present", find_line(builds_lines, "Damage") ~= nil)
+check("builds: damage row names the building (Palisade) and pct (72%)",
+      builds_all:find("Palisade", 1, true) ~= nil and builds_all:find("72%%", 1) ~= nil, builds_all)
+
+page_opts.set("show_builds_damage", false)
+local builds_no_dmg = builds_page.lines(WIDTH)
+check("builds: Damage header disappears when show_builds_damage is off",
+      find_line(builds_no_dmg, "Damage") == nil)
+page_opts.set("show_builds_damage", true)
+
+-- ---- Hired Folk / Staff section ----------------------------------------------
+check("builds: Hired Folk header present", find_line(builds_lines, "Hired Folk") ~= nil)
+check("builds: staff row names Ragnar", builds_all:find("Ragnar", 1, true) ~= nil)
+check("builds: Ragnar is Unassigned", builds_all:find("Unassigned", 1, true) ~= nil)
+check("builds: Ragnar's loyalty (index 4 -> Loyal) present", builds_all:find("Loyal", 1, true) ~= nil)
+check("builds: Ragnar's age (Young) present", builds_all:find("Young", 1, true) ~= nil)
+check("builds: Ragnar's trait (Berserker) present", builds_all:find("Berserker", 1, true) ~= nil)
+-- (a RESET escape sits between "*Cbt" and ":10", so match each half
+-- independently on the same row rather than one contiguous pattern.)
+local stat_idx = find_line(builds_lines, "*Cbt")
+check("builds: Ragnar's highlighted stat (*Cbt:10) present",
+      stat_idx ~= nil and builds_lines[stat_idx]:find(":10", 1, true) ~= nil, builds_all)
+
+page_opts.set("show_builds_staff", false)
+local builds_no_staff = builds_page.lines(WIDTH)
+check("builds: Hired Folk header disappears when show_builds_staff is off",
+      find_line(builds_no_staff, "Hired Folk") == nil)
+page_opts.set("show_builds_staff", true)
+
+-- ---- width discipline --------------------------------------------------------
+do
+  local width_ok, widest = true, nil
+  for _, l in ipairs(builds_lines) do
+    local vw = pagelib.visible_width(l)
+    if vw > WIDTH then width_ok = false; widest = vw end
+  end
+  check("builds: every row's visible width is <= the requested width", width_ok, widest)
+end
 
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING PAGES1 TESTS PASSED")

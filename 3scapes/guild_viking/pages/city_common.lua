@@ -1,8 +1,11 @@
--- Shared formatting helpers for pages/city.lua and pages/trade.lua -- the
--- two modes of LEGACY's draw_page2(y, mode)
--- (/home/simon/code/3s_scripts_old/lua/guild_viking.lua:7573-9114).
+-- Shared formatting helpers, originally for pages/city.lua and
+-- pages/trade.lua -- the two modes of LEGACY's draw_page2(y, mode)
+-- (/home/simon/code/3s_scripts_old/lua/guild_viking.lua:7573-9114) -- and now
+-- also required by pages/farm.lua and pages/builds.lua (Task 5), which need
+-- the same fmt_time/good_label/good_color/cap_first helpers LEGACY defines
+-- once at file scope.
 --
--- This module exists because the TWO PAGE MODULES need the same small set
+-- This module exists because several page modules need the same small set
 -- of formatting helpers LEGACY defined once at file scope, not because
 -- draw_page2 shares SECTION BUILDERS between its city and trade branches --
 -- it doesn't; every section in the source is drawn from exactly one of the

@@ -16,12 +16,14 @@ local placeholder = require("pages.placeholder")
 local stats_page = require("pages.stats")
 local city_page = require("pages.city")
 local trade_page = require("pages.trade")
+local farm_page = require("pages.farm")
+local builds_page = require("pages.builds")
 
 window.PAGES = {
   { key = "stats",  label = "Stats",  mod = stats_page },
   { key = "city",   label = "City",   mod = city_page },
-  { key = "farm",   label = "Farm",   mod = placeholder },
-  { key = "builds", label = "Builds", mod = placeholder },
+  { key = "farm",   label = "Farm",   mod = farm_page },
+  { key = "builds", label = "Builds", mod = builds_page },
   { key = "people", label = "People", mod = placeholder },
   { key = "goods",  label = "Goods",  mod = placeholder },
   { key = "bonds",  label = "Bonds",  mod = placeholder },
