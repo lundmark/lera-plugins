@@ -106,7 +106,12 @@ end
 -- it. `cell` may be nil (empty space).
 local function glyph_field(cell)
   if not cell then return "  " end
-  local g = cell.glyph or ""
+  -- A present-but-empty glyph ("") would otherwise fall through the #g >= 2
+  -- branch below into "" .. " " == " " -- a single visible char, breaking
+  -- the fixed 2-char pitch every other cell relies on. Normalize it to a
+  -- single space first so it pads out to "  " exactly like a nil cell.
+  local g = cell.glyph
+  if g == nil or g == "" then g = " " end
   local text
   if #g >= 2 then
     text = g:sub(1, 2)
@@ -236,7 +241,10 @@ end
 -- wrapping to a new line before exceeding `width`. Each entry renders as
 -- its (optionally colored) glyph, a space, then its label; entries within a
 -- line are joined by two spaces. Every entry carries its own reset, so a
--- color never bleeds into the next entry or the separator.
+-- color never bleeds into the next entry or the separator. A single entry
+-- wider than `width` on its own is placed anyway, alone on its line, rather
+-- than being truncated -- legend labels are caller-authored text, not
+-- board content subject to a hard width budget.
 function maplib.legend(width, entries)
   local SEP = "  "
   local lines = {}

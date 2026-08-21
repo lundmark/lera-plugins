@@ -17,6 +17,36 @@ local maplib = require("maplib")
 local C, RESET = pagelib.C, pagelib.RESET
 local REV_ON, REV_OFF = "\27[7m", "\27[27m"
 
+-- pagelib-aware visible-column slice: walks `line` exactly like
+-- pagelib.trunc does (one whole escape sequence or one visible char per
+-- step, never splitting a sequence), counting only visible chars toward
+-- `col`, and collects the visible chars whose column falls in
+-- [start_col, start_col + len). Escape sequences are dropped entirely, so
+-- the result is plain text -- this checks WHERE content landed, not how it
+-- was styled (styling is covered by the exact-string checks above).
+local function visible_slice(line, start_col, len)
+  local out = {}
+  local col = 0
+  local i, n = 1, #line
+  while i <= n and col < start_col + len do
+    if line:byte(i) == 27 then
+      local seq = line:match("^\27%[[%d;]*m", i)
+      if seq then
+        i = i + #seq
+      else
+        if col >= start_col then out[#out + 1] = line:sub(i, i) end
+        col = col + 1
+        i = i + 1
+      end
+    else
+      if col >= start_col then out[#out + 1] = line:sub(i, i) end
+      col = col + 1
+      i = i + 1
+    end
+  end
+  return table.concat(out)
+end
+
 -- ---- a 3x3 grid: mixed colors, one selected cell, one empty cell, one
 -- 2-char glyph -------------------------------------------------------------
 local grid3 = {
@@ -47,6 +77,14 @@ check("3x3 row1: selected cell (reverse-video) + 2-char glyph + colored", lines3
 
 local row2 = "F " .. " " .. "G " .. " " .. (C.cyan .. "H " .. RESET) .. " "
 check("3x3 row2: plain cells + trailing colored cell", lines3[3] == row2)
+
+-- ---- present-but-empty glyph normalizes to blank, not a broken pitch ------
+local grid_empty_glyph = {
+  w = 1, h = 1,
+  cell = function(c, r) return { glyph = "" } end,
+}
+check("empty-string glyph renders as a full 2-char blank field (fixed pitch preserved)",
+  maplib.render(grid_empty_glyph, {})[1] == "  " .. " ")
 
 -- ---- col + row headers + origin_label ------------------------------------
 local lines3h = maplib.render(grid3, { col_headers = true, row_headers = true, origin_label = "XY" })
@@ -132,6 +170,41 @@ for r = 0, 2 do
     check(string.format("cell_at round-trip glyph-2nd-char (%d,%d) -> (%d,%d)", x + 1, y, c, r),
       gc2 == c and gr2 == r, tostring(gc2) .. "," .. tostring(gr2))
   end
+end
+
+-- cell_at agreement alone only proves the INDEX ARITHMETIC is invertible --
+-- it never inspects what actually got drawn there, so a bug that reorders
+-- what build_cell_line appends per column (e.g. glyph and east-slot swapped
+-- for one column) would still satisfy every check above. Close that gap by
+-- slicing the ACTUAL rendered rt_lines at each hand-computed (x, y) and
+-- comparing the visible glyph-field content against what grid3's cell()
+-- returns for that (c, r) -- every corner, one interior cell, and the
+-- selected cell, on this same combined (headers + row headers + east AND
+-- south edges together) grid.
+local function expected_glyph_field(c, r)
+  local cell = rt_grid.cell(c, r)
+  if not cell then return "  " end
+  local g = cell.glyph
+  if #g >= 2 then return g:sub(1, 2) end
+  return g .. " "
+end
+
+local content_checks = {
+  { c = 0, r = 0, label = "corner" },
+  { c = 2, r = 0, label = "corner" },
+  { c = 0, r = 2, label = "corner" },
+  { c = 2, r = 2, label = "corner" },
+  { c = 1, r = 1, label = "interior" },
+  { c = 0, r = 1, label = "selected" },
+}
+for _, cc in ipairs(content_checks) do
+  local x = prefix_width + cc.c * 3
+  local y = col_header_lines + cc.r * 2
+  local got = visible_slice(rt_lines[y + 1], x, 2)
+  local want = expected_glyph_field(cc.c, cc.r)
+  check(string.format("rendered content at (%d,%d) [%s cell (%d,%d)] is '%s'",
+    x, y, cc.label, cc.c, cc.r, want),
+    got == want, "got '" .. got .. "'")
 end
 
 -- header line (y=0): every x is nil.
