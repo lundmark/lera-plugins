@@ -11,8 +11,8 @@ local window = {}
 
 -- Ordered page registry. Task 9 replaces the last two placeholder entries
 -- (army/war); no PAGES entry still points at pages.placeholder after this --
--- Task 12's audit removes pages/placeholder.lua now that nothing references
--- it any more.
+-- Task 10's audit removed pages/placeholder.lua once nothing referenced it
+-- any more.
 local stats_page = require("pages.stats")
 local city_page = require("pages.city")
 local trade_page = require("pages.trade")

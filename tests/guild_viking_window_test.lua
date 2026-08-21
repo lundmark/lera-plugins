@@ -37,6 +37,14 @@ lera = { render_pass = function() return render_pass end }
 
 local window = require("window")
 
+-- Snapshot the real page modules right after requiring window, before any
+-- later section in this file replaces find_page("stats").mod /
+-- find_page("city").mod with fake { lines = ... } tables for windowing-math
+-- tests -- the Task 10 end-to-end pass appended at the bottom needs the REAL
+-- modules restored, regardless of what ran in between.
+local real_mods = {}
+for _, p in ipairs(window.PAGES) do real_mods[p.key] = p.mod end
+
 -- ---- PAGES registry ---------------------------------------------------------
 local expected_pages = {
   { key = "stats",  label = "Stats" },
@@ -283,6 +291,370 @@ check("down on the separator column between two tabs returns false",
 check("separator down does not change the page",
       window.current_page() == page_before_separator_down)
 
+render_pass = "local"
+
+-- =============================================================================
+-- Task 10: end-to-end pane pass -- every page in window.PAGES rendered at
+-- real pane dimensions with a representative state slice, no page crashing,
+-- no emitted row overflowing the rect width, and scrolling working without
+-- error. Seeds below are borrowed from guild_viking_pages1-4_test.lua so most
+-- sections have real data rather than falling back to "no data yet" text.
+-- This is the "no page crashes at real dimensions" lock the task brief asks
+-- for.
+-- =============================================================================
+
+local pagelib = require("pagelib")
+local state = require("state")
+local page_opts = require("page_opts")
+local S = state.S
+
+-- Restore the REAL page modules (a mid-file section above replaced stats'
+-- and city's `.mod` with fake scroller-math doubles).
+for _, p in ipairs(window.PAGES) do p.mod = real_mods[p.key] end
+
+-- Replicates render_tabbar's own wrap bookkeeping (window.lua) so the test
+-- can tell tab rows apart from body rows in what gets drawn, without
+-- exporting that internal from window.lua itself.
+local function count_tab_rows(width)
+  local row, col = 0, 0
+  for _, p in ipairs(window.PAGES) do
+    local seg_len = #p.label
+    if col > 0 and col + seg_len > width then
+      row = row + 1
+      col = 0
+    end
+    col = col + seg_len
+    if col < width then col = col + 1 end
+  end
+  return row + 1
+end
+
+-- ---- seed a representative state slice across every page -------------------
+
+-- stats
+S.daler = 12345
+S.hp, S.mhp, S.hp_delta = 350, 500, 5
+S.threk, S.mthrek, S.threk_delta = 10, 50, -2
+S.seid, S.mseid, S.seid_delta = 80, 100, 0
+S.vig, S.mvig, S.vig_delta = 40, 80, 0
+S.rad, S.mrad, S.rad_delta = 20, 40, 0
+S.fury = "[***-------]"
+S.ldng, S.mldng, S.lrst = 3, 4, 10
+S.chain, S.bsdepth = 7, 2
+S.god_power_name, S.god_power_next = "Odin's Fury", 125
+S.vis, S.vis_gain, S.vis_session = 100, 5, 20
+S.kap, S.kap_gain, S.kap_session = 200, 3, 15
+S.soe, S.soe_gain, S.soe_session = 50, 0, 5
+S.aud, S.aud_gain, S.aud_session = 10, 1, 2
+S.xp_session_start = os.time() - 65
+S.en5, S.ens, S.rndz = "Wolf", "low", 3
+S.mob_name_full, S.estatus_pct, S.combat = "Grey Wolf", 42, true
+S.stfx = { { name = "ein", val = "54", cat = "Def" } }
+
+-- city
+S.ships = { { name = "Ravager", tier = 2, state = "raiding", target = "Vestergotland",
+              return_in = 90, crew = 8, ship_id = nil, convoy = 0, durability = 100 } }
+S.raidlog = { { ship = "Ravager", target = "vestergotland", daler = 150,
+                goods = { { good = "furs", qty = 12 } }, thralls = 2, lost = false } }
+S.buildings = { warehouse = 3, dock = 2 }
+S.wstock = {
+  { good = "grain", amount = 100, freshness_pct = 100 },
+  { good = "fish", amount = 50, freshness_pct = 100 },
+  { good = "timber", amount = 200, freshness_pct = 100 },
+}
+S.next_tick_in = 45
+S.production = { timber = 25, ore = 10 }
+S.upkeep = { roster = 50, community = 20, throne = 10, roads = 5, forts = 5, total = 90 }
+S.routes = { hold = { name = "Hold", road_tier = 2, fort_tier = 1,
+                       road_maint = 80, fort_maint = 60, road_name = "", fort_name = "" } }
+S.route_upkeep = 12
+S.monuments = { "Saga of the North Wind" }
+S.monument_cap = 5
+
+-- trade
+S.dispatch_cd = 0
+S.carts = { { mode = "buy", good = "furs", village = "Vestergotland", return_in = 120,
+              amount = 50, halfway_in = 0, quality_pct = 100, cart_id = 3, tier = 2,
+              durability = 90, cap = 200, escort = 1, refit = "standard", legs = {} } }
+S.idle_carts = { { cart_id = 7, tier = 1, durability = 100, cap = 150, refit = "standard" } }
+S.cart_upgrades = { { cart_id = 3, target_tier = 3, secs_left = -1, mats_total = 10,
+                       mats_done = 4, mats = { { good = "timber", done = 4, need = 10 } },
+                       target_refit = "", job_type = "upgrade" } }
+S.courier = { tier = 2, runs = { { good = "fish", village = "Imaird", return_in = 60,
+                                    amount = 20, cost = 100, fee = 5 } } }
+S.spy = { tier = 1, mode = "sabotage", village = "Holmgard", secs = 300, sab_pct = 10,
+          sab_secs = 500, cd_secs = 0, scouts = { { city = "Uppsala", amb = 15, secs = 200 } } }
+S.train = { tier = 1, name = "Erik", stat = "combat", trained = 2, secs = 400 }
+S.heat = { 10, 80, 5 }
+S.grudges = { { town = "Birka", secs = 3600 } }
+S.trade_queue = { { mode = "sell", good = "mead", village = "Lejre", amount = 30, escort = 2 } }
+S.market_orders = { { id = 1, buyer = "olaf", good = "iron", remaining = 15, price = 8, age_secs = 60 } }
+S.incoming_fills = { { good = "honey", amount = 25, arrives_in = 90, seller = "astrid" } }
+
+-- farm
+S.season = "spring"
+S.weather = "storm"
+S.weather_str = 3
+S.farm_wmod = 15
+S.farm_plots = {
+  { coord = "A1", shroom = "fly_agaric_t1", time_left = 0, fertilized = 0, wilt_left = -1 },
+  { coord = "A2", shroom = "lions_mane_t2", time_left = 3600, fertilized = 1, wilt_left = -1 },
+}
+S.city_water = 40
+S.city_fert = 25
+S.blot_status = "open"
+S.blot_reset_in = 3661
+S.blot_filled = 4
+S.blot_total = 9
+
+-- builds
+S.pending_builds = {
+  { bldg_id = "warehouse", tier = 2, mats_total = 10, mats_done = 3,
+    complete_at_secs = -1, total_build_secs = 0,
+    mats = { { good = "timber", done = 3, need = 10 } } },
+}
+S.ship_upgrades = {
+  { name = "Ormen", tier = 3, secs_left = -1, mats_total = 5, mats_done = 2,
+    mats = { { good = "iron", done = 2, need = 5 } } },
+}
+S.bdmg = { { bldg_id = "palisade", pct = 72 } }
+S.staff_list = {
+  { name = "Ragnar", assigned_to = "0", stat_key = "combat",
+    stats = { combat = 10, trade = 2 }, trait = "berserker", loyalty = 4,
+    age = "young", arrive_at = 0 },
+}
+
+-- people
+S.settlers = 42
+S.settler_tax = 2
+S.settler_edict = "feast"
+S.settler_edict_left = 125
+S.settler_edict_cd = 0
+S.settler_housing_cap = 300
+S.settler_housing_plots = 12
+S.settler_housing_avg = 250
+S.settler_housing_plot_tiers = { t1 = 4, t2 = 3, t3 = 2, t4 = 0 }
+S.settler_housing_upkeep = 15
+S.settler_community_upkeep = 8
+S.settler_jobs = 30
+S.settler_employed = 25
+S.settler_market_staffed = 3
+S.settler_mood = 82
+S.settler_housing_quality = 65
+S.settler_sustenance = 44
+S.settler_emp_score = 30
+S.settler_security = 90
+S.settler_dignity = 20
+S.settler_sentiment = 5
+S.settler_flourishing = 1
+S.settler_community_net = 120
+S.settler_mult_pct = 150
+S.settler_community_buildings = { mead_hall = 2, well = 0 }
+S.settler_consumption = { grain = 6, water = 4 }
+S.settler_supply_next = 300
+S.settler_pop_next = 600
+S.settler_actions = { { name = "Assembly", secs = 90 } }
+S.settler_projects = {
+  { id = "longhouse", kind = "housing_upgrade", from_tier = 1, to_tier = 2,
+    secs_left = -1, mats_total = 10, mats_done = 4, daler = 50,
+    mat_detail = { timber = { have = 4, need = 10 } } },
+}
+S.settler_identity = "Builders' Hold"
+S.settler_roles = {
+  { key = "smidir", label = "Builders", cur = 40, tgt = 55, work = 10, bonus = 8 },
+  { key = "boendr", label = "Farmers", cur = 30, tgt = 30, work = 5, bonus = 0 },
+}
+S.settler_commoner = 12
+S.patrol = { count = 3, remaining = 45 }
+S.garrison_stationed = 8
+S.garrison_free = 2
+S.garrison_cap = 10
+S.garrison_defpower = 55
+S.hird_list = {
+  { name = "Ragnar", status = "personal_guard", level = 6, atk = 7, def = 5,
+    loyalty = 4, age_phase = "veteran", mode = "offensive", champ = 1, wpn = 3, arm = 2 },
+}
+S.varang_out = { { name = "Skoll's Band", count = 12, expires_in = 3661 } }
+S.varang_in = { { name = "Ingvar's Reinforcements", count = 6, expires_in = 120 } }
+S.raid_in = 200
+S.raid_faction = "Skalgrim Reavers"
+S.raid_strength = 80
+S.thralls = 14
+S.thrall_assignments = { longhouse = 3, warehouse = 2 }
+S.thrall_follower_level = 4
+S.thrall_follower_name = "grimna"
+S.thrall_follower_xp = 120
+S.thrall_follower_xp_cap = 400
+S.thrall_follower_carry_used = 10
+S.thrall_follower_carry_cap = 40
+S.thrall_follower_status = "following"
+S.missions = {
+  { id = 7, label = "Deliver grain to Holmgard", expires_in = 1800,
+    origin_town = "Vestergotland", target_town = "Holmgard",
+    reward = 200, reward_rep = 15, want_goods = { grain = 30 } },
+}
+S.errand = {
+  id = 99, label = "Fetch water", expires_in = 5400,
+  origin_town = "", target_town = "Holmgard",
+  reward = 0, reward_good = "water", reward_qty = 10,
+}
+S.mission_reg_left = 2
+S.mission_new_left = 0
+
+-- goods
+S.trade_goods = {
+  [0] = { iron = { score = -3, supply = 100, demand = 0, buy = 5, sell = 0 },
+          mead = { score = 2, supply = 0, demand = 10, buy = 0, sell = 40 } },
+  [1] = { iron = { score = 2, supply = 0, demand = 100, buy = 0, sell = 50 } },
+}
+S.demand_cycle = "Spring Growth"
+S.demand_cycle_in = 0
+S.wstock_by_good = { mead = { amount = 20 } }
+S.blocks = {}
+S.autotrade.show_n = 6
+S.autotrade.status = "cooldown"
+S.autotrade.last_msg = "sell 4x Mead -> Midgard; buy 2x Furs -> Lodbrok's"
+S.autotrade.log = {
+  { t = "10:00", jobs = { { mode = "sell", qty = 3, good = "mead", stown_lin = 0, profit = 90, margin = 30 } } },
+}
+S.price_history = { [0] = { iron = { { t = 1, b = 5, s = 40 }, { t = 2, b = 15, s = 60 } } } }
+page_opts.set("auto_trade", true)
+page_opts.set("show_goods_atlog", true)
+
+-- bonds
+S.hird_by_id = {
+  [1] = { name = "Ragnar Ironside" },
+  [2] = { name = "Skoll" },
+}
+S.bonds_list = {
+  { id_a = 1, id_b = 2, ticks = 850000, tier = 3 },
+  { id_a = 3, id_b = 4, ticks = 30000, tier = 0 },
+}
+
+-- ranks
+S.standings = {
+  [1] = { name = "Own Lineage", score = 50, label = "Neutral", is_own = true },
+  [2] = { name = "Rival Lineage", score = 620, label = "Allied", is_own = false },
+  [3] = { name = "Foe Lineage", score = -350, label = "Feud", is_own = false },
+}
+S.village_rep = {
+  [2] = { name = "Holmgard", rep = 150, rank = 2, start_at = 100, next_at = 300 },
+  [1] = { name = "Vestergotland", rep = 999, rank = 7, start_at = 500, next_at = 0 },
+}
+
+-- court
+S.dynasty = {
+  realm = "Norvik", house = "Ulfsson",
+  spouse = { name = "Astrid", house = "Ulfsson", age = 34, rank = 2 },
+  heir = "Bjorn",
+  living = 2, cap = 4,
+  children = {
+    { name = "Bjorn", gender = "male", age = 16, adult = true, trait = "bold", role = "warrior" },
+    { name = "Freya", gender = "female", age = 8, adult = false, trait = "", role = nil },
+  },
+}
+
+-- army
+S.army = {
+  conscripts = 42, cap = 10, used = 6,
+  units = {
+    { uid = 1, type = "skirmishers", size = 12, vet = 55, ready = true,
+      leader = "Ivar", traits = { "Blooded", "Scarred" } },
+    { uid = 2, type = "huscarls", size = 8, vet = 0, ready = false,
+      leader = nil, traits = {} },
+  },
+}
+
+-- war
+S.war_map = {
+  active = true, dim = 5, turn = 3, mode = "offense", pending = 0,
+  town = "Jorvik", works_budget = 0, march_eta = 125,
+  rows = { ".....", ".....", ".....", ".....", "....." },
+  upkeep = { food = 10, mead = 5, tools = 2, iron = 1, daler = 3 },
+  spoils = { daler = 500, renown = 20, deeds = 2 },
+}
+S.prison = {
+  held = 2, cap = 5, kin = 1, pending = true,
+  pend_name = "Ragnar", pend_size = 8, pend_cmd = true,
+  roster = { { id = 1, name = "Thrall A", size = 3, cmd = false, val = 50 } },
+}
+S.siege = { engines = 2, cap = 4 }
+S.battle = {
+  phase = "turn", target = "Jorvik", mode = "field", turn = 3,
+  budget = 100, spent = 60, war_points = 30,
+  units = {
+    { side = "you", label = "huscarls", size = 8, coord = "C3", morale = 80, leader = "Ivar" },
+    { side = "foe", label = "foe_raiders", size = 10, coord = "D4", morale = 20 },
+  },
+}
+S.war_points = 30
+S.war = {
+  incoming = { town = "Kaupang", strength = 120, days = 3 },
+  claims = { { town = "Hedeby", days = 10 } },
+  campaigns = { { town = "Hedeby", defense = 40, max = 100 } },
+}
+S.diplomacy = {
+  allies = { { house = "Ivarsson", standing = 5 } },
+  foes = { { house = "Ragnarsson", standing = -3 } },
+}
+
+-- ---- render every page at 80x24 (a real output-pane-sized rect) -----------
+render_pass = "local"
+local TAB_ROWS_80 = count_tab_rows(80)
+for _, p in ipairs(window.PAGES) do
+  window.set_page(p.key)
+  reset_drawn()
+  local ok, err = pcall(window.render, make_rect(0, 0, 80, 24), {})
+  check("80x24 " .. p.key .. ": renders without error", ok, err)
+
+  local widest = nil
+  for _, d in ipairs(drawn.ansi) do
+    local vw = pagelib.visible_width(d.s)
+    if widest == nil or vw > widest then widest = vw end
+  end
+  check("80x24 " .. p.key .. ": at least one non-tab row rendered",
+        #drawn.ansi > TAB_ROWS_80, #drawn.ansi)
+  check("80x24 " .. p.key .. ": every emitted row's visible width <= 80",
+        widest == nil or widest <= 80, widest)
+
+  local ok_scroll, err_scroll = pcall(function()
+    window.scroll(-5)
+    window.scroll(5)
+    window.render(make_rect(0, 0, 80, 24), {})
+  end)
+  check("80x24 " .. p.key .. ": scroll(-5) then scroll(5) renders without error",
+        ok_scroll, err_scroll)
+end
+
+-- ---- render every page at a narrow 40x12 rect (tab bar wraps) -------------
+local TAB_ROWS_40 = count_tab_rows(40)
+check("40x12: tab bar wraps onto more than one row at this width", TAB_ROWS_40 > 1, TAB_ROWS_40)
+for _, p in ipairs(window.PAGES) do
+  window.set_page(p.key)
+  reset_drawn()
+  local ok, err = pcall(window.render, make_rect(0, 0, 40, 12), {})
+  check("40x12 " .. p.key .. ": renders without error", ok, err)
+
+  local widest = nil
+  for _, d in ipairs(drawn.ansi) do
+    local vw = pagelib.visible_width(d.s)
+    if widest == nil or vw > widest then widest = vw end
+  end
+  check("40x12 " .. p.key .. ": at least one non-tab row rendered",
+        #drawn.ansi > TAB_ROWS_40, #drawn.ansi)
+  check("40x12 " .. p.key .. ": every emitted row's visible width <= 40",
+        widest == nil or widest <= 40, widest)
+
+  local ok_scroll, err_scroll = pcall(function()
+    window.scroll(-5)
+    window.scroll(5)
+    window.render(make_rect(0, 0, 40, 12), {})
+  end)
+  check("40x12 " .. p.key .. ": scroll(-5) then scroll(5) renders without error",
+        ok_scroll, err_scroll)
+end
+
+window.set_page("stats")
 render_pass = "local"
 
 if failures > 0 then os.exit(1) end
