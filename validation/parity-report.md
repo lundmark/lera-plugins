@@ -76,6 +76,81 @@ Not rechecked at the public validation level:
 - Path: `3scapes/guild_viking/notify.lua`
 - Approved targets: None
 
+### `guild_viking_page_opts`
+
+- Path: `3scapes/guild_viking/page_opts.lua`
+- Approved targets: None
+
+### `guild_viking_pagelib`
+
+- Path: `3scapes/guild_viking/pagelib.lua`
+- Approved targets: None
+
+### `guild_viking_pages_army`
+
+- Path: `3scapes/guild_viking/pages/army.lua`
+- Approved targets: None
+
+### `guild_viking_pages_bonds`
+
+- Path: `3scapes/guild_viking/pages/bonds.lua`
+- Approved targets: None
+
+### `guild_viking_pages_builds`
+
+- Path: `3scapes/guild_viking/pages/builds.lua`
+- Approved targets: None
+
+### `guild_viking_pages_city`
+
+- Path: `3scapes/guild_viking/pages/city.lua`
+- Approved targets: None
+
+### `guild_viking_pages_city_common`
+
+- Path: `3scapes/guild_viking/pages/city_common.lua`
+- Approved targets: None
+
+### `guild_viking_pages_court`
+
+- Path: `3scapes/guild_viking/pages/court.lua`
+- Approved targets: None
+
+### `guild_viking_pages_farm`
+
+- Path: `3scapes/guild_viking/pages/farm.lua`
+- Approved targets: None
+
+### `guild_viking_pages_goods`
+
+- Path: `3scapes/guild_viking/pages/goods.lua`
+- Approved targets: None
+
+### `guild_viking_pages_people`
+
+- Path: `3scapes/guild_viking/pages/people.lua`
+- Approved targets: None
+
+### `guild_viking_pages_ranks`
+
+- Path: `3scapes/guild_viking/pages/ranks.lua`
+- Approved targets: None
+
+### `guild_viking_pages_stats`
+
+- Path: `3scapes/guild_viking/pages/stats.lua`
+- Approved targets: None
+
+### `guild_viking_pages_trade`
+
+- Path: `3scapes/guild_viking/pages/trade.lua`
+- Approved targets: None
+
+### `guild_viking_pages_war`
+
+- Path: `3scapes/guild_viking/pages/war.lua`
+- Approved targets: None
+
 ### `guild_viking_persist`
 
 - Path: `3scapes/guild_viking/persist.lua`
@@ -94,6 +169,11 @@ Not rechecked at the public validation level:
 ### `guild_viking_util`
 
 - Path: `3scapes/guild_viking/util.lua`
+- Approved targets: None
+
+### `guild_viking_window`
+
+- Path: `3scapes/guild_viking/window.lua`
 - Approved targets: None
 
 ### `help`
@@ -727,15 +807,15 @@ Not rechecked at the public validation level:
 ### `guild_viking` — plugin_gap
 
 - Current plugins: `guild_viking`
-- Feature statuses: not_converted=39, parity=12
+- Feature statuses: not_converted=33, parity=18
 - `viking_base_01_dependencies_state_and_core_helpers` (state): parity — Initialize guild-Viking dependencies, persistent state, labels, and core helpers.
 - `viking_base_02_market_history_and_demand_metrics` (state): parity — Track guild-Viking market history, price statistics, trends, and demand cycles.
-- `viking_base_03_status_bar_callbacks` (rendering): not_converted — Render guild-Viking health and progress status callbacks.
+- `viking_base_03_status_bar_callbacks` (rendering): parity — Render guild-Viking health and progress status callbacks.
 - `viking_base_04_core_persistence_and_lifecycle` (persistence): parity — Persist guild-Viking core state and handle its plugin lifecycle.
 - `viking_base_04_mip_event_dispatch` (callback): parity — Dispatch guild-Viking event notifications from protocol state.
 - `viking_base_04_protocol_ingestion_and_guild_state` (protocol): parity — Ingest the complete guild-Viking protocol payload and maintain coupled guild state.
 - `viking_base_05_events_timers_and_batch_processing` (callback): parity — Handle guild-Viking events, countdowns, and protocol batches.
-- `viking_base_05_market_movers_and_trade_rows` (rendering): not_converted — Compute guild-Viking market movers and trade-row presentation data.
+- `viking_base_05_market_movers_and_trade_rows` (rendering): parity — Compute guild-Viking market movers and trade-row presentation data.
 - `viking_base_06_automated_voyage_planning` (callback): not_converted — Plan and advance guild-Viking automated voyages.
 - `viking_base_07_autotrader_bridge_and_raid_automation` (callback): not_converted — Bridge guild-Viking autotrader context and run automated raids.
 - `viking_base_08_window_chrome_tabs_and_lifecycle` (persistence): not_converted — Manage guild-Viking window chrome, tabs, persistence, and lifecycle.
@@ -747,11 +827,11 @@ Not rechecked at the public validation level:
 - `viking_base_10_terrain_and_building_drawers` (rendering): not_converted — Construct guild-Viking terrain and building drawing helpers.
 - `viking_base_10_voyage_assets` (rendering): not_converted — Load guild-Viking voyage visual assets.
 - `viking_base_10_window_creation_and_interactions` (rendering): not_converted — Create the guild-Viking window and handle its direct interactions.
-- `viking_base_11_dashboard_update_and_shared_rendering` (rendering): not_converted — Update the guild-Viking dashboard and shared presentation helpers.
-- `viking_base_12_building_page` (rendering): not_converted — Render the guild-Viking building page.
+- `viking_base_11_dashboard_update_and_shared_rendering` (rendering): parity — Update the guild-Viking dashboard and shared presentation helpers.
+- `viking_base_12_building_page` (rendering): parity — Render the guild-Viking building page.
 - `viking_base_12_city_status_page` (rendering): not_converted — Render the guild-Viking city status page.
-- `viking_base_12_production_page` (rendering): not_converted — Render the complete guild-Viking production page.
-- `viking_base_13_logistics_and_governance_page` (rendering): not_converted — Render guild-Viking logistics, taxation, edicts, and governance data.
+- `viking_base_12_production_page` (rendering): parity — Render the complete guild-Viking production page.
+- `viking_base_13_logistics_and_governance_page` (rendering): parity — Render guild-Viking logistics, taxation, edicts, and governance data.
 - `viking_base_14_trade_dashboard_and_autotrader_controls` (rendering): not_converted — Render guild-Viking trade data and autotrader-specific controls.
 - `viking_base_15_page_and_automation_menus` (command): not_converted — Handle guild-Viking page, autotrader, raid, and voyage menus.
 - `viking_base_16_map_page_rendering` (rendering): not_converted — Render the guild-Viking map page.
