@@ -331,5 +331,120 @@ check("restore nil-safe", S.price_history == saved)
 
 trade._market_seam.on_tgoods = nil
 
+-- ---------------------------------------------------------------------------
+-- market.lua: Market Movers / Refined Sells (Task 8, LEGACY guild_viking.lua
+-- :3186-3374) -- compute_market_movers, best_sell_of, best_buy_of,
+-- compute_refined_sells, and the "hot" price-percentile flag. These flip
+-- parity feature viking_base_05_market_movers_and_trade_rows, so every
+-- expected number below is hand-computed from the fixture, not just
+-- "non-nil"/"present".
+-- ---------------------------------------------------------------------------
+do
+  S.trade_goods = {
+    -- timber: lineage 0 supplies cheap (score -2, gate <= -1), lineage 1
+    -- demands high (score 3, gate >= 2); lineage 2 is neutral (score 0) and
+    -- must be ignored by the score-gated mover scan on BOTH sides, even
+    -- though it individually beats lineage 0's buy and lineage 1's sell.
+    [0] = { timber = { score = -2, supply = 50, demand = 0,  buy = 10, sell = 0 },
+            iron   = { score = -3, supply = 100, demand = 0, buy = 5,  sell = 0 },
+            fish   = { score = 1,  supply = 10, demand = 0,  buy = 12, sell = 0 },
+            mead   = { score = 2,  supply = 0,  demand = 10, buy = 0,  sell = 40 },
+            bread  = { score = 1,  supply = 0,  demand = 5,  buy = 0,  sell = 15 },
+            weapons = { score = -3, supply = 10, demand = 0, buy = 5,  sell = 0 } },
+    [1] = { timber = { score = 3,  supply = 0,  demand = 40, buy = 0,  sell = 25 },
+            iron   = { score = 2,  supply = 0,  demand = 100, buy = 0, sell = 50 },
+            fish   = { score = 1,  supply = 5,  demand = 8,  buy = 20, sell = 18 },
+            weapons = { score = 3, supply = 0,  demand = 10, buy = 0,  sell = 50 } },
+    [2] = { timber = { score = 0,  supply = 20, demand = 20, buy = 8,  sell = 30 },
+            fish   = { score = 1,  supply = 0,  demand = 15, buy = 0,  sell = 22 } },
+  }
+  S.wstock_by_good = { mead = { amount = 20 }, bread = { amount = 3 } }
+  S.blocks = { mead = 5 }
+
+  -- ---- compute_market_movers (LEGACY:3234-3269) ----------------------------
+  -- timber: buy 10@lin0 (score -2 <= -1), sell 25@lin1 (score 3 >= 2);
+  --   lin2 (score 0) fails both gates and is skipped even though its
+  --   buy=8 is cheaper than lin0's and its sell=30 is dearer than lin1's.
+  --   margin = 25-10 = 15; qty = min(supply 50, floor(demand 40 * 0.8 = 32)) = 32;
+  --   profit = 15*32 = 480.
+  -- iron: buy 5@lin0, sell 50@lin1; margin = 45;
+  --   qty = min(supply 100, floor(demand 100 * 0.8 = 80)) = 80; profit = 45*80 = 3600.
+  -- weapons: structurally profitable (buy 5@lin0 score -3, sell 50@lin1 score 3)
+  --   but NOT in GOODS_ALL (LEGACY:3192-3193 excludes weapons/armour/finery) --
+  --   must not appear at all.
+  local arb = market.compute_market_movers()
+  check("movers: two profitable goods found (timber, iron; weapons excluded)", #arb == 2, #arb)
+  check("movers: sorted by profit descending (iron 3600 before timber 480)",
+        arb[1] and arb[1].good == "iron" and arb[2] and arb[2].good == "timber",
+        arb[1] and arb[1].good)
+  check("movers: iron exact fields (buy 5@lin0, sell 50@lin1, margin 45, qty 80, profit 3600)",
+        arb[1].buy == 5 and arb[1].buy_lin == 0 and arb[1].sell == 50 and arb[1].sell_lin == 1
+        and arb[1].margin == 45 and arb[1].qty == 80 and arb[1].profit == 3600)
+  check("movers: timber exact fields (buy 10@lin0, sell 25@lin1, margin 15, qty 32, profit 480)",
+        arb[2].buy == 10 and arb[2].buy_lin == 0 and arb[2].sell == 25 and arb[2].sell_lin == 1
+        and arb[2].margin == 15 and arb[2].qty == 32 and arb[2].profit == 480)
+  do
+    local has_weapons = false
+    for _, a in ipairs(arb) do if a.good == "weapons" then has_weapons = true end end
+    check("movers: weapons never appears (not in GOODS_ALL)", not has_weapons)
+  end
+  check("movers: empty trade_goods returns {}", (function()
+    local saved = S.trade_goods
+    S.trade_goods = {}
+    local r = market.compute_market_movers()
+    S.trade_goods = saved
+    return #r == 0
+  end)())
+
+  -- ---- best_sell_of / best_buy_of (LEGACY:3322-3350) -- NOT score-gated ----
+  -- fish buy candidates (supply>0, buy>0): lin0 (sup10,buy12), lin1 (sup5,buy20)
+  --   -> cheapest is lin0 @ 12.
+  -- fish sell candidates (demand>0, sell>0): lin1 (dem8,sell18), lin2 (dem15,sell22)
+  --   -> dearest is lin2 @ 22.
+  local bb, bbl, bsup = market.best_buy_of("fish")
+  check("best_buy_of: fish cheapest is lin0 @ 12, supply 10", bb == 12 and bbl == 0 and bsup == 10)
+  local bs, bsl, bdem = market.best_sell_of("fish")
+  check("best_sell_of: fish dearest is lin2 @ 22, demand 15", bs == 22 and bsl == 2 and bdem == 15)
+  check("best_buy_of: no supplying town returns nil", market.best_buy_of("nosuchgood") == nil)
+  check("best_sell_of: no demanding town returns nil", market.best_sell_of("nosuchgood") == nil)
+
+  -- ---- compute_refined_sells (LEGACY:3354-3372) -----------------------------
+  -- mead: best_sell_of -> sp=40, sl=0, dem=10; wh_amount_of=20, blocked=5 ->
+  --   avail=15; value = 15*40 = 600.
+  -- bread: best_sell_of -> sp=15, sl=0, dem=5; wh_amount_of=3, blocked=0 (no
+  --   S.blocks.bread entry) -> avail=3; value = 3*15 = 45.
+  -- salted_fish/fine_furs/tools/gemstones have no trade_goods entries at all
+  --   -> best_sell_of returns nil -> excluded.
+  -- Sorted by value descending: mead (600) before bread (45).
+  local rsell = market.compute_refined_sells()
+  check("refined sells: exactly 2 entries (mead, bread)", #rsell == 2, #rsell)
+  check("refined sells: sorted by value descending (mead 600 before bread 45)",
+        rsell[1].good == "mead" and rsell[2].good == "bread")
+  check("refined sells: mead exact fields (sell 40@lin0, stock 15, blocked 5, value 600)",
+        rsell[1].sell == 40 and rsell[1].sell_lin == 0 and rsell[1].demand == 10
+        and rsell[1].stock == 15 and rsell[1].blocked == 5 and rsell[1].value == 600)
+  check("refined sells: bread exact fields (sell 15@lin0, stock 3, blocked 0, value 45)",
+        rsell[2].sell == 15 and rsell[2].stock == 3 and rsell[2].blocked == 0 and rsell[2].value == 45)
+
+  -- ---- mover_is_hot (LEGACY:3389-3396, inside build_mover_rows) ------------
+  -- Fabricated sell-price history for lin5/copper: min 0, max 100, so
+  -- f = (sell - 0) / 100 = sell / 100 matches the 0.66 literal exactly in
+  -- floating point (both sides round the same correctly-rounded double),
+  -- unlike an arbitrary min/max that would leave the boundary case at the
+  -- mercy of binary floating-point rounding.
+  S.price_history = { [5] = { copper = { { t = 1, b = 1, s = 0 }, { t = 2, b = 1, s = 100 } } } }
+  check("mover_is_hot: f=0.65 (sell 65) is below the 0.66 threshold",
+        market.mover_is_hot(65, 5, "copper") == false)
+  check("mover_is_hot: f=0.66 exactly (sell 66) meets the threshold",
+        market.mover_is_hot(66, 5, "copper") == true)
+  check("mover_is_hot: f=1.0 (sell at max) is hot", market.mover_is_hot(100, 5, "copper") == true)
+  check("mover_is_hot: f=0.0 (sell at min) is not hot", market.mover_is_hot(0, 5, "copper") == false)
+  check("mover_is_hot: no history at all returns false", market.mover_is_hot(100, 9, "nosuch") == false)
+  check("mover_is_hot: degenerate history (smax == smin) returns false", (function()
+    S.price_history[6] = { silver = { { t = 1, b = 1, s = 20 } } }
+    return market.mover_is_hot(20, 6, "silver") == false
+  end)())
+end
+
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING TRADE TESTS PASSED")

@@ -19,6 +19,7 @@ local trade_page = require("pages.trade")
 local farm_page = require("pages.farm")
 local builds_page = require("pages.builds")
 local people_page = require("pages.people")
+local goods_page = require("pages.goods")
 local bonds_page = require("pages.bonds")
 local ranks_page = require("pages.ranks")
 local court_page = require("pages.court")
@@ -29,7 +30,7 @@ window.PAGES = {
   { key = "farm",   label = "Farm",   mod = farm_page },
   { key = "builds", label = "Builds", mod = builds_page },
   { key = "people", label = "People", mod = people_page },
-  { key = "goods",  label = "Goods",  mod = placeholder },
+  { key = "goods",  label = "Goods",  mod = goods_page },
   { key = "bonds",  label = "Bonds",  mod = bonds_page },
   { key = "ranks",  label = "Ranks",  mod = ranks_page },
   { key = "court",  label = "Court",  mod = court_page },

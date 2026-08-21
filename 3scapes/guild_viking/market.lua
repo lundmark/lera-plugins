@@ -1,10 +1,12 @@
--- Market history, price statistics, trends, and demand-cycle helpers,
--- ported verbatim from LEGACY guild_viking.lua:357-418 (record_price_history,
--- price_stats, price_trend, demand_cycle_color). Wired as
--- handlers/trade.lua's `_market_seam.on_tgoods` (see init.lua); on_market is
--- deliberately left unset -- LEGACY's MARKET branch (guild_viking.lua:2459)
--- never calls record_price_history or any other history/demand helper, only
--- TGOODS does (confirmed by grepping LEGACY for every price_history and
+-- Market history, price statistics, trends, demand-cycle, and market-mover
+-- helpers, ported verbatim from LEGACY guild_viking.lua:357-418
+-- (record_price_history, price_stats, price_trend, demand_cycle_color) and
+-- :3186-3396 (Task 8: compute_market_movers, best_sell_of, best_buy_of,
+-- compute_refined_sells, mover_is_hot). Wired as handlers/trade.lua's
+-- `_market_seam.on_tgoods` (see init.lua); on_market is deliberately left
+-- unset -- LEGACY's MARKET branch (guild_viking.lua:2459) never calls
+-- record_price_history or any other history/demand helper, only TGOODS does
+-- (confirmed by grepping LEGACY for every price_history and
 -- record_price_history reference), so there is nothing for this module to
 -- do with the rebuilt order list Task 3's seam offers.
 local S = require("state").S
@@ -78,6 +80,153 @@ function M.demand_cycle_color(name)
   if string.find(s, "winter", 1, true) then return 0xCCCCCC end
   if string.find(s, "calm", 1, true) then return 0xCCCC00 end
   return 0xCCCC00
+end
+
+-- ---------------------------------------------------------------------------
+-- Market Movers / Refined Sells / "hot" flag, ported verbatim from LEGACY
+-- guild_viking.lua:3186-3396 (Task 8; flips parity feature
+-- viking_base_05_market_movers_and_trade_rows). Pure computations over
+-- S.trade_goods/S.wstock_by_good/S.blocks; page_opts-aware pieces (how many
+-- rows to show, lineage-id -> town-name lookup, and the auto_trade on/off
+-- gate) stay in pages/goods.lua per the task's split.
+-- ---------------------------------------------------------------------------
+
+-- LEGACY:3192-3193 (GOODS_ALL). The primary goods eligible for arbitrage --
+-- excludes weapons/armour/finery (never traded lineage-to-lineage) and
+-- REFINED_GOODS below (towns only ever BUY those, never supply them).
+local GOODS_ALL = {
+  "timber", "ore", "iron", "furs", "fish", "grain", "mead", "sunstone",
+  "runestones", "spoils", "salted_fish", "bread", "fine_furs", "tools",
+  "gemstones", "honey",
+}
+
+-- LEGACY:3201-3210. A profitable arbitrage buy must come from a surplus
+-- village (score <= -1) and sell into real demand (score >= +2) -- see
+-- LEGACY's own comment: neutral towns always mark sell DOWN and buy UP, so
+-- near-neutral round trips are churn, not profit.
+local AT_BUY_MAX_SCORE = -1
+local AT_SELL_MIN_SCORE = 2
+-- LEGACY:3208-3210. Size a deal to this fraction of the sell town's CURRENT
+-- demand, leaving a buffer against demand/price shrinking before dispatch.
+local AT_DEMAND_SAFETY = 0.8
+
+-- LEGACY:3234-3269 (compute_market_movers). For each good, find the cheapest
+-- qualifying buy town and the dearest qualifying sell town; a profitable
+-- pair (sell > buy, different towns) becomes one arbitrage row. TGOODS
+-- buy/sell are already the server's fully rep/tier/skill-modified actual
+-- prices, so no client-side reputation adjustment is applied here (LEGACY's
+-- own note: a second rep pass previously inflated sell and deflated buy,
+-- producing routes that actually lost money).
+function M.compute_market_movers()
+  local tg = S.trade_goods
+  if not tg or not next(tg) then return {} end
+  local arb = {}
+  for _, good in ipairs(GOODS_ALL) do
+    local bb, bbl, bsup, bs, bsl, bdem
+    for lin = 0, 13 do
+      local gd = tg[lin] and tg[lin][good]
+      if gd then
+        if (gd.supply or 0) > 0 and (gd.buy or 0) > 0 and (gd.score or 0) <= AT_BUY_MAX_SCORE then
+          if not bb or gd.buy < bb then bb = gd.buy; bbl = lin; bsup = gd.supply end
+        end
+        if (gd.demand or 0) > 0 and (gd.sell or 0) > 0 and (gd.score or 0) >= AT_SELL_MIN_SCORE then
+          if not bs or gd.sell > bs then bs = gd.sell; bsl = lin; bdem = gd.demand end
+        end
+      end
+    end
+    if bb and bs and bs > bb and bbl ~= bsl then
+      local margin = bs - bb
+      local qty = math.min(bsup or 0, math.floor((bdem or 0) * AT_DEMAND_SAFETY))
+      arb[#arb + 1] = { good = good, buy = bb, buy_lin = bbl, buy_supply = bsup or 0,
+                         sell = bs, sell_lin = bsl, sell_demand = bdem or 0,
+                         margin = margin, qty = qty, profit = margin * qty }
+    end
+  end
+  table.sort(arb, function(a, b)
+    if a.profit ~= b.profit then return a.profit > b.profit end
+    return a.margin > b.margin
+  end)
+  return arb
+end
+
+-- LEGACY:3320-3334 (best_sell_of). Best town to SELL `good`: highest sell
+-- price among towns that demand it (NOT score-gated, unlike the mover scan
+-- above). Returns price, lineage id, demand -- or nil if no town wants it.
+function M.best_sell_of(good)
+  local tg = S.trade_goods
+  if not tg then return nil end
+  local bs, bsl, bdem
+  for lin = 0, 13 do
+    local gd = tg[lin] and tg[lin][good]
+    if gd and (gd.demand or 0) > 0 and (gd.sell or 0) > 0 then
+      if not bs or gd.sell > bs then bs = gd.sell; bsl = lin; bdem = gd.demand end
+    end
+  end
+  return bs, bsl, bdem
+end
+
+-- LEGACY:3336-3350 (best_buy_of). Cheapest town to BUY `good`: lowest buy
+-- price among towns that supply it. Returns price, lineage id, supply -- or
+-- nil if no town sells it.
+function M.best_buy_of(good)
+  local tg = S.trade_goods
+  if not tg then return nil end
+  local bb, bbl, bsup
+  for lin = 0, 13 do
+    local gd = tg[lin] and tg[lin][good]
+    if gd and (gd.supply or 0) > 0 and (gd.buy or 0) > 0 then
+      if not bb or gd.buy < bb then bb = gd.buy; bbl = lin; bsup = gd.supply end
+    end
+  end
+  return bb, bbl, bsup
+end
+
+-- LEGACY:3312 (REFINED_GOODS). Goods that towns only ever BUY (produced/
+-- refined goods -- shops surcharge them +75%, so they never clear the
+-- arbitrage buy gate above; they only ever show up as warehouse stock to
+-- sell).
+local REFINED_GOODS = { "mead", "salted_fish", "bread", "fine_furs", "tools", "gemstones" }
+
+-- LEGACY:3315-3318 (wh_amount_of). Warehouse amount of a good, from the
+-- WSTOCK feed (handlers/trade.lua populates S.wstock_by_good).
+local function wh_amount_of(good)
+  local rec = S.wstock_by_good and S.wstock_by_good[good]
+  return rec and rec.amount or 0
+end
+
+-- LEGACY:3354-3372 (compute_refined_sells). Best-sell opportunities for
+-- REFINED_GOODS, ranked by realisable value (stock on hand x price) first,
+-- then unit price. `avail` nets out blocked/reserved stock (S.blocks,
+-- populated by handlers/trade.lua's BLOCKS parsing).
+function M.compute_refined_sells()
+  local out = {}
+  for _, g in ipairs(REFINED_GOODS) do
+    local sp, sl, dem = M.best_sell_of(g)
+    if sp and sl then
+      local total = wh_amount_of(g)
+      local blk = (S.blocks and S.blocks[g]) or 0
+      local avail = total - blk
+      if avail < 0 then avail = 0 end
+      out[#out + 1] = { good = g, sell = sp, sell_lin = sl, demand = dem,
+                         stock = avail, blocked = blk, value = avail * sp }
+    end
+  end
+  table.sort(out, function(a, b)
+    if (a.value > 0) ~= (b.value > 0) then return a.value > 0 end
+    if a.value ~= b.value then return a.value > b.value end
+    return a.sell > b.sell
+  end)
+  return out
+end
+
+-- LEGACY:3389-3396 (inside build_mover_rows). "HOT": true when a mover's
+-- current sell price sits in the top third (>=66th percentile) of that
+-- (lineage, good)'s recorded sell-price range.
+function M.mover_is_hot(sell, sell_lin, good)
+  local st = M.price_stats(sell_lin, good)
+  if not (st and st.smax > st.smin) then return false end
+  local f = (sell - st.smin) / (st.smax - st.smin)
+  return f >= 0.66
 end
 
 -- Persisted subset for Task 10's store wiring: the rolling price history is

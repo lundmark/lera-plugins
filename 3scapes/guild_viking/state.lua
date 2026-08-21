@@ -138,9 +138,13 @@ local state = {
   -- Auto-Trade (arbitrage) settings; on/off lives in page_opts.auto_trade.
   -- use_stock: sell matching goods already in the warehouse before buying more.
   -- last_msg: the most recent action, shown on the Goods tab.
+  -- pack/status/last_jobs: set by LEGACY's client-side auto-trade tick/menu
+  -- (guild_viking.lua:3433,3443,3448), which is stage 4's control surface --
+  -- not populated yet, but the Goods page (Task 8) already reads them for
+  -- content fidelity with draw_page6's Auto-Trade status block.
   autotrade    = { reserve = 0, min_margin = 3, min_profit = 200, max_carts = 2, last = 0,
                    use_stock = false, auto_stock = 0, last_msg = "", show_n = 6, log = {},
-                   stock_priority = true },
+                   stock_priority = true, pack = false, status = "", last_jobs = nil },
   route_upkeep = 0,  -- total road+fort maintenance cost, daler/tick (from RUPKEEP)
   next_tick_in = 0, -- seconds until next trade/stock production tick
   demand_cycle = "",
