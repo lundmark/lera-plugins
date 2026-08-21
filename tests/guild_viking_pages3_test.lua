@@ -1,0 +1,505 @@
+-- guild_viking pane page unit tests: Task 6's pages/people.lua (LEGACY's
+-- draw_page5, guild_viking.lua:9748-10663). Also hosts Task 7's pages
+-- (bonds/ranks/court) once they land, per the plan's shared-harness note.
+-- Run from the lera-plugins repo root with LERA_ROOT pointing at a built
+-- Lera checkout.
+package.path = "3scapes/guild_viking/?.lua;" .. package.path
+
+local failures = 0
+local function check(name, ok, detail)
+  if ok then
+    print("CASE " .. name .. ": PASS")
+  else
+    failures = failures + 1
+    print("CASE " .. name .. ": FAIL" .. (detail and (" - " .. tostring(detail)) or ""))
+  end
+end
+
+-- ---- lera API stubs ---------------------------------------------------------
+ui = { dirty = function() end }
+lera = { render_pass = function() return "local" end }
+
+local pagelib = require("pagelib")
+local state = require("state")
+local page_opts = require("page_opts")
+local cc = require("pages.city_common")
+local people_page = require("pages.people")
+
+local S = state.S
+local C = pagelib.C
+local WIDTH = 80
+
+local function joined(lines)
+  return table.concat(lines, "\n")
+end
+
+local function find_line(lines, needle)
+  for i, l in ipairs(lines) do
+    if l:find(needle, 1, true) then return i end
+  end
+  return nil
+end
+
+-- =============================================================================
+-- pages/people.lua (Task 6) -- LEGACY draw_page5 (guild_viking.lua:9748-10663)
+-- =============================================================================
+
+-- ---- seed Settlers state -----------------------------------------------------
+S.settlers = 42
+S.settler_tax = 2
+S.city_water = 77
+S.settler_edict = "feast"
+S.settler_edict_left = 125
+S.settler_edict_cd = 0
+S.settler_housing_cap = 300
+S.settler_housing_plots = 12
+S.settler_housing_avg = 250   -- -> "2.50"
+S.settler_housing_plot_tiers = { t1 = 4, t2 = 3, t3 = 2, t4 = 0 }
+S.settler_housing_upkeep = 15
+S.settler_community_upkeep = 8
+S.settler_jobs = 30
+S.settler_employed = 25
+S.settler_market_staffed = 3
+S.settler_mood = 82
+S.settler_housing_quality = 65
+S.settler_sustenance = 44
+S.settler_emp_score = 30
+S.settler_security = 90
+S.settler_dignity = 20
+S.settler_sentiment = 5
+S.settler_flourishing = 1
+S.settler_community_net = 120
+S.settler_mult_pct = 150
+S.settler_community_buildings = { mead_hall = 2, well = 0 }
+S.wstock = {
+  { good = "grain", amount = 100, freshness_pct = 100 },
+  { good = "fish", amount = 50, freshness_pct = 100 },
+  { good = "bread", amount = 20, freshness_pct = 100 },
+  { good = "salted_fish", amount = 10, freshness_pct = 100 },
+  { good = "mead", amount = 5, freshness_pct = 100 },
+  { good = "spoils", amount = 3, freshness_pct = 100 },
+}
+S.settler_consumption = { grain = 6, water = 4 }
+S.settler_supply_next = 300
+S.settler_pop_next = 600
+S.settler_actions = { { name = "Assembly", secs = 90 } }
+S.settler_projects = {
+  {
+    id = "longhouse", kind = "housing_upgrade", from_tier = 1, to_tier = 2,
+    secs_left = -1, mats_total = 10, mats_done = 4, daler = 50,
+    mat_detail = { timber = { have = 4, need = 10 } },
+  },
+}
+S.settler_identity = "Builders' Hold"
+S.settler_roles = {
+  { key = "smidir", label = "Builders", cur = 40, tgt = 55, work = 10, bonus = 8 },
+  { key = "boendr", label = "Farmers", cur = 30, tgt = 30, work = 5, bonus = 0 },
+}
+S.settler_commoner = 12
+
+page_opts.set("show_people_settlers", true)
+page_opts.set("show_people_designations", true)
+
+local settlers_lines = people_page.lines(WIDTH)
+local settlers_all = joined(settlers_lines)
+
+check("people: non-empty", #settlers_lines > 5, #settlers_lines)
+
+-- ---- Settlers section ---------------------------------------------------
+check("people: Settlers header present", find_line(settlers_lines, "Settlers") ~= nil)
+check("people: population (42) present", settlers_all:find("42", 1, true) ~= nil)
+check("people: tax label (Moderate) present", settlers_all:find("Moderate", 1, true) ~= nil)
+check("people: water (77) present", settlers_all:find("77", 1, true) ~= nil)
+
+local edict_idx = find_line(settlers_lines, "Edict:")
+check("people: Edict row present", edict_idx ~= nil, settlers_all)
+if edict_idx then
+  check("people: edict names Festival Feast with its remaining time",
+        settlers_lines[edict_idx]:find("Festival Feast", 1, true) ~= nil
+        and settlers_lines[edict_idx]:find("2m5s", 1, true) ~= nil, settlers_lines[edict_idx])
+end
+
+check("people: housing cap (300) present", settlers_all:find("300", 1, true) ~= nil)
+check("people: avg tier (2.50) present", settlers_all:find("2.50", 1, true) ~= nil)
+
+local tiers_idx = find_line(settlers_lines, "Plot Tiers:")
+check("people: Plot Tiers row present with T1:4  T2:3  T3:2 (T4 omitted since 0)",
+      tiers_idx ~= nil and settlers_lines[tiers_idx]:find("T1:4", 1, true) ~= nil
+      and settlers_lines[tiers_idx]:find("T2:3", 1, true) ~= nil
+      and settlers_lines[tiers_idx]:find("T3:2", 1, true) ~= nil
+      and settlers_lines[tiers_idx]:find("T4:", 1, true) == nil, settlers_all)
+
+check("people: housing upkeep (15) and community upkeep (8) present",
+      settlers_all:find("Housing Upkeep: 15", 1, true) ~= nil
+      and settlers_all:find("Community Upkeep: 8", 1, true) ~= nil, settlers_all)
+check("people: jobs/employed/staffed (30/25/3) present",
+      settlers_all:find("Jobs: 30", 1, true) ~= nil
+      and settlers_all:find("Employed: 25", 1, true) ~= nil
+      and settlers_all:find("Market Staffed: 3", 1, true) ~= nil, settlers_all)
+
+-- Exact metric-bar assertion for Mood (82%): pagelib.bar(20, 82, 100, pct_color(82,100)).
+local expected_mood_bar = pagelib.bar(20, 82, 100, pagelib.pct_color(82, 100))
+check("people: Mood bar matches pagelib.bar(20, 82, 100, pct_color) exactly",
+      settlers_all:find(expected_mood_bar, 1, true) ~= nil, settlers_all)
+check("people: Security (90%) present", settlers_all:find("90%%", 1) ~= nil, settlers_all)
+
+local sent_idx = find_line(settlers_lines, "Sentiment:")
+check("people: Sentiment row present (+5, decaying)",
+      sent_idx ~= nil and settlers_lines[sent_idx]:find("+5", 1, true) ~= nil
+      and settlers_lines[sent_idx]:find("decaying", 1, true) ~= nil, settlers_all)
+
+check("people: Flourishing: Yes present", settlers_all:find("Flourishing:", 1, true) ~= nil
+      and settlers_all:find("Yes", 1, true) ~= nil)
+
+check("people: Community Net (+120/tick) and Mood Mult (x1.50) present",
+      settlers_all:find("+120/tick", 1, true) ~= nil and settlers_all:find("x1.50", 1, true) ~= nil,
+      settlers_all)
+
+check("people: Civic Buildings names Mead Hall T2 (well T0 omitted)",
+      settlers_all:find("Mead Hall T2", 1, true) ~= nil, settlers_all)
+
+check("people: stock line shows Bread (20) and Salted Fish (10)",
+      settlers_all:find("20", 1, true) ~= nil and settlers_all:find("Salted Fish:", 1, true) ~= nil
+      and settlers_all:find("10", 1, true) ~= nil, settlers_all)
+
+local spoils_idx = find_line(settlers_lines, "Spoils:")
+check("people: Spoils row present (3, colored since > 0)",
+      spoils_idx ~= nil and settlers_lines[spoils_idx]:find("3", 1, true) ~= nil, settlers_all)
+
+check("people: Consumption/tick lists grain:-6 and water:-4",
+      settlers_all:find("Grain", 1, true) ~= nil and settlers_all:find(":-6", 1, true) ~= nil
+      and settlers_all:find("Water", 1, true) ~= nil and settlers_all:find(":-4", 1, true) ~= nil,
+      settlers_all)
+
+check("people: Supply Tick (5m) and Pop Tick (10m) present",
+      settlers_all:find("Supply Tick: ", 1, true) ~= nil and settlers_all:find("5m", 1, true) ~= nil
+      and settlers_all:find("Pop Tick: ", 1, true) ~= nil and settlers_all:find("10m", 1, true) ~= nil,
+      settlers_all)
+
+check("people: Actions lists Assembly 1m30s", settlers_all:find("Assembly 1m30s", 1, true) ~= nil,
+      settlers_all)
+
+check("people: settler project names Longhouse T1 -> T2",
+      settlers_all:find("Longhouse T1 %-> T2") ~= nil, settlers_all)
+check("people: settler project shows daler cost (50)",
+      settlers_all:find("Cost: 50 daler", 1, true) ~= nil, settlers_all)
+check("people: settler project mat_detail row for timber (4/10)",
+      settlers_all:find("[Tt]imber", 1) ~= nil and settlers_all:find("4/10", 1, true) ~= nil, settlers_all)
+
+-- ---- Designations subsection --------------------------------------------
+check("people: Designations header present", find_line(settlers_lines, "Designations") ~= nil)
+check("people: Identity (Builders' Hold) present", settlers_all:find("Builders' Hold", 1, true) ~= nil)
+-- smidir (Builders) is a cost/time-REDUCTION role (LEGACY's eff_neg table),
+-- so its bonus renders with a minus sign, not a plus.
+check("people: Builders role row (55% target, -8% Bld effect since smidir is a reduction role)",
+      settlers_all:find("Builders", 1, true) ~= nil and settlers_all:find(">>55%%", 1) ~= nil
+      and settlers_all:find("%-8%% Bld", 1) ~= nil, settlers_all)
+check("people: Farmers role row present (no target arrow, cur==tgt)",
+      settlers_all:find("Farmers", 1, true) ~= nil)
+check("people: Commoners row present (12%, muted, idle)",
+      settlers_all:find("Commoners", 1, true) ~= nil and settlers_all:find("idle", 1, true) ~= nil)
+check("people: legend text present", settlers_all:find("green %+gain    red %-cost/time") ~= nil,
+      settlers_all)
+
+page_opts.set("show_people_designations", false)
+local no_desig = people_page.lines(WIDTH)
+check("people: Designations header disappears when show_people_designations is off",
+      find_line(no_desig, "Designations") == nil)
+check("people: Settlers header stays when only Designations is off",
+      find_line(no_desig, "Settlers") ~= nil)
+page_opts.set("show_people_designations", true)
+
+page_opts.set("show_people_settlers", false)
+local no_settlers = people_page.lines(WIDTH)
+check("people: Settlers header disappears when show_people_settlers is off",
+      find_line(no_settlers, "Settlers") == nil)
+check("people: Designations (nested) disappears too", find_line(no_settlers, "Designations") == nil)
+page_opts.set("show_people_settlers", true)
+
+-- ---- "no settlers yet" fallback -----------------------------------------
+do
+  local saved = S.settlers
+  S.settlers = 0
+  local zero_lines = people_page.lines(WIDTH)
+  check("people: 'No settlers yet' fallback shown when settlers == 0",
+        find_line(zero_lines, "No settlers yet") ~= nil, joined(zero_lines))
+  S.settlers = saved
+end
+
+-- =============================================================================
+-- Biome Patrol -- UNGATED section (no page_opts key; source-only condition)
+-- =============================================================================
+
+S.patrol = { count = 3, remaining = 45 }
+local patrol_lines_on = people_page.lines(WIDTH)
+check("people: Biome Patrol header present when state.patrol.count > 0",
+      find_line(patrol_lines_on, "Biome Patrol") ~= nil)
+-- (a RESET escape sits between the dim label and the value in pagelib.kv's
+-- output, so match each half independently rather than one contiguous
+-- pattern -- same idiom as pages1/pages2's tests.)
+do
+  local hird_idx = find_line(patrol_lines_on, "Hirdmadrs:")
+  local time_idx = find_line(patrol_lines_on, "Time:")
+  check("people: Biome Patrol shows Hirdmadrs (3)",
+        hird_idx ~= nil and patrol_lines_on[hird_idx]:find("3", 1, true) ~= nil, joined(patrol_lines_on))
+  check("people: Biome Patrol shows Time (45s)",
+        time_idx ~= nil and patrol_lines_on[time_idx]:find("45s", 1, true) ~= nil, joined(patrol_lines_on))
+end
+
+-- Turning EVERY page_opts gate off does not hide Biome Patrol -- it has none.
+page_opts.set("show_people_settlers", false)
+page_opts.set("show_people_garrison", false)
+page_opts.set("show_people_raids", false)
+page_opts.set("show_people_thralls", false)
+page_opts.set("show_people_missions", false)
+check("people: Biome Patrol survives every OTHER gate being off (it has no gate of its own)",
+      find_line(people_page.lines(WIDTH), "Biome Patrol") ~= nil)
+page_opts.set("show_people_settlers", true)
+page_opts.set("show_people_garrison", true)
+page_opts.set("show_people_raids", true)
+page_opts.set("show_people_thralls", true)
+page_opts.set("show_people_missions", true)
+
+do
+  S.patrol = { count = 0, remaining = 0 }
+  check("people: Biome Patrol absent when patrol.count == 0",
+        find_line(people_page.lines(WIDTH), "Biome Patrol") == nil)
+end
+
+-- =============================================================================
+-- Garrison (show_people_garrison), including hird_list + Varangian Guards
+-- =============================================================================
+
+S.garrison_stationed = 8
+S.garrison_free = 2
+S.garrison_cap = 10
+S.garrison_defpower = 55
+S.hird_list = {
+  { name = "Ragnar", status = "personal_guard", level = 6, atk = 7, def = 5,
+    loyalty = 4, age_phase = "veteran", mode = "offensive", champ = 1, wpn = 3, arm = 2 },
+}
+S.varang_out = { { name = "Skoll's Band", count = 12, expires_in = 3661 } }
+S.varang_in = { { name = "Ingvar's Reinforcements", count = 6, expires_in = 120 } }
+
+local garrison_lines = people_page.lines(WIDTH)
+local garrison_all = joined(garrison_lines)
+
+check("people: Garrison header present", find_line(garrison_lines, "Garrison") ~= nil)
+check("people: Stationed 8 / 10, Free 2, Total 10 present",
+      garrison_all:find("8 / 10", 1, true) ~= nil and garrison_all:find("Free: 2", 1, true) ~= nil
+      and garrison_all:find("Total: 10", 1, true) ~= nil, garrison_all)
+check("people: Def power (55) present", garrison_all:find("Def power:", 1, true) ~= nil
+      and garrison_all:find("55", 1, true) ~= nil, garrison_all)
+
+local ragnar_idx = find_line(garrison_lines, "Ragnar")
+check("people: hird row for Ragnar present", ragnar_idx ~= nil, garrison_all)
+if ragnar_idx then
+  local row = garrison_lines[ragnar_idx]
+  check("people: Ragnar shows champion tag [C]", row:find("%[C%]") ~= nil, row)
+  check("people: Ragnar shows loyalty (Loyal, index 4)", row:find("Loyal", 1, true) ~= nil, row)
+  check("people: Ragnar shows age (Veteran)", row:find("Veteran", 1, true) ~= nil, row)
+  check("people: Ragnar shows level (Lv6)", row:find("Lv6", 1, true) ~= nil, row)
+  check("people: Ragnar shows gear tag (W3/A2)", row:find("W3/A2", 1, true) ~= nil, row)
+  check("people: Ragnar shows status (Guard)", row:find("Guard", 1, true) ~= nil, row)
+  check("people: Ragnar shows mode (Offensive)", row:find("Offensive", 1, true) ~= nil, row)
+end
+
+check("people: Varangian Guards header present", find_line(garrison_lines, "Varangian Guards") ~= nil)
+check("people: dispatched contract (Skoll's Band, 12 men, 1h1m left) present",
+      garrison_all:find("Skoll's Band", 1, true) ~= nil and garrison_all:find("12 men", 1, true) ~= nil
+      and garrison_all:find("1h1m left", 1, true) ~= nil, garrison_all)
+check("people: received contract (Ingvar's Reinforcements, 6 men, 2m left) present",
+      garrison_all:find("Ingvar's Reinforcements", 1, true) ~= nil
+      and garrison_all:find("6 men", 1, true) ~= nil and garrison_all:find("2m left", 1, true) ~= nil,
+      garrison_all)
+
+page_opts.set("show_people_garrison", false)
+local no_garrison = people_page.lines(WIDTH)
+check("people: Garrison header disappears when show_people_garrison is off",
+      find_line(no_garrison, "Garrison") == nil)
+check("people: Varangian Guards also disappears (nested inside the garrison gate)",
+      find_line(no_garrison, "Varangian Guards") == nil)
+page_opts.set("show_people_garrison", true)
+
+-- "No hirdmadrs" fallback.
+do
+  local saved_st, saved_fr, saved_hl = S.garrison_stationed, S.garrison_free, S.hird_list
+  S.garrison_stationed, S.garrison_free, S.hird_list = 0, 0, {}
+  check("people: 'No hirdmadrs' fallback shown when garrison and hird_list are empty",
+        find_line(people_page.lines(WIDTH), "No hirdmadrs") ~= nil)
+  S.garrison_stationed, S.garrison_free, S.hird_list = saved_st, saved_fr, saved_hl
+end
+
+-- =============================================================================
+-- Incoming Raids (show_people_raids)
+-- =============================================================================
+
+S.raid_in = 200
+S.raid_faction = "Skalgrim Reavers"
+S.raid_strength = 80
+
+local raids_lines_l = people_page.lines(WIDTH)
+local raids_all = joined(raids_lines_l)
+check("people: Incoming Raids header present", find_line(raids_lines_l, "Incoming Raids") ~= nil)
+check("people: raid arrival (3m 20s) present", raids_all:find("3m 20s", 1, true) ~= nil, raids_all)
+check("people: raid faction (Skalgrim Reavers) present",
+      raids_all:find("Skalgrim Reavers", 1, true) ~= nil)
+check("people: raid strength (80) present vs garrison_defpower (55) -> dangerous color",
+      raids_all:find("Strength: ", 1, true) ~= nil and raids_all:find("80", 1, true) ~= nil, raids_all)
+
+do
+  local saved = S.raid_in
+  S.raid_in = -1
+  check("people: 'No raid currently scheduled' shown when raid_in < 0",
+        find_line(people_page.lines(WIDTH), "No raid currently scheduled") ~= nil)
+  S.raid_in = saved
+end
+
+page_opts.set("show_people_raids", false)
+check("people: Incoming Raids header disappears when show_people_raids is off",
+      find_line(people_page.lines(WIDTH), "Incoming Raids") == nil)
+page_opts.set("show_people_raids", true)
+
+-- =============================================================================
+-- Thralls (show_people_thralls) + Companion (show_people_thrall_companion)
+-- =============================================================================
+
+S.thralls = 14
+S.thrall_assignments = { longhouse = 3, warehouse = 2 }
+S.thrall_follower_level = 4
+S.thrall_follower_name = "grimna"
+S.thrall_follower_xp = 120
+S.thrall_follower_xp_cap = 400
+S.thrall_follower_carry_used = 10
+S.thrall_follower_carry_cap = 40
+S.thrall_follower_status = "following"
+
+page_opts.set("show_people_thrall_companion", true)
+
+local thralls_lines_l = people_page.lines(WIDTH)
+local thralls_all = joined(thralls_lines_l)
+
+check("people: Thralls header present", find_line(thralls_lines_l, "Thralls") ~= nil)
+check("people: Held (14) and Working (5) present",
+      thralls_all:find("Held: 14", 1, true) ~= nil and thralls_all:find("Working: 5", 1, true) ~= nil,
+      thralls_all)
+check("people: per-building assignment rows for Longhouse (3) and Warehouse (2)",
+      thralls_all:find("Longhouse: 3", 1, true) ~= nil and thralls_all:find("Warehouse: 2", 1, true) ~= nil,
+      thralls_all)
+
+check("people: Companion row present (Grimna, Lv4, Following)",
+      thralls_all:find("Grimna", 1, true) ~= nil and thralls_all:find("Lv4", 1, true) ~= nil
+      and thralls_all:find("Following", 1, true) ~= nil, thralls_all)
+check("people: Companion XP (120/400) present", thralls_all:find("XP: 120/400", 1, true) ~= nil,
+      thralls_all)
+check("people: Companion Carry (10/40) present", thralls_all:find("Carry: 10/40", 1, true) ~= nil,
+      thralls_all)
+
+local expected_lvl_bar = pagelib.bar(WIDTH - 12, 120, 400, C.bright_green)
+check("people: Companion level bar matches pagelib.bar exactly",
+      find_line(thralls_lines_l, "    Level: " .. expected_lvl_bar) ~= nil, thralls_all)
+
+page_opts.set("show_people_thrall_companion", false)
+local no_companion = people_page.lines(WIDTH)
+check("people: Companion row disappears when show_people_thrall_companion is off",
+      find_line(no_companion, "Companion:") == nil)
+check("people: Thralls header stays when only the companion opt is off",
+      find_line(no_companion, "Thralls") ~= nil)
+page_opts.set("show_people_thrall_companion", true)
+
+page_opts.set("show_people_thralls", false)
+check("people: Thralls header disappears when show_people_thralls is off",
+      find_line(people_page.lines(WIDTH), "Thralls") == nil)
+page_opts.set("show_people_thralls", true)
+
+-- Section vanishes entirely when both thralls==0 and follower_level==0, even
+-- with the opt on (LEGACY's own extra guard around the section, 10392).
+do
+  local st, sfl = S.thralls, S.thrall_follower_level
+  S.thralls, S.thrall_follower_level = 0, 0
+  check("people: Thralls section absent when thralls==0 and no companion",
+        find_line(people_page.lines(WIDTH), "Thralls") == nil)
+  S.thralls, S.thrall_follower_level = st, sfl
+end
+
+-- =============================================================================
+-- Missions (show_people_missions)
+-- =============================================================================
+
+S.missions = {
+  {
+    id = 7, label = "Deliver grain to Holmgard", expires_in = 1800,
+    origin_town = "Vestergotland", target_town = "Holmgard",
+    reward = 200, reward_rep = 15, want_goods = { grain = 30 },
+  },
+}
+S.errand = {
+  id = 99, label = "Fetch water", expires_in = 5400,
+  origin_town = "", target_town = "Holmgard",
+  reward = 0, reward_good = "water", reward_qty = 10,
+}
+S.mission_reg_left = 2
+S.mission_new_left = 0
+
+local missions_lines_l = people_page.lines(WIDTH)
+local missions_all = joined(missions_lines_l)
+
+check("people: Missions header present", find_line(missions_lines_l, "Missions") ~= nil)
+check("people: Missions left (2) and Errands left (0) present",
+      missions_all:find("Missions left: ", 1, true) ~= nil and missions_all:find("2", 1, true) ~= nil
+      and missions_all:find("Errands left: ", 1, true) ~= nil, missions_all)
+check("people: mission [7] label present", missions_all:find("%[7%] Deliver grain to Holmgard") ~= nil,
+      missions_all)
+check("people: mission town line (Vestergotland -> Holmgard) present",
+      missions_all:find("Vestergotland %-> Holmgard") ~= nil, missions_all)
+check("people: mission reward (+200 daler, +15 rep) present",
+      missions_all:find("+200 daler", 1, true) ~= nil and missions_all:find("+15 rep", 1, true) ~= nil,
+      missions_all)
+check("people: mission want_goods (Need 30 Grain) present",
+      missions_all:find("Need 30 Grain", 1, true) ~= nil, missions_all)
+
+check("people: errand [99] label present", missions_all:find("%[99%] Errand: Fetch water") ~= nil,
+      missions_all)
+check("people: errand town line (-> Holmgard, no origin) present",
+      missions_all:find("%-> Holmgard") ~= nil, missions_all)
+check("people: errand reward_good (+10 Water) present", missions_all:find("+10 Water", 1, true) ~= nil,
+      missions_all)
+
+page_opts.set("show_people_missions", false)
+check("people: Missions header disappears when show_people_missions is off",
+      find_line(people_page.lines(WIDTH), "Missions") == nil)
+page_opts.set("show_people_missions", true)
+
+-- "No active missions" fallback (timers present, no missions/errand).
+do
+  local sm, se = S.missions, S.errand
+  S.missions, S.errand = {}, nil
+  check("people: 'No active missions' shown when timers are known but nothing is active",
+        find_line(people_page.lines(WIDTH), "No active missions") ~= nil)
+  S.missions, S.errand = sm, se
+end
+
+-- Section vanishes entirely with no missions/errand AND no timers.
+do
+  local sm, se, sr, sn = S.missions, S.errand, S.mission_reg_left, S.mission_new_left
+  S.missions, S.errand, S.mission_reg_left, S.mission_new_left = {}, nil, -1, -1
+  check("people: Missions section absent with nothing active and no timers",
+        find_line(people_page.lines(WIDTH), "Missions") == nil)
+  S.missions, S.errand, S.mission_reg_left, S.mission_new_left = sm, se, sr, sn
+end
+
+-- =============================================================================
+-- width discipline (every gate re-enabled, everything rendering at once)
+-- =============================================================================
+do
+  local all_lines = people_page.lines(WIDTH)
+  local width_ok, widest = true, nil
+  for _, l in ipairs(all_lines) do
+    local vw = pagelib.visible_width(l)
+    if vw > WIDTH then width_ok = false; widest = vw end
+  end
+  check("people: every row's visible width is <= the requested width", width_ok, widest)
+end
+
+if failures > 0 then os.exit(1) end
+print("ALL GUILD_VIKING PAGES3 TESTS PASSED")
