@@ -31,14 +31,31 @@ local M = {}
 -- gated show_city_carts)
 -- ---------------------------------------------------------------------------
 
+-- BGR decode workbook (guild_viking.lua:301, 0xBBGGRR -- leftmost byte =
+-- Blue, middle = Green, rightmost = Red; same convention as pages/goods.lua's
+-- commit 9b6b7b6 workbook and pages/army.lua's comment):
+--   0xFF8844 (outbound cart arrow, player_sell arrow, below; Cartyard
+--             cooldown, carts_lines)          -> R=44/G=88/B=FF -> blue.
+--             pagelib.C has no true blue; nearest hue is the cyan family --
+--             picked C.cyan (not bright_cyan: the literal's R/G bytes are
+--             mid-range, not maxed, so the dimmer cyan reads closer).
+--   0x00CCCC (cart_upgrade_row label, below)  -> R=CC/G=CC/B=00 -> yellow
+--   0x66CCFF (sabotage countdown, spies_lines) -> R=FF/G=CC/B=66 -> gold,
+--             mapped to yellow (nearest pagelib.C hue)
+--   0x88CCEE (training countdown, training_lines) -> R=EE/G=CC/B=88 -> tan,
+--             mapped to yellow (nearest pagelib.C hue)
+--   0xFFCC00 (sell-mode arrow, trade_queue_lines) -> R=00/G=CC/B=FF ->
+--             cyan-blue, mapped to C.cyan
+-- Each was previously mapped by variable-name guess (yellow/cyan/bright_cyan)
+-- rather than decoded; corrected below.
 local function cart_arrow(ct)
   local outbound = ct.halfway_in and ct.halfway_in > 0
   if ct.mode == "buy" then
     return outbound and ">>" or "<<", outbound and C.green or C.white
   elseif ct.mode == "player_sell" then
-    return ">>", C.yellow
+    return ">>", C.cyan
   else
-    return outbound and ">>" or "<<", outbound and C.yellow or C.white
+    return outbound and ">>" or "<<", outbound and C.cyan or C.white
   end
 end
 
@@ -118,7 +135,7 @@ local function cart_upgrade_row(width, cu)
   else
     status = cc.fmt_time(cu.secs_left)
   end
-  return pagelib.trunc(string.format("%s%s%s  %s", C.bright_cyan, label, pagelib.RESET, status), width)
+  return pagelib.trunc(string.format("%s%s%s  %s", C.yellow, label, pagelib.RESET, status), width)
 end
 
 local function mat_row(width, mg)
@@ -132,7 +149,7 @@ local function carts_lines(add, width)
   add(pagelib.header(width, "Carts"))
   local cd = S.dispatch_cd or 0
   add(pagelib.kv(width, "Cartyard:", (cd > 0) and cc.fmt_time(cd) or "ready",
-    (cd > 0) and C.yellow or C.bright_green))
+    (cd > 0) and C.cyan or C.bright_green))
 
   if not S.carts or #S.carts == 0 then
     add(pagelib.trunc(C.dim .. "No carts" .. pagelib.RESET, width))
@@ -204,7 +221,7 @@ local function spies_lines(add, width)
   if (S.spy.sab_pct or 0) > 0 then
     shown = true
     add(pagelib.kv(width, string.format("Sabotage +%d%% raids:", S.spy.sab_pct),
-      cc.fmt_time(S.spy.sab_secs), C.cyan))
+      cc.fmt_time(S.spy.sab_secs), C.yellow))
   end
   for _, s in ipairs(S.spy.scouts or {}) do
     shown = true
@@ -229,7 +246,7 @@ local function training_lines(add, width)
   if S.train.name ~= "" then
     local st = cc.cap_first(S.train.stat)
     add(pagelib.kv(width, string.format("%s: %s %d/3", S.train.name, st, S.train.trained or 0),
-      cc.fmt_time(S.train.secs), C.bright_cyan))
+      cc.fmt_time(S.train.secs), C.yellow))
   else
     add(pagelib.trunc(C.dim .. "No one training" .. pagelib.RESET, width))
   end
@@ -270,7 +287,7 @@ local function trade_queue_lines(add, width)
   add(pagelib.header(width, "Trade Queue"))
   for _, tq in ipairs(S.trade_queue) do
     local arrow = (tq.mode == "buy") and "<<" or ">>"
-    local acolor = (tq.mode == "buy") and C.green or C.yellow
+    local acolor = (tq.mode == "buy") and C.green or C.cyan
     local esc = ((tq.escort or 0) > 0)
       and string.format("  [%d escort%s]", tq.escort, (tq.escort ~= 1) and "s" or "") or ""
     add(pagelib.trunc(string.format("%s%s%s %dx %s%s%s %s%s",

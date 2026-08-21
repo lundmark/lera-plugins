@@ -59,12 +59,25 @@ local function fmt_session(elapsed)
   return m > 0 and string.format("Session: %dh%dm", h, m) or string.format("Session: %dh", h)
 end
 
+-- BGR decode workbook (guild_viking.lua:301, 0xBBGGRR -- leftmost byte =
+-- Blue, middle = Green, rightmost = Red; same convention/precedent as
+-- pages/goods.lua's commit 9b6b7b6 workbook and pages/army.lua's comment):
+--   0x4444FF (delta_text loss, below)      -> R=FF/G=44/B=44 -> red
+--   0x00CCCC (Daler, line ~97)             -> R=CC/G=CC/B=00 -> yellow
+--   0x0088FF (Fury bar fill, line ~121)    -> R=FF/G=88/B=00 -> orange, folded
+--                                              to red (pagelib.pct_color's own
+--                                              orange-tier precedent)
+--   0x4488FF (Ledung bar fill, line ~133)  -> R=FF/G=88/B=44 -> orange, folded
+--                                              to red (same precedent)
+-- Each was previously mapped by variable-name guess (cyan/bright_cyan) rather
+-- than decoded; corrected below.
+
 -- LEGACY 7172-7176 (delta_text): "+N"/"-N" after a bar row; green for a
--- gain, blue-ish for a loss (mapped to pagelib.C.cyan -- no literal "blue"
--- in the shared palette), nothing when unchanged.
+-- gain, red for a loss (0x4444FF, see the workbook above), nothing when
+-- unchanged.
 local function delta_text(val)
   if not val or val == 0 then return "" end
-  local color = val > 0 and C.bright_green or C.cyan
+  local color = val > 0 and C.bright_green or C.red
   return " " .. color .. string.format("%+d", val) .. pagelib.RESET
 end
 
@@ -94,7 +107,7 @@ function M.lines(width)
 
   -- ---- Daler treasury (7154-7159) -------------------------------------
   if S.daler and S.daler >= 0 then
-    add(pagelib.kv(width, "Daler:", pagelib.fmt_num(S.daler), C.bright_cyan))
+    add(pagelib.kv(width, "Daler:", pagelib.fmt_num(S.daler), C.yellow))
   end
 
   -- ---- Vitals: HP/Threk/Seid/Vig/Rad/Fury bars (7161-7231) ------------
@@ -118,7 +131,7 @@ function M.lines(width)
     local fury_inner = fury_raw:match("^%[(.-)%]$") or fury_raw
     local fury_filled = select(2, fury_inner:gsub("%*", ""))
     local fury_total = #fury_inner
-    add(bar_row(width, "Fury:", fury_filled, fury_total > 0 and fury_total or 1, nil, C.cyan))
+    add(bar_row(width, "Fury:", fury_filled, fury_total > 0 and fury_total or 1, nil, C.red))
   end
 
   -- ---- Ledung / Chain / BSDepth (7233-7256) ---------------------------
@@ -130,7 +143,7 @@ function M.lines(width)
     ldng_val = string.format("%d/%d", S.ldng, S.mldng)
   end
   add(pagelib.trunc(
-    string.format("%-7s%s %s", "Ledng:", pagelib.bar(20, S.ldng, S.mldng > 0 and S.mldng or 1, C.cyan), ldng_val),
+    string.format("%-7s%s %s", "Ledng:", pagelib.bar(20, S.ldng, S.mldng > 0 and S.mldng or 1, C.red), ldng_val),
     width))
   add(pagelib.trunc(string.format("Chain:%d  BSDp:%d", S.chain or 0, S.bsdepth or 0), width))
 
@@ -210,6 +223,14 @@ function M.lines(width)
   if S.stfx and #S.stfx > 0 and page_opts.get("show_stats_buffs") then
     add(pagelib.header(width, "Active Effects"))
     local by_cat = {}
+    -- Grouping reads fx.cat directly rather than re-deriving it from
+    -- combat.lua's (currently private) STFX_META -- safe only because
+    -- S.stfx is rebuilt fresh from the wire by combat.lua on every FFF
+    -- composite and is never persisted (see persist.lua's module comment:
+    -- only price_history/source/page_opts/page survive a save/load, combat
+    -- state deliberately does not). If S.stfx ever starts round-tripping
+    -- through the store, re-derive cat from STFX_META (exporting it if
+    -- needed) instead of trusting a stale fx.cat loaded from disk.
     for _, fx in ipairs(S.stfx) do
       local cat = fx.cat or "DoT"
       by_cat[cat] = by_cat[cat] or {}

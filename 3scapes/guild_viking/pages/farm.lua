@@ -24,6 +24,14 @@ local M = {}
 -- Weather & Season (guild_viking.lua:9122-9144)
 -- ---------------------------------------------------------------------------
 
+-- KEEP AND DISCLOSE (semantic exception, final BGR sweep -- same style as
+-- pages/army.lua's "training status" note): summer/autumn/storm/blizzard/
+-- rain here, and the negative-growth branch in farm_plots_lines below, are
+-- kept exactly as currently mapped rather than mechanically re-decoded.
+-- Season/weather color is chosen for its semantic association -- warm
+-- yellow for summer, falling-leaf red for autumn, alarm red for storm and
+-- blizzard, cool cyan for rain, red for a negative growth modifier -- not
+-- for hue proximity to whatever LEGACY's literal happens to decode to.
 local SEASON_ANSI = { spring = C.green, summer = C.yellow, autumn = C.red, winter = C.white }
 local WEATHER_ANSI = {
   clear = C.green, overcast = C.dim, rain = C.cyan, storm = C.bright_red,

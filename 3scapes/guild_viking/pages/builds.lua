@@ -64,6 +64,15 @@ end
 -- 4, 5" per the shared mat_pct_color comment at 7548). pagelib.pct_color
 -- approximates LEGACY's 10-step MAT_GRAD (7550-7568), same as city_common's
 -- cc.mat_color.
+--
+-- This also folds two things LEGACY draws separately -- its own fixed-color
+-- qty number and a two-tone (filled-run/empty-run) progress bar -- into one
+-- pct_color-driven run: the qty here is plain/uncolored, and the single
+-- `color` value (pagelib.pct_color(done, need)) drives only the bar's fill,
+-- so the done/need RATIO is carried entirely by the bar rather than split
+-- across a separately-colored number and a ratio-independent bar tone.
+-- Content fidelity over pixel fidelity, same precedent as the
+-- veterancy-bar note in pages/army.lua.
 local function mat_row(width, mg)
   local color = pagelib.pct_color(mg.done or 0, mg.need or 1)
   return pagelib.trunc(string.format("  %s%-12s%s %d/%d %s",
@@ -82,7 +91,7 @@ local function construction_status(pb)
       return string.format("Mats %d/%d", pb.mats_done or 0, pb.mats_total or 0),
         pagelib.pct_color(pb.mats_done or 0, pb.mats_total or 1)
     end
-    return "Awaiting mats", C.yellow
+    return "Awaiting mats", C.cyan
   elseif cas == 0 then
     return "Finalizing...", C.bright_green
   else
@@ -139,7 +148,7 @@ local function upgrade_status(su)
       return string.format("Mats %d/%d", su.mats_done or 0, su.mats_total or 0),
         pagelib.pct_color(su.mats_done or 0, su.mats_total or 1)
     end
-    return "Awaiting mats", C.yellow
+    return "Awaiting mats", C.cyan
   elseif sl == 0 then
     return "Finalizing...", C.bright_green
   else
@@ -213,6 +222,20 @@ local STAT_LABEL_ANSI = {
   sea = C.cyan, wild = C.green, land = C.yellow, charm = C.magenta,
 }
 
+-- BGR decode workbook (guild_viking.lua:301, 0xBBGGRR -- leftmost byte =
+-- Blue, middle = Green, rightmost = Red; same convention as pages/goods.lua's
+-- commit 9b6b7b6 workbook and pages/army.lua's comment):
+--   0xFFCC00 ("Awaiting mats", construction_status/upgrade_status above;
+--             building assignment, below)   -> R=00/G=CC/B=FF -> cyan-blue,
+--             mapped to C.cyan
+--   0x00CCFF (staff "Training" assignment, below) -> R=FF/G=CC/B=00 ->
+--             gold, mapped to yellow (nearest pagelib.C hue)
+--   0x4444FF (staff ship assignment, below)  -> R=FF/G=44/B=44 -> red
+--   0x55FFFF (elder age / "En route", staff_lines below) -> R=FF/G=FF/B=55
+--             -> yellow
+-- Each was previously mapped by variable-name guess rather than decoded;
+-- corrected below.
+
 -- Ported from LEGACY's assignment branch (guild_viking.lua:9655-9677):
 -- unassigned/training/a ship (resolved to its display name via
 -- voyage_longships, falling back to state.ships)/otherwise a building id.
@@ -221,18 +244,18 @@ local function staff_assignment(sf)
   if asgn == "0" or asgn == "" then
     return "Unassigned", C.dim
   elseif asgn == "training" then
-    return "Training", C.bright_cyan
+    return "Training", C.yellow
   elseif asgn:sub(1, 5) == "ship_" then
     local ship_num = asgn:sub(6)
     local ships = (S.voyage_longships and #S.voyage_longships > 0) and S.voyage_longships or (S.ships or {})
     for _, sh in ipairs(ships) do
       if tostring(sh.ship_id) == ship_num then
-        return sh.name, C.cyan
+        return sh.name, C.red
       end
     end
-    return "Ship " .. ship_num, C.cyan
+    return "Ship " .. ship_num, C.red
   else
-    return bldg_display(asgn), C.yellow
+    return bldg_display(asgn), C.cyan
   end
 end
 
@@ -247,13 +270,13 @@ local function staff_lines(add, width)
     local loy_label = LOYALTY_LABELS[tonumber(sf.loyalty) or 3] or "Steady"
     local age = sf.age or "veteran"
     local age_color = (age == "young") and C.bright_green
-      or ((age == "elder") and C.bright_cyan or C.white)
+      or ((age == "elder") and C.yellow or C.white)
     add(pagelib.trunc(string.format("  %s%s%s  Loy:%s  Age: %s%s%s",
       asgn_color, asgn_text, pagelib.RESET, loy_label,
       age_color, cc.cap_first(age), pagelib.RESET), width))
 
     if sf.arrive_at and sf.arrive_at > os.time() then
-      add(pagelib.trunc("  " .. C.bright_cyan .. "En route (~" ..
+      add(pagelib.trunc("  " .. C.yellow .. "En route (~" ..
         cc.fmt_time(sf.arrive_at - os.time()) .. ")" .. pagelib.RESET, width))
     end
 

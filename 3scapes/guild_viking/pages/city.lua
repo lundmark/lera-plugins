@@ -68,9 +68,24 @@ local function merged_ships()
   return out
 end
 
+-- BGR decode workbook (guild_viking.lua:301, 0xBBGGRR -- leftmost byte =
+-- Blue, middle = Green, rightmost = Red; same convention as pages/goods.lua's
+-- commit 9b6b7b6 workbook and pages/army.lua's comment):
+--   0x00CCCC (building/upgrading ship state, below; Daler and Active God
+--             "In Power"/"Resets In", further down)      -> R=CC/G=CC/B=00
+--             -> yellow
+--   0x0099FF (repairing ship state, below)                -> R=FF/G=99/B=00
+--             -> orange, folded to red (pagelib.pct_color's own orange-tier
+--             precedent)
+--   0x00AAFF (partial-crew color, longship_lines)         -> R=FF/G=AA/B=00
+--             -> orange, folded to red (same precedent)
+--   0x66CCFF (Auto-Raid target, raids_lines)               -> R=FF/G=CC/B=66
+--             -> gold, mapped to yellow (nearest pagelib.C hue)
+-- Each was previously mapped by variable-name guess (cyan/bright_cyan)
+-- rather than decoded; corrected below and where noted further down.
 local SHIP_STATE_ANSI = {
-  docked = C.dim, raiding = C.red, building = C.cyan, upgrading = C.cyan,
-  repairing = C.bright_cyan, voyaging = C.magenta, ["on voyage"] = C.magenta,
+  docked = C.dim, raiding = C.red, building = C.yellow, upgrading = C.yellow,
+  repairing = C.red, voyaging = C.magenta, ["on voyage"] = C.magenta,
 }
 
 local function longship_lines(add, width)
@@ -84,7 +99,9 @@ local function longship_lines(add, width)
     local tier_name = cc.SHIP_TIER_NAMES[sh.tier] or ("T" .. tostring(sh.tier))
     local crew_max = cc.CREW_MAX[sh.tier] or 5
     local crew = sh.crew or 0
-    local crew_color = crew >= crew_max and C.bright_green or (crew > 0 and C.cyan or C.red)
+    -- Partial crew (0x00AAFF, workbook above) folds to the same red as an
+    -- empty crew -- both are "not fully crewed," and pagelib has no orange.
+    local crew_color = crew >= crew_max and C.bright_green or C.red
     local state_color = SHIP_STATE_ANSI[sh.state] or C.dim
     local target = ""
     if sh.target and sh.target ~= "" and sh.state ~= "docked" then
@@ -135,8 +152,22 @@ local function raids_lines(add, width)
   local target_txt = has_tgt and cc.tcase(ar.target) or "(no target)"
   add(pagelib.trunc(string.format("Auto-Raid %s%s%s   %s%s  ->  %s%s%s",
     on and C.bright_green or C.dim, on and "ON" or "off", pagelib.RESET,
-    ships_txt, convoy_txt, has_tgt and C.cyan or C.dim, target_txt, pagelib.RESET), width))
+    ships_txt, convoy_txt, has_tgt and C.yellow or C.dim, target_txt, pagelib.RESET), width))
 
+  -- KEEP AND DISCLOSE (semantic exceptions, same style as pages/army.lua's
+  -- "training status" note):
+  --   - lost-raid line, below: LEGACY's own literal is 0xFF5555, which
+  --     decodes (R=55,G=55,B=FF) to a blue/cyan hue, not the red the
+  --     "raid lost" semantics obviously call for. Treated as an author
+  --     slip against LEGACY's own documented BGR convention (a plain
+  --     RGB-red-looking hex picked without re-checking it against the
+  --     byte order LEGACY itself declares) rather than mechanically ported
+  --     -- kept as C.bright_red.
+  --   - raid-daler gain, below: LEGACY's literal is 0xFFCC33, which decodes
+  --     (R=33,G=CC,B=FF) to a blue hue on paper, but the value is a
+  --     currency gain and every other daler-gain readout in this page
+  --     (Daler treasury, Active God) uses the warm gold/yellow family --
+  --     kept as C.yellow for that consistency rather than decoded literally.
   local rl = S.raidlog or {}
   if #rl == 0 then
     add(pagelib.trunc(C.dim .. "No raids returned yet." .. pagelib.RESET, width))
@@ -416,8 +447,10 @@ function M.lines(width)
   local function add(s) lines[#lines + 1] = s end
 
   -- ---- settlement-before block (guild_viking.lua:7588-7831) -------------
+  -- Daler and Active God both use 0x00CCCC (workbook near SHIP_STATE_ANSI
+  -- above) -> yellow, not the bright_cyan they were guessed at.
   if S.daler and S.daler >= 0 then
-    add(pagelib.kv(width, "Daler:", pagelib.fmt_num(S.daler), C.bright_cyan))
+    add(pagelib.kv(width, "Daler:", pagelib.fmt_num(S.daler), C.yellow))
   end
 
   do
@@ -432,8 +465,8 @@ function M.lines(width)
       gtxt = "--"
     end
     add(pagelib.header(width, "Active God"))
-    add(pagelib.kv(width, "In Power:", gname, has_god and C.bright_cyan or C.dim))
-    add(pagelib.kv(width, "Resets In:", gtxt, has_god and C.bright_cyan or C.dim))
+    add(pagelib.kv(width, "In Power:", gname, has_god and C.yellow or C.dim))
+    add(pagelib.kv(width, "Resets In:", gtxt, has_god and C.yellow or C.dim))
   end
 
   if page_opts.get("show_city_ships") then

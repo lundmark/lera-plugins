@@ -63,13 +63,17 @@ end
 -- Ported from LEGACY's GOOD_COLORS (guild_viking.lua:7477-7500), mapped by
 -- intent from BGR hex onto pagelib's ANSI 16-color table -- per the plan's
 -- Global Constraints, exact hex fidelity is NOT required.
+--
+-- Final-review BGR decode workbook (guild_viking.lua:301, 0xBBGGRR):
+--   finery 0x44DDFF -> R=FF/G=DD/B=44 -> gold, mapped to yellow (nearest
+--     pagelib.C hue) -- was guessed at bright_cyan by variable-name alone.
 local GOOD_COLORS = {
   timber = C.green, ore = C.dim, iron = C.cyan, grain = C.yellow,
   furs = C.red, fish = C.bright_cyan, mead = C.magenta, sunstone = C.yellow,
   runestones = C.white, spoils = C.red,
   salted_fish = C.bright_cyan, bread = C.yellow, fine_furs = C.bright_red,
   tools = C.dim, gemstones = C.magenta, honey = C.yellow, weapons = C.red,
-  armour = C.bright_cyan, finery = C.bright_cyan,
+  armour = C.bright_cyan, finery = C.yellow,
   food = C.yellow, water = C.cyan,
 }
 function M.good_color(g)
@@ -128,8 +132,12 @@ function M.quality_label(good, pct)
     if pct >= 62 then return "young", C.magenta end
     return "green", C.green
   end
+  -- 0x00FFFF ("slightly stale") -> R=FF/G=FF/B=00 -> yellow, not cyan --
+  -- this now shares C.yellow with the "stale" tier just below (its own
+  -- literal decodes to yellow too); the decode wins over keeping the two
+  -- tiers visually distinct, per the sweep's ruling.
   if pct >= 100 then return "fresh", C.bright_green end
-  if pct >= 90 then return "slightly stale", C.cyan end
+  if pct >= 90 then return "slightly stale", C.yellow end
   if pct >= 78 then return "stale", C.yellow end
   if pct >= 62 then return "old", C.red end
   return "very old", C.bright_red
