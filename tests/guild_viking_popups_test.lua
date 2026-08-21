@@ -317,21 +317,27 @@ local M = dofile("3scapes/guild_viking/init.lua")
 M.on_load()
 check("vik registered", registered_vik ~= nil and registered_vik.name == "/vik")
 
--- An unregistered popup name still routes through popups.toggle (prints its
--- own message) rather than falling through to the bare page-key switch.
--- "war" is the probe: by Task 5, popups.lua has self-registered map/sea/
--- voyage/cityplan for real (see the bottom of popups.lua), so "war" is the
--- only POPUP_NAMES member still unregistered at this point in the file --
--- right up until the throwaway stub below registers it for the
--- page/popup-collision tests that follow. Whichever POPUP_NAMES member is
--- the last to land keeps being the natural probe here.
+-- popups.toggle with an unregistered name prints its own friendly message
+-- and opens nothing. Task 5's probe used "war" here, banking on it being
+-- the one POPUP_NAMES member still unregistered at this point in the file;
+-- Task 6 gave popups.lua a REAL self-registered "war" module (see the
+-- bottom of popups.lua), so requiring "popups" above now registers it
+-- before this file ever reaches this line -- "war" stopped being a valid
+-- probe. Fixed by testing popups.toggle directly with a permanently-fake
+-- name (never a real POPUP_NAMES member, so no future task can register it
+-- out from under this probe) instead of routing through /vik. The
+-- complementary property the old probe also checked -- a POPUP_NAMES
+-- member opens its popup rather than switching the pane, even though the
+-- name is ALSO a window.PAGES key -- is covered more strongly below by the
+-- registered "war" stub ("bare /vik war opened the popup, not the pane").
 window.set_page("stats")
 printed = {}
-registered_vik.handler("war", "/vik")
-check("/vik war (unregistered) does not switch the pane",
-      window.current_page() == "stats" and is_open_flag == false)
-check("/vik war (unregistered) printed popups.lua's message",
-      #printed >= 1 and printed[#printed]:find("war", 1, true) ~= nil, printed[#printed])
+local ok_unregistered = popups.toggle("zz_never_registered_popup")
+check("popups.toggle with an unregistered name returns false", ok_unregistered == false)
+check("popups.toggle with an unregistered name opens nothing", is_open_flag == false)
+check("popups.toggle with an unregistered name printed its own message",
+      #printed >= 1 and printed[#printed]:find("zz_never_registered_popup", 1, true) ~= nil,
+      printed[#printed])
 
 -- Stage 1 registers no named popups yet; register a throwaway "war" module
 -- directly through popups.lua (the same singleton init.lua's dispatch uses)
