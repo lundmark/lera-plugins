@@ -182,9 +182,13 @@ local state = {
   vmap_h    = 0,
   vmap_px   = -1,
   vmap_py   = -1,
-  vmap_rows = {},   -- [0-based row index] = row_string
-  vmap_east_edges  = {}, -- [0-based row index] = east edge passability string
-  vmap_south_edges = {}, -- [0-based row index] = south edge passability string
+  -- 1-INDEXED Lua storage for a 0-based wire row: handlers/voyage.lua's
+  -- vmr_row/mee_row/mes_row store at [ridx + 1] for wire row ridx (LEGACY
+  -- 2571-2579), locked by guild_viking_voyage_test.lua:304-306. A reader
+  -- that wants 0-based grid row r must index [r + 1].
+  vmap_rows = {},   -- [wire row + 1] = row_string
+  vmap_east_edges  = {}, -- [wire row + 1] = east edge passability string
+  vmap_south_edges = {}, -- [wire row + 1] = south edge passability string
   vmap_pois = {},   -- { type, name, x, y, owner }
   vmap_pois_keys = {},          -- { "x,y" = true } dedup lookup
   vmap_pois_expecting = false,  -- true when waiting for first VMAPL after VMAPH

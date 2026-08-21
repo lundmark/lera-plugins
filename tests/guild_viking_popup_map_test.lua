@@ -87,6 +87,19 @@ local page_opts = require("page_opts")
 local popups = require("popups")
 local map = require("popups.map")
 
+-- ---- real ingestion pipeline (protocol.ingest -> handlers.voyage), the SAME
+-- registration guild_viking_voyage_test.lua does, so vmap fixtures are
+-- driven through production code rather than poked into S by hand -- see
+-- seed_vmap below for why this matters.
+local protocol = require("protocol")
+local voyage = require("handlers.voyage")
+for key, fn in pairs(voyage) do
+  if key ~= "_patterns" then protocol.handler(key, fn) end
+end
+for _, p in ipairs(voyage._patterns or {}) do
+  protocol.pattern_handler(p.pattern, p.fn)
+end
+
 local S = state.S
 local C, RESET = pagelib.C, pagelib.RESET
 
@@ -105,6 +118,46 @@ local EXPECT_COLOR = {
   X = C.white,          -- 0xFFFFFF
 }
 
+-- Seeds vmap state by driving the REAL ingestion pipeline
+-- (protocol.ingest -> handlers.voyage's VMAPH / VMR%d%d / MEE%d%d / MES%d%d /
+-- VMAPL), exactly like guild_viking_voyage_test.lua does for the very same
+-- handlers. This is deliberate, not incidental: handlers/voyage.lua's
+-- vmr_row/mee_row/mes_row store at S.vmap_*[wire_row + 1] (1-indexed Lua
+-- storage for a 0-based wire row, LEGACY 2571-2579, locked by
+-- guild_viking_voyage_test.lua:304-306). Poking S.vmap_rows directly with
+-- 0-based Lua keys (an earlier version of this file did exactly that) can
+-- never disagree with a reader that also assumes 0-based keys -- the
+-- fixture and the (buggy) implementation agree with each other while both
+-- disagree with production. Driving the real handlers instead means the
+-- fixture's indexing can only ever be what handlers/voyage.lua actually
+-- produces.
+--
+-- `rows`/`east_edges`/`south_edges` are plain 1-based Lua arrays in WIRE
+-- order (rows[1] is wire row 0, i.e. VMR00) -- the natural way to write a
+-- fixture; seed_vmap does the wire_row-1 translation into the VMR%02d/
+-- MEE%02d/MES%02d keys itself.
+local function seed_vmap(t)
+  protocol.ingest("VMAPH", string.format("%d|%d|%d|%d",
+    t.w, t.h, t.px or -1, t.py or -1))
+  for wire_row, row in ipairs(t.rows or {}) do
+    protocol.ingest(string.format("VMR%02d", wire_row - 1), row)
+  end
+  for wire_row, edge in ipairs(t.east_edges or {}) do
+    protocol.ingest(string.format("MEE%02d", wire_row - 1), edge)
+  end
+  for wire_row, edge in ipairs(t.south_edges or {}) do
+    protocol.ingest(string.format("MES%02d", wire_row - 1), edge)
+  end
+  if t.pois and #t.pois > 0 then
+    local parts = {}
+    for _, p in ipairs(t.pois) do
+      parts[#parts + 1] = table.concat(
+        { p.type, p.name, p.x, p.y, p.owner or "" }, "|")
+    end
+    protocol.ingest("VMAPL", table.concat(parts, ";"))
+  end
+end
+
 local function reset_vmap()
   S.vmap_w, S.vmap_h = 0, 0
   S.vmap_px, S.vmap_py = -1, -1
@@ -112,6 +165,9 @@ local function reset_vmap()
   S.vmap_east_edges = {}
   S.vmap_south_edges = {}
   S.vmap_pois = {}
+  S.vmap_pois_pending = nil
+  S.vmap_pois_pending_keys = {}
+  S.vmap_pois_expecting = false
 end
 
 -- =============================================================================
@@ -135,8 +191,10 @@ check("no-data fallback has a Territory Map header",
 -- grid: seeded rows render exact glyph/color fields (BGR workbook)
 -- =============================================================================
 reset_vmap()
-S.vmap_w, S.vmap_h = 3, 2
-S.vmap_rows = { [0] = "ph.", [1] = "AfW" }
+seed_vmap({ w = 3, h = 2, rows = { "ph.", "AfW" } })
+check("VMR00 landed at the real 1-indexed storage position",
+  S.vmap_rows[1] == "ph." and S.vmap_rows[2] == "AfW",
+  tostring(S.vmap_rows[1]) .. "/" .. tostring(S.vmap_rows[2]))
 
 local width = 76
 local offset = map.grid_line_offset(width)
@@ -149,18 +207,19 @@ local row1 = EXPECT_COLOR.A .. "A " .. RESET .. " " ..
              EXPECT_COLOR.f .. "f " .. RESET .. " " ..
              EXPECT_COLOR.W .. "W " .. RESET .. " "
 
-check("grid row0 (p/h/.) renders exact glyph+color fields",
+check("grid row0 (p/h/.) renders exact glyph+color fields, wire row 0 (VMR00)",
   lines[offset + 1] == row0, lines[offset + 1])
-check("grid row1 (A/f/W) renders exact glyph+color fields",
+check("grid row1 (A/f/W) renders exact glyph+color fields, wire row 1 (VMR01)",
   lines[offset + 2] == row1, lines[offset + 2])
 
 -- =============================================================================
 -- POI overlay overrides terrain glyph/color
 -- =============================================================================
 reset_vmap()
-S.vmap_w, S.vmap_h = 3, 2
-S.vmap_rows = { [0] = "ph.", [1] = "AfW" }
-S.vmap_pois = { { type = "capital", name = "uppsala", x = 1, y = 0, owner = "" } }
+seed_vmap({
+  w = 3, h = 2, rows = { "ph.", "AfW" },
+  pois = { { type = "capital", name = "uppsala", x = 1, y = 0, owner = "" } },
+})
 
 offset = map.grid_line_offset(width)
 lines = map.lines(width)
@@ -174,10 +233,10 @@ check("POI at (1,0) overrides the terrain glyph/color with its symbol",
 -- player position marker overrides both terrain and a co-located POI
 -- =============================================================================
 reset_vmap()
-S.vmap_w, S.vmap_h = 3, 2
-S.vmap_rows = { [0] = "ph.", [1] = "AfW" }
-S.vmap_px, S.vmap_py = 2, 1
-S.vmap_pois = { { type = "ruins", name = "old fort", x = 2, y = 1, owner = "" } }
+seed_vmap({
+  w = 3, h = 2, px = 2, py = 1, rows = { "ph.", "AfW" },
+  pois = { { type = "ruins", name = "old fort", x = 2, y = 1, owner = "" } },
+})
 
 offset = map.grid_line_offset(width)
 lines = map.lines(width)
@@ -197,10 +256,13 @@ check("header shows the player's position", pos_line_found)
 -- east/south edge overlays
 -- =============================================================================
 reset_vmap()
-S.vmap_w, S.vmap_h = 2, 2
-S.vmap_rows = { [0] = "pp", [1] = "pp" }
-S.vmap_east_edges = { [0] = "01" } -- col0 wall, col1 clear, row1 unspecified
-S.vmap_south_edges = { [0] = "10" } -- col0 clear, col1 wall, row1 unspecified
+seed_vmap({
+  w = 2, h = 2, rows = { "pp", "pp" },
+  east_edges = { "01" },  -- wire row 0: col0 wall, col1 clear
+  south_edges = { "10" }, -- wire row 0: col0 clear, col1 wall
+})
+check("MEE00/MES00 landed at the real 1-indexed storage position",
+  S.vmap_east_edges[1] == "01" and S.vmap_south_edges[1] == "10")
 
 offset = map.grid_line_offset(width)
 lines = map.lines(width)
@@ -214,8 +276,7 @@ check("south edge row (interleaved): wall under (1,0), none under (0,0)",
 -- not 2h): total = pre-grid lines + h grid rows + 1 hover line (no towns
 -- seeded).
 reset_vmap()
-S.vmap_w, S.vmap_h = 2, 2
-S.vmap_rows = { [0] = "pp", [1] = "pp" }
+seed_vmap({ w = 2, h = 2, rows = { "pp", "pp" } })
 offset = map.grid_line_offset(width)
 lines = map.lines(width)
 check("with no south-edge data at all, the grid section is exactly h lines "
@@ -231,12 +292,13 @@ check("grid row1 with no edge data has no wall marks",
 -- towns list + show_map_towns gate
 -- =============================================================================
 reset_vmap()
-S.vmap_w, S.vmap_h = 3, 2
-S.vmap_rows = { [0] = "...", [1] = "..." }
-S.vmap_pois = {
-  { type = "capital", name = "asgard", x = 0, y = 0, owner = "" },
-  { type = "farm", name = "hearthstead", x = 1, y = 0, owner = "bjorn" },
-}
+seed_vmap({
+  w = 3, h = 2, rows = { "...", "..." },
+  pois = {
+    { type = "capital", name = "asgard", x = 0, y = 0, owner = "" },
+    { type = "farm", name = "hearthstead", x = 1, y = 0, owner = "bjorn" },
+  },
+})
 
 page_opts.set("show_map_towns", true)
 lines = map.lines(width)
@@ -265,18 +327,19 @@ page_opts.set("show_map_towns", true)
 -- width discipline at popup-inner 76 cols
 -- =============================================================================
 reset_vmap()
-S.vmap_w, S.vmap_h = 8, 4
 local wide_rows = {}
 for r = 0, 3 do
   local chars = {}
   for c = 0, 7 do chars[#chars + 1] = ({ "p", "h", "A", "f", "W", ".", "+", "=" })[(c + r) % 8 + 1] end
-  wide_rows[r] = table.concat(chars)
+  wide_rows[r + 1] = table.concat(chars) -- 1-based wire order: wide_rows[1] = wire row 0
 end
-S.vmap_rows = wide_rows
-S.vmap_pois = {
-  { type = "capital", name = "asgard", x = 0, y = 0, owner = "" },
-  { type = "lineage", name = "midgard hall", x = 1, y = 1, owner = "" },
-}
+seed_vmap({
+  w = 8, h = 4, rows = wide_rows,
+  pois = {
+    { type = "capital", name = "asgard", x = 0, y = 0, owner = "" },
+    { type = "lineage", name = "midgard hall", x = 1, y = 1, owner = "" },
+  },
+})
 lines = map.lines(76)
 local over_width = 0
 for _, l in ipairs(lines) do
@@ -288,10 +351,10 @@ check("no rendered line exceeds 76 visible columns", over_width == 0, over_width
 -- pointer: hover info line (direct unit test with a stubbed ctx)
 -- =============================================================================
 reset_vmap()
-S.vmap_w, S.vmap_h = 3, 2
-S.vmap_rows = { [0] = "ph.", [1] = "AfW" }
-S.vmap_px, S.vmap_py = -1, -1
-S.vmap_pois = { { type = "seer", name = "vala", x = 1, y = 0, owner = "ivar" } }
+seed_vmap({
+  w = 3, h = 2, rows = { "ph.", "AfW" },
+  pois = { { type = "seer", name = "vala", x = 1, y = 0, owner = "ivar" } },
+})
 
 local function fixed_ctx(c, r)
   return { cell_from_xy = function() return c, r end,
@@ -306,7 +369,8 @@ local hover_terrain_found = false
 for _, l in ipairs(lines) do
   if l:find("%(0,1%)") and l:find("Mountains", 1, true) then hover_terrain_found = true end
 end
-check("hover over terrain cell (0,1) shows its terrain label", hover_terrain_found)
+check("hover over terrain cell (0,1) shows its terrain label (wire row 1, VMR01 = 'AfW')",
+  hover_terrain_found)
 check("hovering never sends anything to the MUD", #send_calls == 0)
 
 map.on_pointer({ kind = "move", x = 0, y = 0, inside = true }, fixed_ctx(1, 0))
@@ -351,8 +415,7 @@ check("out-of-grid click never sends anything to the MUD", #send_calls == 0)
 -- wm.popup) -- the contract Tasks 4-6 reuse.
 -- =============================================================================
 reset_vmap()
-S.vmap_w, S.vmap_h = 2, 3
-S.vmap_rows = { [0] = "pp", [1] = "hh", [2] = "AA" }
+seed_vmap({ w = 2, h = 3, rows = { "pp", "hh", "AA" } })
 
 is_open_flag = false
 opens = {}
@@ -376,7 +439,8 @@ renderer.render(make_rect(0, 0, width, rect_h), { title = "Territory Map" })
 local pre_offset = map.grid_line_offset(width)
 -- wrapper_y for grid row r (0-based, no south edges => 1 line per row) at
 -- zero scroll: wrapper_y = pre_offset + r (see popups.lua's ctx.cell_from_xy
--- doc comment: gy = y + scroll_offset - grid_line_offset).
+-- doc comment: gy = y + scroll_offset - grid_line_offset). Grid row 2 is
+-- wire row 2 (VMR02 = "AA", "Mountains").
 local wrapper_y_row2 = pre_offset + 2
 check("row 2 is within the visible rect at zero scroll", wrapper_y_row2 < rect_h,
   wrapper_y_row2)

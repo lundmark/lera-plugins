@@ -5,18 +5,34 @@
 -- pixel hotspots do not carry over" ruling). VMAP_SYM_COL (10990-11015) and
 -- VMAP_TYPE_LABEL (11018-11029) below are ported verbatim.
 --
--- Interaction fidelity: draw_page7's ONLY interactive hotspot family is
+-- Interaction fidelity: draw_page7's ONLY hotspot family is
 -- "vmp_<col>_<row>" (guild_viking.lua:12639-12655), and every one of them
 -- is registered via WindowAddHotspot with all five callback slots
 -- ("", "", "", "", "") empty -- a pure hover tooltip, no click behavior at
--- all. Ported below as a module-local `hover` info line, updated from
--- on_pointer through the ctx.cell_from_xy contract (see popups.lua's header
--- comment). draw_page7 also builds `vmap_poi_locations`
--- (guild_viking.lua:12695-12728) with a comment claiming a "right-click
--- lookup", but its only would-be reader, `viking_resolve_poi_at`
--- (guild_viking.lua:11770), is never called anywhere in the file -- dead
--- code, confirmed by grep -- so the town list below gets no click handler
--- either: there is nothing live to port.
+-- all EVEN WHEN IT FIRES. And it does not fire in the branch this module
+-- ports: creation is gated by `vmap_allow_hotspots = icons and cell_w >= 7
+-- and (gw*gh <= 4096)` (guild_viking.lua:12514, checked at the registration
+-- site 12638), where `icons` requires `page_opts.show_map_icons` (12422) --
+-- the graphical Wang-tile branch this task deliberately does NOT port (see
+-- above). In the TEXT-VIEW branch (icons=false, our target), LEGACY fires
+-- ZERO hotspots on this page: there is no live interaction to port at all.
+--
+-- The module-local `hover` info line below (updated from on_pointer through
+-- the ctx.cell_from_xy contract, see popups.lua's header comment) is
+-- therefore a LERA ADDITION, not a port of a live LEGACY interaction --
+-- exactly the same category as the edge-wall overlay disclosed further
+-- down. It gives the text view a hover affordance analogous to what the
+-- icon view's tooltip WOULD have shown had this task ported that branch,
+-- using the tooltip's own text format/vocabulary (still ported verbatim:
+-- VMAP_TIP_TERR/VMAP_TIP_SYM below, and the "(%d,%d)  %s" format string,
+-- guild_viking.lua:12652).
+--
+-- draw_page7 also builds `vmap_poi_locations` (guild_viking.lua:12695-
+-- 12728) with a comment claiming a "right-click lookup", but its only
+-- would-be reader, `viking_resolve_poi_at` (guild_viking.lua:11770), is
+-- never called anywhere in the file -- dead code, confirmed by grep -- so
+-- the town list below gets no click handler either: there is nothing live
+-- to port there regardless of branch.
 --
 -- Content decision worth disclosing: VMAP_SYM_COL's keys split cleanly into
 -- TERRAIN glyphs (t/h/A/f/p/W/r/=/c/./+) and POI/player glyphs
@@ -164,18 +180,22 @@ local TOWN_SHORT = {
 local M = {}
 M.title = "Territory Map"
 
--- Module-local hover/info line (the interaction-fidelity port of the
--- vmp_* tooltip -- see the pointer section below). Declared here, ahead of
--- every function that reads or writes it, so it is a proper upvalue rather
--- than an accidental global.
+-- Module-local hover/info line (a lera addition, not a port of a live
+-- LEGACY interaction -- see the module doc comment above). Declared here,
+-- ahead of every function that reads or writes it, so it is a proper
+-- upvalue rather than an accidental global.
 local hover = ""
 
 -- ---------------------------------------------------------------------------
 -- Grid construction
 -- ---------------------------------------------------------------------------
 
+-- state.lua's vmap_rows is 1-INDEXED Lua storage for a 0-based wire row
+-- (handlers/voyage.lua's vmr_row stores at [ridx + 1] for wire row ridx,
+-- LEGACY 2571-2573, locked by guild_viking_voyage_test.lua:304-306) --
+-- maplib's `r` here is the 0-based grid row, so the read is [r + 1].
 local function terrain_glyph(r, c)
-  local row = S.vmap_rows[r] or ""
+  local row = S.vmap_rows[r + 1] or ""
   local ch = row:sub(c + 1, c + 1)
   if ch == "" then ch = "." end
   return ch
@@ -218,13 +238,14 @@ local function make_grid(poi_at)
 end
 
 -- Edge passability strings are "0" (blocked) / "1" (passable) per-column
--- characters, one string per 0-based row (state.lua's own documented
--- convention for both vmap_east_edges and vmap_south_edges). Only an
--- EXPLICIT "0" draws a wall; a missing row/char (no data for that edge)
+-- characters, one string per row. Both vmap_east_edges and vmap_south_edges
+-- share vmap_rows' 1-INDEXED-for-a-0-based-wire-row storage (handlers/
+-- voyage.lua's mee_row/mes_row, LEGACY 2574-2579), so `r + 1` here too. Only
+-- an EXPLICIT "0" draws a wall; a missing row/char (no data for that edge)
 -- draws nothing, rather than defaulting to "blocked" or "open" for data
 -- that was simply never sent.
 local function edge_blocked(edge_rows, r, c)
-  local s = edge_rows[r]
+  local s = edge_rows[r + 1]
   if not s then return false end
   return s:sub(c + 1, c + 1) == "0"
 end
@@ -358,9 +379,11 @@ function M.grid_line_offset(width)
 end
 
 -- ---------------------------------------------------------------------------
--- Pointer: hover-only, per the interaction-fidelity finding above -- there
--- is no click action to port, so on_pointer only ever updates `hover` and
--- never returns true (never consumes the event) and never calls mud.send.
+-- Pointer: hover-only, per the module doc comment above -- LEGACY fires no
+-- hotspots at all on this page in the text-view branch, so there is no
+-- click (or even a live hover) to port; on_pointer only ever updates
+-- `hover` (a lera addition) and never returns true (never consumes the
+-- event) and never calls mud.send.
 -- ---------------------------------------------------------------------------
 
 local function cell_tip(poi_at, c, r)
