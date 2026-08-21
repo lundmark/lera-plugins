@@ -11,7 +11,9 @@
 --     colored by intent, plus time-to-next-shift when known.
 --   EARLY EXIT (10725-10730, UNGATED): if state.trade_goods is completely
 --     empty, draw ONLY a "Trade Goods" header + "No data -- enable with:
---     vtoggle mip_trade_goods" and stop. Market Movers, Refined Goods, the
+--     vtoggle mip_trade_goods" and stop (LEGACY's em dash character is
+--     deliberately substituted with "--" here, matching this file's own
+--     comment convention). Market Movers, Refined Goods, the
 --     Auto-Trade status block and the price rows below are ALL skipped in
 --     that case, regardless of their own opts, because draw_page6 itself
 --     returns before build_mover_rows or the price-row loop ever runs.
@@ -165,7 +167,7 @@ end
 -- "off" 0x5566FF decodes to strong red, not the cyan a "cool/inactive" guess
 -- would suggest), the DECODE wins, same precedent as pages/people.lua's
 -- Designations legend note.
---   0xFFCC33 (rank number, both rows)      -> R33/G204/B255  -> cyan
+--   0xFFCC33 (rank number, both rows)      -> R51/G204/B255  -> cyan
 --   0xAAAAAA (town name, mover row)        -> grey           -> white
 --   0x66CCFF (mover buy price; refsell     -> R255/G204/B102 -> yellow
 --             "have N")
@@ -395,11 +397,14 @@ end
 
 -- "B:"/"S:" label decode (guild_viking.lua:10897,10900): 0xAA88FF ->
 -- R255/G136/B170 (magenta-ish) and 0x88CCFF -> R255/G204/B136 (gold) --
--- mapped to magenta and yellow respectively. "Sup:"/"Dem:" labels
--- (0x44AAFF/0x44CC88) and their values (0x999999, uniformly grey regardless
--- of magnitude in LEGACY) collapse to pagelib.kv's plain dim-label
--- convention rather than being decoded individually: neither carries a
--- polarity signal of its own the way AFF_COLOR or the trend arrows do.
+-- mapped to magenta and yellow respectively. These are FIXED label colors
+-- only -- LEGACY (guild_viking.lua:10904-10909) colors the VALUE and its
+-- trend arrow with the trend color (bc/sc from market.price_trend), a
+-- SECOND, independent signal from the fixed label color. "Sup:"/"Dem:"
+-- labels (0x44AAFF/0x44CC88) and their values (0x999999, uniformly grey
+-- regardless of magnitude in LEGACY) collapse to pagelib.kv's plain
+-- dim-label convention rather than being decoded individually: neither
+-- carries a polarity signal of its own the way the trend colors do.
 local function price_row(width, good, gd, lin)
   local score = gd.score or 0
   local aff_label = AFF_LABEL[score] or ""
@@ -408,14 +413,17 @@ local function price_row(width, good, gd, lin)
   local ba, bc_hex = market.price_trend(gd.buy or 0, st and st.bavg, true)
   local sa, sc_hex = market.price_trend(gd.sell or 0, st and st.savg, false)
   local bc, sc = trend_color(bc_hex), trend_color(sc_hex)
-  return pagelib.trunc(string.format(
-    "  %s%-12s%s %s%-3s%s B:%s%4d%s %s%s%s S:%s%4d%s %s%s%s Sup:%s%3d%s Dem:%s%3d%s",
-    cc.good_color(good), cc.good_label(good), pagelib.RESET,
-    aff_color, aff_label, pagelib.RESET,
-    C.magenta, gd.buy or 0, pagelib.RESET, bc, ba, pagelib.RESET,
-    C.yellow, gd.sell or 0, pagelib.RESET, sc, sa, pagelib.RESET,
-    C.dim, gd.supply or 0, pagelib.RESET,
-    C.dim, gd.demand or 0, pagelib.RESET), width)
+  local good_part = string.format("%s%-12s%s %s%-3s%s",
+    cc.good_color(good), cc.good_label(good), pagelib.RESET, aff_color, aff_label, pagelib.RESET)
+  -- Value + arrow share ONE trend-colored span (bc/sc), matching LEGACY's
+  -- two separate WindowText calls that both pass the same color.
+  local buy_part = string.format("%sB:%s%s%4d%s%s",
+    C.magenta, pagelib.RESET, bc, gd.buy or 0, ba, pagelib.RESET)
+  local sell_part = string.format("%sS:%s%s%4d%s%s",
+    C.yellow, pagelib.RESET, sc, gd.sell or 0, sa, pagelib.RESET)
+  local supdem_part = string.format("Sup:%s%3d%s Dem:%s%3d%s",
+    C.dim, gd.supply or 0, pagelib.RESET, C.dim, gd.demand or 0, pagelib.RESET)
+  return pagelib.trunc("  " .. good_part .. " " .. buy_part .. " " .. sell_part .. " " .. supdem_part, width)
 end
 
 -- Lineage header color (guild_viking.lua:10820): 0x00CCFF decodes

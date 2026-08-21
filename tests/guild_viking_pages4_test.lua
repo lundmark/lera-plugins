@@ -25,6 +25,7 @@ local page_opts = require("page_opts")
 local goods_page = require("pages.goods")
 
 local S = state.S
+local C = pagelib.C
 local WIDTH = 80
 
 local function joined(lines)
@@ -241,11 +242,34 @@ if midgard_header_idx then
 end
 check("goods: an Iron price row exists under the Midgard header", iron_row_idx ~= nil, price_all)
 if iron_row_idx then
+  local row = price_lines[iron_row_idx]
   check("goods: Iron price row shows the down-trend arrow 'v' for buy (5, well below avg 10)",
-        price_lines[iron_row_idx]:find("v", 1, true) ~= nil, price_lines[iron_row_idx])
+        row:find("v", 1, true) ~= nil, row)
   check("goods: Iron price row shows Supply/Demand values",
-        price_lines[iron_row_idx]:find("Sup:", 1, true) ~= nil
-        and price_lines[iron_row_idx]:find("Dem:", 1, true) ~= nil, price_lines[iron_row_idx])
+        row:find("Sup:", 1, true) ~= nil and row:find("Dem:", 1, true) ~= nil, row)
+
+  -- Fix round 1: the "B:"/"S:" LABELS carry their own FIXED color (magenta/
+  -- yellow, decoded from LEGACY's 0xAA88FF/0x88CCFF), while the VALUE + its
+  -- trend arrow together carry the TREND color (market.price_trend's bc/sc)
+  -- -- two independent signals, matching LEGACY's two separate WindowText
+  -- calls (guild_viking.lua:10904-10909) rather than one merged color.
+  -- buy: avg=10 (samples 5,15), cur=5 well below avg-thr(9) -> "v", and
+  -- lower_is_good=true for buy -> GOOD_COL -> bright_green.
+  local expected_buy_label = C.magenta .. "B:" .. pagelib.RESET
+  local expected_buy_value = C.bright_green .. string.format("%4d", 5) .. "v" .. pagelib.RESET
+  check("goods: 'B:' label is fixed magenta", row:find(expected_buy_label, 1, true) ~= nil, row)
+  check("goods: buy value+arrow is trend-colored bright_green (down is GOOD for buy)",
+        row:find(expected_buy_value, 1, true) ~= nil, row)
+
+  -- sell: avg=50 (samples 40,60), CURRENT sell (from the trade_goods
+  -- fixture, not price_history) is 0 -- well below avg-thr(48) -> "v", and
+  -- lower_is_good=false for sell -> BAD_COL -> bright_red (a different
+  -- trend color than the buy value above, demonstrating independence).
+  local expected_sell_label = C.yellow .. "S:" .. pagelib.RESET
+  local expected_sell_value = C.bright_red .. string.format("%4d", 0) .. "v" .. pagelib.RESET
+  check("goods: 'S:' label is fixed yellow", row:find(expected_sell_label, 1, true) ~= nil, row)
+  check("goods: sell value+arrow is trend-colored bright_red (down is BAD for sell)",
+        row:find(expected_sell_value, 1, true) ~= nil, row)
 end
 
 page_opts.set("show_goods_prices", false)
