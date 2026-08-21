@@ -244,13 +244,23 @@ function M.on_load()
   -- protocol.lua's sweep comment); lera.time() is milliseconds, so it must be
   -- divided down here at the call site rather than changing sweep()'s contract.
   sweep_id = timer.every(100, function() protocol.sweep(lera.time() / 1000) end)
+
+  -- Fix 1: persist.load() must run BEFORE the initial combat-trigger
+  -- registration, not after. register_combat_triggers() reads
+  -- page_opts.get("gag_status_lines") fresh at call time (see its comment
+  -- above), so a persisted gag_status_lines=false has to already be applied
+  -- by the time this first registration happens -- otherwise every session
+  -- silently re-gags the 8 hp-bar triggers regardless of what the user last
+  -- saved, and only a subsequent /vik set flip would notice. persist.load
+  -- depends only on market/protocol/page_opts/window, all required above
+  -- this point, so moving it earlier has no ordering hazard of its own.
+  persist.load()
+
   register_combat_triggers()
   for _, t in ipairs(notify.triggers) do
     notify_trigger_ids[#notify_trigger_ids + 1] = trigger.add(t.pattern, t.fn)
   end
   countdown_id = timer.every(1000, function() notify.countdown_tick() end)
-
-  persist.load()
 
   local id, err = command.register({
     name = "/vik",

@@ -756,6 +756,55 @@ end
 check("re-registered triggers are gagged again once the opt is back on",
       all_gagged_after_on)
 
+-- ---- Fix 1 regression: a persisted gag_status_lines=false must be honored --
+-- by the INITIAL combat-trigger registration in on_load, not just by a later
+-- reregister_combat_triggers() call. register_combat_triggers() historically
+-- ran before persist.load() in on_load, so a freshly-loaded persisted value
+-- never reached the first registration -- only a subsequent /vik set flip
+-- would. The shared M's on_load must not be re-run (Task 10 comment above),
+-- and dofile-ing init.lua again against the SAME cached "protocol" module
+-- would trip protocol.lua's duplicate-handler guard (every handlers.* module
+-- registers unconditionally at file scope). So: save the persisted state via
+-- the real /vik path, clear this plugin's require cache, and dofile a
+-- genuinely independent second instance (fresh protocol/state/page_opts/...)
+-- through on_load exactly once. It shares only the global stub tables
+-- (store/trigger/mip/gmcp/...), so its persist.load() sees the same saved
+-- store data, and its combat-trigger registrations land in the same
+-- trigger_regs capture, right after whatever the shared M already used.
+registered_vik.handler("set gag_status_lines off", "/vik")   -- real /vik path
+check("gag_status_lines off before save", page_opts.get("gag_status_lines") == false)
+persist.save()
+
+local cleared_modules = {
+  "protocol", "state", "page_opts", "window", "persist", "market", "combat",
+  "notify", "util", "handlers.trade", "handlers.voyage", "handlers.kingdom",
+  "handlers.city",
+}
+for _, name in ipairs(cleared_modules) do package.loaded[name] = nil end
+
+local before_m2_regs = trigger_reg_count
+local M2 = dofile("3scapes/guild_viking/init.lua")
+M2.on_load()
+
+local page_opts2 = real_require("page_opts")
+check("fresh instance's persist.load restored gag_status_lines=false during on_load",
+      page_opts2.get("gag_status_lines") == false)
+
+local m2_first_8 = {}
+for id = before_m2_regs + 1, before_m2_regs + 8 do
+  m2_first_8[#m2_first_8 + 1] = trigger_regs[id]
+end
+check("M2's on_load registered 8 combat triggers", #m2_first_8 == 8, #m2_first_8)
+local any_gagged_m2 = false
+for _, r in ipairs(m2_first_8) do
+  if r.opts and r.opts.omit_from_output then any_gagged_m2 = true end
+end
+check("initial combat-trigger registration honors the persisted gag=false "
+      .. "(no omit_from_output)", not any_gagged_m2, any_gagged_m2)
+
+pcall(M2.on_unload)
+page_opts.set("gag_status_lines", true)   -- restore the shared instance's default
+
 -- ---- on_unload: full cleanup, must not error (Task 10; call LAST) ----------
 local ok_unload = pcall(M.on_unload)
 check("on_unload does not error", ok_unload)
