@@ -14,10 +14,12 @@ local window = {}
 -- nothing references it any more.
 local placeholder = require("pages.placeholder")
 local stats_page = require("pages.stats")
+local city_page = require("pages.city")
+local trade_page = require("pages.trade")
 
 window.PAGES = {
   { key = "stats",  label = "Stats",  mod = stats_page },
-  { key = "city",   label = "City",   mod = placeholder },
+  { key = "city",   label = "City",   mod = city_page },
   { key = "farm",   label = "Farm",   mod = placeholder },
   { key = "builds", label = "Builds", mod = placeholder },
   { key = "people", label = "People", mod = placeholder },
@@ -27,7 +29,7 @@ window.PAGES = {
   { key = "court",  label = "Court",  mod = placeholder },
   { key = "army",   label = "Army",   mod = placeholder },
   { key = "war",    label = "War",    mod = placeholder },
-  { key = "trade",  label = "Trade",  mod = placeholder },
+  { key = "trade",  label = "Trade",  mod = trade_page },
 }
 
 local pages_by_key = {}

@@ -1,0 +1,475 @@
+-- City page: the `mode ~= "trade"` branches of LEGACY's draw_page2(y, mode)
+-- (/home/simon/code/3s_scripts_old/lua/guild_viking.lua:7573-9114). Pure
+-- builder: lines(width) -> array of ANSI strings, reading state.lua's S and
+-- page_opts.lua only.
+--
+-- LEGACY's draw_page2 is three sibling `if mode ~= ...` blocks: a
+-- "settlement-before" block (Daler/Active God/Longships/Raids), a
+-- "logistics" block (Carts and everything nested under it -- see
+-- pages/trade.lua), and a "settlement-after" block (Warehouse/Production/
+-- Buildings/Trade Routes/Runic Monuments/City Plan). This page renders the
+-- first and third blocks, in source order; pages/trade.lua renders the
+-- second. See the task report for the full section/gate/field table and the
+-- discrepancies found versus the task brief's landmark list (several
+-- sections the brief called "city" turned out to be nested in the trade
+-- block instead, and vice versa is NOT the case -- the source wins).
+--
+-- EXCLUDED by the task: the City Plan interior-layout grid
+-- (guild_viking.lua:8759-9108, anchor `section_header("City Plan"...)`
+-- ~8761) -- replaced with a one-line placeholder, gated the same as LEGACY
+-- (show_city_plan).
+local pagelib = require("pagelib")
+local state = require("state")
+local page_opts = require("page_opts")
+local cc = require("pages.city_common")
+
+local S = state.S
+local C = pagelib.C
+
+local M = {}
+
+-- ---------------------------------------------------------------------------
+-- Longships (guild_viking.lua:7626-7762, gated show_city_ships)
+-- ---------------------------------------------------------------------------
+
+-- Merge state.voyage_longships (primary source: has ship_id + more detail)
+-- with state.ships (supplies convoy/durability/state/return_in when the
+-- voyage feed is stale or absent), same dedup-by-name logic as LEGACY
+-- (guild_viking.lua:7629-7677).
+local function merged_ships()
+  local by_id, order = {}, {}
+  for _, sh in ipairs(S.voyage_longships or {}) do
+    local sid = sh.ship_id or ("name:" .. (sh.name or "unknown"))
+    if not by_id[sid] then order[#order + 1] = sid end
+    by_id[sid] = sh
+  end
+  for _, sh in ipairs(S.ships or {}) do
+    local name = sh.name or "unknown"
+    local found_sid
+    for sid, vsh in pairs(by_id) do
+      if vsh.name == name then found_sid = sid break end
+    end
+    if found_sid then
+      local vsh = by_id[found_sid]
+      if sh.convoy and sh.convoy ~= 0 and (not vsh.convoy or vsh.convoy == 0) then
+        vsh.convoy, vsh.convoy_size, vsh.convoy_bonus = sh.convoy, sh.convoy_size, sh.convoy_bonus
+      end
+      vsh.durability = sh.durability
+      if sh.state and sh.state ~= "" then vsh.state = sh.state end
+      if sh.return_in then vsh.return_in = sh.return_in end
+    else
+      local sid = "name:" .. name
+      if not by_id[sid] then order[#order + 1] = sid end
+      by_id[sid] = sh
+    end
+  end
+  local out = {}
+  for _, sid in ipairs(order) do out[#out + 1] = by_id[sid] end
+  return out
+end
+
+local SHIP_STATE_ANSI = {
+  docked = C.dim, raiding = C.red, building = C.cyan, upgrading = C.cyan,
+  repairing = C.bright_cyan, voyaging = C.magenta, ["on voyage"] = C.magenta,
+}
+
+local function longship_lines(add, width)
+  add(pagelib.header(width, "Longships"))
+  local ships = merged_ships()
+  if #ships == 0 then
+    add(pagelib.trunc(C.dim .. "No ships" .. pagelib.RESET, width))
+    return
+  end
+  for _, sh in ipairs(ships) do
+    local tier_name = cc.SHIP_TIER_NAMES[sh.tier] or ("T" .. tostring(sh.tier))
+    local crew_max = cc.CREW_MAX[sh.tier] or 5
+    local crew = sh.crew or 0
+    local crew_color = crew >= crew_max and C.bright_green or (crew > 0 and C.cyan or C.red)
+    local state_color = SHIP_STATE_ANSI[sh.state] or C.dim
+    local target = ""
+    if sh.target and sh.target ~= "" and sh.state ~= "docked" then
+      target = " -> " .. sh.target .. ((sh.convoy == 1) and " (convoy)" or "")
+    end
+    add(pagelib.trunc(string.format("%-12s %-10s %s%s%s%s  Crew:%s%d/%d%s",
+      sh.name or "?", tier_name, state_color, sh.state or "docked", pagelib.RESET, target,
+      crew_color, crew, crew_max, pagelib.RESET), width))
+    if sh.return_in and sh.return_in > 0 then
+      add(pagelib.trunc("  " .. cc.fmt_time(sh.return_in), width))
+    elseif sh.state == "upgrading" then
+      for _, su in ipairs(S.ship_upgrades or {}) do
+        if su.name == sh.name and su.secs_left and su.secs_left > 0 then
+          add(pagelib.trunc("  " .. cc.fmt_time(su.secs_left), width))
+          break
+        end
+      end
+    end
+    if sh.saga_title and sh.saga_title ~= "" then
+      add(pagelib.trunc(string.format("  %s %s  (%d raids)",
+        sh.name, sh.saga_title, sh.saga_raids or 0), width))
+    end
+    local dur = sh.durability or 100
+    if dur < 100 then
+      add(pagelib.kv(width, "  Hull:", dur .. "%", cc.dur_color(dur, 100)))
+    end
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Raids (guild_viking.lua:7764-7829, gated show_city_raidlog)
+-- ---------------------------------------------------------------------------
+
+local function raids_lines(add, width)
+  add(pagelib.header(width, "Raids"))
+  -- Auto-Raid status. LEGACY caps the displayed ship count with
+  -- ar_max_ships(), a helper entangled with the (not-yet-ported) automation
+  -- subsystem (dock tier, owned/held ship counts) -- omitted here; the raw
+  -- configured value is shown uncapped. state.autoraid itself is also not
+  -- populated by any handler yet (client-only automation config, stage 3/4
+  -- per page_opts.lua's auto_trade/auto_voyage comments), so this reads
+  -- defensively exactly like LEGACY's own `local ar = state.autoraid or {}`.
+  local ar = S.autoraid or {}
+  local on = page_opts.get("auto_raid")
+  local ships_txt = (ar.ships == "all") and "All Ships" or ((tonumber(ar.ships) or 2) .. " Ships")
+  local convoy_txt = ar.convoy and " convoy" or ""
+  local has_tgt = ar.target and ar.target ~= ""
+  local target_txt = has_tgt and cc.tcase(ar.target) or "(no target)"
+  add(pagelib.trunc(string.format("Auto-Raid %s%s%s   %s%s  ->  %s%s%s",
+    on and C.bright_green or C.dim, on and "ON" or "off", pagelib.RESET,
+    ships_txt, convoy_txt, has_tgt and C.cyan or C.dim, target_txt, pagelib.RESET), width))
+
+  local rl = S.raidlog or {}
+  if #rl == 0 then
+    add(pagelib.trunc(C.dim .. "No raids returned yet." .. pagelib.RESET, width))
+    return
+  end
+  local first = math.max(1, #rl - 8)
+  for li = #rl, first, -1 do
+    local r = rl[li]
+    if r.lost then
+      add(pagelib.trunc(string.format("%s%s @%s  raid lost%s",
+        C.bright_red, r.ship, cc.tcase(r.target or "?"), pagelib.RESET), width))
+    else
+      local goods_parts = {}
+      for _, g in ipairs(r.goods or {}) do
+        goods_parts[#goods_parts + 1] = string.format("%d %s", g.qty or 0, cc.good_label(g.good))
+      end
+      local goods_txt = (#goods_parts > 0) and ("  " .. table.concat(goods_parts, "  ")) or ""
+      local thralls_txt = ((r.thralls or 0) > 0)
+        and string.format("  %d thrall%s", r.thralls, (r.thralls == 1) and "" or "s") or ""
+      add(pagelib.trunc(string.format("%s @%s  %s+%dd%s%s%s",
+        r.ship, cc.tcase(r.target or "?"), C.yellow, r.daler or 0, pagelib.RESET,
+        goods_txt, thralls_txt), width))
+    end
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Warehouse (+ nested Refineries) (guild_viking.lua:8321-8479,
+-- gated show_city_warehouse)
+-- ---------------------------------------------------------------------------
+
+local WH_CAP = { [1] = 400, [2] = 1000, [3] = 1750, [4] = 3000, [5] = 5250 }
+local REFINERY_NAMES = {
+  salting_house = "Salting House", bakehouse = "Bakehouse",
+  furriers_lodge = "Furrier's Lodge", smelter = "Smelter", smithy = "Smithy",
+  mead_cellar = "Mead Cellar", weaponry = "Weaponry", armoury = "Armoury",
+  goldsmith = "Goldsmith's Hall",
+}
+
+local function wstock_row(width, ws, show_name)
+  local pct = ws.freshness_pct or 100
+  local label, lcolor
+  if ws.grade then
+    label, lcolor = ws.grade, pagelib.pct_color(pct, 100)
+  elseif cc.is_perishable(ws.good) then
+    label, lcolor = cc.quality_label(ws.good, pct)
+  else
+    label, lcolor = "stable", C.green
+    pct = 100
+  end
+  local name = show_name and cc.good_label(ws.good) or ""
+  return pagelib.trunc(string.format("%s%-14s%s %s%-16s%s %s %d  %d%%",
+    cc.good_color(ws.good), name, pagelib.RESET, lcolor, label, pagelib.RESET,
+    pagelib.bar(12, pct, 100, lcolor), ws.amount or 0, pct), width)
+end
+
+local function warehouse_lines(add, width)
+  local wh_tier = S.buildings and S.buildings["warehouse"] or 0
+  local wh_cap = WH_CAP[wh_tier] or 0
+  local wh_used = 0
+  for _, ws in ipairs(S.wstock or {}) do wh_used = wh_used + (ws.amount or 0) end
+  if wh_cap > 0 then
+    add(pagelib.header(width, string.format("Warehouse  [%s / %s]",
+      pagelib.fmt_num(wh_used), pagelib.fmt_num(wh_cap))))
+  else
+    add(pagelib.header(width, "Warehouse"))
+  end
+
+  local tick_txt = (S.next_tick_in and S.next_tick_in > 0) and cc.fmt_time(S.next_tick_in) or "now"
+  add(pagelib.kv(width, "Next stock tick:", tick_txt, C.bright_cyan))
+
+  if not S.wstock or #S.wstock == 0 then
+    add(pagelib.trunc(C.dim .. "Empty" .. pagelib.RESET, width))
+  else
+    local last_good = nil
+    for _, ws in ipairs(S.wstock) do
+      add(wstock_row(width, ws, ws.good ~= last_good))
+      last_good = ws.good
+    end
+  end
+
+  if S.refineries and #S.refineries > 0 then
+    add(pagelib.header(width, "Refineries"))
+    for _, r in ipairs(S.refineries) do
+      add(pagelib.trunc(string.format("%-16s [%d / %d]",
+        REFINERY_NAMES[r.id] or r.id, r.stock or 0, r.cap or 0), width))
+      for _, g in ipairs(r.grades or {}) do
+        local col = pagelib.pct_color(g.pct or 100, 100)
+        add(pagelib.trunc(string.format("  %s%-14s%s %3d  %s",
+          col, g.name, pagelib.RESET, g.qty or 0, pagelib.bar(12, g.pct or 100, 100, col)), width))
+      end
+    end
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Production (guild_viking.lua:8481-8542, gated show_city_production)
+-- ---------------------------------------------------------------------------
+
+local PROD_GOOD_ORDER = { "timber", "ore", "furs", "fish", "grain", "honey" }
+local PROD_BLDGS = {
+  lumber_yard = { good = "timber", yields = { 5, 12, 25, 36, 56 } },
+  mine        = { good = "ore",    yields = { 6, 15, 30, 44, 64 } },
+  tannery     = { good = "furs",   yields = { 4, 10, 20, 29, 44 } },
+  fishery     = { good = "fish",   yields = { 6, 15, 30, 44, 64 } },
+  farm        = { good = "grain",  yields = { 8, 20, 40, 56, 80 } },
+  apiary      = { good = "honey",  yields = { 4, 10, 15, 20, 32 } },
+}
+
+local function production_lines(add, width)
+  local totals = {}
+  if S.production then
+    for good, amt in pairs(S.production) do
+      if amt ~= 0 then totals[good] = (totals[good] or 0) + amt end
+    end
+  else
+    for bid, info in pairs(PROD_BLDGS) do
+      local tier = S.buildings and S.buildings[bid]
+      if tier then
+        local qty = info.yields[tier] or info.yields[#info.yields]
+        totals[info.good] = (totals[info.good] or 0) + qty
+      end
+    end
+  end
+  local has_prod = false
+  for _, g in ipairs(PROD_GOOD_ORDER) do if totals[g] then has_prod = true; break end end
+  if not has_prod then return end
+
+  add(pagelib.header(width, "Production / Tick"))
+  if S.next_tick_in and S.next_tick_in > 0 then
+    add(pagelib.kv(width, "Next in:", cc.fmt_time(S.next_tick_in), C.bright_cyan))
+  end
+  local parts = {}
+  for _, good in ipairs(PROD_GOOD_ORDER) do
+    local qty = totals[good]
+    if qty then
+      parts[#parts + 1] = cc.good_color(good) .. cc.good_label(good) .. " +" .. qty .. pagelib.RESET
+    end
+  end
+  add(pagelib.trunc(table.concat(parts, "  "), width))
+end
+
+-- ---------------------------------------------------------------------------
+-- Buildings + Upkeep/Tick (guild_viking.lua:8544-8639, both gated
+-- show_city_buildings)
+-- ---------------------------------------------------------------------------
+
+local BLDG_LABELS = {
+  warehouse = "Warehouse", trading_post = "Trading Post", dock = "Dock",
+  courier_post = "Courier Post", beacon = "Beacon", shadow_house = "Shadow-House",
+  training_yard = "Training Yard", lumber_yard = "Lumber Yard", mine = "Mine",
+  smithy = "Smithy", smelter = "Smelter", weaponry = "Weaponry", armoury = "Armoury",
+  goldsmith = "Goldsmith's Hall", skald_hall = "Skald's Hall",
+  salting_house = "Salting House", bakehouse = "Bakehouse",
+  furriers_lodge = "Furrier's Lodge", tannery = "Tannery", fishery = "Fishery",
+  farm = "Farm", apiary = "Apiary", mead_cellar = "Mead Cellar", longhouse = "Longhouse",
+  garrison = "Garrison", palisade = "Palisade", watchtower = "Watchtower",
+  mead_hall = "Mead Hall", thrall_pen = "Thrall Pen", muster_ground = "Muster Ground",
+  settler_plots = "Settler Plots", well = "Well",
+}
+
+local function buildings_lines(add, width)
+  local bld_ids = {}
+  for bid in pairs(S.buildings or {}) do bld_ids[#bld_ids + 1] = bid end
+  table.sort(bld_ids)
+
+  if #bld_ids > 0 then
+    add(pagelib.header(width, "Buildings"))
+    local half = math.floor(width / 2)
+    local function cell(bid)
+      local label = BLDG_LABELS[bid] or cc.cap_first((bid:gsub("_", " ")))
+      return string.format("%s T%d", label, S.buildings[bid] or 1)
+    end
+    for i = 1, #bld_ids, 2 do
+      local left = pagelib.trunc(cell(bld_ids[i]), half)
+      local right = bld_ids[i + 1] and cell(bld_ids[i + 1]) or ""
+      add(pagelib.trunc(left .. " " .. right, width))
+    end
+  end
+
+  if S.upkeep and (S.upkeep.total or 0) > 0 then
+    add(pagelib.header(width, "Upkeep / Tick"))
+    local u = S.upkeep
+    local urows = {
+      { "Roster (staff)", u.roster }, { "Settlers/civic", u.community },
+      { "Throne Room", u.throne }, { "Roads", u.roads }, { "Forts", u.forts },
+    }
+    for _, r in ipairs(urows) do
+      if (r[2] or 0) > 0 then
+        add(pagelib.kv(width, r[1] .. ":", "-" .. pagelib.fmt_num(r[2]) .. "/tick", C.red))
+      end
+    end
+    add(pagelib.kv(width, "Total:", "-" .. pagelib.fmt_num(u.total) .. " daler/tick", C.bright_red))
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Trade Routes (guild_viking.lua:8641-8739) -- NOTE: no page_opts gate at
+-- all in LEGACY, despite the name; unconditional on state.routes being
+-- non-empty. Rendered in the CITY-mode (settlement-after) block, not trade
+-- mode -- see the task report.
+-- ---------------------------------------------------------------------------
+
+local function trade_routes_lines(add, width)
+  if not S.routes or next(S.routes) == nil then return end
+  add(pagelib.header(width, "Trade Routes"))
+  if S.route_upkeep and S.route_upkeep > 0 then
+    add(pagelib.kv(width, "Upkeep:", S.route_upkeep .. " daler/tick", C.bright_cyan))
+  end
+  local route_ids = {}
+  for vid in pairs(S.routes) do route_ids[#route_ids + 1] = vid end
+  table.sort(route_ids)
+  for _, vid in ipairs(route_ids) do
+    local r = S.routes[vid]
+    local road_str = (r.road_tier or 0) > 0
+      and ((r.road_name ~= "" and r.road_name) or ("Road T" .. r.road_tier)) or "No Road"
+    local fort_str = (r.fort_tier or 0) > 0
+      and ((r.fort_name ~= "" and r.fort_name) or ("Fort T" .. r.fort_tier)) or "No Fort"
+    add(pagelib.trunc(string.format("%-16s %s%-14s%s %s%-14s%s",
+      r.name or vid,
+      (r.road_tier or 0) > 0 and C.green or C.dim, road_str, pagelib.RESET,
+      (r.fort_tier or 0) > 0 and C.green or C.dim, fort_str, pagelib.RESET), width))
+    if (r.road_tier or 0) > 0 or (r.fort_tier or 0) > 0 then
+      local parts = {}
+      if (r.road_tier or 0) > 0 then
+        parts[#parts + 1] = "Rd " .. pagelib.bar(10, r.road_maint or 0, 100,
+          pagelib.pct_color(r.road_maint or 0, 100))
+      end
+      if (r.fort_tier or 0) > 0 then
+        parts[#parts + 1] = "Ft " .. pagelib.bar(10, r.fort_maint or 0, 100,
+          pagelib.pct_color(r.fort_maint or 0, 100))
+      end
+      add(pagelib.trunc("  " .. table.concat(parts, "  "), width))
+    end
+    if S.route_builds then
+      for _, kind in ipairs({ "road", "fort" }) do
+        local rb = S.route_builds[kind .. ":" .. vid]
+        if rb then
+          local klabel = (kind == "road") and "Road" or "Fort"
+          local detail
+          if rb.complete_at_secs and rb.complete_at_secs > 0 then
+            detail = "- " .. cc.fmt_time(rb.complete_at_secs) .. " left"
+          elseif rb.complete_at_secs == 0 then
+            detail = "- finalizing..."
+          elseif (rb.mats_total or 0) > 0 then
+            detail = string.format("- mats %d/%d", rb.mats_done or 0, rb.mats_total or 0)
+          else
+            detail = "- awaiting mats"
+          end
+          add(pagelib.trunc(string.format("  Building %s T%d %s", klabel, rb.tier or 1, detail), width))
+        end
+      end
+    end
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Runic Monuments (guild_viking.lua:8741-8756, gated show_city_monuments)
+-- ---------------------------------------------------------------------------
+
+local function monuments_lines(add, width)
+  add(pagelib.header(width, "Runic Monuments"))
+  add(pagelib.trunc(string.format("(%d/%d slots)",
+    #(S.monuments or {}), S.monument_cap or 0), width))
+  if not S.monuments or #S.monuments == 0 then
+    add(pagelib.trunc(C.dim .. "None inscribed" .. pagelib.RESET, width))
+  else
+    for _, ins in ipairs(S.monuments) do
+      add(pagelib.trunc(ins, width))
+    end
+  end
+end
+
+function M.lines(width)
+  width = width or 80
+  local lines = {}
+  local function add(s) lines[#lines + 1] = s end
+
+  -- ---- settlement-before block (guild_viking.lua:7588-7831) -------------
+  if S.daler and S.daler >= 0 then
+    add(pagelib.kv(width, "Daler:", pagelib.fmt_num(S.daler), C.bright_cyan))
+  end
+
+  do
+    local has_god = S.god_power_name and S.god_power_name ~= ""
+    local gname = has_god and S.god_power_name or "--"
+    local gtxt
+    if S.god_power_next and S.god_power_next > 0 then
+      gtxt = cc.fmt_time(S.god_power_next)
+    elseif has_god then
+      gtxt = "now"
+    else
+      gtxt = "--"
+    end
+    add(pagelib.header(width, "Active God"))
+    add(pagelib.kv(width, "In Power:", gname, has_god and C.bright_cyan or C.dim))
+    add(pagelib.kv(width, "Resets In:", gtxt, has_god and C.bright_cyan or C.dim))
+  end
+
+  if page_opts.get("show_city_ships") then
+    longship_lines(add, width)
+  end
+
+  if page_opts.get("show_city_raidlog") then
+    raids_lines(add, width)
+  end
+
+  -- ---- settlement-after block (guild_viking.lua:8319-9114) --------------
+  if page_opts.get("show_city_warehouse") then
+    warehouse_lines(add, width)
+  end
+
+  if page_opts.get("show_city_production") then
+    production_lines(add, width)
+  end
+
+  if page_opts.get("show_city_buildings") then
+    buildings_lines(add, width)
+  end
+
+  trade_routes_lines(add, width)
+
+  if page_opts.get("show_city_monuments") then
+    monuments_lines(add, width)
+  end
+
+  -- City Plan grid: excluded per the task brief, replaced with one placeholder
+  -- line, gated the same as LEGACY (show_city_plan).
+  if page_opts.get("show_city_plan") then
+    add(pagelib.trunc("City plan: /vik cityplan (stage 3)", width))
+  end
+
+  return lines
+end
+
+return M
