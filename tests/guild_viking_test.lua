@@ -562,6 +562,15 @@ window.set_page("city")   -- somewhere other than stats, so the dispatch below
 registered_vik.handler("stats", "/vik")
 check("/vik stats switches page", window.current_page() == "stats")
 
+-- Finding 3 (review round 1): the page-key match is case-insensitive.
+window.set_page("city")
+registered_vik.handler("STATS", "/vik")
+check("/vik STATS (uppercase) switches page", window.current_page() == "stats")
+window.set_page("stats")
+registered_vik.handler("CITY", "/vik")
+check("/vik CITY (uppercase) switches page", window.current_page() == "city")
+window.set_page("stats")
+
 check("page_opts.set rejects an unknown key directly", page_opts.set("no_such_opt", true) == false)
 
 check("show_stats_xp defaults to true", page_opts.get("show_stats_xp") == true)

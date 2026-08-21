@@ -83,6 +83,12 @@ local function make_top_scroller(count_fn)
     return offset
   end
 
+  -- NOTE: unlike a tail-anchored pane (wm.make_scroller / the "output" slot,
+  -- where following_tail() == true means "at the newest/bottom line"), this
+  -- scroller's "at rest" position is the TOP: following_tail() == true here
+  -- means offset() == 0, i.e. showing the page from its first line. Same
+  -- name, same wm.assign contract, opposite physical direction -- see the
+  -- module-level comment above make_top_scroller.
   function sc.following_tail()
     clamp()
     return offset == 0
@@ -211,7 +217,21 @@ function window.render(rect, opts)
   last_lines[current_key] = lines
 
   local sc = scrollers[current_key]
-  sc.set_height(body_h)
+  -- Only the LOCAL render pass may adjust the scroller's height-based clamp.
+  -- The scroll offset itself is a single Lua-side value shared across render
+  -- targets by design (CLAUDE.md "Pane Scrolling" WebSocket note: a
+  -- Lua-scrolled wm pane has no local/remote gate). But a remote WebSocket
+  -- viewer can be sized independently of the local pane (CLAUDE.md "Resize
+  -- semantics"), so if a remote pass were allowed to call set_height too, a
+  -- differently-sized remote render could reclamp -- and silently move --
+  -- the offset the LOCAL user chose, purely as a side effect of the remote
+  -- client's own screen size. Skipping set_height on a remote pass leaves
+  -- the persisted clamp (and therefore the offset) exactly as the last local
+  -- render left it; the remote pass still reads that same offset and windows
+  -- its OWN body_h against it below, it just never mutates the shared state.
+  if lera.render_pass() ~= "remote" then
+    sc.set_height(body_h)
+  end
   local offset = sc.offset()
   local count = #lines
   local first = offset + 1

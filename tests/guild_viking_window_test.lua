@@ -177,6 +177,71 @@ check("remote render into a different-width rect does not error", ok_remote)
 check("remote pass did not update the recorded spans",
       window.on_pointer(down_on_farm) == true and window.current_page() == "farm")
 
+-- ---- Finding 1 (review round 1): a remote pass at a DIFFERENT height must --
+-- not mutate the shared scroller clamp a later local render depends on. -----
+window.set_page("stats")
+render_pass = "local"
+reset_drawn()
+window.render(body_rect, {})       -- establishes height = 4 (body_rect's body_h)
+window.scroll_to_bottom()          -- offset -> 46 (count 50 - height 4)
+reset_drawn()
+window.render(body_rect, {})       -- "before": window at H1 = 4
+check("(setup) before window ends at L50",
+      drawn.ansi[5] and drawn.ansi[5].s:find("^L50%s") ~= nil, drawn.ansi[5] and drawn.ansi[5].s)
+local before_window = { drawn.ansi[2].s, drawn.ansi[3].s, drawn.ansi[4].s, drawn.ansi[5].s }
+
+render_pass = "remote"
+reset_drawn()
+-- H2 = 10 (a TALLER remote body) -- if set_height ran unguarded here, the
+-- clamp's max (count - height) would shrink from 46 to 40 and reclamp the
+-- LOCAL offset down, even though only a remote viewer's own size changed.
+local ok_remote_height = pcall(window.render, make_rect(0, 0, 100, 11), {})
+check("remote render at a different height does not error", ok_remote_height)
+
+render_pass = "local"
+reset_drawn()
+window.render(body_rect, {})       -- render locally again at the SAME H1
+local after_window = { drawn.ansi[2].s, drawn.ansi[3].s, drawn.ansi[4].s, drawn.ansi[5].s }
+check("local window unchanged after an intervening remote render at a different height",
+      after_window[1] == before_window[1] and after_window[2] == before_window[2]
+      and after_window[3] == before_window[3] and after_window[4] == before_window[4],
+      after_window[1])
+
+-- ---- Finding 2a (review round 1): a down on a WRAPPED (row>0) tab span ----
+-- switches page and returns true. A 30-wide rect wraps the twelve labels
+-- onto three rows: row0 Stats/City/Farm/Builds/People, row1
+-- Goods/Bonds/Ranks/Court/Army, row2 War/Trade (verified against
+-- render_tabbar's column bookkeeping: Goods[0,5) Bonds[6,11) ...).
+window.set_page("stats")
+render_pass = "local"
+reset_drawn()
+window.render(make_rect(0, 0, 30, 10), {})
+check("narrow rect wraps the tab bar onto multiple rows", #drawn.ansi >= 3)
+check("wrapped row 1 contains Bonds",
+      drawn.ansi[2] and drawn.ansi[2].s:find("Bonds", 1, true) ~= nil,
+      drawn.ansi[2] and drawn.ansi[2].s)
+
+local down_on_wrapped_bonds = { kind = "down", button = "left", x = 8, y = 1,
+                                 inside = true, width = 30, height = 10 }
+check("down on a wrapped-row tab span switches page",
+      window.on_pointer(down_on_wrapped_bonds) == true)
+check("current_page is now bonds (from a row-1 span)", window.current_page() == "bonds")
+window.set_page("stats")
+
+-- ---- Finding 2b (review round 1): a down on the separator column between --
+-- two adjacent labels matches neither span and returns false.
+render_pass = "local"
+reset_drawn()
+window.render(make_rect(0, 0, 100, 5), {}) -- restores the wide layout's spans
+local page_before_separator_down = window.current_page()
+local down_on_separator = { kind = "down", button = "left", x = 5, y = 0, -- the
+                             -- single space between Stats[0,5) and City[6,10)
+                             inside = true, width = 100, height = 5 }
+check("down on the separator column between two tabs returns false",
+      window.on_pointer(down_on_separator) == false)
+check("separator down does not change the page",
+      window.current_page() == page_before_separator_down)
+
 render_pass = "local"
 
 if failures > 0 then os.exit(1) end
