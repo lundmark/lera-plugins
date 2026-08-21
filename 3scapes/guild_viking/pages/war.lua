@@ -1,0 +1,428 @@
+-- War page: LEGACY's draw_page_war
+-- (/home/simon/code/3s_scripts_old/lua/guild_viking.lua:14061-14669) plus the
+-- two helper functions it calls, `draw_campaign_map` (13620-14016) and
+-- `draw_prison_panel` (14020-14058). Pure builder: lines(width) -> array of
+-- ANSI strings, reading state.lua's S and page_opts.lua only. TEXTUAL
+-- OVERVIEW ONLY, per the task brief: every pixel-grid render (the campaign
+-- march map AND the tactical battle board) collapses to ONE placeholder
+-- line each, at the exact point LEGACY draws the grid -- everything else
+-- LEGACY draws around those grids (headers, hints, upkeep, spoils, command
+-- budget, unit rosters, war status, campaigns, diplomacy) is ported as text.
+--
+-- Section order/gates, read from the source top to bottom:
+--   Campaign Map (UNGATED -- state.war_map and state.war_map.active,
+--     13620-14016) -- header (town/turn[/works budget]); the grid itself
+--     (dropped, see below); a status hint (battle awaits / marching ETA /
+--     holding); per-tile upkeep; spoils-if-you-win.
+--   War Captives (UNGATED -- data-gated on state.prison/state.siege having
+--     anything to show, 14020-14058) -- held/cap header, a pending-judgement
+--     line, the captive roster, kin held by the foe, and siege-engine count.
+--     Persists even with no active campaign (LEGACY's own comment).
+--   Battle (show_war_battle, 14084-14603) -- deploy/turn header; the tactical
+--     grid (dropped); command budget + Fraegd (war points); either the
+--     deploy-phase reserve/deployed rosters or the turn-phase your-host/enemy
+--     rosters; "No battle underway" when state.battle is nil.
+--   War Council (show_war_council, 14606-14624) -- an incoming-threat line
+--     or "no power marches," then the held-claims list or "no claims held."
+--   Campaigns (show_war_campaigns AND state.war.campaigns non-empty,
+--     14626-14647) -- one row per campaign (town + a defense-pct bar).
+--   Great Houses (show_war_houses, 14649-14667) -- state.diplomacy's
+--     allies/foes lists, or "no houses committed."
+--
+-- DISCREPANCY vs. the task brief, disclosed up front: the brief's landmark
+-- list mentioned "grudges summary if present." Grepped `grudge` across the
+-- whole LEGACY file (same check Task 7 ran for the ranks page): `state.
+-- grudges` ("Reprisal Grudges") is drawn inside `draw_page2`'s city/heat
+-- block, already ported to `pages/trade.lua` under `show_city_heat` (Task
+-- 4). It is not reachable from `draw_page_war`, `draw_campaign_map`, or
+-- `draw_prison_panel` -- confirmed by reading all three in full. Not ported
+-- here; already ported at its actual source location.
+--
+-- Dropped grid/hotspot surfaces (stage 3's list, everything under the two
+-- placeholder lines below):
+--   - Campaign map: the whole Wang-tile terrain grid, the terrain/unit
+--     legend rows, the queued-move path line/highlights, the per-cell
+--     "bcamp_<c>_<r>" hotspots (click-to-select-army / click-to-queue-move),
+--     and the `viking_camp_selected`/`viking_camp_queue` click-to-move
+--     globals that drive them.
+--   - Tactical battle board: the terrain/works grid itself, the unit-glyph
+--     legend rows (M/B/H/S/K/A/R/L/G), the "same letter" duplicate-ordinal
+--     roll call, the terrain-tile legend, the per-cell "bcell_<coord>"
+--     hotspots (click-to-select-unit / click-to-move / right-click deploy
+--     menu) and `state.battle_cell_info`/`state.battle_selected`, and the
+--     three clickable action buttons (Begin Battle/Advance Turn/Abandon,
+--     "bbtn_begin"/"bbtn_go"/"bbtn_abandon") together with
+--     `state.battle_buttons`.
+--   - `page_opts.show_war_ascii` (tiles-vs-ASCII-glyphs rendering mode) has
+--     no effect on this port: it only ever changed how the now-dropped grids
+--     were drawn, so it is unused here -- not a missing gate, just an opt
+--     with nothing left to gate.
+--
+-- BGR color decoding (guild_viking.lua line 301, 0xBBGGRR): every literal
+-- below decoded byte-by-byte before choosing a pagelib.C entry.
+--   - Campaign hint 0x55AAAA -> (R=AA,G=AA,B=55) a muted yellow-olive;
+--     pagelib.C has no olive -> mapped to C.yellow (nearest warm-neutral).
+--   - Campaign upkeep-per-tile 0x8888BB -> (R=BB,G=88,B=88) a muted rose-red
+--     -> mapped to C.red (nearest available hue; this is informational, not
+--     an alarm, but pagelib.C has no separate muted-red).
+--   - Campaign spoils-if-win 0x40C0A0 -> (R=A0,G=C0,B=40) yellow-green ->
+--     mapped to C.green (G-dominant channel wins).
+--   - Prison "awaiting judgement" 0x33CCFF -> (R=FF,G=CC,B=33) gold ->
+--     C.yellow. Kin-held-by-foe 0x5555DD -> (R=DD,G=55,B=55) brick red ->
+--     C.red. Siege engines 0x66AAEE -> (R=EE,G=AA,B=66) tan/orange ->
+--     C.yellow (nearest; no orange in pagelib.C). Roster rows 0xCCCCCC ->
+--     light grey -> C.white (matches ranks.lua's own-lineage-grey
+--     precedent).
+--   - Battle "ready" 0x40FF40 -> bright green -> C.bright_green; "training"
+--     0x0088CC -> (R=CC,G=88,B=00) orange -> C.yellow, same disclosed
+--     departure from the red-for-orange precedent as pages/army.lua (ready
+--     vs. training must stay visually distinct, not both read as alarms).
+--   - "In reserve"/"Deployed" section labels 0x00CCFF -> (R=FF,G=CC,B=00)
+--     gold -> C.yellow. Deployed/reserved unit lines 0x40FF40 -> bright
+--     green -> C.bright_green. "Led by"/"pts"/"Position" labels 0x999999 ->
+--     grey -> C.dim; the leader NAME/position VALUE 0xEEEEEE -> near-white
+--     -> C.white. Command budget label 0x00CCCC -> (R=CC,G=CC,B=00) yellow
+--     -> C.yellow. Fraegd (war points) label 0xFFCC44 -> (R=44,G=CC,B=FF)
+--     light blue -> C.bright_cyan.
+--   - Your-host header 0x00CCFF -> gold -> C.yellow; your-host unit name
+--     0x40FF40 -> bright green -> C.bright_green. Enemy header 0x4040FF ->
+--     (R=FF,G=40,B=40) red -> C.bright_red; enemy unit name 0x6060FF ->
+--     (R=FF,G=60,B=60) a lighter red -> C.red (one shade down from the
+--     header, same relationship, no separate "light red" in pagelib.C).
+--   - Morale color (`mor_col`): >=66 0x40FF40 bright green -> C.bright_green;
+--     >=33 0x00CCCC -> DECODES to (R=CC,G=CC,B=00) YELLOW, not cyan despite
+--     the hex looking cyan-shaped at a glance -- flagged explicitly because
+--     it is easy to misread; else 0x4040FF -> red -> C.bright_red. Three
+--     tiers preserved exactly: green/yellow/red.
+--   - War Council incoming-threat 0x4444FF -> (R=FF,G=44,B=44) red ->
+--     C.bright_red (matches the "under threat" alarm intent, no
+--     discrepancy). "No power marches"/"No claims held" 0x888888 -> grey ->
+--     C.dim. Claim rows 0xEEEEEE -> near-white -> C.white.
+--   - Campaigns: town label 0xEEEEEE -> C.white; pct readout 0xCCCCCC ->
+--     C.white; trailing hint 0x888888 -> C.dim. Defense-pct bar has THREE
+--     source tiers (pct>66 0x4444CC red, pct>33 0x2299CC orange, else
+--     0x33AA33 green) but pagelib.C has no orange; folding the middle tier
+--     into C.red (pagelib.pct_color's usual precedent) would collapse two
+--     of the three tiers into the same color and lose the distinction this
+--     bar exists to show. Disclosed departure: middle tier mapped to
+--     C.yellow instead, preserving three visually distinct tiers
+--     (red/yellow/green) even though the literal decode is red/orange/green.
+--   - Great Houses: allies "marches with you" 0x44CC44 -> green -> C.green;
+--     foes "marches against you" 0x4444FF -> red -> C.bright_red (matches
+--     ranks.lua's Hostile/Feud precedent: enemy = red, no discrepancy).
+--     "No houses committed" 0x888888 -> C.dim.
+local pagelib = require("pagelib")
+local state = require("state")
+local page_opts = require("page_opts")
+local cc = require("pages.city_common")
+
+local S = state.S
+local C = pagelib.C
+
+local M = {}
+
+local GRID_PLACEHOLDER = "Battle map: /vik war (stage 3)"
+
+-- ---------------------------------------------------------------------------
+-- Campaign Map (guild_viking.lua:13620-14016, UNGATED -- war_map.active)
+-- ---------------------------------------------------------------------------
+
+-- Ported from LEGACY's inline march-ETA formatter (guild_viking.lua:
+-- 13988-13992) -- distinct convention from cc.fmt_time (zero-padded minutes,
+-- no seconds component once minutes are shown).
+local function march_eta_text(secs)
+  secs = secs or 0
+  if secs >= 3600 then
+    return string.format("%dh%02dm", math.floor(secs / 3600), math.floor((secs % 3600) / 60))
+  elseif secs >= 60 then
+    return string.format("%dm", math.floor(secs / 60))
+  end
+  return string.format("%ds", secs)
+end
+
+local function campaign_map_lines(add, width, wm)
+  local hdr = string.format("War Campaign: %s  --  turn %d", wm.town or "?", wm.turn or 0)
+  if wm.mode == "defense" and (wm.works_budget or 0) > 0 then
+    hdr = hdr .. string.format("  (works %d)", wm.works_budget)
+  end
+  add(pagelib.header(width, hdr))
+
+  local dim = wm.dim or #(wm.rows or {})
+  if dim < 1 or #(wm.rows or {}) < 1 then
+    add(pagelib.trunc(C.dim .. "(waiting for map data...)" .. pagelib.RESET, width))
+    return
+  end
+
+  add(pagelib.trunc(GRID_PLACEHOLDER, width))
+
+  local hint
+  if wm.pending and wm.pending ~= 0 then
+    hint = "A battle awaits -- 'vcampaign fight'"
+  elseif (wm.march_eta or 0) > 0 then
+    hint = "On the march -- next tile in " .. march_eta_text(wm.march_eta)
+  else
+    hint = "Holding -- 'vcampaign move <sq>'"
+  end
+  add(pagelib.trunc(C.yellow .. hint .. pagelib.RESET, width))
+
+  local up = wm.upkeep
+  if up and (up.food or 0) > 0 then
+    add(pagelib.trunc(string.format("%sUpkeep/tile: %d food  %d mead  %d tools  %d iron  %dd%s",
+      C.red, up.food, up.mead or 0, up.tools or 0, up.iron or 0, up.daler or 0, pagelib.RESET), width))
+  end
+
+  local sp = wm.spoils
+  if sp and ((sp.daler or 0) > 0 or (sp.deeds or 0) > 0) then
+    add(pagelib.trunc(string.format("%sSpoils if you win: %d daler, %d renown  (%d deed%s)%s",
+      C.green, sp.daler or 0, sp.renown or 0, sp.deeds or 0, (sp.deeds == 1) and "" or "s",
+      pagelib.RESET), width))
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- War Captives (guild_viking.lua:14020-14058, UNGATED -- data-gated)
+-- ---------------------------------------------------------------------------
+
+local function prison_lines(add, width)
+  local pr = S.prison
+  local sg = S.siege
+  local have_prison = pr and ((pr.held or 0) > 0 or (pr.kin or 0) > 0 or pr.pending or (pr.cap or 0) > 0)
+  local have_siege = sg and (sg.cap or 0) > 0
+  if not have_prison and not have_siege then return end
+  if not pr then pr = { held = 0, cap = 0, kin = 0 } end
+
+  add(pagelib.header(width, string.format("War Captives  (%d/%d held)", pr.held or 0, pr.cap or 0)))
+
+  if pr.pending then
+    add(pagelib.trunc(string.format(
+      "%sAwaiting judgement: %s  (%d%s)  -- 'vprison take' / 'vprison kill'%s",
+      C.yellow, pr.pend_name or "?", pr.pend_size or 0,
+      pr.pend_cmd and ", commander" or "", pagelib.RESET), width))
+  end
+
+  for _, p in ipairs(pr.roster or {}) do
+    add(pagelib.trunc(string.format("  %s%d) %s (%d%s)  ransom %dd%s",
+      C.white, p.id or 0, p.name or "?", p.size or 0, p.cmd and ", cmdr" or "", p.val or 0,
+      pagelib.RESET), width))
+  end
+
+  if (pr.kin or 0) > 0 then
+    add(pagelib.trunc(string.format(
+      "%sOur kin held by the foe: %d  -- 'vprison recover' / 'vprison exchange'%s",
+      C.red, pr.kin, pagelib.RESET), width))
+  end
+
+  if have_siege then
+    add(pagelib.trunc(string.format(
+      "%sSiege engines: %d/%d  -- 'vsiege build', deploy in an assault to breach walls%s",
+      C.yellow, sg.engines or 0, sg.cap or 0, pagelib.RESET), width))
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Battle (guild_viking.lua:14084-14603, gated show_war_battle)
+-- ---------------------------------------------------------------------------
+
+local function unit_line(width, size, label, color)
+  return pagelib.trunc(string.format("  %s%dx %s%s", color, size or 0, cc.tcase(label or "?"),
+    pagelib.RESET), width)
+end
+
+local function led_by_line(width, leader)
+  return pagelib.trunc(string.format("    %sLed by %s%s%s", C.dim, C.white, leader, pagelib.RESET), width)
+end
+
+local function deploy_lines(add, width, b)
+  local reserve = b.reserve or {}
+  if #reserve > 0 then
+    add(pagelib.trunc(C.yellow .. "In reserve  (vbattle deploy <id> <sq>)" .. pagelib.RESET, width))
+    for _, u in ipairs(reserve) do
+      add(pagelib.trunc(string.format("  %s[%d] %dx %s%s",
+        C.bright_green, u.uid or 0, u.size or 0, cc.tcase(u.label or "?"), pagelib.RESET), width))
+      add(pagelib.trunc(string.format("    %s%d pts%s", C.dim, u.cost or 0, pagelib.RESET), width))
+      if u.leader then add(led_by_line(width, u.leader)) end
+    end
+  else
+    add(pagelib.trunc(C.dim .. "All committed -- 'vbattle begin' to join." .. pagelib.RESET, width))
+  end
+
+  local placed = 0
+  for _, u in ipairs(b.units or {}) do
+    if u.side == "you" then
+      if placed == 0 then
+        add(pagelib.trunc(C.yellow .. "Deployed" .. pagelib.RESET, width))
+      end
+      placed = placed + 1
+      add(unit_line(width, u.size, u.label, C.bright_green))
+      add(pagelib.trunc(string.format("    %sPosition %s%s%s", C.dim, C.white, u.coord or "?",
+        pagelib.RESET), width))
+      if u.leader then add(led_by_line(width, u.leader)) end
+    end
+  end
+end
+
+-- Ported from LEGACY's mor_col (guild_viking.lua:14571-14573). The middle
+-- tier's literal hex (0x00CCCC) decodes to YELLOW, not cyan -- see the
+-- module header's flagged BGR note.
+local function mor_col(m)
+  m = m or 0
+  if m >= 66 then return C.bright_green end
+  if m >= 33 then return C.yellow end
+  return C.bright_red
+end
+
+local function turn_side_lines(add, width, b, is_you, header, hcol, ncol)
+  local shown = false
+  for _, u in ipairs(b.units or {}) do
+    if (u.side == "you") == is_you then
+      if not shown then
+        add(pagelib.trunc(hcol .. header .. pagelib.RESET, width))
+        shown = true
+      end
+      add(unit_line(width, u.size, u.label, ncol))
+      add(pagelib.trunc(string.format("    %sPosition %s%s%s   %sMorale %s%d%s",
+        C.dim, C.white, u.coord or "?", pagelib.RESET,
+        C.dim, mor_col(u.morale), u.morale or 0, pagelib.RESET), width))
+      if u.leader then add(led_by_line(width, u.leader)) end
+    end
+  end
+end
+
+local function battle_lines(add, width)
+  local b = S.battle
+  if not b then
+    add(pagelib.trunc(C.dim .. "No battle underway." .. pagelib.RESET, width))
+    return
+  end
+
+  local deploying = (b.phase == "deploy")
+  local mode_lbl = (b.mode or "field"):gsub("siege_attack", "siege"):gsub("siege_defend", "defence")
+  if deploying then
+    add(pagelib.header(width, string.format("Deploying vs %s  (%s)", b.target or "?", mode_lbl)))
+  else
+    add(pagelib.header(width, string.format("Battle vs %s  --  turn %d", b.target or "?", b.turn or 0)))
+  end
+
+  add(pagelib.trunc(GRID_PLACEHOLDER, width))
+
+  add(pagelib.trunc(string.format("%sCommand %d/%d%s   %sFraegd %d%s",
+    C.yellow, b.spent or 0, b.budget or 0, pagelib.RESET,
+    C.bright_cyan, b.war_points or S.war_points or 0, pagelib.RESET), width))
+
+  if deploying then
+    deploy_lines(add, width, b)
+  else
+    turn_side_lines(add, width, b, true, "Your host", C.yellow, C.bright_green)
+    turn_side_lines(add, width, b, false, "Enemy", C.bright_red, C.red)
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- War Council (guild_viking.lua:14606-14624, gated show_war_council)
+-- ---------------------------------------------------------------------------
+
+local function council_lines(add, width)
+  add(pagelib.header(width, "War Council"))
+  local w = S.war
+  if w and w.incoming then
+    add(pagelib.trunc(string.format("%sUNDER THREAT: %s marches (host ~%d%%, ~%dd to answer)%s",
+      C.bright_red, w.incoming.town, w.incoming.strength or 100, w.incoming.days or 0, pagelib.RESET),
+      width))
+  else
+    add(pagelib.trunc(C.dim .. "No power marches on you." .. pagelib.RESET, width))
+  end
+
+  if w and w.claims and #w.claims > 0 then
+    for _, c in ipairs(w.claims) do
+      add(pagelib.trunc(string.format("%sClaim on %s  (lapses ~%dd)%s",
+        C.white, c.town, c.days or 0, pagelib.RESET), width))
+    end
+  else
+    add(pagelib.trunc(C.dim .. "No claims held (vwar fabricate <town>)." .. pagelib.RESET, width))
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Campaigns (guild_viking.lua:14626-14647, gated show_war_campaigns)
+-- ---------------------------------------------------------------------------
+
+local function campaign_defense_color(pct)
+  if pct > 66 then return C.red end
+  -- Middle tier ("orange" in LEGACY) mapped to yellow, not red, to keep all
+  -- three tiers visually distinct -- see the module header's disclosed note.
+  if pct > 33 then return C.yellow end
+  return C.green
+end
+
+local function campaigns_lines(add, width, w)
+  add(pagelib.header(width, "Campaigns"))
+  for _, c in ipairs(w.campaigns) do
+    local mx = (c.max and c.max > 0) and c.max or 100
+    local pct = math.floor((c.defense or 0) * 100 / mx)
+    if pct < 0 then pct = 0 elseif pct > 100 then pct = 100 end
+    add(pagelib.trunc(string.format("%s%-16s%s %s %d%%",
+      C.white, c.town, pagelib.RESET, pagelib.bar(20, pct, 100, campaign_defense_color(pct)), pct), width))
+  end
+  add(pagelib.trunc(C.dim .. "Win sieges to break defence, then take the town." .. pagelib.RESET, width))
+end
+
+-- ---------------------------------------------------------------------------
+-- Great Houses (guild_viking.lua:14649-14667, gated show_war_houses)
+-- ---------------------------------------------------------------------------
+
+local function houses_lines(add, width)
+  add(pagelib.header(width, "Great Houses"))
+  local dp = S.diplomacy
+  local shown = 0
+  if dp then
+    for _, hh in ipairs(dp.allies or {}) do
+      add(pagelib.trunc(string.format("%s%s (%d) marches with you%s",
+        C.green, hh.house, hh.standing or 0, pagelib.RESET), width))
+      shown = shown + 1
+    end
+    for _, hh in ipairs(dp.foes or {}) do
+      add(pagelib.trunc(string.format("%s%s (%d) marches against you%s",
+        C.bright_red, hh.house, hh.standing or 0, pagelib.RESET), width))
+      shown = shown + 1
+    end
+  end
+  if shown == 0 then
+    add(pagelib.trunc(C.dim .. "No houses committed either way." .. pagelib.RESET, width))
+  end
+end
+
+-- ---------------------------------------------------------------------------
+
+function M.lines(width)
+  width = width or 80
+  local lines = {}
+  local function add(s) lines[#lines + 1] = s end
+
+  local wm = S.war_map
+  if wm and wm.active then
+    campaign_map_lines(add, width, wm)
+  end
+
+  prison_lines(add, width)
+
+  if page_opts.get("show_war_battle") then
+    battle_lines(add, width)
+  end
+
+  if page_opts.get("show_war_council") then
+    council_lines(add, width)
+  end
+
+  local w = S.war
+  if page_opts.get("show_war_campaigns") and w and w.campaigns and #w.campaigns > 0 then
+    campaigns_lines(add, width, w)
+  end
+
+  if page_opts.get("show_war_houses") then
+    houses_lines(add, width)
+  end
+
+  return lines
+end
+
+return M

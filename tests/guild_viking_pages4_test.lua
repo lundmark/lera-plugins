@@ -1,8 +1,9 @@
 -- guild_viking pane page unit tests: Task 8's pages/goods.lua (LEGACY's
 -- draw_page6, guild_viking.lua:10703-10984) plus the Part-A market.lua
--- computations it consumes. Task 9 appends its own pages here later, per
--- the plan's shared-harness note. Run from the lera-plugins repo root with
--- LERA_ROOT pointing at a built Lera checkout.
+-- computations it consumes; Task 9 appends pages/army.lua (draw_page_army,
+-- 13305-13351) and pages/war.lua (draw_page_war, 14061-14669, plus its
+-- draw_campaign_map/draw_prison_panel helpers). Run from the lera-plugins
+-- repo root with LERA_ROOT pointing at a built Lera checkout.
 package.path = "3scapes/guild_viking/?.lua;" .. package.path
 
 local failures = 0
@@ -49,6 +50,15 @@ local function find_exact(lines, text)
     if stripped == text then return i end
   end
   return nil
+end
+
+-- Strips ANSI SGR escapes from a joined string -- used where a label and its
+-- value are adjacent in the SOURCE text but separated by a color-switch
+-- escape in the rendered text (e.g. "Position " in one color, the coord in
+-- another), so a plain substring search across the boundary needs the
+-- escape gone first.
+local function strip_ansi(s)
+  return (s:gsub("\27%[[%d;]*m", ""))
 end
 
 local function check_width(lines, label)
@@ -280,6 +290,332 @@ page_opts.set("show_goods_prices", true)
 
 -- ---- width discipline (every gate on, everything rendering at once) --------
 check_width(goods_page.lines(WIDTH), "goods")
+
+-- =============================================================================
+-- pages/army.lua (Task 9) -- LEGACY draw_page_army (guild_viking.lua:13305-13351)
+-- =============================================================================
+
+local army_page = require("pages.army")
+
+-- ---- No-army fallback (13308-13312, UNGATED) --------------------------------
+S.army = nil
+local no_army_lines = army_page.lines(WIDTH)
+check("army: 'No army data' fallback when state.army is nil",
+      find_line(no_army_lines, "No army data") ~= nil, joined(no_army_lines))
+check("army: no-army fallback names the toggle",
+      joined(no_army_lines):find("vtoggle mip_kingdom", 1, true) ~= nil, joined(no_army_lines))
+
+-- ---- Levy + Units (13313-13350) ---------------------------------------------
+S.army = {
+  conscripts = 42, cap = 10, used = 6,
+  units = {
+    { uid = 1, type = "skirmishers", size = 12, vet = 55, ready = true,
+      leader = "Ivar", traits = { "Blooded", "Scarred" } },
+    { uid = 2, type = "huscarls", size = 8, vet = 0, ready = false,
+      leader = nil, traits = {} },
+  },
+}
+page_opts.set("show_army_levy", true)
+page_opts.set("show_army_units", true)
+
+local army_lines = army_page.lines(WIDTH)
+local army_all = joined(army_lines)
+check("army: Levy header shows conscript count",
+      army_all:find("Levy", 1, true) ~= nil and army_all:find("42 conscripts", 1, true) ~= nil, army_all)
+check("army: Units header shows used/cap", army_all:find("Units", 1, true) ~= nil and
+      army_all:find("(6 / 10)", 1, true) ~= nil, army_all)
+check("army: unit 1 shows type and size", army_all:find("skirmishers x12", 1, true) ~= nil, army_all)
+check("army: unit 1 status is 'ready'", army_all:find("ready", 1, true) ~= nil, army_all)
+check("army: unit 1 leader is named", army_all:find("led by Ivar", 1, true) ~= nil, army_all)
+check("army: unit 1 veterancy bar shows 55%", army_all:find("55%", 1, true) ~= nil, army_all)
+check("army: unit 1 traits line names both traits",
+      army_all:find("Blooded", 1, true) ~= nil and army_all:find("Scarred", 1, true) ~= nil, army_all)
+check("army: unit 2 status is 'training' (no leader -> '-')",
+      army_all:find("huscarls x8", 1, true) ~= nil and
+      army_all:find("training", 1, true) ~= nil and
+      army_all:find("led by -", 1, true) ~= nil, army_all)
+
+-- ---- Gate off -----------------------------------------------------------------
+page_opts.set("show_army_levy", false)
+local no_levy = army_page.lines(WIDTH)
+check("army: Levy section absent when show_army_levy is off",
+      find_line(no_levy, "Levy") == nil, joined(no_levy))
+page_opts.set("show_army_levy", true)
+
+page_opts.set("show_army_units", false)
+local no_units = army_page.lines(WIDTH)
+check("army: Units section absent when show_army_units is off",
+      find_line(no_units, "Units") == nil, joined(no_units))
+page_opts.set("show_army_units", true)
+
+-- ---- Empty units list fallback ----------------------------------------------
+S.army.units = {}
+local empty_units = army_page.lines(WIDTH)
+check("army: '(no units ...)' fallback when the unit list is empty",
+      joined(empty_units):find("no units", 1, true) ~= nil, joined(empty_units))
+
+-- ---- width discipline --------------------------------------------------------
+S.army.units = {
+  { uid = 1, type = "skirmishers", size = 12, vet = 55, ready = true,
+    leader = "Ivar", traits = { "Blooded", "Scarred" } },
+}
+check_width(army_page.lines(WIDTH), "army")
+
+-- =============================================================================
+-- pages/war.lua (Task 9) -- LEGACY draw_page_war (guild_viking.lua:14061-14669)
+-- =============================================================================
+
+local war_page = require("pages.war")
+
+page_opts.set("show_war_battle", true)
+page_opts.set("show_war_council", true)
+page_opts.set("show_war_campaigns", true)
+page_opts.set("show_war_houses", true)
+
+-- ---- Campaign Map (13620-14016, UNGATED -- war_map.active) ------------------
+
+S.war_map = {
+  active = true, dim = 5, turn = 3, mode = "offense", pending = 0,
+  town = "Jorvik", works_budget = 0, march_eta = 125,
+  rows = { ".....", ".....", ".....", ".....", "....." },
+  upkeep = { food = 10, mead = 5, tools = 2, iron = 1, daler = 3 },
+  spoils = { daler = 500, renown = 20, deeds = 2 },
+}
+S.prison = nil
+S.siege = nil
+S.battle = nil
+S.war = nil
+S.diplomacy = nil
+
+local camp_lines = war_page.lines(WIDTH)
+local camp_all = joined(camp_lines)
+check("war: campaign map header names the town and turn",
+      camp_all:find("War Campaign: Jorvik", 1, true) ~= nil and
+      camp_all:find("turn 3", 1, true) ~= nil, camp_all)
+check("war: campaign map grid collapses to the stage-3 placeholder line",
+      find_line(camp_lines, "Battle map: /vik war (stage 3)") ~= nil, camp_all)
+check("war: campaign map march-ETA hint (125s -> '2m')",
+      camp_all:find("On the march -- next tile in 2m", 1, true) ~= nil, camp_all)
+check("war: campaign map upkeep/tile line",
+      camp_all:find("Upkeep/tile: 10 food  5 mead  2 tools  1 iron  3d", 1, true) ~= nil, camp_all)
+check("war: campaign map spoils-if-win line",
+      camp_all:find("Spoils if you win: 500 daler, 20 renown  (2 deeds)", 1, true) ~= nil, camp_all)
+
+S.war_map.pending = 1
+local camp_pending = joined(war_page.lines(WIDTH))
+check("war: campaign map hint is 'battle awaits' when pending is set",
+      camp_pending:find("A battle awaits", 1, true) ~= nil, camp_pending)
+S.war_map.pending = 0
+
+S.war_map.march_eta = 0
+local camp_holding = joined(war_page.lines(WIDTH))
+check("war: campaign map hint is 'Holding' with no pending battle and no march ETA",
+      camp_holding:find("Holding -- 'vcampaign move", 1, true) ~= nil, camp_holding)
+S.war_map.march_eta = 125
+
+S.war_map.dim = 0
+S.war_map.rows = {}
+local camp_waiting = joined(war_page.lines(WIDTH))
+check("war: campaign map shows '(waiting for map data...)' with no rows yet",
+      camp_waiting:find("waiting for map data", 1, true) ~= nil, camp_waiting)
+S.war_map.dim = 5
+S.war_map.rows = { ".....", ".....", ".....", ".....", "....." }
+
+S.war_map.active = false
+local camp_inactive = joined(war_page.lines(WIDTH))
+check("war: campaign map section absent entirely when war_map.active is false",
+      camp_inactive:find("War Campaign", 1, true) == nil, camp_inactive)
+S.war_map.active = true
+
+-- ---- War Captives (14020-14058, UNGATED -- data-gated) ----------------------
+
+S.prison = {
+  held = 2, cap = 5, kin = 1, pending = true,
+  pend_name = "Ragnar", pend_size = 8, pend_cmd = true,
+  roster = { { id = 1, name = "Thrall A", size = 3, cmd = false, val = 50 } },
+}
+S.siege = { engines = 2, cap = 4 }
+
+local prison_lines_out = war_page.lines(WIDTH)
+local prison_all = joined(prison_lines_out)
+check("war: War Captives header shows held/cap",
+      prison_all:find("War Captives  (2/5 held)", 1, true) ~= nil, prison_all)
+check("war: pending-judgement line names the captive and 'commander'",
+      prison_all:find("Awaiting judgement: Ragnar  (8, commander)", 1, true) ~= nil, prison_all)
+check("war: roster row shows id/name/size/ransom",
+      prison_all:find("1) Thrall A (3)  ransom 50d", 1, true) ~= nil, prison_all)
+check("war: kin-held-by-foe line", prison_all:find("Our kin held by the foe: 1", 1, true) ~= nil, prison_all)
+check("war: siege engines line", prison_all:find("Siege engines: 2/4", 1, true) ~= nil, prison_all)
+
+S.prison = nil
+S.siege = nil
+local no_prison = war_page.lines(WIDTH)
+check("war: War Captives section absent entirely with no prison/siege data",
+      find_line(no_prison, "War Captives") == nil, joined(no_prison))
+
+-- ---- Battle (14084-14603, gated show_war_battle) ----------------------------
+
+S.battle = {
+  phase = "deploy", target = "Jorvik", mode = "field", turn = 1,
+  budget = 100, spent = 40, war_points = 15,
+  reserve = { { uid = 5, size = 10, cost = 20, leader = "Bjorn", label = "skirmishers" } },
+  units = { { side = "you", label = "huscarls", size = 8, coord = "C3", leader = "Ivar" } },
+}
+S.war_points = 15
+
+local deploy_lines_out = war_page.lines(WIDTH)
+local deploy_all = joined(deploy_lines_out)
+-- Several rows switch color mid-label (e.g. "Position " in one color, the
+-- coord in another), so a plain substring search across that boundary needs
+-- the escapes gone first -- same idiom as find_exact above.
+local deploy_stripped = strip_ansi(deploy_all)
+check("war: battle header (deploying)",
+      deploy_all:find("Deploying vs Jorvik  (field)", 1, true) ~= nil, deploy_all)
+check("war: battle grid collapses to the stage-3 placeholder line",
+      find_line(deploy_lines_out, "Battle map: /vik war (stage 3)") ~= nil, deploy_all)
+check("war: command budget + Fraegd line",
+      deploy_all:find("Command 40/100", 1, true) ~= nil and
+      deploy_all:find("Fraegd 15", 1, true) ~= nil, deploy_all)
+check("war: 'In reserve' roster row names id/size/label/cost/leader",
+      deploy_all:find("In reserve", 1, true) ~= nil and
+      deploy_all:find("[5] 10x Skirmishers", 1, true) ~= nil and
+      deploy_all:find("20 pts", 1, true) ~= nil and
+      deploy_stripped:find("Led by Bjorn", 1, true) ~= nil, deploy_all)
+check("war: 'Deployed' roster row names size/label/position/leader",
+      deploy_all:find("Deployed", 1, true) ~= nil and
+      deploy_all:find("8x Huscarls", 1, true) ~= nil and
+      deploy_stripped:find("Position C3", 1, true) ~= nil and
+      deploy_stripped:find("Led by Ivar", 1, true) ~= nil, deploy_all)
+
+S.battle = {
+  phase = "turn", target = "Jorvik", mode = "siege_attack", turn = 3,
+  budget = 100, spent = 60, war_points = 30,
+  units = {
+    { side = "you", label = "huscarls", size = 8, coord = "C3", morale = 80, leader = "Ivar" },
+    { side = "foe", label = "foe_raiders", size = 10, coord = "D4", morale = 20 },
+  },
+}
+local turn_lines_out = war_page.lines(WIDTH)
+local turn_all = joined(turn_lines_out)
+local turn_stripped = strip_ansi(turn_all)
+check("war: battle header (turn phase, no mode label)",
+      turn_all:find("Battle vs Jorvik  --  turn 3", 1, true) ~= nil, turn_all)
+check("war: 'Your host' roster row with position and morale",
+      turn_all:find("Your host", 1, true) ~= nil and
+      turn_all:find("8x Huscarls", 1, true) ~= nil and
+      turn_stripped:find("Position C3", 1, true) ~= nil and
+      turn_stripped:find("Morale 80", 1, true) ~= nil and
+      turn_stripped:find("Led by Ivar", 1, true) ~= nil, turn_all)
+check("war: 'Enemy' roster row with position and morale (no leader)",
+      turn_all:find("Enemy", 1, true) ~= nil and
+      turn_all:find("10x Foe_Raiders", 1, true) ~= nil and
+      turn_stripped:find("Position D4", 1, true) ~= nil and
+      turn_stripped:find("Morale 20", 1, true) ~= nil, turn_all)
+
+S.battle = nil
+local no_battle = joined(war_page.lines(WIDTH))
+check("war: 'No battle underway.' when state.battle is nil",
+      no_battle:find("No battle underway.", 1, true) ~= nil, no_battle)
+
+S.battle = { phase = "turn", target = "Jorvik", turn = 1, budget = 10, spent = 0, units = {} }
+page_opts.set("show_war_battle", false)
+local no_battle_section = joined(war_page.lines(WIDTH))
+check("war: whole Battle section absent when show_war_battle is off",
+      no_battle_section:find("Command", 1, true) == nil, no_battle_section)
+page_opts.set("show_war_battle", true)
+S.battle = nil
+
+-- ---- War Council (14606-14624, gated show_war_council) ---------------------
+
+S.war = {
+  incoming = { town = "Kaupang", strength = 120, days = 3 },
+  claims = { { town = "Hedeby", days = 10 } },
+}
+local council_all = joined(war_page.lines(WIDTH))
+check("war: War Council header", council_all:find("War Council", 1, true) ~= nil, council_all)
+check("war: incoming-threat line",
+      council_all:find("UNDER THREAT: Kaupang marches (host ~120%, ~3d to answer)", 1, true) ~= nil,
+      council_all)
+check("war: claim row", council_all:find("Claim on Hedeby  (lapses ~10d)", 1, true) ~= nil, council_all)
+
+S.war.incoming = nil
+local no_incoming = joined(war_page.lines(WIDTH))
+check("war: 'No power marches on you.' when there is no incoming threat",
+      no_incoming:find("No power marches on you.", 1, true) ~= nil, no_incoming)
+
+S.war.claims = {}
+local no_claims = joined(war_page.lines(WIDTH))
+check("war: 'No claims held' when the claims list is empty",
+      no_claims:find("No claims held (vwar fabricate", 1, true) ~= nil, no_claims)
+
+page_opts.set("show_war_council", false)
+local no_council = joined(war_page.lines(WIDTH))
+check("war: War Council section absent when show_war_council is off",
+      no_council:find("War Council", 1, true) == nil, no_council)
+page_opts.set("show_war_council", true)
+
+-- ---- Campaigns (14626-14647, gated show_war_campaigns AND non-empty) -------
+
+S.war.campaigns = { { town = "Hedeby", defense = 40, max = 100 } }
+local campaigns_all = joined(war_page.lines(WIDTH))
+check("war: Campaigns header + row", campaigns_all:find("Campaigns", 1, true) ~= nil and
+      campaigns_all:find("Hedeby", 1, true) ~= nil and campaigns_all:find("40%", 1, true) ~= nil,
+      campaigns_all)
+check("war: Campaigns trailing hint",
+      campaigns_all:find("Win sieges to break defence, then take the town.", 1, true) ~= nil,
+      campaigns_all)
+
+S.war.campaigns = {}
+local no_campaigns = joined(war_page.lines(WIDTH))
+check("war: Campaigns section absent entirely when the campaign list is empty",
+      no_campaigns:find("Campaigns", 1, true) == nil, no_campaigns)
+
+S.war.campaigns = { { town = "Hedeby", defense = 40, max = 100 } }
+page_opts.set("show_war_campaigns", false)
+local no_campaigns_gate = joined(war_page.lines(WIDTH))
+check("war: Campaigns section absent when show_war_campaigns is off (data present)",
+      no_campaigns_gate:find("Campaigns", 1, true) == nil, no_campaigns_gate)
+page_opts.set("show_war_campaigns", true)
+
+-- ---- Great Houses (14649-14667, gated show_war_houses) ----------------------
+
+S.diplomacy = {
+  allies = { { house = "Ivarsson", standing = 5 } },
+  foes = { { house = "Ragnarsson", standing = -3 } },
+}
+local houses_all = joined(war_page.lines(WIDTH))
+check("war: Great Houses header", houses_all:find("Great Houses", 1, true) ~= nil, houses_all)
+check("war: ally line", houses_all:find("Ivarsson (5) marches with you", 1, true) ~= nil, houses_all)
+check("war: foe line", houses_all:find("Ragnarsson (-3) marches against you", 1, true) ~= nil, houses_all)
+
+S.diplomacy = nil
+local no_houses = joined(war_page.lines(WIDTH))
+check("war: 'No houses committed either way.' when state.diplomacy is nil",
+      no_houses:find("No houses committed either way.", 1, true) ~= nil, no_houses)
+
+page_opts.set("show_war_houses", false)
+local no_houses_gate = joined(war_page.lines(WIDTH))
+check("war: Great Houses section absent when show_war_houses is off",
+      no_houses_gate:find("Great Houses", 1, true) == nil, no_houses_gate)
+page_opts.set("show_war_houses", true)
+
+-- ---- width discipline (every gate on, everything rendering at once) --------
+S.war.incoming = { town = "Kaupang", strength = 120, days = 3 }
+S.war.claims = { { town = "Hedeby", days = 10 } }
+S.war.campaigns = { { town = "Hedeby", defense = 40, max = 100 } }
+S.diplomacy = {
+  allies = { { house = "Ivarsson", standing = 5 } },
+  foes = { { house = "Ragnarsson", standing = -3 } },
+}
+S.battle = {
+  phase = "turn", target = "Jorvik", mode = "field", turn = 3,
+  budget = 100, spent = 60, war_points = 30,
+  units = {
+    { side = "you", label = "huscarls", size = 8, coord = "C3", morale = 80, leader = "Ivar" },
+    { side = "foe", label = "foe_raiders", size = 10, coord = "D4", morale = 20 },
+  },
+}
+check_width(war_page.lines(WIDTH), "war")
 
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING PAGES4 TESTS PASSED")

@@ -9,10 +9,10 @@ local pagelib = require("pagelib")
 
 local window = {}
 
--- Ordered page registry. Every mod is pages.placeholder until its page task
--- lands (Tasks 3-9); Task 12's audit removes pages/placeholder.lua once
--- nothing references it any more.
-local placeholder = require("pages.placeholder")
+-- Ordered page registry. Task 9 replaces the last two placeholder entries
+-- (army/war); no PAGES entry still points at pages.placeholder after this --
+-- Task 12's audit removes pages/placeholder.lua now that nothing references
+-- it any more.
 local stats_page = require("pages.stats")
 local city_page = require("pages.city")
 local trade_page = require("pages.trade")
@@ -23,6 +23,8 @@ local goods_page = require("pages.goods")
 local bonds_page = require("pages.bonds")
 local ranks_page = require("pages.ranks")
 local court_page = require("pages.court")
+local army_page = require("pages.army")
+local war_page = require("pages.war")
 
 window.PAGES = {
   { key = "stats",  label = "Stats",  mod = stats_page },
@@ -34,8 +36,8 @@ window.PAGES = {
   { key = "bonds",  label = "Bonds",  mod = bonds_page },
   { key = "ranks",  label = "Ranks",  mod = ranks_page },
   { key = "court",  label = "Court",  mod = court_page },
-  { key = "army",   label = "Army",   mod = placeholder },
-  { key = "war",    label = "War",    mod = placeholder },
+  { key = "army",   label = "Army",   mod = army_page },
+  { key = "war",    label = "War",    mod = war_page },
   { key = "trade",  label = "Trade",  mod = trade_page },
 }
 
