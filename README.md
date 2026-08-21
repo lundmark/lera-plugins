@@ -117,7 +117,7 @@ events or payloads for a plugin to consume.
 | `autostepper` | `/step`, `-` `-.` `->` `-!` | Automatic speedwalk execution |
 | `chat_monitor` | `/chat` | Chat channel monitoring and logging (MIP or GMCP) |
 | `guild_druid` | `/dauto`, `/resetgxp` | Druid guild utilities |
-| `guild_viking` | `/vik`, `resetvikxp` | Vikings guild: protocol/state and a 12-page tab-bar pane (`/vik <page>`); maps/automation pending |
+| `guild_viking` | `/vik`, `resetvikxp` | Vikings guild: protocol/state, a 12-page tab-bar pane (`/vik <page>` or `/vik page <key>`), popup board overlays (`/vik map\|sea\|voyage\|cityplan\|war`), and detached-page parity (`/vik pop <page>`); automation pending |
 | `kill_trigger` | `/killers` | Combat automation triggers |
 | `mapper` | `/map` | Room mapping and pathfinding |
 | `mapview` | `/mapview` | Visual map display |

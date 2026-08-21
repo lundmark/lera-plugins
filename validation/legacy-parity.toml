@@ -1,7 +1,7 @@
 [scope]
 revision = 1
 approved_on = "2026-08-10"
-digest = "106f5ed8f2b5e3c09c42e78f9faa54a868f2197d69672fea75459dbbb5e34b18"
+digest = "0dc36f69bcddb265c7c2ec7251d1f711c4830825e20b7272fd2f4d6853e8c4e3"
 
 [[current_plugins]]
 key = "autologin"
@@ -38,7 +38,7 @@ key = "guild_viking"
 path = "3scapes/guild_viking/init.lua"
 target_keys = ["guild_viking"]
 fixtures = []
-notes = "Directory plugin: init.lua is the mapped entry module. The guild_viking_* rows below register its other source files purely so their paths satisfy the current-refs path check (current_paths is built from every current_plugins path in this file); each carries no separate target mapping of its own. Stage 2 added the pagelib/page_opts/window shell and the twelve pages/*.lua modules (pane rendering); those rows follow the same pattern."
+notes = "Directory plugin: init.lua is the mapped entry module. The guild_viking_* rows below register its other source files purely so their paths satisfy the current-refs path check (current_paths is built from every current_plugins path in this file); each carries no separate target mapping of its own. Stage 2 added the pagelib/page_opts/window shell and the twelve pages/*.lua modules (pane rendering); those rows follow the same pattern. Stage 3 added scroller.lua (extracted from window.lua), popups.lua (the named-popup registry and /vik pop), maplib.lua (grid rendering/hit-testing), and the five popups/*.lua board-view modules (map, sea, sea_common, voyage, cityplan, war, war_campaign, war_battle) -- same file-registration-only pattern."
 
 [[current_plugins]]
 key = "guild_viking_combat"
@@ -67,6 +67,12 @@ fixtures = []
 [[current_plugins]]
 key = "guild_viking_handlers_voyage"
 path = "3scapes/guild_viking/handlers/voyage.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_maplib"
+path = "3scapes/guild_viking/maplib.lua"
 target_keys = []
 fixtures = []
 
@@ -179,8 +185,68 @@ target_keys = []
 fixtures = []
 
 [[current_plugins]]
+key = "guild_viking_popups"
+path = "3scapes/guild_viking/popups.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_popups_cityplan"
+path = "3scapes/guild_viking/popups/cityplan.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_popups_map"
+path = "3scapes/guild_viking/popups/map.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_popups_sea"
+path = "3scapes/guild_viking/popups/sea.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_popups_sea_common"
+path = "3scapes/guild_viking/popups/sea_common.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_popups_voyage"
+path = "3scapes/guild_viking/popups/voyage.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_popups_war"
+path = "3scapes/guild_viking/popups/war.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_popups_war_battle"
+path = "3scapes/guild_viking/popups/war_battle.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_popups_war_campaign"
+path = "3scapes/guild_viking/popups/war_campaign.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
 key = "guild_viking_protocol"
 path = "3scapes/guild_viking/protocol.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_scroller"
+path = "3scapes/guild_viking/scroller.lua"
 target_keys = []
 fixtures = []
 
@@ -7802,7 +7868,7 @@ key = "viking_base_11_dashboard_update_and_shared_rendering"
 category = "rendering"
 status = "parity"
 summary = "Update the guild-Viking dashboard and shared presentation helpers."
-current_refs = ["3scapes/guild_viking/window.lua:219", "3scapes/guild_viking/pagelib.lua:1"]
+current_refs = ["3scapes/guild_viking/window.lua:154", "3scapes/guild_viking/pagelib.lua:1"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -7830,16 +7896,16 @@ local_key = "guild_viking-viking_base_12_building_page-manual"
 [[legacy_targets.features]]
 key = "viking_base_12_city_status_page"
 category = "rendering"
-status = "not_converted"
+status = "parity"
 summary = "Render the guild-Viking city status page."
-current_refs = []
+current_refs = ["3scapes/guild_viking/popups/cityplan.lua:281", "3scapes/guild_viking/popups/cityplan.lua:403"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-21"
 reviewed_scope = "Complete guild-Viking city-status-page renderer and its coordinate, cell, and status helpers."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+result = "guild_viking/popups/cityplan.lua's make_grid/plan_geometry/castle_cell/terrain_cell reproduce the City Plan grid's coordinate and cell-occupancy computation, cellname() reproduces the coordinate-label helper, and footer_lines() reproduces the status (Unplanned/perks/mood/coast/placed) helpers, with LEGACY parity for the TEXT-VIEW branch (the icon/Wang-tile branch is out of scope, see the module's header comment)."
+outcome = "pass"
 local_key = "guild_viking-viking_base_12_city_status_page-manual"
 
 [[legacy_targets.features]]
@@ -7905,16 +7971,16 @@ local_key = "guild_viking-viking_base_15_page_and_automation_menus-manual"
 [[legacy_targets.features]]
 key = "viking_base_16_map_page_rendering"
 category = "rendering"
-status = "not_converted"
+status = "parity"
 summary = "Render the guild-Viking map page."
-current_refs = []
+current_refs = ["3scapes/guild_viking/popups/map.lua:221", "3scapes/guild_viking/popups/map.lua:312"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-21"
 reviewed_scope = "Complete guild-Viking map-page renderer with point-of-interest and resource overlays."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+result = "guild_viking/popups/map.lua's make_grid overlays the player marker and S.vmap_pois (by type -> glyph/color, VMAP_SYM_COL ported verbatim) onto the terrain grid from S.vmap_rows, and town_lines reproduces the gated towns list (show_map_towns), with LEGACY parity for the TEXT-VIEW branch (the icon/Wang-tile branch is out of scope, see the module's header comment)."
+outcome = "pass"
 local_key = "guild_viking-viking_base_16_map_page_rendering-manual"
 
 [[legacy_targets.features]]
@@ -7965,91 +8031,91 @@ local_key = "guild_viking-viking_base_16_point_of_interest_interactions-manual"
 [[legacy_targets.features]]
 key = "viking_base_17_voyage_views_and_interactions"
 category = "rendering"
-status = "not_converted"
+status = "parity"
 summary = "Render and operate guild-Viking voyage views."
-current_refs = []
+current_refs = ["3scapes/guild_viking/popups/sea.lua:282", "3scapes/guild_viking/popups/sea.lua:558", "3scapes/guild_viking/popups/voyage.lua:72", "3scapes/guild_viking/popups/sea_common.lua:142", "3scapes/guild_viking/popups/sea_common.lua:285"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-21"
 reviewed_scope = "Complete guild-Viking voyage-page renderers, resolution controls, chart labels, tooltips, and clicks."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+result = "popups/sea.lua (full sub-view: chart + legend + loot) and popups/voyage.lua (compact voyage-status subset), plus their shared popups/sea_common.lua (status/queue/saga/memory and the reroll/resolve/end/clear controls via one hit-tested [Actions] line), reproduce draw_page11's voyage views, chart labels, tooltips, and every live click, with LEGACY parity for the TEXT-VIEW chart branch."
+outcome = "pass"
 local_key = "guild_viking-viking_base_17_voyage_views_and_interactions-manual"
 
 [[legacy_targets.features]]
 key = "viking_base_18_city_planning_views_and_controls"
 category = "command"
-status = "not_converted"
+status = "parity"
 summary = "Render and operate guild-Viking city planning."
-current_refs = []
+current_refs = ["3scapes/guild_viking/popups/cityplan.lua:365", "3scapes/guild_viking/popups/cityplan.lua:443", "3scapes/guild_viking/popups/cityplan.lua:474"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-21"
 reviewed_scope = "Complete guild-Viking city-plan menu, click handling, and city-plan page renderer."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+result = "guild_viking/popups/cityplan.lua's M.lines renders the City Plan grid (TEXT-VIEW branch), M.on_pointer ports viking_cityplan_down/viking_cityplan_click's down/right-click dispatch, and open_context_menu ports viking_show_cityplan_menu's item set verbatim (Lift <name> for an occupied plot, one Place item per unplaced building for an empty plot, both with a working Cancel), with LEGACY parity."
+outcome = "pass"
 local_key = "guild_viking-viking_base_18_city_planning_views_and_controls-manual"
 
 [[legacy_targets.features]]
 key = "viking_base_19_court_army_and_battle_controls"
 category = "command"
-status = "not_converted"
+status = "parity"
 summary = "Render guild-Viking court and army views and handle battle controls."
-current_refs = []
+current_refs = ["3scapes/guild_viking/pages/court.lua:106", "3scapes/guild_viking/pages/army.lua:109", "3scapes/guild_viking/popups/war_battle.lua:340", "3scapes/guild_viking/popups/war_battle.lua:384", "3scapes/guild_viking/popups/war_campaign.lua:351"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-21"
 reviewed_scope = "Complete guild-Viking court and army renderers plus battle menu, button, and campaign-control callbacks."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+result = "pages/court.lua and pages/army.lua (stage 2) reproduce the court/army renderers; stage 3's popups/war_battle.lua ports the deploy-phase context menu (open_deploy_menu, viking_show_battle_menu's item set) and the turn-phase order flow (handle_click, viking_battle_click) plus the [Actions] button menu (begin/go/abandon), and popups/war_campaign.lua ports the campaign click-to-move flow (on_click, viking_campaign_click), completing the full split-scope feature with LEGACY parity."
+outcome = "pass"
 local_key = "guild_viking-viking_base_19_court_army_and_battle_controls-manual"
 
 [[legacy_targets.features]]
 key = "viking_base_20_battle_detail"
 category = "rendering"
-status = "not_converted"
+status = "parity"
 summary = "Render the complete guild-Viking battle detail view."
-current_refs = []
+current_refs = ["3scapes/guild_viking/popups/war_battle.lua:132", "3scapes/guild_viking/popups/war_battle.lua:267"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-21"
 reviewed_scope = "Complete guild-Viking battle-detail renderer with nested chart and field helpers."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+result = "guild_viking/popups/war_battle.lua's make_grid (units/terrain/works/deploy-zone overlay, coordinate mapping matching LEGACY's bottom-row-1 convention), legend_lines, and the Command/Fraegd field line reproduce the battle board's nested rendering helpers, with LEGACY parity for the ASCII/text-view branch."
+outcome = "pass"
 local_key = "guild_viking-viking_base_20_battle_detail-manual"
 
 [[legacy_targets.features]]
 key = "viking_base_20_campaign_map"
 category = "rendering"
-status = "not_converted"
+status = "parity"
 summary = "Render the guild-Viking campaign map and campaign interactions."
-current_refs = []
+current_refs = ["3scapes/guild_viking/popups/war_campaign.lua:141", "3scapes/guild_viking/popups/war_campaign.lua:351"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-21"
 reviewed_scope = "Complete guild-Viking campaign-map renderer and campaign queue interactions."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+result = "guild_viking/popups/war_campaign.lua's make_grid renders the campaign board (terrain, dugout, unit markers, selection highlight) and on_click ports viking_campaign_click's live click-to-move flow verbatim (select own stack, queue a destination with an immediate 'vcampaign queue' send, deselect on re-clicking the selected stack's own tile with 'vcampaign hold'); the dead viking_camp_send_next/viking_camp_advance_queue functions are confirmed unreachable in LEGACY and correctly not ported."
+outcome = "pass"
 local_key = "guild_viking-viking_base_20_campaign_map-manual"
 
 [[legacy_targets.features]]
 key = "viking_base_20_prison_panel"
 category = "rendering"
-status = "not_converted"
+status = "parity"
 summary = "Render the guild-Viking prison panel."
-current_refs = []
+current_refs = ["3scapes/guild_viking/pages/war.lua:182"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-21"
 reviewed_scope = "Complete guild-Viking prison-panel renderer."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+result = "guild_viking/pages/war.lua's prison_lines (shipped in stage 2's war pane) reproduces draw_prison_panel's War Captives header, pending-judgement line, roster, kin-held line, and siege-engines line verbatim, with LEGACY parity; this task's brief asked to verify the existing stage-2 port against this specific feature key rather than duplicate it in a popup, since the prison panel is deliberately excluded from the war popup composite."
+outcome = "pass"
 local_key = "guild_viking-viking_base_20_prison_panel-manual"
 
 [[legacy_targets.features]]

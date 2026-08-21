@@ -66,6 +66,11 @@ Not rechecked at the public validation level:
 - Path: `3scapes/guild_viking/handlers/voyage.lua`
 - Approved targets: None
 
+### `guild_viking_maplib`
+
+- Path: `3scapes/guild_viking/maplib.lua`
+- Approved targets: None
+
 ### `guild_viking_market`
 
 - Path: `3scapes/guild_viking/market.lua`
@@ -156,9 +161,59 @@ Not rechecked at the public validation level:
 - Path: `3scapes/guild_viking/persist.lua`
 - Approved targets: None
 
+### `guild_viking_popups`
+
+- Path: `3scapes/guild_viking/popups.lua`
+- Approved targets: None
+
+### `guild_viking_popups_cityplan`
+
+- Path: `3scapes/guild_viking/popups/cityplan.lua`
+- Approved targets: None
+
+### `guild_viking_popups_map`
+
+- Path: `3scapes/guild_viking/popups/map.lua`
+- Approved targets: None
+
+### `guild_viking_popups_sea`
+
+- Path: `3scapes/guild_viking/popups/sea.lua`
+- Approved targets: None
+
+### `guild_viking_popups_sea_common`
+
+- Path: `3scapes/guild_viking/popups/sea_common.lua`
+- Approved targets: None
+
+### `guild_viking_popups_voyage`
+
+- Path: `3scapes/guild_viking/popups/voyage.lua`
+- Approved targets: None
+
+### `guild_viking_popups_war`
+
+- Path: `3scapes/guild_viking/popups/war.lua`
+- Approved targets: None
+
+### `guild_viking_popups_war_battle`
+
+- Path: `3scapes/guild_viking/popups/war_battle.lua`
+- Approved targets: None
+
+### `guild_viking_popups_war_campaign`
+
+- Path: `3scapes/guild_viking/popups/war_campaign.lua`
+- Approved targets: None
+
 ### `guild_viking_protocol`
 
 - Path: `3scapes/guild_viking/protocol.lua`
+- Approved targets: None
+
+### `guild_viking_scroller`
+
+- Path: `3scapes/guild_viking/scroller.lua`
 - Approved targets: None
 
 ### `guild_viking_state`
@@ -807,7 +862,7 @@ Not rechecked at the public validation level:
 ### `guild_viking` — plugin_gap
 
 - Current plugins: `guild_viking`
-- Feature statuses: not_converted=33, parity=18
+- Feature statuses: not_converted=25, parity=26
 - `viking_base_01_dependencies_state_and_core_helpers` (state): parity — Initialize guild-Viking dependencies, persistent state, labels, and core helpers.
 - `viking_base_02_market_history_and_demand_metrics` (state): parity — Track guild-Viking market history, price statistics, trends, and demand cycles.
 - `viking_base_03_status_bar_callbacks` (rendering): parity — Render guild-Viking health and progress status callbacks.
@@ -829,21 +884,21 @@ Not rechecked at the public validation level:
 - `viking_base_10_window_creation_and_interactions` (rendering): not_converted — Create the guild-Viking window and handle its direct interactions.
 - `viking_base_11_dashboard_update_and_shared_rendering` (rendering): parity — Update the guild-Viking dashboard and shared presentation helpers.
 - `viking_base_12_building_page` (rendering): parity — Render the guild-Viking building page.
-- `viking_base_12_city_status_page` (rendering): not_converted — Render the guild-Viking city status page.
+- `viking_base_12_city_status_page` (rendering): parity — Render the guild-Viking city status page.
 - `viking_base_12_production_page` (rendering): parity — Render the complete guild-Viking production page.
 - `viking_base_13_logistics_and_governance_page` (rendering): parity — Render guild-Viking logistics, taxation, edicts, and governance data.
 - `viking_base_14_trade_dashboard_and_autotrader_controls` (rendering): not_converted — Render guild-Viking trade data and autotrader-specific controls.
 - `viking_base_15_page_and_automation_menus` (command): not_converted — Handle guild-Viking page, autotrader, raid, and voyage menus.
-- `viking_base_16_map_page_rendering` (rendering): not_converted — Render the guild-Viking map page.
+- `viking_base_16_map_page_rendering` (rendering): parity — Render the guild-Viking map page.
 - `viking_base_16_map_pathfinding` (state): not_converted — Find traversable guild-Viking map routes.
 - `viking_base_16_missions_and_errands` (command): not_converted — Dispatch guild-Viking missions and errands.
 - `viking_base_16_point_of_interest_interactions` (command): not_converted — Operate guild-Viking map point-of-interest interactions.
-- `viking_base_17_voyage_views_and_interactions` (rendering): not_converted — Render and operate guild-Viking voyage views.
-- `viking_base_18_city_planning_views_and_controls` (command): not_converted — Render and operate guild-Viking city planning.
-- `viking_base_19_court_army_and_battle_controls` (command): not_converted — Render guild-Viking court and army views and handle battle controls.
-- `viking_base_20_battle_detail` (rendering): not_converted — Render the complete guild-Viking battle detail view.
-- `viking_base_20_campaign_map` (rendering): not_converted — Render the guild-Viking campaign map and campaign interactions.
-- `viking_base_20_prison_panel` (rendering): not_converted — Render the guild-Viking prison panel.
+- `viking_base_17_voyage_views_and_interactions` (rendering): parity — Render and operate guild-Viking voyage views.
+- `viking_base_18_city_planning_views_and_controls` (command): parity — Render and operate guild-Viking city planning.
+- `viking_base_19_court_army_and_battle_controls` (command): parity — Render guild-Viking court and army views and handle battle controls.
+- `viking_base_20_battle_detail` (rendering): parity — Render the complete guild-Viking battle detail view.
+- `viking_base_20_campaign_map` (rendering): parity — Render the guild-Viking campaign map and campaign interactions.
+- `viking_base_20_prison_panel` (rendering): parity — Render the guild-Viking prison panel.
 - `viking_base_20_war_overview` (rendering): not_converted — Render the guild-Viking war overview and its coupled battle tiles.
 - `viking_base_21_public_window_controls` (public_api): not_converted — Expose guild-Viking window visibility and minimization controls.
 - `viking_trader_01_settings_inventory_and_cart_selection` (state): not_converted — Configure the guild-Viking autotrader and select inventory and carts.
