@@ -7,10 +7,15 @@
 -- surfaces at LEGACY:670-811) is a later task's territory, not this
 -- module's -- this module never calls mud.send.
 --
--- Return shape (plan.build()): nil when the tick is off, still inside the
--- AT_INTERVAL cooldown, or nothing has changed since the last "gate blocked"
--- pass (LEGACY returns bare/silently in exactly these cases too); otherwise
--- a table:
+-- Return shape (plan.build()): nil ONLY when the tick is off
+-- (page_opts.auto_trade false) or still inside the 30s AT_INTERVAL cooldown
+-- -- LEGACY returns bare/silently in exactly those two spots too (TRADER:399,
+-- 416-417). There is no change-detection: every OTHER gate-blocked call
+-- (not connected, settling, cart-packing cooldown, waiting for city data, no
+-- idle carts, cart limit reached, no profitable deals) recomputes from
+-- current state and returns a fresh table with a freshly-set `status`
+-- string every time it is called, exactly as LEGACY recomputes `at.status`
+-- on every one of those branches. Otherwise the table shape is:
 --   { status = <string|nil>,   -- mirrors at.status: nil once jobs dispatch,
 --                               -- else the human-readable reason nothing did
 --     jobs = <array>,          -- LEGACY's own job-record shape verbatim:

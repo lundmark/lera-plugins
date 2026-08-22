@@ -18,8 +18,13 @@
 --   * AT_CURE_MIN_PCT (LEGACY:159) is a module-local constant here for the
 --     same 200-local-cap reason as above.
 --   * AT_INTERVAL (LEGACY:17, the 30-second auto-trade tick interval) is
---     OUTSIDE this task's ported line range (19-296) and belongs to the
---     tick-wiring task that calls into this module on a timer.
+--     OUTSIDE this task's ported line range (19-296). It is declared in
+--     autotrader/plan.lua instead (Task 2), not here and not in the
+--     tick-wiring task: its only use site, LEGACY:416
+--     (`if at.last and (now - at.last) < AT_INTERVAL then return end`), is
+--     inside viking_autotrader_plan (TRADER:398-667), which plan.lua ports.
+--     `auto_trade_tick` (TRADER:812-849) never references AT_INTERVAL at
+--     all.
 --   * The MAIN 4128-4211 bridge (`viking_autotrader_context`) hands the
 --     separate TRADER chunk `state`, `page_opts`, and a `dependencies` table
 --     of `{ libs, compute_market_movers, towns (AT_TOWN), lineage_names

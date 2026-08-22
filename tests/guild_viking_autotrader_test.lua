@@ -456,6 +456,69 @@ check("plan/cap_left exhaustion: exact command sequence",
       and #p2.commands == 5)
 
 -- ---------------------------------------------------------------------------
+-- add_deal_legs' "use warehouse stock" sub-path (LEGACY:344-365, inside
+-- at_add_deal_legs' `if at.use_stock then ... end` block): an ARBITRAGE
+-- candidate (so this must reach add_deal_legs, not dispatch_stock_sell/
+-- add_stock_leg) that gets satisfied by SELLING EXISTING WAREHOUSE STOCK
+-- instead of buying -- no "route add buy" command at all.
+--
+-- Two sell-side TGOODS entries for the same good (ore) create the
+-- divergence that keeps this candidate out of the top-level stock scan
+-- (LEGACY:461-513) while still reaching compute_market_movers as a genuine
+-- arbitrage deal:
+--   lineage 2: score 1  (fails compute_market_movers' score>=2 sell gate,
+--              but wins best_sell_of on price alone: sell 100)
+--   lineage 3: score 3  (qualifies for compute_market_movers: sell 50)
+-- best_sell_of(ore) picks lineage 2 (sell 100 > 50) -> the top-level scan's
+-- weak_sell check sees score 1 < AT_SELL_MIN_SCORE (2) and excludes ore
+-- from `sc` entirely, regardless of warehouse amount. compute_market_movers
+-- only accepts lineage 3 (score 3) for its sell side, so the arb candidate
+-- carries sell=50, sell_lin=3, sell_demand=1000 (lineage 3's demand).
+-- Warehouse stock (200 ore) is untouched by any of this -- it is read
+-- directly by add_deal_legs' own core.wh_amount(a.good) call.
+--
+-- Inside add_deal_legs (at.use_stock true, cap_left 300 from the one idle
+-- cart, never binding):
+--   have = wh_amount(ore) = 200
+--   sq = min(have 200, cap_left 300, sell_demand 1000) = 200
+--   sq (200) >= AT_MIN_LEG_QTY (5) -> proceeds
+--   gain = floor(200 * 50 * route_sell_quality(ore,200)=1.0 + 0.5)
+--        = floor(10000.5) = 10000
+-- Returns (job, cost=0, units=200) -- cost 0 is the tell: nothing was
+-- bought. A single sell leg is queued, no buy leg, no second cart pass.
+-- ---------------------------------------------------------------------------
+fake_now = fake_now + 1000
+S.autotrade = nil
+at_core.settings()
+S.autotrade.use_stock = true
+protocol.ingest("BUILDINGS", "")
+protocol.ingest("WSTOCK", "ore|200|100")
+protocol.ingest("STAFF", "")
+protocol.ingest("BLOCKS", "")
+protocol.ingest("CARTS", "")
+protocol.ingest("CIDLE", "71|1|100|300|standard")
+protocol.ingest("TQUEUE", "")
+protocol.ingest("DALER", "5000")
+protocol.ingest("TGOODS", "0=o:-1:1000:0:10:0|2=o:1:0:1000:0:100|3=o:3:0:1000:0:50")
+
+local pu = plan.build()
+check("plan/use-stock arb leg: exactly one job", pu and #pu.jobs == 1, pu and #pu.jobs)
+if pu and pu.jobs[1] then
+  local j = pu.jobs[1]
+  check("plan/use-stock arb leg: job is a SELL of existing stock, not a buy",
+        j.mode == "sell" and j.stock == true and j.good == "ore" and j.qty == 200
+        and j.stown_lin == 3 and j.margin == 40 and j.profit == 10000, j.mode)
+  check("plan/use-stock arb leg: label exact",
+        j.label == "sell 200 Ore (stock)->Ui Imair Hold +10000d [cart #71]", j.label)
+end
+check("plan/use-stock arb leg: exactly ONE sell command, no buy leg at all",
+      pu and pu.commands[1] == "vtrade route clear quiet"
+      and pu.commands[2] == "vtrade route cart 71"
+      and pu.commands[3] == "vtrade route add sell 200 ore ui_imair"
+      and pu.commands[4] == "vtrade queue add"
+      and #pu.commands == 4)
+
+-- ---------------------------------------------------------------------------
 -- Branch: warehouse-full stock dispatch (LEGACY:457-458, 471, 505 --
 -- `overflow` bypasses both the weak-sell wait and the profit floor). A
 -- durable, non-graded good (ore) piled to 95% of a tier-1 warehouse (cap
@@ -598,6 +661,113 @@ check("plan/stop-limit truncation: exact command sequence -- two separate route/
       and p5.commands[8] == "vtrade route add sell 60 timber rurikid"
       and p5.commands[9] == "vtrade queue add"
       and #p5.commands == 9)
+
+-- ---------------------------------------------------------------------------
+-- Mixed mode (LEGACY:526-554, at.stock_priority == false): the candidate
+-- merge computes a comparable `profit_margin` for stock sells
+-- (eff - replacement-cost, via best_buy_of) and arbitrage deals (margin
+-- as-is), then sorts everyone by profit_margin*qty. Two stock candidates
+-- (furs, ore) and one arbitrage candidate (timber) are built so the three
+-- plausible outcomes give three DIFFERENT orders:
+--
+--   furs: eff (sp) = 90, best_buy_of = 20 -> profit_margin = 70, qty = 5
+--         -> product = 350
+--   ore:  eff (sp) = 70, best_buy_of = 20 -> profit_margin = 50, qty = 6
+--         -> product = 300
+--   timber (arb): margin = sell(50) - buy(40) = 10, movers qty = 50
+--         -> profit_margin = margin = 10, product = 500
+--
+-- Correct order (sort by profit_margin*qty, descending): timber (500),
+-- furs (350), ore (300).
+--   * A wrong-direction bug (ascending instead of descending) would give
+--     ore, furs, timber -- the exact reverse.
+--   * A wrong-precedence bug (comparing raw margin/eff instead of
+--     profit_margin*qty -- i.e. forgetting the best_buy_of subtraction and
+--     the qty weighting) would rank by 90/70/10 and give furs, ore, timber
+--     -- also different, and different from the reversed order too.
+-- All three are distinct, so the exact job order below pins the real
+-- comparator against both mistakes at once.
+--
+-- Timber is sourced from the ARB list, not `sc` -- a second, lower-scoring
+-- "decoy" sell lineage (score 1, sell 999) makes best_sell_of(timber) win
+-- on price and keeps timber's weak_sell check (score 1 < AT_SELL_MIN_SCORE
+-- 2) failing it out of the top-level stock scan, exactly the same
+-- divergence trick used for the use-stock-arb-leg fixture above. That is
+-- what matters for THIS test: timber's `profit_margin` comes from the
+-- `a.profit_margin = a.margin` line (LEGACY:543), not the stock branch's
+-- `eff - best_buy_of` line (LEGACY:537), and its `qty` for the sort is
+-- compute_market_movers' own qty (50: min(buy_supply 50, floor(sell_demand
+-- 100 * 0.8) = 80)) -- both exercised BEFORE any dispatch happens.
+--
+-- Timber's warehouse stock (1000 units, given so a plain buy leg's own
+-- `qty > have` clamp would not have zeroed it) turns out to be irrelevant
+-- to which PATH it dispatches through: with at.use_stock true, LEGACY's
+-- own `if at.use_stock then ... end` block in at_add_deal_legs (LEGACY:
+-- 344-365) is checked BEFORE the plain buy path, and it succeeds for ANY
+-- good already holding at least AT_MIN_LEG_QTY sellable units -- so timber
+-- dispatches as a "sell existing stock" leg here too, same as furs/ore,
+-- even though it is arb-sourced. Confirmed by tracing every clamp in that
+-- branch: sq = min(have 1000, cap_left 300, sell_demand 100) = 100 (>=
+-- AT_MIN_LEG_QTY), gain = floor(100 * 50 * 1.0 + 0.5) = 5000. This is a
+-- genuine LEGACY property, not a fixture mistake -- "Use-stock: sell what
+-- we already hold, skip buying" (LEGACY's own comment at :344) really does
+-- mean skip buying for every candidate with usable stock, not only the
+-- ones already flagged stock_only. The dedicated use-stock-arb-leg fixture
+-- above already exercises this exact branch in isolation; this fixture's
+-- job here is the MERGE/SORT, which is fully settled before any of that.
+--
+-- Furs and ore both dispatch as single direct sells (stock_route off);
+-- furs' qty of 5 sits exactly on the AT_MIN_LEG_QTY boundary (5 < 5 is
+-- false) so it is not itself a trickle refusal.
+-- max_carts is raised to 3 so all three candidates get a cart (idle count
+-- 3, otherwise the default max_carts=2 would truncate the dispatch loop
+-- before the third candidate, confusing "wrong order" with "ran out of
+-- carts").
+-- ---------------------------------------------------------------------------
+fake_now = fake_now + 1000
+S.autotrade = nil
+at_core.settings()
+S.autotrade.use_stock = true
+S.autotrade.stock_priority = false
+S.autotrade.max_carts = 3
+protocol.ingest("BUILDINGS", "")
+protocol.ingest("WSTOCK", "furs|5|100;ore|6|100;timber|1000|100")
+protocol.ingest("STAFF", "")
+protocol.ingest("BLOCKS", "")
+protocol.ingest("CARTS", "")
+protocol.ingest("CIDLE", "91|1|100|300|standard;92|1|100|300|standard;93|1|100|300|standard")
+protocol.ingest("TQUEUE", "")
+protocol.ingest("DALER", "100000")
+protocol.ingest("TGOODS",
+  "0=t:-1:50:0:40:0|1=t:2:0:100:0:50|2=f:3:0:1000:0:90|3=f:0:500:0:20:0"
+  .. "|4=o:3:0:1000:0:70|5=o:0:500:0:20:0|6=t:1:0:1000:0:999")
+
+local pm = plan.build()
+check("plan/mixed mode: three jobs, one per candidate", pm and #pm.jobs == 3, pm and #pm.jobs)
+if pm and #pm.jobs == 3 then
+  local j1, j2, j3 = pm.jobs[1], pm.jobs[2], pm.jobs[3]
+  check("plan/mixed mode: order is timber, furs, ore -- NOT the ascending reverse "
+        .. "(ore, furs, timber) and NOT the raw-margin order (furs, ore, timber)",
+        j1.good == "timber" and j2.good == "furs" and j3.good == "ore",
+        string.format("%s, %s, %s", j1.good, j2.good, j3.good))
+  check("plan/mixed mode: timber is arb-sourced (margin 10, the compute_market_movers "
+        .. "margin, not an eff-minus-best_buy_of figure) but dispatches via the "
+        .. "use-stock sub-path (qty 100, profit 5000) -- see the fixture comment above",
+        j1.mode == "sell" and j1.stock == true and j1.margin == 10 and j1.qty == 100 and j1.profit == 5000)
+  check("plan/mixed mode: furs stock sell (qty 5, right at the AT_MIN_LEG_QTY boundary)",
+        j2.mode == "sell" and j2.stock == true and j2.qty == 5 and j2.margin == 90 and j2.profit == 450)
+  check("plan/mixed mode: ore stock sell (qty 6, margin 70, profit 420)",
+        j3.mode == "sell" and j3.stock == true and j3.qty == 6 and j3.margin == 70 and j3.profit == 420)
+end
+check("plan/mixed mode: exact command sequence -- timber's route/queue block first, "
+      .. "then furs' and ore's direct dispatches, in that order",
+      pm and pm.commands[1] == "vtrade route clear quiet"
+      and pm.commands[2] == "vtrade route cart 91"
+      and pm.commands[3] == "vtrade route add sell 100 timber lodbrok"
+      and pm.commands[4] == "vtrade queue add"
+      and pm.commands[5] == "vtrade dispatch sell 5 furs eiriksson"
+      and pm.commands[6] == "vtrade dispatch sell 6 ore rurikid"
+      and #pm.commands == 6)
 
 -- ---------------------------------------------------------------------------
 -- Branch: the empty-plan case (LEGACY:446-450). No arbitrage deals and no
