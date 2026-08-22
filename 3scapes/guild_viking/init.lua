@@ -67,6 +67,11 @@ local notify = require("notify")
 -- Task 10: cross-session persistence (price history + transport source).
 local persist = require("persist")
 
+-- Stage 4 Task 3: the auto-trade paced runner + its /vik trader control
+-- surface and settings menu. notify.lua calls autotrade_tick.tick() itself
+-- (see its own header); init.lua only needs it for the command surface.
+local autotrade_tick = require("autotrader.tick")
+
 local S = state_mod.S
 
 local M = {}
@@ -240,6 +245,8 @@ function M.vik_command(args)
     print_opts()
   elseif sub == "set" then
     set_opt(rest)
+  elseif sub_lower == "trader" then
+    autotrade_tick.trader_command(rest)
   elseif POPUP_NAMES[sub_lower] then
     popups.toggle(sub_lower)
   elseif sub_lower == "page" then
@@ -262,7 +269,7 @@ function M.vik_command(args)
     buffer.color_print(nil, "DAA520",
       "Usage: /vik [status | trace | save | source mip|gmcp|auto | resetxp | "
       .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
-      .. "<page> | opts | set <opt> on|off|toggle]")
+      .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>]]")
   end
 end
 
@@ -305,7 +312,7 @@ function M.on_load()
     name = "/vik",
     usage = "/vik [status | trace | save | source mip|gmcp|auto | resetxp | "
       .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
-      .. "<page> | opts | set <opt> on|off|toggle]",
+      .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>]]",
     summary = "Viking guild data, pane, and controls",
     description = "Ingestion status and counters (status), message tracing "
       .. "(trace), explicit save (save), transport selection (source), the "
@@ -319,7 +326,12 @@ function M.on_load()
       .. "-- (page <page>; a bare <page> does the same, same as clicking "
       .. "its tab, EXCEPT 'war', whose bare form toggles the popup instead "
       .. "-- use 'page war' for the pane), listing every page option with "
-      .. "its current value (opts), and flipping one page option (set).",
+      .. "its current value (opts), flipping one page option (set), and the "
+      .. "client-side auto-trader: bare 'trader' opens its settings menu, "
+      .. "'trader <sub>' configures it (on|off, stock on|off, pack on|off, "
+      .. "stockroute on|off, stockpriority on|off, debug on|off, "
+      .. "reserve/margin/profit/carts/show <n>, autostock <n>|off, "
+      .. "log [clear]).",
     accepts_args = true,
     handler = function(args) M.vik_command(args or "") end,
   })
@@ -393,7 +405,33 @@ function M.on_unload()
   end
 end
 
-function M.on_connect() end
+-- LEGACY guild_viking.lua:4770-4788 (OnPluginConnect). Two Portal-window-only
+-- lines in that range (detached_pages_from_string(...), viking_window.create())
+-- have no lera analog and are dropped, same disposition as every other
+-- viking_window.*/detached-page call elsewhere in this port. Send("hp")
+-- (LEGACY:4771) is ported verbatim as a plain mud.send("hp") -- this is a
+-- DIFFERENT refresh than the "!hp" sent from on_setup's on_monster_died
+-- listener above (that one ports LEGACY:2681's Execute("!hp"), fired after
+-- combat ends, not on connect); nothing else in this plugin sends an hp
+-- refresh at connect time, so this is not a duplicate.
+function M.on_connect()
+  mud.send("hp")
+  -- Give the server a minute to push fresh prices/city state before the
+  -- auto-trader is allowed to dispatch carts again (autotrader/plan.lua
+  -- reads S.at_hold_until -- see that module's header).
+  S.at_hold_until = os.time() + 60
+  -- Clear transient, server-authoritative trade state. These lists persist
+  -- in `state`, so after a client/computer restart they can hold carts or
+  -- queued jobs that actually finished while we were down -- the server
+  -- never re-reports a cart it no longer has, so stale entries would count
+  -- against the cart limit forever and silently stall the auto-trader
+  -- despite it reading ON. Wiping here fails safe: with carts/queue/idle
+  -- empty the trader waits, and fresh CARTS/TQUEUE/CIDLE MIP repopulates
+  -- the true state within the hold window above.
+  S.carts       = {}
+  S.trade_queue = {}
+  S.idle_carts  = {}
+end
 
 function M.on_disconnect()
   persist.save()

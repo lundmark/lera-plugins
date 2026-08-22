@@ -6,15 +6,21 @@
 -- into single functions here, matching the interpolation each performed).
 -- countdown_tick is ported from LEGACY guild_viking.lua:2701-2891: every
 -- return_in-style field it decremented is preserved here with the same
--- clamp/removal semantics. The trailing `auto_trade_tick`/`auto_raid_tick`/
--- `auto_voyage_tick` calls at LEGACY 2885-2890 are client-side autopilot
--- hooks with no state or task surface in this port and are intentionally
--- dropped. LEGACY's per-field/per-block `dirty` flag (which also gated a
--- `viking_window.update()` call) is collapsed into a single `ui.dirty()`
--- fired once per tick, only when something actually changed -- window
--- repaint arrives in stage 2, and an idle tick (nothing counting down) must
--- stay cheap.
+-- clamp/removal semantics. LEGACY's per-field/per-block `dirty` flag (which
+-- also gated a `viking_window.update()` call) is collapsed into a single
+-- `ui.dirty()` fired once per tick, only when something actually changed --
+-- window repaint arrives in stage 2, and an idle tick (nothing counting
+-- down) must stay cheap.
+--
+-- The trailing `auto_trade_tick`/`auto_raid_tick`/`auto_voyage_tick` calls at
+-- LEGACY 2885-2890 run in that exact order, AFTER the dirty check (LEGACY's
+-- own viking_window.update() call sits between the countdown work and the
+-- three ticks). Stage 4 Task 3 wires the first of the three
+-- (autotrader/tick.lua's M.tick, at the tail of this function, below the
+-- ui.dirty() call); auto_raid_tick/auto_voyage_tick are later tasks'
+-- territory and are not called from here yet.
 local S = require("state").S
+local autotrade_tick = require("autotrader.tick")
 
 local M = {}
 
@@ -346,6 +352,10 @@ function M.countdown_tick()
   if dirty then
     ui.dirty()
   end
+
+  -- LEGACY guild_viking.lua:2885-2890 (trade, raid, voyage order). See this
+  -- function's header.
+  autotrade_tick.tick()
 end
 
 return M

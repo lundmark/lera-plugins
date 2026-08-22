@@ -92,11 +92,14 @@
 --
 --   * state.at_hold_until -> S.at_hold_until, read verbatim (LEGACY:405-406
 --     is inside this task's range). LEGACY only ever WRITES this global from
---     an on-connect hook at guild_viking.lua:4774, which is outside both
---     TRADER's line range and every stage-4 task's assigned file list.
---     Nothing in this stage sets S.at_hold_until, so this branch is
---     currently always false (dormant) -- flagged in the task report for
---     whichever future task wires a connect hook.
+--     an on-connect hook at guild_viking.lua:4774, which was outside both
+--     TRADER's line range and every stage-4 task's assigned file list at
+--     the time this module was written -- flagged in this task's report as
+--     dormant until a future task wires a connect hook. Stage 4 Task 3
+--     (autotrader/tick.lua) went on to do exactly that, in
+--     guild_viking/init.lua's M.on_connect: S.at_hold_until = os.time() + 60,
+--     alongside the state.carts/trade_queue/idle_carts wipe from the same
+--     LEGACY range. This branch is live from Task 3 onward.
 --
 --   * state.carts / state.idle_carts vs. state.trade_queue: LEGACY's
 --     "waiting for city data" gate (LEGACY:412-413) reads all three as

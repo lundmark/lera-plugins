@@ -71,12 +71,12 @@
 --     draw_page9's Village Trade Reputation renderer (already ported at
 --     pages/ranks.lua). Not ported here; source (what actually executes)
 --     wins per the plan's Global Constraints.
---   - Any autotrader CONTROL surface -- the right-click "Auto-Trade
---     Options" popup menu (viking_show_atrade_menu, guild_viking.lua:11321)
---     that lets a player toggle Auto-Trade/Pack/Use-stock and cycle
---     Margin/Reserve/Carts/Shown -- is stage 4. A gated placeholder line,
---     "Auto-trade controls: stage 4", renders under the Auto-Trade block in
---     its place, per the task brief.
+--   - Stage 4 Task 3: the right-click "Auto-Trade Options" popup menu
+--     (viking_show_atrade_menu, guild_viking.lua:11321) that let a player
+--     toggle Auto-Trade/Pack/Use-stock and cycle Margin/Reserve/Carts/Shown
+--     became a require("menu") menu opened by bare `/vik trader`
+--     (autotrader/tick.lua). The line under the Auto-Trade block that used
+--     to read "Auto-trade controls: stage 4" now points at that command.
 --   - MUSHclient colors in this source range are 0xBBGGRR (guild_viking.lua
 --     line 301); every mapping below was decoded byte-by-byte first.
 --     AFF_COLOR's polarity is disclosed explicitly where it matters (see
@@ -321,9 +321,11 @@ local function autotrade_status_lines(add, width)
     end
   end
 
-  -- Stage 4: the right-click Auto-Trade Options popup menu (toggle Auto-
-  -- Trade/Pack/Use-stock, cycle Margin/Reserve/Carts/Shown) is not ported.
-  add(pagelib.trunc(C.dim .. "Auto-trade controls: stage 4" .. pagelib.RESET, width))
+  -- Stage 4 Task 3: the right-click Auto-Trade Options popup menu became a
+  -- require("menu") settings menu, opened by bare `/vik trader`; `/vik
+  -- trader <sub>` runs the same on/off + numeric-knob subcommands LEGACY's
+  -- `atrade` alias did (autotrader/tick.lua's M.config/M.open_menu).
+  add(pagelib.trunc(C.dim .. "Auto-trade controls: /vik trader" .. pagelib.RESET, width))
 end
 
 local function movers_block_lines(add, width)

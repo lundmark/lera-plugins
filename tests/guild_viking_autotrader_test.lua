@@ -18,18 +18,34 @@ end
 ui = { dirty = function() end }
 lera = { time = function() return 1000 end, version = function() return "test" end }
 -- mud.connected() is Task 2's IsConnected() stand-in (plan.lua). `sent`
--- collects mud.send() calls for suites that need to assert nothing was
--- sent; plan.lua itself never calls mud.send (it captures into its own
--- returned `commands` list -- see its header), but the stub is shared
--- shape with every other guild_viking test file's `mud` stub.
+-- collects mud.send() calls -- plan.lua itself never calls mud.send (it
+-- captures into its own returned `commands` list -- see its header), so
+-- this only fills up once Task 3's tick.lua starts actually dispatching.
 local mud_connected = true
-mud = { send = function() end, connected = function() return mud_connected end }
+local sent = {}
+mud = {
+  send = function(cmd) sent[#sent + 1] = cmd end,
+  connected = function() return mud_connected end,
+}
 local stored = nil
 store = {
   load = function() end,
   get = function() return stored end,
   set = function(d) stored = d end,
   save = function() end,
+}
+-- Task 3 (tick.lua): fail_closed()/M.config() print via buffer.color_print.
+-- Same capture shape as every other guild_viking test file's `buffer` stub.
+local printed = {}
+buffer = {
+  color_print = function(...)
+    local args = { ... }
+    local parts = {}
+    for i = 3, #args, 3 do
+      parts[#parts + 1] = tostring(args[i])
+    end
+    printed[#printed + 1] = table.concat(parts)
+  end,
 }
 
 local protocol = require("protocol")
@@ -46,6 +62,7 @@ end
 local at_core = require("autotrader.core")
 local page_opts = require("page_opts")
 local plan = require("autotrader.plan")
+local tick = require("autotrader.tick")
 
 -- ---------------------------------------------------------------------------
 -- at_settings (LEGACY:19-31): default-knob guard, exercised on both the
@@ -791,6 +808,297 @@ check("plan/empty-plan case: no jobs, no commands",
       p6 and #p6.jobs == 0 and #p6.commands == 0)
 check("plan/empty-plan case: status exact",
       p6 and p6.status == "no profitable deals right now (and no stock set to offload)", p6 and p6.status)
+
+-- ===========================================================================
+-- Task 3: autotrader/tick.lua (auto_trade_tick's paced/MIP-confirmed
+-- runner, LEGACY guild_viking_autotrader.lua:670-849). One test per
+-- fail-closed gate enumerated in tick.lua's own header, plus the
+-- AT_INTERVAL boundary walked end-to-end through the tick (not just
+-- plan.build() directly, as the Task 2 section above already covers). The
+-- same fake os.time() control from Task 2 stays active.
+-- ===========================================================================
+
+-- Reusable single-dispatch fixture (same numbers as the "plan/warehouse-full
+-- stock dispatch" case above): produces EXACTLY one job, as a single-command
+-- transaction ("vtrade dispatch sell 200 ore eiriksson"), so the state
+-- machine's idle->sending->confirming cycle can be walked one command at a
+-- time. warehouse_pct = floor(380/400*100) = 95 >= 85 -> overflow/wh_full;
+-- qty = min(380, cart cap 200, demand 1000) = 200; gain =
+-- floor(200*20*1.0 + 0.5) = 4000 (direct_sell_quality = 1.0: ore is neither
+-- graded nor perishable).
+local function setup_single_dispatch_fixture()
+  S.autotrade = nil
+  at_core.settings()
+  protocol.ingest("BUILDINGS", "warehouse:1")
+  protocol.ingest("WSTOCK", "ore|380|100")
+  protocol.ingest("STAFF", "")
+  protocol.ingest("BLOCKS", "")
+  protocol.ingest("CARTS", "")
+  protocol.ingest("CIDLE", "31|1|100|200|standard")
+  protocol.ingest("TQUEUE", "")
+  protocol.ingest("DALER", "1000")
+  protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
+end
+
+-- ---------------------------------------------------------------------------
+-- Gate 1: OFF by default. Task 2 above left page_opts.auto_trade ON, so
+-- turn it off explicitly. Many ticks over a fixture that WOULD dispatch (if
+-- the flag were on) must send nothing at all.
+-- ---------------------------------------------------------------------------
+page_opts.set("auto_trade", false)
+setup_single_dispatch_fixture()
+tick.reset()
+sent, printed = {}, {}
+for _ = 1, 50 do
+  fake_now = fake_now + 1
+  tick.tick()
+end
+check("tick/gate 1 (off by default): 50 ticks over a would-dispatch fixture send nothing",
+      #sent == 0, #sent)
+do
+  local phase, pending = tick.status()
+  check("tick/gate 1 (off by default): phase reset to idle, nothing pending",
+        phase == "idle" and pending == 0, phase)
+end
+
+-- ---------------------------------------------------------------------------
+-- Turn the feature on and walk the full single-command dispatch cycle: the
+-- commands seam (plan.build()'s own `commands` list, fed through this
+-- module's port of LEGACY's transactions()) and gates 2/3 (confirming-phase
+-- wait, then confirmation timeout -> fail_closed).
+-- ---------------------------------------------------------------------------
+page_opts.set("auto_trade", true)
+setup_single_dispatch_fixture()
+tick.reset()
+sent, printed = {}, {}
+local g23_t0 = fake_now + 1000
+fake_now = g23_t0
+tick.tick()
+check("tick/commands seam: one call plans, begins, and sends the single-command transaction",
+      #sent == 1 and sent[1] == "vtrade dispatch sell 200 ore eiriksson", sent[1])
+do
+  local phase, pending = tick.status()
+  check("tick/commands seam: phase is confirming, nothing left pending",
+        phase == "confirming" and pending == 0, phase)
+end
+
+-- Gate 2: confirming-phase wait -- mip_sig unchanged, well before the 20s
+-- deadline -> no new send, still confirming.
+fake_now = g23_t0 + 5
+tick.tick()
+check("tick/gate 2 (confirming wait): no send while mip unchanged and before the deadline",
+      #sent == 1)
+check("tick/gate 2 (confirming wait): still confirming", tick.status() == "confirming")
+
+-- Gate 3: confirmation timeout (mip still unchanged at/after the 20s
+-- deadline from the send) -> fail_closed: cooldown, diagnostic printed
+-- verbatim, no additional send.
+fake_now = g23_t0 + 25   -- 20s after the send at g23_t0+5's tick, i.e. >= deadline (g23_t0+25)
+tick.tick()
+do
+  local phase, pending, _, last_error = tick.status()
+  check("tick/gate 3 (confirm timeout): fail_closed moves to cooldown",
+        phase == "cooldown", phase)
+  check("tick/gate 3 (confirm timeout): last_error set verbatim",
+        last_error == "no MIP confirmation within 20s", last_error)
+end
+check("tick/gate 3 (confirm timeout): diagnostic printed verbatim",
+      printed[#printed] ==
+        "[Auto-Trade] no MIP confirmation within 20s; paused without retrying the dispatch",
+      printed[#printed])
+check("tick/gate 3 (confirm timeout): no additional send", #sent == 1)
+
+-- ---------------------------------------------------------------------------
+-- Gate 4: cooldown (30s FAILURE_COOLDOWN from the fail_closed above) blocks
+-- everything -- including drawing a fresh plan -- until it elapses; the
+-- boundary is exact (29s no, 30s yes). Once it lifts, the SAME fixture is
+-- still sitting there ready to dispatch, so a fresh send at exactly 30s
+-- proves the gate actually reopened rather than merely not having
+-- re-errored.
+-- ---------------------------------------------------------------------------
+local g4_fail_at = g23_t0 + 25
+fake_now = g4_fail_at + 29
+tick.tick()
+check("tick/gate 4 (cooldown): still blocked 29s after the failure", tick.status() == "cooldown")
+check("tick/gate 4 (cooldown): no send at 29s", #sent == 1)
+
+fake_now = g4_fail_at + 30
+tick.tick()
+check("tick/gate 4 (cooldown): cooldown lifts at 30s and a fresh dispatch fires",
+      #sent == 2 and sent[2] == "vtrade dispatch sell 200 ore eiriksson", sent[2])
+
+-- ---------------------------------------------------------------------------
+-- Gates 5/6/7 plus a full multi-transaction commands-seam check: a fixture
+-- whose plan produces TWO transactions (5 + 4 commands, matching the
+-- "plan/stop-limit truncation" fixture and its exact command sequence in
+-- the Task 2 section above). Walks: gate 7 (inter-command COMMAND_DELAY
+-- within one transaction), the confirm/success handoff, gate 5 (COMMAND_DELAY
+-- before the NEXT pending transaction may begin), and gate 6 (a pending
+-- transaction means do_plan() is skipped -- the second transaction's
+-- commands are exactly what the ORIGINAL plan produced, not recomputed).
+-- ---------------------------------------------------------------------------
+tick.reset()
+sent, printed = {}, {}
+S.autotrade = nil
+at_core.settings()
+S.autotrade.use_stock = true
+S.autotrade.stock_route = true
+S.autotrade.pack = true
+protocol.ingest("BUILDINGS", "trading_post:2")
+protocol.ingest("WSTOCK", "furs|50|100;timber|60|100;ore|40|100")
+protocol.ingest("STAFF", "")
+protocol.ingest("BLOCKS", "")
+protocol.ingest("CARTS", "")
+protocol.ingest("CIDLE", "11|1|100|300|standard;12|1|100|300|standard")
+protocol.ingest("TQUEUE", "")
+protocol.ingest("DALER", "1000")
+protocol.ingest("TGOODS", "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
+
+local expect_commands = {
+  "vtrade route clear quiet", "vtrade route cart 11",
+  "vtrade route add sell 50 furs ui_imair", "vtrade route add sell 40 ore harfagre",
+  "vtrade queue add",
+  "vtrade route clear quiet", "vtrade route cart 11",
+  "vtrade route add sell 60 timber rurikid", "vtrade queue add",
+}
+
+local t0 = fake_now + 1000
+fake_now = t0
+tick.tick()   -- idle -> plan (2 transactions queued) -> begin T1 -> sends T1[1]
+check("tick/multi-tx: first call plans and sends T1's first command",
+      #sent == 1 and sent[1] == expect_commands[1], sent[1])
+
+-- Gate 7: inter-command delay -- 1s later (< 2s COMMAND_DELAY) sends
+-- nothing more.
+fake_now = t0 + 1
+tick.tick()
+check("tick/gate 7 (inter-command delay): no send 1s after the previous command (< 2s)",
+      #sent == 1)
+
+-- Send T1's remaining 4 commands, one every 2s, each gated by COMMAND_DELAY.
+local at_time = t0
+for i = 2, 5 do
+  at_time = at_time + 2
+  fake_now = at_time
+  tick.tick()
+  check("tick/multi-tx: T1 command " .. i .. " sent exactly at its COMMAND_DELAY boundary",
+        #sent == i and sent[i] == expect_commands[i], sent[i])
+end
+do
+  local phase, pending = tick.status()
+  check("tick/multi-tx: after T1's queue-add, confirming with T2 still pending",
+        phase == "confirming" and pending == 1, phase)
+end
+
+-- Confirm T1 (a real MIP push would move cart 11 off the idle list; adding a
+-- second idle-cart row changes mip_sig() without zeroing idle_carts, which
+-- both plan.build()'s own "no idle carts" gate and this fixture's second
+-- transaction still need to be non-empty).
+protocol.ingest("CIDLE", "11|1|100|300|standard;12|1|100|300|standard;13|1|100|10|standard")
+fake_now = at_time + 1
+tick.tick()
+do
+  local phase = tick.status()
+  check("tick/multi-tx: T1 confirmed, back to idle (T2 still pending)", phase == "idle", phase)
+end
+
+-- Gate 5: post-success COMMAND_DELAY (2s) -- T2 must NOT begin before it
+-- elapses, even though it is already pending.
+fake_now = at_time + 2   -- 1s after confirmation, < 2s COMMAND_DELAY from it
+tick.tick()
+check("tick/gate 5 (post-success delay): T2 has not started yet (still #sent == 5)",
+      #sent == 5, #sent)
+
+-- COMMAND_DELAY elapses: T2 begins. Gate 6: pending is non-empty, so
+-- do_plan() is skipped -- T2's commands are the ORIGINAL plan's, unchanged.
+fake_now = at_time + 3
+tick.tick()
+check("tick/gate 6 (pending skips replanning): T2's first command is the ORIGINAL plan's, "
+      .. "not a freshly recomputed one",
+      #sent == 6 and sent[6] == expect_commands[6], sent[6])
+
+local at_time2 = fake_now
+for i = 7, 9 do
+  at_time2 = at_time2 + 2
+  fake_now = at_time2
+  tick.tick()
+  check("tick/multi-tx: T2 command " .. i .. " sent exactly at its COMMAND_DELAY boundary",
+        #sent == i and sent[i] == expect_commands[i], sent[i])
+end
+check("tick/multi-tx: full 9-command sequence matches plan.build()'s own "
+      .. "\"stop-limit truncation\" fixture exactly (the commands seam)",
+      table.concat(sent, "|") == table.concat(expect_commands, "|"))
+
+-- ---------------------------------------------------------------------------
+-- Gate 8 (LEGACY:836, `if not cmd then fail_closed(...) end`): structurally
+-- unreachable through the public path -- see tick.lua's header for why
+-- transactions() can never hand begin_transaction an empty array -- so it is
+-- not given a synthetic test here, same disclosed treatment plan.lua's
+-- header already gives LEGACY:339's dead code.
+-- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- Gate: the planner itself finds nothing to do (no arbitrage, no stock to
+-- offload) -- nothing is sent, and the phase stays idle so a later tick
+-- retries planning rather than getting stuck.
+-- ---------------------------------------------------------------------------
+tick.reset()
+sent, printed = {}, {}
+S.autotrade = nil
+at_core.settings()
+protocol.ingest("BUILDINGS", "")
+protocol.ingest("WSTOCK", "")
+protocol.ingest("STAFF", "")
+protocol.ingest("BLOCKS", "")
+protocol.ingest("CARTS", "")
+protocol.ingest("CIDLE", "61|1|100|100|standard")
+protocol.ingest("TQUEUE", "")
+protocol.ingest("DALER", "500")
+protocol.ingest("TGOODS", "")
+fake_now = fake_now + 10000
+tick.tick()
+check("tick/gate (no candidates): nothing sent", #sent == 0)
+check("tick/gate (no candidates): phase stays idle", tick.status() == "idle")
+fake_now = fake_now + 1
+tick.tick()
+check("tick/gate (no candidates): a later tick retries planning, still nothing sent", #sent == 0)
+
+-- ===========================================================================
+-- AT_INTERVAL (30s) boundary walked end-to-end through the tick, not just
+-- plan.build() directly (already covered in the Task 2 section above): 29s
+-- after the first dispatch's plan.build() call, still blocked; 30s, a fresh
+-- dispatch fires.
+-- ===========================================================================
+page_opts.set("auto_trade", true)
+setup_single_dispatch_fixture()
+tick.reset()
+sent, printed = {}, {}
+local ati_t0 = fake_now + 1000
+fake_now = ati_t0
+tick.tick()
+check("tick/AT_INTERVAL setup: first dispatch fires immediately",
+      #sent == 1 and sent[1] == "vtrade dispatch sell 200 ore eiriksson", sent[1])
+
+-- Confirm it (a second idle cart appears -- mip_sig changes -- without
+-- zeroing idle_carts, so plan.build()'s own idle-cart gate stays open and
+-- AT_INTERVAL, not that gate, is what the 29s/30s probe below exercises).
+protocol.ingest("CIDLE", "31|1|100|200|standard;32|1|100|50|standard")
+fake_now = ati_t0 + 1
+tick.tick()
+check("tick/AT_INTERVAL setup: confirmed back to idle", tick.status() == "idle")
+
+-- The post-confirm COMMAND_DELAY (next_at = ati_t0+1+2 = ati_t0+3) has long
+-- elapsed by ati_t0+29, so AT_INTERVAL -- not COMMAND_DELAY -- is what is
+-- doing the blocking from here on.
+fake_now = ati_t0 + 29
+tick.tick()
+check("tick/AT_INTERVAL: 29s after the first plan.build() call, still blocked (no send)",
+      #sent == 1, #sent)
+
+fake_now = ati_t0 + 30
+tick.tick()
+check("tick/AT_INTERVAL: 30s after the first plan.build() call, a fresh dispatch fires",
+      #sent == 2 and sent[2] == "vtrade dispatch sell 200 ore eiriksson", sent[2])
 
 os.time = real_os_time
 

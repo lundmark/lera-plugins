@@ -39,7 +39,15 @@ buffer = {
     printed[#printed + 1] = table.concat(parts)
   end,
 }
-mud = { send = function() end }
+-- Task 3 (M.on_connect / autotrader/tick.lua): `sent` captures every
+-- mud.send() call so the reconnect-hook and /vik trader tests below can
+-- assert on it.
+local sent = {}
+local mud_connected = true
+mud = {
+  send = function(cmd) sent[#sent + 1] = cmd end,
+  connected = function() return mud_connected end,
+}
 -- mip/gmcp stubs capture registrations and can fire them with the real wire
 -- shapes, so wiring bugs (e.g. binding the wrong callback argument) show up
 -- as test failures instead of only at runtime.
@@ -105,6 +113,23 @@ alias = {
   remove = function() end,
 }
 plugin = { get = function() return nil end }
+-- Task 3 (autotrader/tick.lua's M.open_menu): same package.loaded["menu"]
+-- stub shape as guild_viking_popup_dispatch_test.lua's preamble -- real
+-- Lua require() consults package.loaded before touching package.path, so
+-- this is seen even though tick.lua's own `require("menu")` call is routed
+-- through the require() override below (which falls through to the real
+-- require for any name other than "command").
+local last_menu_open = nil
+package.loaded["menu"] = {
+  open = function(opts) last_menu_open = opts end,
+  close = function() last_menu_open = nil end,
+  is_open = function() return last_menu_open ~= nil end,
+}
+local function menu_item_labels(opts)
+  local out = {}
+  for _, it in ipairs(opts.items or {}) do out[#out + 1] = it.label end
+  return out
+end
 local real_require = require
 -- Task 10: capture the spec passed to command.register so later cases can
 -- dispatch through the registered /vik handler directly.
@@ -632,6 +657,210 @@ check("trace off via /vik", protocol.trace() == false)
 S.price_history[2] = { wool = { { t = 200, b = 5, s = 6 } } }
 local ok_save = pcall(registered_vik.handler, "save", "/vik")
 check("vik save dispatches without error", ok_save)
+
+-- ---- M.on_connect: the reconnect settle window + stale-list wipe (Task 3) --
+-- LEGACY guild_viking.lua:4770-4788 (OnPluginConnect). Task 2's plan.lua
+-- suite left this branch dormant (nothing wrote S.at_hold_until yet); this
+-- is the connect hook that plan.lua's header flagged as still needed.
+S.carts       = { { mode = "sell", good = "stale", return_in = 5 } }
+S.trade_queue = { { good = "stale_q" } }
+S.idle_carts  = { { cart_id = 99 } }
+S.at_hold_until = nil
+sent = {}
+local before_connect = os.time()
+M.on_connect()
+local after_connect = os.time()
+check("on_connect: sends a plain 'hp' (LEGACY:4771, distinct from the "
+      .. "on_monster_died '!hp' refresh)", sent[1] == "hp" and #sent == 1, sent[1])
+check("on_connect: at_hold_until is ~60s out",
+      S.at_hold_until ~= nil and S.at_hold_until >= before_connect + 60
+        and S.at_hold_until <= after_connect + 60, S.at_hold_until)
+check("on_connect: wipes state.carts", type(S.carts) == "table" and #S.carts == 0)
+check("on_connect: wipes state.trade_queue", type(S.trade_queue) == "table" and #S.trade_queue == 0)
+check("on_connect: wipes state.idle_carts", type(S.idle_carts) == "table" and #S.idle_carts == 0)
+
+-- The hold window actually blocks the auto-trader's dispatch (proving the
+-- documented failure mode, not just that a field got set): with auto_trade
+-- on and a fixture that WOULD dispatch, autotrader/plan.lua's own gate
+-- (Task 2) reports "settling after reconnect" and sends nothing while
+-- S.at_hold_until is still in the future.
+local at_core_for_connect = require("autotrader.core")
+local plan_for_connect = require("autotrader.plan")
+page_opts.set("auto_trade", true)
+S.autotrade = nil
+at_core_for_connect.settings()
+protocol.ingest("BUILDINGS", "warehouse:1")
+protocol.ingest("WSTOCK", "ore|380|100")
+protocol.ingest("STAFF", "")
+protocol.ingest("BLOCKS", "")
+protocol.ingest("CIDLE", "31|1|100|200|standard")
+protocol.ingest("TQUEUE", "")
+protocol.ingest("DALER", "1000")
+protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
+local held = plan_for_connect.build()
+check("on_connect: the hold window blocks dispatch (plan.build reports settling, sends nothing)",
+      held and held.status and held.status:find("^settling after reconnect") ~= nil
+        and #held.jobs == 0 and #held.commands == 0,
+      held and held.status)
+S.at_hold_until = nil   -- clear for later tests
+page_opts.set("auto_trade", false)
+
+-- ---- /vik trader <sub>: LEGACY's at_config grammar, verbatim (Task 3) -----
+-- guild_viking_autotrader.lua:670-724. autotrader/core.lua's settings() is
+-- used directly (not through protocol.ingest) for the same reason Task 1's
+-- own suite pokes S.autotrade directly: it is plugin-local settings state,
+-- not wire-parsed data.
+local at_core = require("autotrader.core")
+S.autotrade = nil
+at_core.settings()
+
+check("/vik trader: auto_trade off by default", page_opts.get("auto_trade") == false)
+printed = {}
+registered_vik.handler("trader on", "/vik")
+check("/vik trader on: flips page_opts.auto_trade", page_opts.get("auto_trade") == true)
+check("/vik trader on: reply text verbatim", printed[1] == "[Auto-Trade] ON.", printed[1])
+-- The trailing status line format string, LEGACY:713-717, verbatim.
+check("/vik trader on: trailing status line",
+      printed[2] == "[Auto-Trade] ON | reserve 0 | margin 3/u | min-gain 200d | carts 2 | "
+        .. "pack no | use-stock no | auto-stock off | stockprio stock1st", printed[2])
+
+printed = {}
+registered_vik.handler("trader off", "/vik")
+check("/vik trader off: flips page_opts.auto_trade back", page_opts.get("auto_trade") == false)
+check("/vik trader off: reply text verbatim", printed[1] == "[Auto-Trade] OFF.", printed[1])
+
+printed = {}
+registered_vik.handler("trader stock on", "/vik")
+check("/vik trader stock on: sets use_stock", S.autotrade.use_stock == true)
+check("/vik trader stock on: reply verbatim", printed[1] == "[Auto-Trade] use-stock ON.", printed[1])
+registered_vik.handler("trader stock off", "/vik")
+check("/vik trader stock off: clears use_stock", S.autotrade.use_stock == false)
+
+registered_vik.handler("trader pack on", "/vik")
+check("/vik trader pack on: sets pack", S.autotrade.pack == true)
+registered_vik.handler("trader pack off", "/vik")
+check("/vik trader pack off: clears pack", S.autotrade.pack == false)
+
+printed = {}
+registered_vik.handler("trader debug on", "/vik")
+check("/vik trader debug on: sets debug", S.autotrade.debug == true)
+check("/vik trader debug on: reply verbatim",
+      printed[1] == "[Auto-Trade] debug ON -- each idle tick will print why nothing was sent.",
+      printed[1])
+registered_vik.handler("trader debug off", "/vik")
+check("/vik trader debug off: clears debug", S.autotrade.debug == false)
+
+registered_vik.handler("trader stockroute on", "/vik")
+check("/vik trader stockroute on: sets stock_route", S.autotrade.stock_route == true)
+registered_vik.handler("trader stockroute off", "/vik")
+check("/vik trader stockroute off: clears stock_route", S.autotrade.stock_route == false)
+
+registered_vik.handler("trader stockpriority off", "/vik")
+check("/vik trader stockpriority off: clears stock_priority", S.autotrade.stock_priority == false)
+registered_vik.handler("trader stockpriority on", "/vik")
+check("/vik trader stockpriority on: sets stock_priority", S.autotrade.stock_priority == true)
+
+registered_vik.handler("trader reserve 50", "/vik")
+check("/vik trader reserve <n>: sets reserve", S.autotrade.reserve == 50)
+registered_vik.handler("trader margin 7", "/vik")
+check("/vik trader margin <n>: sets min_margin", S.autotrade.min_margin == 7)
+registered_vik.handler("trader profit 300", "/vik")
+check("/vik trader profit <n>: sets min_profit", S.autotrade.min_profit == 300)
+registered_vik.handler("trader carts 4", "/vik")
+check("/vik trader carts <n>: sets max_carts", S.autotrade.max_carts == 4)
+registered_vik.handler("trader show 9", "/vik")
+check("/vik trader show <n>: sets show_n", S.autotrade.show_n == 9)
+registered_vik.handler("trader autostock 500", "/vik")
+check("/vik trader autostock <n>: sets auto_stock", S.autotrade.auto_stock == 500)
+registered_vik.handler("trader autostock off", "/vik")
+check("/vik trader autostock off: clears auto_stock", S.autotrade.auto_stock == 0)
+
+-- log / log clear: return early, no trailing status line.
+S.autotrade.log = {}
+printed = {}
+registered_vik.handler("trader log", "/vik")
+check("/vik trader log (empty): exact message",
+      printed[1] == "[Auto-Trade] log is empty." and #printed == 1, printed[1])
+
+S.autotrade.log = { { t = "12:00", jobs = { { label = "sell 5 ore->X +10d" } } } }
+printed = {}
+registered_vik.handler("trader log", "/vik")
+check("/vik trader log (non-empty): header + one entry, no trailing status line",
+      printed[1] == "[Auto-Trade] recent activity:"
+        and printed[2] == "  12:00 sell 5 ore->X +10d"
+        and #printed == 2, table.concat(printed, "|"))
+
+printed = {}
+registered_vik.handler("trader log clear", "/vik")
+check("/vik trader log clear: clears the log and replies, no trailing status line",
+      #S.autotrade.log == 0 and printed[1] == "[Auto-Trade] log cleared." and #printed == 1,
+      printed[1])
+
+-- Unrecognized subcommand: usage message, no state change, no trailing
+-- status line.
+local reserve_before = S.autotrade.reserve
+printed = {}
+local ok_bad_trader = pcall(registered_vik.handler, "trader bogus", "/vik")
+check("/vik trader bogus: does not error", ok_bad_trader)
+check("/vik trader bogus: usage message verbatim",
+      printed[1] == "[Auto-Trade] usage: atrade on|off | stock on|off | stockpriority on|off | "
+        .. "autostock <n>|off | pack on|off | debug on|off | reserve <n> | margin <n> | "
+        .. "profit <n> | carts <n> | show <n> | log [clear]" and #printed == 1,
+      printed[1])
+check("/vik trader bogus: no state disturbed", S.autotrade.reserve == reserve_before)
+
+-- "status" is explicitly accepted (falls through to the trailing status
+-- line, same as an empty rest at the plan-config level -- NOT the same as
+-- bare `/vik trader`, which opens the menu; see below).
+printed = {}
+registered_vik.handler("trader status", "/vik")
+check("/vik trader status: prints the trailing status line, no usage error",
+      #printed == 1 and printed[1]:find("^%[Auto%-Trade%]") ~= nil, printed[1])
+
+-- ---- /vik trader (bare): opens the settings menu (Task 3) ------------------
+S.autotrade = nil
+at_core.settings()
+page_opts.set("auto_trade", false)
+last_menu_open = nil
+registered_vik.handler("trader", "/vik")
+check("/vik trader (bare): opens a menu", last_menu_open ~= nil)
+check("/vik trader (bare): menu title", last_menu_open and last_menu_open.title == "Auto-Trade Settings")
+check("/vik trader (bare): 13 items, LEGACY's atrade_menu_build order",
+      last_menu_open and #last_menu_open.items == 13, last_menu_open and #last_menu_open.items)
+if last_menu_open then
+  local labels = menu_item_labels(last_menu_open)
+  check("/vik trader (bare): item labels reflect current OFF/default settings",
+        labels[1] == "Auto-Trade: off" and labels[2] == "Pack deals per cart: no"
+          and labels[3] == "Use warehouse stock: no" and labels[4] == "Auto-stock over: off"
+          and labels[5] == "Batch stock sells: dispatch" and labels[6] == "Stock priority: stock1st"
+          and labels[7] == "Min margin (/u): >=3" and labels[8] == "Min gain per job: 200d"
+          and labels[9] == "Daler reserve: 0" and labels[10] == "Max carts: 2"
+          and labels[11] == "Movers shown: 6" and labels[12] == "Show log: no"
+          and labels[13] == "Clear log",
+        table.concat(labels, "|"))
+end
+
+-- Selecting the "on" item toggles the flag, saves, and reopens the menu in
+-- place (LEGACY:11377's rebuild-in-place) -- the SAME on_select call this
+-- test drives is exactly what a menu.lua Enter keypress would invoke.
+last_menu_open.on_select("on")
+check("/vik trader menu: selecting 'on' flips auto_trade", page_opts.get("auto_trade") == true)
+check("/vik trader menu: reopens itself in place (a new menu is open)", last_menu_open ~= nil)
+if last_menu_open then
+  check("/vik trader menu: reopened item reflects the new ON state",
+        menu_item_labels(last_menu_open)[1] == "Auto-Trade: ON")
+end
+
+-- Cycling knobs: margin 3 -> 5 (AT_MARGIN_STEPS = {1,2,3,5,8,10,15,20}).
+last_menu_open.on_select("margin")
+check("/vik trader menu: cycling margin 3 -> 5", S.autotrade.min_margin == 5, S.autotrade.min_margin)
+-- Clear log via the menu.
+S.autotrade.log = { "one", "two" }
+last_menu_open.on_select("clearlog")
+check("/vik trader menu: clearlog empties the log", #S.autotrade.log == 0)
+
+page_opts.set("auto_trade", false)   -- restore default for later tests
+last_menu_open = nil
 
 -- ---- stats_window contract: has_data / render_guild_stats (Task 3) ---------
 -- Stage 2: render_guild_stats draws a truncated view of pages.stats.lines(w)

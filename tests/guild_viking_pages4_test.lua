@@ -181,8 +181,8 @@ local at_all = joined(at_lines)
 check("goods: Auto-Trade shows ON when page_opts.auto_trade is true",
       at_all:find("ON", 1, true) ~= nil, at_all)
 check("goods: Idle status line shown (cooldown)", at_all:find("cooldown", 1, true) ~= nil, at_all)
-check("goods: Auto-trade controls placeholder present (stage 4)",
-      at_all:find("Auto%-trade controls: stage 4") ~= nil, at_all)
+check("goods: Auto-trade controls line points at /vik trader (stage 4 Task 3)",
+      at_all:find("Auto%-trade controls: /vik trader") ~= nil, at_all)
 
 page_opts.set("auto_trade", false)
 local at_off_lines = goods_page.lines(WIDTH)
@@ -225,8 +225,8 @@ page_opts.set("show_goods_atlog", false)
 local no_atlog_lines = goods_page.lines(WIDTH)
 check("goods: Auto-Trade Log header disappears when show_goods_atlog is off",
       find_line(no_atlog_lines, "Auto-Trade Log:") == nil, joined(no_atlog_lines))
-check("goods: controls placeholder still present when atlog is off",
-      joined(no_atlog_lines):find("Auto%-trade controls: stage 4") ~= nil)
+check("goods: controls line still present when atlog is off",
+      joined(no_atlog_lines):find("Auto%-trade controls: /vik trader") ~= nil)
 page_opts.set("show_goods_atlog", true)
 
 -- ---- Price rows (show_goods_prices) + trend arrows via market.price_trend --
