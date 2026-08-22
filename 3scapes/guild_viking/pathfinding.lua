@@ -31,6 +31,15 @@
 -- guild_viking.lua ever reads it -- it is genuinely dead bookkeeping, not a
 -- side effect to preserve, but dropping it would be "cleaning up" the
 -- traversal rather than porting it, so it stays.
+--
+-- Testability adaptation (review round 1): `tile_passable`/`edge_passable`/
+-- `can_move` are exposed as `M._tile_passable`/`M._edge_passable`/
+-- `M._can_move` purely so tests can pin their indexing directly against a
+-- known row/edge string, instead of only through BFS's aggregate nil/path
+-- answer (which can hide a mutant when two indexing errors happen to
+-- cancel out -- see the pathfinding test file's header for the concrete
+-- case). This is exposure only: no behavior, traversal, passability rule,
+-- or return shape changed.
 local S = require("state").S
 
 local M = {}
@@ -120,5 +129,10 @@ function M.bfs(fx, fy, tx, ty)
   end
   return nil  -- no passable route
 end
+
+-- Testability exposure only -- see the header note above. No behavior change.
+M._tile_passable = tile_passable
+M._edge_passable = edge_passable
+M._can_move = can_move
 
 return M

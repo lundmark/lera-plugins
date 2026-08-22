@@ -217,5 +217,135 @@ check("element shape: every entry is a bare direction string", all_valid, path_s
 check("element shape: first two moves are both 'east'",
   p6 and p6[1] == "east" and p6[2] == "east", path_str(p6))
 
+-- =============================================================================
+-- Review round 1 finding: `tile_passable`'s column read
+-- (`:sub(x + 1, x + 1)`) was unpinned -- mutating it to `:sub(x, x)`
+-- produced zero test failures across cases 1-6. Root cause: in Case 4's
+-- fixture (rows={"pWp"}, water at wire-column 1, goal at column 2), the
+-- shifted read simultaneously (a) hides the real water at column 1 -- it
+-- now reads column 0's 'p' -- and (b) falsely blocks the goal at column 2
+-- -- it now reads column 1's 'W'. Both changes point the same way (still
+-- unreachable), so the aggregate nil/path answer never moves and the
+-- mutant survives. Cases 7 and 8 below each break that cancellation in a
+-- different way: 7 keeps the block reachable-but-detourable so the shift
+-- changes WHICH path comes back, and 8 puts the only water tile at the
+-- goal itself so the shift's direction of error (always "read one column
+-- to the left of the one asked for") has nothing to cancel against and
+-- flips nil into a false path. Case 9 pins the same indexing directly via
+-- the exposed `pathfinding._tile_passable` accessor, bypassing BFS
+-- aggregation entirely.
+-- =============================================================================
+
+-- =============================================================================
+-- Case 7: a mid-corridor water tile that is NOT adjacent to the goal (or to
+-- the start), with a second row available so the goal stays reachable by
+-- detour either way. A one-column shift in tile_passable's read moves the
+-- block from column 2 to column 3, which changes WHICH detour BFS returns
+-- rather than whether one exists -- exactly the "different path" failure
+-- mode called for, and it cannot be explained away as "still unreachable."
+--
+--   col:        0     1     2     3     4
+--   row0:    (0,0)p--(1,0)p--(2,0)W--(3,0)p--(4,0)p
+--               |1    |1    |1    |1    |1        (south edges, all open)
+--   row1:    (0,1)p--(1,1)p--(2,1)p--(3,1)p--(4,1)p
+--
+--   All east edges open on both rows, all south edges open. Water only at
+--   (2,0). Start=(0,0)  Goal=(4,0).
+--
+--   Correct (block at column 2): dip at column 0, cross under the water on
+--   row1, climb back up right after the blocked column, at column 3:
+--     south, east, east, east, north, east
+--
+--   Mutant (`:sub(x,x)`): tile_passable(x) now reads the string position
+--   for column x, which is what CORRECT would have read for column x-1 --
+--   so the block appears to move from column 2 to column 3, and BFS must
+--   climb back up one column later, at column 4:
+--     south, east, east, east, east, north
+--   Same length (6), genuinely different route -- this is the
+--   discriminator, not a reachability flip.
+-- =============================================================================
+reset_vmap()
+seed_vmap({
+  w = 5, h = 2,
+  rows = { "ppWpp", "ppppp" },
+  east_edges = { "11111", "11111" },
+  south_edges = { "11111" },
+})
+local p7 = pathfinding.bfs(0, 0, 4, 0)
+check("mid-corridor detour (not goal-adjacent): path found", p7 ~= nil, path_str(p7))
+check("mid-corridor detour (not goal-adjacent): exact route",
+  p7 and paths_equal(p7, { "south", "east", "east", "east", "north", "east" }), path_str(p7))
+-- The mutant's route -- included so a reviewer can see by eye that a
+-- one-column shift lands on a DIFFERENT valid-looking 6-step path, not on
+-- a garbage one; the assertion above is what actually pins the correct
+-- route and would fail against this alternative.
+local MUTANT_P7 = { "south", "east", "east", "east", "east", "north" }
+check("mid-corridor detour: the mutant's route is not what we assert (sanity)",
+  not paths_equal({ "south", "east", "east", "east", "north", "east" }, MUTANT_P7))
+
+-- =============================================================================
+-- Case 8: the ONLY water tile sits exactly at the goal -- the failure
+-- direction that would send a player walking into water. The mutant's
+-- read is always "one column left of the one asked for," so when the
+-- water is the last column (the goal), the shifted read reports the
+-- goal's neighbour's terrain ('p') for the goal itself, and BFS returns a
+-- confident path to a tile that is actually water.
+--
+--   col:      0     1     2
+--   row0:   (0,0)p-1->(1,0)p-1->(2,0)W   (goal tile itself is water)
+--
+--   Start=(0,0)  Goal=(2,0). Correct: the goal tile is impassable, so it
+--   can never be enqueued -> nil (correctly "no route to a goal that's
+--   underwater"). Mutant: tile_passable(2,0) reads column 1's 'p' instead
+--   of column 2's 'W' -> BFS happily reports {"east","east"}.
+-- =============================================================================
+reset_vmap()
+seed_vmap({
+  w = 3, h = 1,
+  rows = { "ppW" },
+  east_edges = { "11" },
+})
+local p8 = pathfinding.bfs(0, 0, 2, 0)
+check("goal-is-water: returns nil, not a false route into the water",
+  p8 == nil, path_str(p8))
+
+-- =============================================================================
+-- Case 9: pin tile_passable's indexing directly via the exposed
+-- `pathfinding._tile_passable` accessor, bypassing BFS's aggregate answer
+-- entirely. Two DIFFERENT rows (so a row-index slip -- [y] instead of
+-- [y+1] -- also gets caught: row1 read with row0's data would fail this
+-- comparison immediately) each mix all three terrain classes so every
+-- column position is independently checked, not just "some column blocks
+-- somewhere."
+--
+--   col:        0     1     2     3
+--   row0 (y=0): p     W     r     p      -- expect: T  F  F  T
+--   row1 (y=1): p     r     W     p      -- expect: T  F  F  T  (same
+--                                            pattern, different columns
+--                                            hold W vs r, so a row mix-up
+--                                            would still show as wrong
+--                                            per-column values here)
+-- =============================================================================
+reset_vmap()
+seed_vmap({
+  w = 4, h = 2,
+  rows = { "pWrp", "prWp" },
+})
+local EXPECT_ROW0 = { true, false, false, true }
+local EXPECT_ROW1 = { true, false, false, true }
+local row0_ok, row1_ok = true, true
+for x = 0, 3 do
+  if pathfinding._tile_passable(x, 0) ~= EXPECT_ROW0[x + 1] then row0_ok = false end
+  if pathfinding._tile_passable(x, 1) ~= EXPECT_ROW1[x + 1] then row1_ok = false end
+end
+check("tile_passable direct: row0 (wire row 0) matches column-by-column", row0_ok)
+check("tile_passable direct: row1 (wire row 1) matches column-by-column", row1_ok)
+-- Cross-check: row0 and row1 hold water/river in DIFFERENT columns
+-- (row0's blockers at x=1,2 are W,r; row1's are r,W) specifically so that
+-- reading the wrong row still produces a plausible-looking but WRONG
+-- per-column result rather than accidentally matching.
+check("tile_passable direct: rows are not identical (a real test of row indexing)",
+  S.vmap_rows[1] ~= S.vmap_rows[2], S.vmap_rows[1] .. " / " .. S.vmap_rows[2])
+
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING PATHFINDING TESTS PASSED")
