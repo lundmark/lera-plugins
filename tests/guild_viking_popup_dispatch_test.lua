@@ -591,9 +591,11 @@ end
 -- delivers the matching up), the up must open the ported travel menu, and
 -- selecting the menu's item must send the EXACT path (mirrors
 -- pathfinding_test.lua's Case 1: (0,0) -> (2,0) on a clear row =
--- {"east", "east"}). The second half is the fail-closed tracker case the
--- brief calls out by name: down on the POI, release over a DIFFERENT cell
--- -> no menu, no send.
+-- {"east", "east"}). Then two fail-closed sub-cases: down on the POI,
+-- release over a DIFFERENT, non-POI cell (the brief's own case); and,
+-- review round 1's Important finding, down on POI A, release over POI B
+-- -- see that block's own comment for why the non-POI case alone doesn't
+-- discriminate the tracker.
 -- =============================================================================
 do
   seed_vmap({
@@ -613,12 +615,24 @@ do
   local off = map.grid_line_offset(inner_w)
   local pcol, prow = to_screen(root_w, root_h, cell_lx(2), off + 0)
 
+  -- Review round 1, Minor 3: popup.lua's own handle_pointer (line ~220)
+  -- returns true for EVERY down inside the popup rect regardless of
+  -- whether the module consumed it (`return true -- a down inside never
+  -- falls through to panes or selection`) -- so asserting that return
+  -- value proves nothing about map.lua's own consumption. What DOES
+  -- discriminate it: popup.lua only sets its internal `capture` (and
+  -- therefore only ever calls on_pointer again for the matching up) when
+  -- the module's on_pointer actually returned true. The "matching up
+  -- opens the travel menu" check just below is what would fail if
+  -- map.lua's down handler stopped consuming -- that check carries the
+  -- consumption-verification role instead.
   send_calls, last_menu_open = {}, nil
-  check("a REAL down on the POI cell (2,0) consumes",
-    real_popup.handle_pointer({ kind = "down", button = "left", x = pcol, y = prow }) == true)
+  real_popup.handle_pointer({ kind = "down", button = "left", x = pcol, y = prow })
   check("the down never sends", #send_calls == 0)
   real_popup.handle_pointer({ kind = "up", button = "left", x = pcol, y = prow })
-  check("the matching up opens the travel menu via the REAL dispatch path", last_menu_open ~= nil)
+  check("the matching up opens the travel menu via the REAL dispatch path "
+    .. "(this is what actually proves the down was consumed -- see the comment above)",
+    last_menu_open ~= nil)
 
   local asgard_value
   for _, it in ipairs((last_menu_open or {}).items or {}) do
@@ -626,11 +640,19 @@ do
   end
   check("menu contains the asgard item", asgard_value ~= nil)
 
-  send_calls = {}
-  last_menu_open.on_select(asgard_value)
-  check("selecting the item sends the EXACT path, in order",
-    #send_calls == 2 and send_calls[1] == "east" and send_calls[2] == "east",
-    table.concat(send_calls, ","))
+  -- Review round 1, Minor 4: guard against a nil last_menu_open (e.g. a
+  -- real regression reintroducing the down-consumption bug) so a failure
+  -- here reports as a FAILED check on this and every later case, rather
+  -- than a Lua error that aborts the whole script before they run.
+  if last_menu_open then
+    send_calls = {}
+    last_menu_open.on_select(asgard_value)
+    check("selecting the item sends the EXACT path, in order",
+      #send_calls == 2 and send_calls[1] == "east" and send_calls[2] == "east",
+      table.concat(send_calls, ","))
+  else
+    check("selecting the item sends the EXACT path, in order", false, "menu never opened")
+  end
 
   -- Fail-closed (the brief's own case): down on the POI cell, release over
   -- a DIFFERENT, non-POI cell (0,0) -- must not open the menu or send.
@@ -638,10 +660,47 @@ do
   send_calls, last_menu_open = {}, nil
   real_popup.handle_pointer({ kind = "down", button = "left", x = pcol, y = prow })
   real_popup.handle_pointer({ kind = "up", button = "left", x = ocol, y = orow })
-  check("fail-closed: down on POI, up over a different cell -> menu never opens",
+  check("fail-closed (non-POI up): down on POI, up over a different cell -> menu never opens",
     last_menu_open == nil)
-  check("fail-closed: down on POI, up over a different cell -> nothing sent",
+  check("fail-closed (non-POI up): down on POI, up over a different cell -> nothing sent",
     #send_calls == 0)
+
+  -- Review round 1, Important: the case above releases over a NON-POI
+  -- cell, so map.lua's own guard `poi_at_cell(...) ~= nil and
+  -- track.matches(...)` is already rejected by its FIRST conjunct --
+  -- track.matches() is never even called with a chance to matter, so
+  -- that case cannot tell a working tracker from a broken (fail-open)
+  -- one. This block closes that gap: TWO real POIs, down on POI A's cell
+  -- (2,0), release on POI B's cell (1,0) -- poi_at_cell(...) ~= nil is
+  -- TRUE for the up (B is a genuine POI), so only track.matches()
+  -- rejecting the mismatched cell can be what keeps the menu shut.
+  --
+  -- VMAPH/VMAPL is a double-buffer (handlers/voyage.lua's own "swap
+  -- completed pending batch into live list" comment): a POI list commits
+  -- to S.vmap_pois only on the NEXT VMAPH, unless vmap_pois is currently
+  -- EMPTY (a first-load shortcut). It is NOT empty here (the single-POI
+  -- fixture above already populated it), so seed_vmap's own VMAPL alone
+  -- leaves the two-POI list pending; the extra VMAPH below is a second
+  -- heartbeat, exactly like a real second MIP packet, that promotes it.
+  seed_vmap({
+    w = 3, h = 1, rows = { "ppp" }, east_edges = { "111" },
+    px = 0, py = 0,
+    pois = {
+      { type = "capital", name = "asgard", x = 2, y = 0, owner = "" },
+      { type = "ruins", name = "vanaheim", x = 1, y = 0, owner = "" },
+    },
+  })
+  protocol.ingest("VMAPH", "3|1|0|0")
+  check("two-POI fixture promoted to the live list (scenario E)", #S.vmap_pois == 2, #S.vmap_pois)
+
+  local bcol, brow = to_screen(root_w, root_h, cell_lx(1), off + 0)
+  send_calls, last_menu_open = {}, nil
+  real_popup.handle_pointer({ kind = "down", button = "left", x = pcol, y = prow }) -- down on A (2,0)
+  real_popup.handle_pointer({ kind = "up", button = "left", x = bcol, y = brow })   -- up on B (1,0)
+  check("fail-closed (POI A -> POI B drag): menu never opens "
+    .. "(the up lands on a REAL poi, so only track.matches() can be rejecting this)",
+    last_menu_open == nil)
+  check("fail-closed (POI A -> POI B drag): nothing sent", #send_calls == 0)
 
   real_popup.close()
   check("scenario E: popup closed cleanly", real_popup.is_open() == false)

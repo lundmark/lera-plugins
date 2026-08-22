@@ -43,9 +43,13 @@
 -- actually took the down, but this tracker is a second, independent line
 -- of defense: even a mis-routed up must still fail to act when this
 -- specific module recorded no matching down of its own. Audited on this
--- flip: none of the four modules that hold a tracker (war_campaign,
--- war_battle, cityplan, sea) has any legitimate on_pointer path that
--- relies on acting without a recorded down of its own.
+-- flip: none of the modules that hold a tracker (war_campaign, war_battle,
+-- cityplan, sea) has any legitimate on_pointer path that relies on acting
+-- without a recorded down of its own. Re-audited when map.lua joined this
+-- list (Task 5, five modules now): map's only "up" action (open_poi_menu)
+-- is gated on `poi_at_cell(...) ~= nil and track.matches(...)`, both
+-- conjuncts required, so it too never acts on an up with no recorded
+-- (matching) down of its own.
 local M = {}
 
 local function same(a, b)

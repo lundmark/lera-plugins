@@ -94,19 +94,43 @@
 -- position, no send on "no route" or "already there" -- is ported and
 -- tested, just silently.
 --
--- Pacing adaptation: viking_poi_menu_travel paces each Send with
--- DoAfterSpecial(0.5, ...) ("wait for room to load before next move");
--- this port sends the whole path back-to-back with no delay, matching
+-- No pacing to port (review round 1 correction -- the original version of
+-- this note claimed LEGACY paced sends and disclosed dropping that; the
+-- premise was false). viking_poi_menu_travel's loop (MAIN 12358-12365)
+-- reads:
+--   for i, dir in ipairs(path) do
+--     Send(dir)
+--     if i < #path then DoAfterSpecial(0.5, "", sendto.execute) end
+--   end
+-- DoAfterSpecial registers a one-shot timer and returns immediately -- it
+-- cannot block the running Lua loop (MUSHclient has no such API); the
+-- SAME file proves this elsewhere: guild.events' MIP-batch throttle
+-- (MAIN 2672, 2947) re-arms `DoAfterSpecial(0.1, "guild.events.
+-- process_mip_batches()", 12)` from inside a live event handler, and
+-- autostepper.lua's watchdog (1533, re-armed from 1540) reschedules
+-- itself every tick via `DoAfterSpecial(2, "autostepper_watchdog_tick()",
+-- sendto.script)` -- neither is expressible if the call blocked. So in
+-- LEGACY every `Send(dir)` already fires back-to-back, with no wait
+-- between them at all; the `DoAfterSpecial(0.5, "", sendto.execute)`
+-- calls (one per step except the last, `#path - 1` total) each just
+-- queue an EMPTY command ("") to fire ~0.5s later -- a side effect, not a
+-- pacing mechanism, and one this port does not reproduce: this loop
+-- sends only the real direction strings, nothing else. This also matches
 -- pathfinding.lua's own documented consumption contract (a plain
--- `for _, dir in ipairs(path) do send(dir) end` loop, no timer involved)
--- and this codebase's sibling speedwalk.lua precedent (walk_delay defaults
--- to 0 -- instant -- for exactly this style of consecutive movement
--- commands).
+-- `for _, dir in ipairs(path) do send(dir) end` loop, no timer involved).
 --
 -- Title text ("Travel to...", the label of the PAGE_MENUS[7] item that
 -- used to open this) is a small disclosed addition: LEGACY's own
 -- viking_draw_poi_menu popup has no title bar at all (border + item rows
 -- only); require("menu")'s box always has one.
+--
+-- Per-item colour is FORCED-dropped, not a choice: viking_draw_poi_menu
+-- colours each row by POI type (`type_col`, MAIN 11960-11971, fallback
+-- 0xFFFF99) via a raw WindowText colour argument, but require("menu")'s
+-- item spec (scripts/default/menu.lua's normalize_items) carries only
+-- label/value/search -- there is no per-item colour slot to plug a BGR
+-- decode into. Every menu item therefore renders in the menu's own single
+-- colour regardless of POI type.
 --
 -- draw_page7 also builds `vmap_poi_locations` (guild_viking.lua:12695-
 -- 12728) with a comment claiming a "right-click lookup", but its only
