@@ -1,6 +1,7 @@
 -- Cross-session persistence: the rolling price history (market.lua), the
--- transport source mode (protocol.lua), and (stage 2) the page options and
--- current page (page_opts.lua / window.lua), mirroring LEGACY's
+-- transport source mode (protocol.lua), (stage 2) the page options and
+-- current page (page_opts.lua / window.lua), and (stage 4 Task 1) the
+-- auto-trade settings knobs (autotrader/core.lua), mirroring LEGACY's
 -- SetVariable("popt_"..k) + SetVariable("page", ...)
 -- (/home/simon/code/3s_scripts_old/lua/guild_viking.lua:3025-3040). Everything
 -- else in state.lua is per-connection/session data (combat, carts in
@@ -10,6 +11,7 @@ local market = require("market")
 local protocol = require("protocol")
 local page_opts = require("page_opts")
 local window = require("window")
+local at_core = require("autotrader.core")
 
 local M = {}
 
@@ -22,6 +24,7 @@ function M.save()
     price_history = market.snapshot().price_history,
     page_opts = opts,
     page = window.current_page(),
+    autotrade = at_core.snapshot().autotrade,
   })
   store.save()
 end
@@ -43,6 +46,9 @@ function M.load()
   end
   if data.page then
     window.set_page(data.page)
+  end
+  if data.autotrade then
+    at_core.restore({ autotrade = data.autotrade })
   end
 end
 
