@@ -17,6 +17,13 @@ end
 -- ---- lera API stubs (same shape as guild_viking_trade_test.lua) -----------
 ui = { dirty = function() end }
 lera = { time = function() return 1000 end, version = function() return "test" end }
+-- mud.connected() is Task 2's IsConnected() stand-in (plan.lua). `sent`
+-- collects mud.send() calls for suites that need to assert nothing was
+-- sent; plan.lua itself never calls mud.send (it captures into its own
+-- returned `commands` list -- see its header), but the stub is shared
+-- shape with every other guild_viking test file's `mud` stub.
+local mud_connected = true
+mud = { send = function() end, connected = function() return mud_connected end }
 local stored = nil
 store = {
   load = function() end,
@@ -37,6 +44,8 @@ for key, fn in pairs(city) do
 end
 
 local at_core = require("autotrader.core")
+local page_opts = require("page_opts")
+local plan = require("autotrader.plan")
 
 -- ---------------------------------------------------------------------------
 -- at_settings (LEGACY:19-31): default-knob guard, exercised on both the
@@ -300,6 +309,320 @@ persist.load()
 check("persist round-trip: reloaded settings match what was saved",
       S.autotrade ~= nil and S.autotrade.min_margin == 7 and S.autotrade.reserve == 42
       and S.autotrade.max_carts == 5)
+
+-- ===========================================================================
+-- Task 2: autotrader/plan.lua (viking_autotrader_plan and its three helpers,
+-- LEGACY guild_viking_autotrader.lua:281-667). Every fixture below is built
+-- through protocol.ingest with the real handlers (never a direct S. poke,
+-- except S.autotrade -- plugin-local settings state, the same exception
+-- Task 1's own tests use). A fake, monotonically-increasing os.time() drives
+-- both TGOODS' own >2s burst-reset window (handlers/trade.lua's M.TGOODS)
+-- and plan.lua's 30s AT_INTERVAL gate deterministically, following the same
+-- os.time-stubbing precedent guild_viking_trade_test.lua uses for price
+-- history timestamps.
+-- ===========================================================================
+local real_os_time = os.time
+local fake_now = 100000
+os.time = function() return fake_now end
+
+-- ---------------------------------------------------------------------------
+-- Off by default (global constraint): before page_opts.auto_trade is ever
+-- turned on, plan.build() must return nil and touch nothing.
+-- ---------------------------------------------------------------------------
+S.autotrade = nil
+check("plan: off by default (page_opts.auto_trade starts false) -> nil",
+      plan.build() == nil)
+
+page_opts.set("auto_trade", true)
+
+-- ---------------------------------------------------------------------------
+-- A couple of the earlier top-of-function gates, ported in this same range
+-- (LEGACY:401, 412-415), get a light sanity check before any fixture below
+-- ever populates S.trade_queue -- Task 1's own tests never touch TQUEUE, so
+-- it is still genuinely nil here (state.lua pre-seeds S.carts/S.idle_carts
+-- to {} at load, always truthy, which is why the "waiting for city data"
+-- gate in this port is effectively driven by S.trade_queue alone; see
+-- plan.lua's header). Not exhaustively boundary-tested here -- that is Task
+-- 3's job for auto_trade_tick's own preconditions -- just proof the gate
+-- exists and returns the right status, without poking S. directly.
+-- ---------------------------------------------------------------------------
+mud_connected = false
+local p0a = plan.build()
+check("plan/not connected: status set, no jobs/commands",
+      p0a and p0a.status == "not connected" and #p0a.jobs == 0 and #p0a.commands == 0)
+mud_connected = true
+
+check("plan/waiting for city data sanity: S.trade_queue is still nil (never ingested yet)",
+      S.trade_queue == nil)
+local p0b = plan.build()
+check("plan/waiting for city data: status set, no jobs/commands",
+      p0b and p0b.status == "waiting for city data -- enable 'vtoggle mip_city' on the MUD"
+      and #p0b.jobs == 0 and #p0b.commands == 0, p0b and p0b.status)
+
+-- ---------------------------------------------------------------------------
+-- Branch: budget clamp (LEGACY:376-379, inside at_add_deal_legs). One
+-- arbitrage deal for a durable, non-graded good (timber, so
+-- route_sell_quality is always 1.0 and the arithmetic stays simple).
+--
+-- TGOODS: lineage 0 buys timber at 10d (score -1, supply 1000); lineage 1
+-- sells timber at 50d (score 2, demand 1000). compute_market_movers sizes
+-- the deal at qty = min(supply 1000, floor(demand*0.8) = 800) = 800 -- that
+-- 800 is only the MOVERS-suggested size, not what gets dispatched.
+--
+-- daler 500, reserve 0 -> budget 500. at_add_deal_legs:
+--   qty = floor(budget / buy) = floor(500 / 10) = 50
+--   (50 is not > a.qty=800, not > cap_left=200, not > have=1000 -> stays 50)
+--   unit_margin = floor(sell*1.0 - buy + 0.5) = floor(50 - 10 + 0.5) = 40
+--   gain = 50 * 40 = 2000
+-- One idle cart (cap 200) comfortably covers cap_left, so cap_left never
+-- binds here -- only the budget does.
+-- ---------------------------------------------------------------------------
+S.autotrade = nil
+at_core.settings()
+protocol.ingest("BUILDINGS", "")
+protocol.ingest("WSTOCK", "timber|1000|100")
+protocol.ingest("STAFF", "")
+protocol.ingest("BLOCKS", "")
+protocol.ingest("CARTS", "")
+protocol.ingest("CIDLE", "11|1|100|200|standard")
+protocol.ingest("TQUEUE", "")
+protocol.ingest("DALER", "500")
+protocol.ingest("TGOODS", "0=t:-1:1000:0:10:0|1=t:2:0:1000:0:50")
+
+local p1 = plan.build()
+check("plan/budget clamp: returns a table", type(p1) == "table")
+check("plan/budget clamp: exactly one job", p1 and #p1.jobs == 1, p1 and #p1.jobs)
+if p1 and p1.jobs[1] then
+  local j = p1.jobs[1]
+  check("plan/budget clamp: job qty clamped to 50 by budget (not movers' 800)", j.qty == 50, j.qty)
+  check("plan/budget clamp: job fields (mode/good/btown_lin/stown_lin/margin/profit)",
+        j.mode == "buy" and j.good == "timber" and j.btown_lin == 0 and j.stown_lin == 1
+        and j.margin == 40 and j.profit == 2000)
+  check("plan/budget clamp: job label exact",
+        j.label == "buy 50 Timber @Midgard->Lodbrok's Hold (+40/u, ~2000d) [cart #11]", j.label)
+end
+check("plan/budget clamp: exact command sequence",
+      p1 and p1.commands[1] == "vtrade route clear quiet"
+      and p1.commands[2] == "vtrade route cart 11"
+      and p1.commands[3] == "vtrade route add buy 50 timber midgard"
+      and p1.commands[4] == "vtrade route add sell 50 timber lodbrok"
+      and p1.commands[5] == "vtrade queue add"
+      and #p1.commands == 5)
+check("plan/budget clamp: status cleared once jobs dispatch", p1 and p1.status == nil)
+
+-- AT_INTERVAL (LEGACY:17, 30s) gate: calling again immediately (same
+-- fake_now) must return nil without touching anything.
+check("plan/AT_INTERVAL: a second call inside the 30s window returns nil",
+      plan.build() == nil)
+
+-- ---------------------------------------------------------------------------
+-- Branch: cap_left exhaustion (LEGACY:378, `if qty > cap_left then qty =
+-- cap_left end`). Same shape as above, but a HUGE budget/movers qty and a
+-- small idle cart (cap 30), so cap_left -- not budget -- is what clamps qty.
+--
+--   qty (pre-clamp) = floor(100000 / 10) = 10000
+--   a.qty (movers)  = min(2000, floor(2000*0.8)=1600) = 1600 -> qty clamps to 1600
+--   cap_left = 30 (the only idle cart's capacity)             -> qty clamps to 30
+--   unit_margin = floor(50*1.0 - 10 + 0.5) = 40
+--   gain = 30 * 40 = 1200
+-- ---------------------------------------------------------------------------
+fake_now = fake_now + 1000
+S.autotrade = nil
+at_core.settings()
+protocol.ingest("BUILDINGS", "")
+protocol.ingest("WSTOCK", "timber|1000|100")
+protocol.ingest("STAFF", "")
+protocol.ingest("BLOCKS", "")
+protocol.ingest("CARTS", "")
+protocol.ingest("CIDLE", "21|1|100|30|standard")
+protocol.ingest("TQUEUE", "")
+protocol.ingest("DALER", "100000")
+protocol.ingest("TGOODS", "0=t:-1:2000:0:10:0|1=t:2:0:2000:0:50")
+
+local p2 = plan.build()
+check("plan/cap_left exhaustion: exactly one job", p2 and #p2.jobs == 1, p2 and #p2.jobs)
+if p2 and p2.jobs[1] then
+  local j = p2.jobs[1]
+  check("plan/cap_left exhaustion: qty clamped to the cart's cap_left (30), not budget's 10000 nor movers' 1600",
+        j.qty == 30, j.qty)
+  check("plan/cap_left exhaustion: margin/profit", j.margin == 40 and j.profit == 1200)
+end
+check("plan/cap_left exhaustion: exact command sequence",
+      p2 and p2.commands[1] == "vtrade route clear quiet"
+      and p2.commands[2] == "vtrade route cart 21"
+      and p2.commands[3] == "vtrade route add buy 30 timber midgard"
+      and p2.commands[4] == "vtrade route add sell 30 timber lodbrok"
+      and p2.commands[5] == "vtrade queue add"
+      and #p2.commands == 5)
+
+-- ---------------------------------------------------------------------------
+-- Branch: warehouse-full stock dispatch (LEGACY:457-458, 471, 505 --
+-- `overflow` bypasses both the weak-sell wait and the profit floor). A
+-- durable, non-graded good (ore) piled to 95% of a tier-1 warehouse (cap
+-- 400), with NO use_stock/auto_stock and a deliberately weak score (-3,
+-- below AT_SELL_MIN_SCORE) that would normally hold it back.
+--
+--   warehouse_pct = floor(380/400*100) = 95 >= 85 -> wh_full/overflow = true
+--   qty (top-level, and again at dispatch) = min(380, cart_cap 200, demand
+--     1000) = 200
+--   gain = floor(200*20*1.0 + 0.5) = 4000 (direct_sell_quality = 1.0: ore is
+--     neither graded nor perishable)
+-- ---------------------------------------------------------------------------
+fake_now = fake_now + 1000
+S.autotrade = nil
+at_core.settings()
+protocol.ingest("BUILDINGS", "warehouse:1")
+protocol.ingest("WSTOCK", "ore|380|100")
+protocol.ingest("STAFF", "")
+protocol.ingest("BLOCKS", "")
+protocol.ingest("CARTS", "")
+protocol.ingest("CIDLE", "31|1|100|200|standard")
+protocol.ingest("TQUEUE", "")
+protocol.ingest("DALER", "1000")
+protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
+
+check("plan/warehouse-full sanity: 380/400 = 95% >= 85", at_core.warehouse_pct() == 95, at_core.warehouse_pct())
+
+local p3 = plan.build()
+check("plan/warehouse-full stock dispatch: exactly one job", p3 and #p3.jobs == 1, p3 and #p3.jobs)
+if p3 and p3.jobs[1] then
+  local j = p3.jobs[1]
+  check("plan/warehouse-full stock dispatch: job fields",
+        j.mode == "sell" and j.stock == true and j.good == "ore" and j.qty == 200
+        and j.stown_lin == 2 and j.margin == 20 and j.profit == 4000)
+  check("plan/warehouse-full stock dispatch: label exact",
+        j.label == "sell 200 Ore (stock)->Eiriksson Hold +4000d [cart #31]", j.label)
+end
+check("plan/warehouse-full stock dispatch: single dispatch command, no route/queue machinery",
+      p3 and #p3.commands == 1 and p3.commands[1] == "vtrade dispatch sell 200 ore eiriksson", p3 and p3.commands[1])
+
+-- ---------------------------------------------------------------------------
+-- Branch: demand-safety refusal (LEGACY:291/293/354-355, sell_demand caps
+-- `sq` below AT_MIN_LEG_QTY=5 even though the CANDIDATE cleared the
+-- top-level profit filter using that same demand-capped size). Furs (durable,
+-- not graded), use_stock on, single-dispatch mode.
+--
+--   top-level candidate qty = min(have 50, cart_cap 60, demand 4) = 4
+--   qty * eff = 4 * 100 = 400 >= min_profit 200 -> candidate is KEPT
+--   at dispatch: sq = min(have 50, cap 60, demand 4) = 4 < AT_MIN_LEG_QTY (5)
+--     and not forced -> dispatch_stock_sell returns nil: no send, no job
+-- ---------------------------------------------------------------------------
+fake_now = fake_now + 1000
+S.autotrade = nil
+at_core.settings()
+S.autotrade.use_stock = true
+protocol.ingest("BUILDINGS", "")
+protocol.ingest("WSTOCK", "furs|50|100")
+protocol.ingest("STAFF", "")
+protocol.ingest("BLOCKS", "")
+protocol.ingest("CARTS", "")
+protocol.ingest("CIDLE", "41|1|100|60|standard")
+protocol.ingest("TQUEUE", "")
+protocol.ingest("DALER", "1000")
+protocol.ingest("TGOODS", "3=f:3:0:4:0:100")
+
+local p4 = plan.build()
+check("plan/demand-safety refusal: no jobs (leg fell under AT_MIN_LEG_QTY)",
+      p4 and #p4.jobs == 0, p4 and #p4.jobs)
+check("plan/demand-safety refusal: no commands sent",
+      p4 and #p4.commands == 0, p4 and #p4.commands)
+check("plan/demand-safety refusal: status names the one unaffordable candidate",
+      p4 and p4.status == "1 deal(s) found but none affordable after reserve (budget 1000d) -- "
+        .. "lower reserve/margin/min-profit or raise carts",
+      p4 and p4.status)
+
+-- ---------------------------------------------------------------------------
+-- Branch: stop-limit truncation (LEGACY:580-586, `max_legs = at.pack and
+-- at_max_stops() or 1` bounds a SINGLE cart's packed route). Three durable,
+-- non-perishable, non-graded stock candidates (furs/ore/timber) with
+-- trading_post tier 2 (no staff) -> max_stops() = 2 -> max_legs = 2 with
+-- Pack on. Two idle carts, so the third candidate spills into its OWN
+-- cart/route rather than being folded into the first (which still has
+-- cap_left to spare -- the stop count, not the cap, is what truncates it).
+--
+--   sc products (margin*qty): furs 20*50=1000, ore 24*40=960, timber
+--   15*60=900 -> sorted desc: furs, ore, timber
+--
+-- Cart 1 (cap 300): furs leg sq=min(50,300,1000)=50, gain=floor(50*20+0.5)=1000,
+--   cap_left 300->250; ore leg sq=min(40,250,1000)=40, gain=floor(40*24+0.5)=960,
+--   cap_left 250->210. #packed reaches max_legs (2) -> the inner loop stops
+--   BEFORE consuming timber, even though cap_left (210) still has room.
+-- Cart 2 (same only idle cart -- pick_cart is stateless within one planning
+--   pass, an existing LEGACY property): timber leg sq=min(60,300,1000)=60,
+--   gain=floor(60*15+0.5)=900.
+-- ---------------------------------------------------------------------------
+fake_now = fake_now + 1000
+S.autotrade = nil
+at_core.settings()
+S.autotrade.use_stock = true
+S.autotrade.stock_route = true
+S.autotrade.pack = true
+protocol.ingest("BUILDINGS", "trading_post:2")
+protocol.ingest("WSTOCK", "furs|50|100;timber|60|100;ore|40|100")
+protocol.ingest("STAFF", "")
+protocol.ingest("BLOCKS", "")
+protocol.ingest("CARTS", "")
+protocol.ingest("CIDLE", "11|1|100|300|standard;12|1|100|300|standard")
+protocol.ingest("TQUEUE", "")
+protocol.ingest("DALER", "1000")
+protocol.ingest("TGOODS", "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
+
+check("plan/stop-limit sanity: max_stops = 2 (trading_post tier 2, no staff)",
+      at_core.max_stops() == 2, at_core.max_stops())
+
+local p5 = plan.build()
+check("plan/stop-limit truncation: three jobs total, across two carts",
+      p5 and #p5.jobs == 3, p5 and #p5.jobs)
+if p5 and #p5.jobs == 3 then
+  local j1, j2, j3 = p5.jobs[1], p5.jobs[2], p5.jobs[3]
+  check("plan/stop-limit truncation: job order furs, ore, timber (sorted by margin*qty desc)",
+        j1.good == "furs" and j2.good == "ore" and j3.good == "timber")
+  check("plan/stop-limit truncation: furs leg (cart 1)",
+        j1.qty == 50 and j1.stown_lin == 3 and j1.profit == 1000
+        and j1.label == "sell 50 Furs (stock)->Ui Imair Hold +1000d [cart #11]", j1.label)
+  check("plan/stop-limit truncation: ore leg (cart 1, the 2nd and LAST leg max_legs allows)",
+        j2.qty == 40 and j2.stown_lin == 5 and j2.profit == 960
+        and j2.label == "sell 40 Ore (stock)->Harfagre Hold +960d [cart #11]", j2.label)
+  check("plan/stop-limit truncation: timber leg spilled into its OWN cart/route (cart 2)",
+        j3.qty == 60 and j3.stown_lin == 4 and j3.profit == 900
+        and j3.label == "sell 60 Timber (stock)->Rurikid Hold +900d [cart #11]", j3.label)
+end
+check("plan/stop-limit truncation: exact command sequence -- two separate route/queue blocks",
+      p5 and p5.commands[1] == "vtrade route clear quiet"
+      and p5.commands[2] == "vtrade route cart 11"
+      and p5.commands[3] == "vtrade route add sell 50 furs ui_imair"
+      and p5.commands[4] == "vtrade route add sell 40 ore harfagre"
+      and p5.commands[5] == "vtrade queue add"
+      and p5.commands[6] == "vtrade route clear quiet"
+      and p5.commands[7] == "vtrade route cart 11"
+      and p5.commands[8] == "vtrade route add sell 60 timber rurikid"
+      and p5.commands[9] == "vtrade queue add"
+      and #p5.commands == 9)
+
+-- ---------------------------------------------------------------------------
+-- Branch: the empty-plan case (LEGACY:446-450). No arbitrage deals and no
+-- reason to offload stock at all.
+-- ---------------------------------------------------------------------------
+fake_now = fake_now + 1000
+S.autotrade = nil
+at_core.settings()
+protocol.ingest("BUILDINGS", "")
+protocol.ingest("WSTOCK", "")
+protocol.ingest("STAFF", "")
+protocol.ingest("BLOCKS", "")
+protocol.ingest("CARTS", "")
+protocol.ingest("CIDLE", "51|1|100|100|standard")
+protocol.ingest("TQUEUE", "")
+protocol.ingest("DALER", "500")
+protocol.ingest("TGOODS", "")
+
+local p6 = plan.build()
+check("plan/empty-plan case: no jobs, no commands",
+      p6 and #p6.jobs == 0 and #p6.commands == 0)
+check("plan/empty-plan case: status exact",
+      p6 and p6.status == "no profitable deals right now (and no stock set to offload)", p6 and p6.status)
+
+os.time = real_os_time
 
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING AUTOTRADER TESTS PASSED")
