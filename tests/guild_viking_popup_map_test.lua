@@ -80,6 +80,23 @@ package.loaded["wm"] = {
   },
 }
 
+-- ---- menu.lua facade stub (identical shape to
+-- guild_viking_popup_dispatch_test.lua's) -- Task 5's POI travel menu opens
+-- through require("menu"); map.lua requires "menu" lazily (only from
+-- open_poi_menu), so this just needs to be in place before the first click
+-- that reaches it, same as popups/cityplan.lua's own test coverage.
+local last_menu_open = nil
+package.loaded["menu"] = {
+  open = function(opts) last_menu_open = opts end,
+  close = function() last_menu_open = nil end,
+  is_open = function() return last_menu_open ~= nil end,
+}
+local function menu_item_values(opts)
+  local out = {}
+  for _, it in ipairs(opts.items or {}) do out[#out + 1] = it end
+  return out
+end
+
 local pagelib = require("pagelib")
 local maplib = require("maplib")
 local state = require("state")
@@ -411,22 +428,166 @@ check("out-of-grid click leaves the hover line unchanged", after_hover == before
 check("out-of-grid click never sends anything to the MUD", #send_calls == 0)
 
 -- =============================================================================
--- per-module smoke (fix round 2, Important #1's "apply uniformly" audit):
--- map has no click action to protect (on_pointer never consumes a "down"),
--- so there is no cross-target drag to test here -- but a down+move+down
--- sequence on the SAME cell must still behave exactly like a bare move,
--- with no crash, no consumption, and no send, confirming the audit's
--- conclusion that this module needs no down-target tracker.
+-- per-module smoke, non-POI cell (fix round 2, Important #1's "apply
+-- uniformly" audit, updated for Task 5): a down+move+up sequence on a
+-- TERRAIN cell (no POI there -- (0,1) is 'A', mountains, per the fixture
+-- above) must still behave exactly like a bare move: no crash, no
+-- consumption, no send, no menu. Task 5 gives POI/town cells a real click
+-- action (tested below); this pins that a non-POI cell is unaffected.
 -- =============================================================================
 send_calls = {}
-local ok_down_same = map.on_pointer({ kind = "down", x = 0, y = 0, inside = true }, fixed_ctx(0, 1))
-check("down on a cell does not consume (map has no click action)",
+last_menu_open = nil
+local ok_down_same = map.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" },
+  fixed_ctx(0, 1))
+check("down on a non-POI cell does not consume",
   ok_down_same == nil or ok_down_same == false)
 map.on_pointer({ kind = "move", x = 0, y = 0, inside = true }, fixed_ctx(0, 1))
 local ok_up_same = map.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" },
   fixed_ctx(0, 1))
-check("a subsequent up on the SAME cell does not consume either", ok_up_same == nil or ok_up_same == false)
-check("down+move+up on the same cell never sends anything", #send_calls == 0)
+check("a subsequent up on the SAME non-POI cell does not consume either",
+  ok_up_same == nil or ok_up_same == false)
+check("down+move+up on a non-POI cell never sends anything", #send_calls == 0)
+check("down+move+up on a non-POI cell never opens the travel menu", last_menu_open == nil)
+
+-- =============================================================================
+-- Task 5: POI travel menu -- item list and per-item conditions
+-- (viking_show_poi_menu, guild_viking.lua:11789-11814). Player at (0,0);
+-- one POI with a KNOWN path (reachable "asgard" at (2,0), the pathfinding
+-- suite's own Case 1 straight-line grid) and one with NO known path
+-- (unreachable "helheim" behind water at (2,0) on a second, disconnected
+-- row -- see the water-fixture grid below); plus a POI with an invalid
+-- position (x = -1) that viking_show_poi_menu's own filter excludes.
+-- =============================================================================
+reset_vmap()
+seed_vmap({
+  w = 3, h = 1,
+  rows = { "ppp" },
+  east_edges = { "111" },
+  px = 0, py = 0,
+  pois = {
+    { type = "capital", name = "asgard", x = 2, y = 0, owner = "" },
+    { type = "ruins", name = "lost cave", x = -1, y = -1, owner = "" },
+  },
+})
+
+local poi_at_2_0 = { kind = "down", x = 0, y = 0, inside = true, button = "left" }
+local up_at_2_0 = { kind = "up", x = 0, y = 0, inside = true, button = "left" }
+send_calls, last_menu_open = {}, nil
+check("left down on the POI cell (2,0) consumes",
+  map.on_pointer(poi_at_2_0, fixed_ctx(2, 0)) == true)
+check("down on a POI cell never sends", #send_calls == 0)
+map.on_pointer(up_at_2_0, fixed_ctx(2, 0))
+check("matching up opens the travel menu", last_menu_open ~= nil)
+check("travel menu title is 'Travel to...'",
+  last_menu_open and last_menu_open.title == "Travel to...", last_menu_open and last_menu_open.title)
+
+local items = last_menu_open and menu_item_values(last_menu_open) or {}
+check("menu excludes the POI with an invalid position (x = -1)", #items == 1, #items)
+check("menu's one item is asgard, labeled per viking_draw_poi_menu's format",
+  items[1] and items[1].label == "Cap  Travel to Asgard (2,0)", items[1] and items[1].label)
+check("menu item's value carries the POI record itself (for on_select's travel_to)",
+  items[1] and items[1].value and items[1].value.name == "asgard")
+
+-- =============================================================================
+-- Task 5: travel branch -- EXACT movement sends for a reachable target,
+-- via the real on_select callback the menu captured above (mirrors
+-- pathfinding_test.lua's Case 1: (0,0) -> (2,0) on a clear row = exactly
+-- {"east", "east"}).
+-- =============================================================================
+send_calls = {}
+last_menu_open.on_select(items[1].value)
+check("reachable target: EXACTLY two sends, in order, 'east' then 'east'",
+  #send_calls == 2 and send_calls[1] == "east" and send_calls[2] == "east",
+  table.concat(send_calls, ","))
+
+-- =============================================================================
+-- Task 5: travel branch -- a POI with NO known path sends nothing
+-- (mirrors pathfinding_test.lua's Case 4: water blocks the only route).
+-- =============================================================================
+reset_vmap()
+seed_vmap({
+  w = 3, h = 1,
+  rows = { "pWp" },
+  east_edges = { "111" },
+  px = 0, py = 0,
+  pois = { { type = "ruins", name = "helheim", x = 2, y = 0, owner = "" } },
+})
+send_calls, last_menu_open = {}, nil
+map.on_pointer(poi_at_2_0, fixed_ctx(2, 0))
+map.on_pointer(up_at_2_0, fixed_ctx(2, 0))
+check("unreachable target's menu still opens", last_menu_open ~= nil)
+local unreachable_items = last_menu_open and menu_item_values(last_menu_open) or {}
+check("unreachable target: exactly one item (helheim)", #unreachable_items == 1)
+send_calls = {}
+last_menu_open.on_select(unreachable_items[1].value)
+check("unreachable target: no passable route -> nothing sent", #send_calls == 0)
+
+-- Already-at-target: player standing on the POI's own cell -> #path == 0,
+-- still nothing sent (mirrors pathfinding_test.lua's Case 5).
+reset_vmap()
+seed_vmap({
+  w = 3, h = 1,
+  rows = { "ppp" },
+  east_edges = { "111" },
+  px = 2, py = 0,
+  pois = { { type = "capital", name = "asgard", x = 2, y = 0, owner = "" } },
+})
+send_calls, last_menu_open = {}, nil
+map.on_pointer(poi_at_2_0, fixed_ctx(2, 0))
+map.on_pointer(up_at_2_0, fixed_ctx(2, 0))
+check("already-at-target: menu still opens (player position is known)", last_menu_open ~= nil)
+local already_items = last_menu_open and menu_item_values(last_menu_open) or {}
+check("already-at-target: exactly one item (asgard)", #already_items == 1)
+send_calls = {}
+last_menu_open.on_select(already_items[1].value)
+check("already at target: #path == 0 -> nothing sent", #send_calls == 0)
+
+-- =============================================================================
+-- Task 5: a click on a non-POI cell sends nothing and never opens the menu
+-- (the down itself is unconsumed, matching the per-module smoke case
+-- above -- repeated here with a fresh grid that actually HAS pois
+-- elsewhere, so this is a genuine "wrong cell" check, not just "no pois
+-- at all").
+-- =============================================================================
+reset_vmap()
+seed_vmap({
+  w = 3, h = 1,
+  rows = { "ppp" },
+  east_edges = { "111" },
+  px = 0, py = 0,
+  pois = { { type = "capital", name = "asgard", x = 2, y = 0, owner = "" } },
+})
+send_calls, last_menu_open = {}, nil
+local ok_nonpoi_down = map.on_pointer({ kind = "down", x = 0, y = 0, inside = true, button = "left" },
+  fixed_ctx(1, 0))
+check("down on a non-POI cell (1,0) does not consume", ok_nonpoi_down ~= true)
+map.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(1, 0))
+check("non-POI cell click never opens the menu", last_menu_open == nil)
+check("non-POI cell click never sends", #send_calls == 0)
+
+-- =============================================================================
+-- Task 5: fail-closed tracker case, driven directly at the module level
+-- (the REAL popup.lua dispatch-layer version of this lives in
+-- guild_viking_popup_dispatch_test.lua) -- down on the POI cell (2,0),
+-- up on a DIFFERENT cell (1,0, non-POI) must not open the menu or send.
+-- =============================================================================
+send_calls, last_menu_open = {}, nil
+map.on_pointer(poi_at_2_0, fixed_ctx(2, 0))
+map.on_pointer({ kind = "up", x = 0, y = 0, inside = true, button = "left" }, fixed_ctx(1, 0))
+check("fail-closed: down on POI, up elsewhere -> menu never opens", last_menu_open == nil)
+check("fail-closed: down on POI, up elsewhere -> nothing sent", #send_calls == 0)
+
+-- A "cancel" (popup closing mid-drag) clears the tracker too: a down on
+-- the POI followed by cancel, then an up on that SAME cell (simulating a
+-- fresh, unrelated gesture the tracker must not still "remember"), must
+-- not open the menu either.
+send_calls, last_menu_open = {}, nil
+map.on_pointer(poi_at_2_0, fixed_ctx(2, 0))
+map.on_pointer({ kind = "cancel" }, fixed_ctx(2, 0))
+map.on_pointer(up_at_2_0, fixed_ctx(2, 0))
+check("cancel clears the tracker: a later up on the same cell still does not open the menu",
+  last_menu_open == nil)
+check("cancel clears the tracker: nothing sent either", #send_calls == 0)
 
 -- =============================================================================
 -- ctx.cell_from_xy wiring through the real popups.lua wrapper (stubbed

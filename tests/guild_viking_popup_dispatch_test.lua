@@ -135,6 +135,16 @@ for _, p in ipairs(kingdom._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
 end
 
+-- Task 5 needs VMAP* too (map.lua's own popup test's seed_vmap uses the
+-- same registration).
+local voyage = require("handlers.voyage")
+for key, fn in pairs(voyage) do
+  if key ~= "_patterns" then protocol.handler(key, fn) end
+end
+for _, p in ipairs(voyage._patterns or {}) do
+  protocol.pattern_handler(p.pattern, p.fn)
+end
+
 local S = state.S
 
 -- popups.lua self-registers map/sea/voyage/cityplan/war against the "wm"
@@ -142,6 +152,7 @@ local S = state.S
 local popups = require("popups")
 local war_campaign = require("popups.war_campaign")
 local war_battle = require("popups.war_battle")
+local map = require("popups.map")
 
 -- seed_wmap/seed_battle: copied verbatim from
 -- guild_viking_popup_war_test.lua (same wire-format helpers, so a fixture
@@ -188,6 +199,32 @@ local function seed_battle(t)
     t.phase or "deploy", t.turn or 0, t.war_points or 0, t.mode or "field", t.target or "",
     budg, wh, terrain, works, table.concat(units_parts, ";"),
   }, "|"))
+end
+
+-- seed_vmap: copied verbatim from guild_viking_popup_map_test.lua's own
+-- helper (same wire-format, same 1-indexed-storage-for-a-0-based-wire-row
+-- translation) so a Task 5 fixture here is directly comparable to that
+-- suite's own.
+local function seed_vmap(t)
+  protocol.ingest("VMAPH", string.format("%d|%d|%d|%d",
+    t.w, t.h, t.px or -1, t.py or -1))
+  for wire_row, row in ipairs(t.rows or {}) do
+    protocol.ingest(string.format("VMR%02d", wire_row - 1), row)
+  end
+  for wire_row, edge in ipairs(t.east_edges or {}) do
+    protocol.ingest(string.format("MEE%02d", wire_row - 1), edge)
+  end
+  for wire_row, edge in ipairs(t.south_edges or {}) do
+    protocol.ingest(string.format("MES%02d", wire_row - 1), edge)
+  end
+  if t.pois and #t.pois > 0 then
+    local parts = {}
+    for _, p in ipairs(t.pois) do
+      parts[#parts + 1] = table.concat(
+        { p.type, p.name, p.x, p.y, p.owner or "" }, "|")
+    end
+    protocol.ingest("VMAPL", table.concat(parts, ";"))
+  end
 end
 
 -- ---- popup.lua's OWN private box-geometry math, replicated here so this
@@ -544,6 +581,70 @@ do
 
   real_popup.close()
   check("scenario D positive control: popup closed cleanly", real_popup.is_open() == false)
+end
+
+-- =============================================================================
+-- Scenario E (Task 5): the map popup's POI travel menu, driven end to end
+-- through the REAL popup.lua down/up dispatch -- the case this suite exists
+-- for (per its own header comment): a down on the map's POI cell (2,0)
+-- must be CONSUMED (so popup.lua actually captures the gesture and
+-- delivers the matching up), the up must open the ported travel menu, and
+-- selecting the menu's item must send the EXACT path (mirrors
+-- pathfinding_test.lua's Case 1: (0,0) -> (2,0) on a clear row =
+-- {"east", "east"}). The second half is the fail-closed tracker case the
+-- brief calls out by name: down on the POI, release over a DIFFERENT cell
+-- -> no menu, no send.
+-- =============================================================================
+do
+  seed_vmap({
+    w = 3, h = 1, rows = { "ppp" }, east_edges = { "111" },
+    px = 0, py = 0,
+    pois = { { type = "capital", name = "asgard", x = 2, y = 0, owner = "" } },
+  })
+  check("vmap seeded (scenario E)", S.vmap_w == 3 and S.vmap_px == 0)
+  check("popups.toggle('map') opens the territory map", popups.toggle("map") == true)
+
+  local root_w, root_h = 100, 30
+  local root = ui.rect(0, 0, root_w, root_h)
+  real_popup.render(root)
+  local _, _, bw = box_geometry(root_w, root_h)
+  local inner_w = bw - 2
+
+  local off = map.grid_line_offset(inner_w)
+  local pcol, prow = to_screen(root_w, root_h, cell_lx(2), off + 0)
+
+  send_calls, last_menu_open = {}, nil
+  check("a REAL down on the POI cell (2,0) consumes",
+    real_popup.handle_pointer({ kind = "down", button = "left", x = pcol, y = prow }) == true)
+  check("the down never sends", #send_calls == 0)
+  real_popup.handle_pointer({ kind = "up", button = "left", x = pcol, y = prow })
+  check("the matching up opens the travel menu via the REAL dispatch path", last_menu_open ~= nil)
+
+  local asgard_value
+  for _, it in ipairs((last_menu_open or {}).items or {}) do
+    if it.value and it.value.name == "asgard" then asgard_value = it.value end
+  end
+  check("menu contains the asgard item", asgard_value ~= nil)
+
+  send_calls = {}
+  last_menu_open.on_select(asgard_value)
+  check("selecting the item sends the EXACT path, in order",
+    #send_calls == 2 and send_calls[1] == "east" and send_calls[2] == "east",
+    table.concat(send_calls, ","))
+
+  -- Fail-closed (the brief's own case): down on the POI cell, release over
+  -- a DIFFERENT, non-POI cell (0,0) -- must not open the menu or send.
+  local ocol, orow = to_screen(root_w, root_h, cell_lx(0), off + 0)
+  send_calls, last_menu_open = {}, nil
+  real_popup.handle_pointer({ kind = "down", button = "left", x = pcol, y = prow })
+  real_popup.handle_pointer({ kind = "up", button = "left", x = ocol, y = orow })
+  check("fail-closed: down on POI, up over a different cell -> menu never opens",
+    last_menu_open == nil)
+  check("fail-closed: down on POI, up over a different cell -> nothing sent",
+    #send_calls == 0)
+
+  real_popup.close()
+  check("scenario E: popup closed cleanly", real_popup.is_open() == false)
 end
 
 if failures > 0 then os.exit(1) end

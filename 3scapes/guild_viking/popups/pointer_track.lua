@@ -1,9 +1,8 @@
 -- Down-target recording, shared by the interactive popup modules that need
--- it (war_campaign, war_battle, cityplan, sea). map never consumes a
--- "down" at all (hover-only), so popup.lua never captures a gesture for
--- it and it needs no tracker; voyage's [Actions] line is its only
--- clickable target, so there is no second target for a mismatched up to
--- land on. Both are documented inline in their own modules.
+-- it (war_campaign, war_battle, cityplan, sea, and, as of Task 5's POI
+-- travel menu, map). voyage's [Actions] line is its only clickable target,
+-- so there is no second target for a mismatched up to land on -- it is
+-- documented inline in its own module.
 --
 -- Real MUSHclient/miniwin hotspot semantics: a mouseup is only delivered to
 -- the SAME hotspot that took the matching mousedown, even for a hotspot with

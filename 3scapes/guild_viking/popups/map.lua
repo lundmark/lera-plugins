@@ -15,17 +15,98 @@
 -- site 12638), where `icons` requires `page_opts.show_map_icons` (12422) --
 -- the graphical Wang-tile branch this task deliberately does NOT port (see
 -- above). In the TEXT-VIEW branch (icons=false, our target), LEGACY fires
--- ZERO hotspots on this page: there is no live interaction to port at all.
+-- ZERO "vmp_*" hotspots on this page: there is no click behavior riding on
+-- THAT family to port, in either branch.
 --
 -- The module-local `hover` info line below (updated from on_pointer through
 -- the ctx.cell_from_xy contract, see popups.lua's header comment) is
--- therefore a LERA ADDITION, not a port of a live LEGACY interaction --
--- exactly the same category as the edge-wall overlay disclosed further
--- down. It gives the text view a hover affordance analogous to what the
--- icon view's tooltip WOULD have shown had this task ported that branch,
--- using the tooltip's own text format/vocabulary (still ported verbatim:
--- VMAP_TIP_TERR/VMAP_TIP_SYM below, and the "(%d,%d)  %s" format string,
--- guild_viking.lua:12652).
+-- therefore a LERA ADDITION as far as "vmp_*" goes, not a port of a live
+-- LEGACY interaction -- exactly the same category as the edge-wall overlay
+-- disclosed further down. It gives the text view a hover affordance
+-- analogous to what the icon view's tooltip WOULD have shown had this task
+-- ported that branch, using the tooltip's own text format/vocabulary
+-- (still ported verbatim: VMAP_TIP_TERR/VMAP_TIP_SYM below, and the
+-- "(%d,%d)  %s" format string, guild_viking.lua:12652).
+--
+-- Task 5 (POI travel menu) IS a genuinely live LEGACY interaction, just not
+-- one reached through "vmp_*". Its only live attach point is the generic
+-- per-page right-click context menu -- PAGE_MENUS[7]'s "Travel to..." item
+-- (guild_viking.lua:11092-11096) -> viking_page_menu_pick's "travel" branch
+-- (11211, 11216) -> viking_show_poi_menu (11789-11814) -- chrome stage 2/3
+-- dropped entirely (lera has no generic per-page right-click menu; see
+-- autotrader/tick.lua's header comment for the identical precedent with
+-- viking_show_atrade_menu, including its own explicit "assign the dropped
+-- trigger to something else" ruling). viking_vmap_any_mouseup/mousedown
+-- (11822-11841) are NOT that attach point and are NOT ported: grep confirms
+-- neither is ever registered as a WindowAddHotspot callback anywhere in
+-- guild_viking.lua -- dead code, same class of finding as
+-- viking_resolve_poi_at below.
+--
+-- Retargeted trigger (disclosed adaptation, per the task brief): since the
+-- page-context chrome is gone, a LEFT down on a POI/town cell (a cell
+-- poi_lookup() resolves -- i.e. a rendered town glyph) is this port's
+-- trigger instead of a right-click anywhere on the page. The down is
+-- consumed and recorded via popups/pointer_track.lua (a module-local
+-- tracker, same discipline popups/cityplan.lua/sea.lua/war_*.lua already
+-- use -- see the "Pointer" section below for why THIS module now needs
+-- one, where it used to need none). The matching up opens the SAME menu
+-- content viking_show_poi_menu built: the list is NOT filtered to the
+-- clicked POI -- it lists every travelable location, exactly what LEGACY's
+-- own right-click-anywhere trigger showed.
+--
+-- Hotspot / attach-point -> port table:
+--   LEGACY vmp_<col>_<row>         guild_viking.lua   on_pointer move/down
+--     (hover only, no click;         :12639-12655       hover (unchanged,
+--      unchanged)                                        this task didn't
+--                                                         touch it)
+--   PAGE_MENUS[7] "Travel to..."   :11092-11096       dropped chrome;
+--     -> viking_page_menu_pick      :11211, 11216        retargeted onto a
+--     -> viking_show_poi_menu       :11789-11814          left-click on a
+--                                                          POI/town cell
+--                                                          (see above)
+--   viking_draw_poi_menu's         :11913-12048       require("menu")
+--     "poi_pick_<n>" hotspots       :11977                (its own
+--     + poi_scroll_up/down/         :12038-12070          windowing
+--       thumb_drag/scroll_wheel     :12057-12068          replaces the
+--                                                          bespoke miniwin
+--                                                          popup+scrollbar
+--                                                          -- same upgrade
+--                                                          precedent as
+--                                                          cityplan's and
+--                                                          sea's own menu
+--                                                          ports)
+--   viking_poi_menu_pick           :12332-12341       menu's on_select ->
+--                                                        travel_to(poi)
+--   viking_poi_menu_travel         :12343-12369       travel_to(poi):
+--                                                        pathfinding.bfs +
+--                                                        mud.send loop
+--   viking_vmap_any_mouseup/       :11822-11841       NOT ported: dead
+--     mousedown                                         code, never
+--                                                        registered
+--                                                        (grep-confirmed)
+--
+-- ColourNote status messages ("you are not on the map" / "No locations
+-- available to travel to" / "No passable route to X" / "Already at X" /
+-- "Traveling to X (n steps)") are display-only and dropped, per the SAME
+-- convention every pointer handler in this plugin already follows
+-- (popups/war_campaign.lua's "Click a host first" note). The guard/branch
+-- LOGIC each message rode along with -- no-op on an unknown player
+-- position, no send on "no route" or "already there" -- is ported and
+-- tested, just silently.
+--
+-- Pacing adaptation: viking_poi_menu_travel paces each Send with
+-- DoAfterSpecial(0.5, ...) ("wait for room to load before next move");
+-- this port sends the whole path back-to-back with no delay, matching
+-- pathfinding.lua's own documented consumption contract (a plain
+-- `for _, dir in ipairs(path) do send(dir) end` loop, no timer involved)
+-- and this codebase's sibling speedwalk.lua precedent (walk_delay defaults
+-- to 0 -- instant -- for exactly this style of consecutive movement
+-- commands).
+--
+-- Title text ("Travel to...", the label of the PAGE_MENUS[7] item that
+-- used to open this) is a small disclosed addition: LEGACY's own
+-- viking_draw_poi_menu popup has no title bar at all (border + item rows
+-- only); require("menu")'s box always has one.
 --
 -- draw_page7 also builds `vmap_poi_locations` (guild_viking.lua:12695-
 -- 12728) with a comment claiming a "right-click lookup", but its only
@@ -49,16 +130,18 @@
 -- Disposition of the plan's "pointer drag pans, wheel zooms where legacy
 -- zoomed" (design doc, Stage 3): "pan" here is the popup wrapper's own
 -- scroller (popups.lua's `wrap()`, wheel-driven, same as every other board
--- popup) -- there is no drag-to-pan gesture, since this module (see above)
--- fires no click/drag interaction at all in the text-view branch. "Zoom"
--- never applies: LEGACY's zoom is pixel/icon-branch `cell_w` machinery
--- (the graphical Wang-tile rendering this task does not port, same ruling
--- as every other popup's show_*_icons disclosure) with no text-grid
--- equivalent -- there is nothing here for a zoom gesture to do.
+-- popup) -- there is no drag-to-pan gesture; Task 5's own click (see below)
+-- is a plain down+up on one cell, not a drag. "Zoom" never applies:
+-- LEGACY's zoom is pixel/icon-branch `cell_w` machinery (the graphical
+-- Wang-tile rendering this task does not port, same ruling as every other
+-- popup's show_*_icons disclosure) with no text-grid equivalent -- there
+-- is nothing here for a zoom gesture to do.
 local pagelib = require("pagelib")
 local maplib = require("maplib")
 local state = require("state")
 local page_opts = require("page_opts")
+local pathfinding = require("pathfinding")
+local track = require("popups.pointer_track").tracker()
 
 local S = state.S
 local C = pagelib.C
@@ -389,16 +472,14 @@ function M.grid_line_offset(width)
 end
 
 -- ---------------------------------------------------------------------------
--- Pointer: hover-only, per the module doc comment above -- LEGACY fires no
--- hotspots at all on this page in the text-view branch, so there is no
--- click (or even a live hover) to port; on_pointer only ever updates
--- `hover` (a lera addition) and never returns true (never consumes the
--- event) and never calls mud.send. No down-target tracker
--- (popups/pointer_track.lua) here, unlike cityplan/sea/war_campaign/
--- war_battle: this module never consumes a "down" at all, so the popup
--- layer never establishes a capture for it and "up" is never even
--- dispatched here -- there is no click action for a cross-target drag to
--- misfire.
+-- Pointer: hover (unchanged) plus, as of Task 5, a genuinely live click --
+-- see the module doc comment's "Task 5" section above for why this module
+-- now needs its own down-target tracker (popups/pointer_track.lua), unlike
+-- before. A LEFT down on a POI/town cell records the cell via the tracker
+-- and consumes; the matching up, when its own cell still matches the
+-- recorded one (fail-closed: no match, including no recorded down at all,
+-- means no action), opens the travel menu. Every other down (non-POI cell,
+-- or a non-left button) is unconsumed, exactly as before.
 -- ---------------------------------------------------------------------------
 
 local function cell_tip(poi_at, c, r)
@@ -420,25 +501,139 @@ local function cell_tip(poi_at, c, r)
   return string.format("(%d,%d)  %s", c, r, tip)
 end
 
+local function poi_at_cell(poi_at, c, r)
+  return poi_at[r * (S.vmap_w or 0) + c]
+end
+
+-- viking_show_poi_menu's item list (guild_viking.lua:11796-11803): every
+-- POI with a valid position (x, y >= 0), sorted by TOWN_SORT_ORDER's
+-- type/name order (guild_viking.lua:11804-11810, the SAME table
+-- town_lines above uses for its own sort -- but note the FILTER here is
+-- different: viking_show_poi_menu gates on coordinate validity only, not
+-- on TOWN_SORT_ORDER membership, so an unlisted type still appears (sorted
+-- last, `oa/ob or 99`) rather than being dropped the way town_lines drops
+-- it).
+local function poi_menu_items()
+  local items = {}
+  for _, poi in ipairs(S.vmap_pois or {}) do
+    if poi.x and poi.y and poi.x >= 0 and poi.y >= 0 then
+      items[#items + 1] = poi
+    end
+  end
+  table.sort(items, function(a, b)
+    local oa = TOWN_SORT_ORDER[a.type] or 99
+    local ob = TOWN_SORT_ORDER[b.type] or 99
+    if oa ~= ob then return oa < ob end
+    return display_name(a.name or ""):lower() < display_name(b.name or ""):lower()
+  end)
+  return items
+end
+
+-- viking_draw_poi_menu's per-item label (guild_viking.lua:11970-11976:
+-- `"%s  Travel to %s (%d,%d)"`), ported verbatim. Its own local
+-- `type_short` table is identical to TOWN_SHORT above except for the
+-- fallback ("POI" here vs TOWN_SHORT's "?" fallback used by
+-- town_entry_text) -- both are LEGACY's own literal choices, kept as-is.
+local function poi_menu_label(poi)
+  local prefix = TOWN_SHORT[poi.type] or "POI"
+  return string.format("%s  Travel to %s (%d,%d)", prefix, display_name(poi.name), poi.x, poi.y)
+end
+
+-- viking_poi_menu_pick + viking_poi_menu_travel (guild_viking.lua:
+-- 12332-12369): resolves the path at PICK time (not at menu-open time, so
+-- a player-position update that lands while the menu is open is honored),
+-- then dispatches it. ColourNote status messages are dropped -- see the
+-- module doc comment's disclosure above; every guard below still runs.
+local function travel_to(poi)
+  if (S.vmap_px or -1) < 0 then return end -- "[vmap] Player position unknown"
+  local path = pathfinding.bfs(S.vmap_px, S.vmap_py, poi.x, poi.y)
+  if not path then return end               -- "[vmap] No passable route to X"
+  if #path == 0 then return end             -- "Already at X"
+  for _, dir in ipairs(path) do              -- "[vmap] Traveling to X (n steps)"
+    mud.send(dir)
+  end
+end
+
+-- viking_show_poi_menu (guild_viking.lua:11789-11814), retargeted onto
+-- this port's own trigger -- see the module doc comment's "Retargeted
+-- trigger" section above. The `state.vmap_px < 0` guard (11791-11794) and
+-- the empty-list guard (11809-11812) are both ported; in practice the
+-- empty-list guard is unreachable via THIS trigger (a POI cell was just
+-- clicked, so poi_menu_items() can never come back empty), but it stays
+-- for the same reason pathfinding.lua kept LEGACY's dead `explored`
+-- counter -- porting the function, not "cleaning it up".
+local function open_poi_menu()
+  if (S.vmap_px or -1) < 0 then return end
+  local pois = poi_menu_items()
+  if #pois == 0 then return end
+  local items = {}
+  for _, poi in ipairs(pois) do
+    items[#items + 1] = { label = poi_menu_label(poi), value = poi }
+  end
+  require("menu").open({
+    items = items,
+    title = "Travel to...",
+    on_select = function(value)
+      if type(value) == "table" then travel_to(value) end
+    end,
+  })
+end
+
 function M.on_pointer(ev, ctx)
   if not ctx.cell_from_xy then return nil end
-  if ev.kind ~= "move" and ev.kind ~= "down" then return nil end
+
+  if ev.kind == "cancel" then
+    track.clear()
+    return nil
+  end
+
+  if ev.kind ~= "move" and ev.kind ~= "down" and ev.kind ~= "up" then return nil end
+
   local c, r = ctx.cell_from_xy(ev.x, ev.y)
   if not c then
     -- Fix round 2, Minor: clear a stale hover line on an off-grid MOVE
     -- only -- not "down", which stays a pure no-op (never touches hover),
     -- matching this module's own existing "out-of-grid click leaves the
-    -- hover line unchanged" contract.
+    -- hover line unchanged" contract. An off-grid "up" has nothing to
+    -- match against, so it just clears the tracker.
     if ev.kind == "move" and hover ~= "" then hover = ""; ui.dirty() end
+    if ev.kind == "up" then track.clear() end
     return nil
   end
-  hover = cell_tip(poi_lookup(), c, r)
-  ui.dirty()
+
+  local poi_at = poi_lookup()
+
+  if ev.kind == "move" then
+    hover = cell_tip(poi_at, c, r)
+    ui.dirty()
+    return nil
+  end
+
+  if ev.kind == "down" then
+    hover = cell_tip(poi_at, c, r)
+    ui.dirty()
+    if ev.button ~= "left" then return nil end
+    if not poi_at_cell(poi_at, c, r) then return nil end
+    track.record({ kind = "cell", c = c, r = r })
+    return true
+  end
+
+  -- ev.kind == "up"
+  local matched = poi_at_cell(poi_at, c, r) ~= nil and track.matches({ kind = "cell", c = c, r = r })
+  track.clear()
+  if matched then
+    open_poi_menu()
+    return true
+  end
   return nil
 end
 
 -- Called by popups.lua's registry when this popup closes (fix round 2,
--- Minor: "clear hover on close").
+-- Minor: "clear hover on close"). The down-target tracker needs no
+-- separate clearing here: popup.lua synthesizes a "cancel" to any
+-- module holding a live capture before this runs (scripts/default/
+-- popup.lua's finish()), and on_pointer's "cancel" branch above already
+-- clears it.
 function M.reset()
   hover = ""
 end
