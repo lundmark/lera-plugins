@@ -5,6 +5,31 @@
 -- pointer routing, matching CLAUDE.md's wm.assign renderer contract:
 -- render(rect, opts), on_pointer(event), and auto-captured
 -- scroll/scroll_to_bottom/following_tail.
+--
+-- Task 6 seam: `mod.lines(width)` MAY return a second value, a `targets`
+-- array of `{ row, col_start, col_end, action }` -- `row` is the 1-based
+-- index into that SAME `lines` array, `col_start`/`col_end` are zero-based
+-- visible columns (`col_end` exclusive), matching the tab-span convention
+-- below. A page that returns no second value behaves exactly as before
+-- (`targets or {}` in window.render, so `on_pointer` just finds nothing to
+-- hit-test). Recorded only on a local render pass, alongside `tab_rows` and
+-- the scroll `offset`, using the SAME pass-guard idiom as `tab_spans` (see
+-- that comment below) and for the SAME reason: a remote WebSocket viewer's
+-- own (possibly different) width/height must never clobber what the local
+-- click routing depends on.
+--
+-- `on_pointer` fires a hit target's `action` directly on the qualifying
+-- LEFT DOWN itself (mirroring the tab bar's own down-fires dispatch just
+-- below) -- there is no up-based "release inside the same element" gesture
+-- at this seam, unlike the popup/pane pointer_track.lua modules. See the
+-- Task 6 report for the safety argument this affords against a
+-- down-on-target-A/drag/up-on-target-B misfire: because window.on_pointer's
+-- very first line rejects every event that is not `kind == "down"`, a
+-- later "move" or "up" delivered to this SAME function (wm.lua's
+-- pointer_capture mechanism re-invokes it, per CLAUDE.md's "Pane Pointer
+-- Input") can never reach the target hit-test at all, let alone fire a
+-- second (or misrouted) action -- there is exactly one chance to fire per
+-- physical click, taken at down time, before any drag can happen.
 local pagelib = require("pagelib")
 local scroller = require("scroller")
 
@@ -101,6 +126,14 @@ end
 -- click routing depends on.
 local tab_spans = {}
 
+-- Recorded page-body targets from the most recent LOCAL render (Task 6
+-- seam), plus the `tab_rows`/`offset` inputs the row-mapping formula in
+-- `window.on_pointer` needs. Same local-only recording discipline as
+-- `tab_spans` above -- see this module's header comment.
+local page_targets = {}
+local recorded_tab_rows = 0
+local recorded_offset = 0
+
 local SEPARATOR = " "
 
 -- Draws the tab bar into the top of `rect`, flowing onto further rows when
@@ -160,7 +193,7 @@ function window.render(rect, opts)
   if body_h <= 0 then return end
 
   local page = pages_by_key[current_key]
-  local lines = page.mod.lines(w)
+  local lines, targets = page.mod.lines(w)
 
   local sc = scrollers[current_key]
   -- Only the LOCAL render pass may adjust the scroller's height-based clamp,
@@ -188,6 +221,15 @@ function window.render(rect, opts)
   local first = offset + 1
   local last = math.min(count, offset + body_h)
 
+  -- Task 6 seam: same local-pass-only recording as `last_lines`/
+  -- `sc.set_height` just above, and for the identical reason -- see this
+  -- module's header comment and `tab_spans`' own comment.
+  if lera.render_pass() ~= "remote" then
+    page_targets = targets or {}
+    recorded_tab_rows = tab_rows
+    recorded_offset = offset
+  end
+
   local body_y = rect:y() + tab_rows
   for i = first, last do
     ui.text_ansi(ui.rect(rect:x(), body_y + (i - first), w, 1),
@@ -199,11 +241,28 @@ end
 -- every other event (a down with a different/no button, e.g. a middle- or
 -- right-click on a tab, or a down elsewhere, e.g. the body) returns false so
 -- the pane never falsely claims an interaction it didn't handle.
+-- Task 6 seam: a body-target hit fires its `action` (pcall'd, so an errant
+-- action can never wedge the pane) and returns true, taking priority below
+-- the tab bar's own check. `page_row` maps the down's pane-local row back
+-- onto the page's own 1-based `lines` index using the SAME inputs the
+-- render pass just windowed the visible rows with (`recorded_tab_rows`,
+-- `recorded_offset`); a down still on a tab-bar row (`event.y <
+-- recorded_tab_rows`) that missed every tab span (e.g. the separator
+-- column) is deliberately excluded from that mapping rather than being
+-- allowed to alias onto some body row's target.
 function window.on_pointer(event)
   if event.kind ~= "down" or event.button ~= "left" then return false end
   for _, s in ipairs(tab_spans) do
     if event.y == s.row and event.x >= s.col_start and event.x < s.col_end then
       return window.set_page(s.key)
+    end
+  end
+  if event.y < recorded_tab_rows then return false end
+  local page_row = (event.y - recorded_tab_rows) + recorded_offset + 1
+  for _, t in ipairs(page_targets) do
+    if page_row == t.row and event.x >= t.col_start and event.x < t.col_end then
+      pcall(t.action)
+      return true
     end
   end
   return false

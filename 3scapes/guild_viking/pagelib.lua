@@ -134,6 +134,18 @@ function pagelib.bar(width, val, max, color)
   return "[" .. body .. "]"
 end
 
+-- Targets helper (Task 6): a bracketed clickable label ("[Run There]"),
+-- colored, with its own PLAIN (escape-free) width returned alongside so a
+-- caller building a window.lua pointer target's col_start/col_end can do
+-- the column arithmetic in plain character counts -- the same "escapes
+-- cost zero width" convention window.lua's render_tabbar already uses for
+-- its own tab-span bookkeeping, rather than re-deriving width by stripping
+-- escapes back out of the colored string via pagelib.visible_width.
+function pagelib.button(text, color)
+  local plain = "[" .. text .. "]"
+  return (color or "") .. plain .. pagelib.RESET, #plain
+end
+
 -- Section header: text then a dash fill to exactly `width`, all in one
 -- fixed header color. Overflow (text alone at/past width) truncates via
 -- trunc exactly like every other primitive.

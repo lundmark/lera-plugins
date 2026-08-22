@@ -160,6 +160,16 @@
 -- Wang-tile rendering this task does not port, same ruling as every other
 -- popup's show_*_icons disclosure) with no text-grid equivalent -- there
 -- is nothing here for a zoom gesture to do.
+-- Task 6 addendum: `M.poi_menu_items` and `M.travel_to` are exported below
+-- (next to their local definitions) so pages/people.lua's errand "Run
+-- There" button can reuse viking_show_poi_menu's item list/sort and
+-- viking_poi_menu_travel's bfs+send dispatch verbatim -- see
+-- viking_errand_return_and_submit (MAIN 12234-12331), which calls exactly
+-- those two operations (12289 viking_show_poi_menu(), 12309
+-- viking_poi_menu_pick -> viking_poi_menu_travel()) -- instead of
+-- pages/people.lua re-deriving the sorted town list or re-running bfs
+-- itself. No behavior here changed for THIS module's own on_pointer path;
+-- the exports are additive.
 local pagelib = require("pagelib")
 local maplib = require("maplib")
 local state = require("state")
@@ -553,6 +563,12 @@ local function poi_menu_items()
   return items
 end
 
+-- Exported (Task 6): pages/people.lua's errand-return button reuses this
+-- EXACT item list/sort -- viking_errand_return_and_submit (MAIN 12289) calls
+-- viking_show_poi_menu(), whose item-building/sort is this same function --
+-- rather than re-deriving the town list and its TOWN_SORT_ORDER tie-break.
+M.poi_menu_items = poi_menu_items
+
 -- viking_draw_poi_menu's per-item label (guild_viking.lua:11970-11976:
 -- `"%s  Travel to %s (%d,%d)"`), ported verbatim. Its own local
 -- `type_short` table is identical to TOWN_SHORT above except for the
@@ -577,6 +593,13 @@ local function travel_to(poi)
     mud.send(dir)
   end
 end
+
+-- Exported (Task 6): pages/people.lua's errand-return button reuses this
+-- EXACT travel dispatch -- viking_errand_return_and_submit's simulated pick
+-- (MAIN 12309, viking_poi_menu_pick(0, "poi_pick_" .. visible_index)) ends
+-- up calling viking_poi_menu_travel() on the resolved POI, which is this
+-- function -- rather than re-implementing the bfs+send-loop a second time.
+M.travel_to = travel_to
 
 -- viking_show_poi_menu (guild_viking.lua:11789-11814), retargeted onto
 -- this port's own trigger -- see the module doc comment's "Retargeted

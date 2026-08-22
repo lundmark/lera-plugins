@@ -40,11 +40,17 @@
 --     convention verbatim rather than LEGACY's own (inconsistent-with-its-
 --     neighbors) hex choices, so the same semantic state reads the same way
 --     on both pages.
---   - The "Run There" button + WindowAddHotspot on each mission/errand row
---     (10538-10558, 10609-10631) is dropped: a GUI-only click affordance
---     with no pane equivalent yet, same disposition as Task 9's battle-grid
---     placeholder. `has_sufficient_goods` (which only fed that button) is
---     not ported.
+--   - The "Run There" button on each mission/errand row (10538-10558,
+--     10609-10631) IS ported (Task 6), through window.lua's new page-level
+--     pointer seam (see that module's header comment) -- superseding a
+--     stage-2 disposition that dropped it as "no pane equivalent yet".
+--     `has_sufficient_goods` (MAIN 4817-4839, verbatim below) gates the
+--     MISSION button's enabled/disabled appearance exactly as LEGACY gates
+--     its hotspot registration; the errand button has no such gate (LEGACY
+--     hard-codes `can_travel = true` for it, MAIN 10608) so it always
+--     renders enabled. See the "Missions" section below for the full
+--     hotspot -> port table, verbatim command strings, and the BGR
+--     workbook for both button appearances.
 --   - `want_goods`/mat_detail are Lua tables iterated with `pairs()` in
 --     LEGACY too (so LEGACY's own on-screen order isn't guaranteed either);
 --     this port sorts keys for deterministic, testable output.
@@ -56,6 +62,8 @@ local pagelib = require("pagelib")
 local state = require("state")
 local page_opts = require("page_opts")
 local cc = require("pages.city_common")
+local pathfinding = require("pathfinding")
+local map = require("popups.map")
 
 local S = state.S
 local C = pagelib.C
@@ -625,7 +633,233 @@ end
 
 -- ---------------------------------------------------------------------------
 -- Missions (guild_viking.lua:10500-10661, gated show_people_missions)
+--
+-- Task 6: mission/errand "Run There" buttons, ported through window.lua's
+-- new page-level pointer seam (that module's header comment). Hotspot ->
+-- port table (LEGACY line -> where it lives now):
+--
+--   mission_run_<id> hotspot     MAIN 10538-10558   mission_lines' button
+--     (WindowAddHotspot, enabled                     row + the target
+--      branch only)                                   appended to
+--                                                       `targets` below,
+--                                                       gated the SAME way
+--                                                       on has_sufficient_
+--                                                       goods(m.want_goods)
+--   viking_mission_run_click     MAIN 12080-12143   mission_run_click(id)
+--   errand_run_<id> hotspot      MAIN 10609-10631   errand_lines' button
+--     (WindowAddHotspot,                              row + target -- LEGACY
+--      unconditional: can_travel                       hard-codes
+--      is hard-coded true)                              can_travel=true, so
+--                                                        this target is
+--                                                        always appended,
+--                                                        never gated
+--   viking_errand_run_click      MAIN 12144-12233   errand_run_click(id)
+--   viking_errand_return_and_    MAIN 12234-12331   errand_return_and_
+--     submit                                          submit(id) -- reuses
+--                                                       popups/map.lua's
+--                                                       M.poi_menu_items()
+--                                                       and M.travel_to()
+--                                                       (Task 5 machinery),
+--                                                       per that call's
+--                                                       12289/12309 in
+--                                                       LEGACY -- see below
+--   has_sufficient_goods         MAIN 4817-4839     has_sufficient_goods
+--     (verbatim)                                       (this file, below)
+--
+-- BGR workbook (0xBBGGRR, per this module's header note) for the button's
+-- two text colors (MAIN 10541/10548 mission, 10614/10621 errand -- both
+-- button families share the same literal pair):
+--   enabled  0xCCFFCC -> B=CC,G=FF,R=CC -> R=CC,G=FF,B=CC: pale green
+--     -> nearest pagelib.C entry: C.bright_green
+--   disabled 0x888888 -> B=88,G=88,R=88 -> R=88,G=88,B=88: mid gray
+--     -> nearest pagelib.C entry: C.dim
+-- (WindowRectOp's fill/border colors, 0x444444/0x666666 enabled and
+-- 0x333333/0x555555 disabled, have no text-mode equivalent -- dropped, same
+-- "content fidelity not pixel fidelity" convention as this module's other
+-- disclosed simplifications.)
+--
+-- Row/button placement is a disclosed adaptation, not a pixel port: LEGACY
+-- right-aligns the button before the expiry time on row 1 (pixel layout
+-- this text pane cannot reproduce at arbitrary widths -- a long label could
+-- push the button off a truncated row entirely, an ambiguity a fixed pixel
+-- canvas never has). This port gives the button ITS OWN row, 2-space
+-- indented, directly under the [id]/label/expiry row -- deterministic
+-- column math for the pointer seam regardless of label length, and never
+-- truncated away except at a pathologically narrow width (guarded below:
+-- no target is recorded unless the full "[Run There]" span fits).
+--
+-- "Both fetched states" ambiguity (resolved): LEGACY's own comment at MAIN
+-- 10610 ("enable if not fetched... OR if fetched...") describes a two-state
+-- errand button that the CODE never implements -- `can_travel` is hard-coded
+-- `true` (10608) with no read of any "fetched" flag anywhere in state.errand
+-- (grep-confirmed), so there is only one live appearance/behavior for this
+-- button, not two. Verbatim discipline ports the executable branch, not the
+-- aspirational comment; the two states this port actually exercises (and
+-- tests) are `e.target_town` present vs blank -- errand_run_click's real
+-- branch (MAIN 12148-12151 dispatches only when target_town is non-empty;
+-- the else is a dropped ColourNote, no-op).
 -- ---------------------------------------------------------------------------
+
+-- Check if player has sufficient goods for a mission -- MAIN 4817-4839,
+-- ported verbatim (same stock-lookup-then-per-good-compare shape; no goods
+-- required -> true).
+local function has_sufficient_goods(want_goods)
+  if not want_goods or type(want_goods) ~= "table" or not next(want_goods) then
+    return true
+  end
+  local stock_lookup = {}
+  for _, item in ipairs(S.wstock or {}) do
+    if item.good and item.amount then
+      stock_lookup[item.good] = (stock_lookup[item.good] or 0) + item.amount
+    end
+  end
+  for good, needed_qty in pairs(want_goods) do
+    local have_qty = stock_lookup[good] or 0
+    if have_qty < needed_qty then
+      return false
+    end
+  end
+  return true
+end
+
+-- viking_errand_return_and_submit (MAIN 12234-12331). Called only from
+-- errand_run_click below, itself only reachable once e.target_town's travel
+-- (if any) has already been dispatched -- see that function's ordering.
+-- ColourNote status/diagnostic lines throughout are dropped (display-only,
+-- same convention as every pointer handler in this plugin); every guard
+-- and branch that gated a SEND is kept.
+local function errand_return_and_submit(errand_id)
+  local e = S.errand
+  if not e or e.id ~= errand_id then return end -- "Errand data lost during travel"
+
+  local origin_town_name = e.origin_town or ""
+  if origin_town_name == "" then
+    -- Fallback (MAIN 12251-12268): capital towns first, then lineage towns,
+    -- in state.vmap_pois' own iteration order (NOT the sorted menu order) --
+    -- take the first match, or abort if there are none at all.
+    local capital_towns, lineage_towns = {}, {}
+    for _, poi in ipairs(S.vmap_pois or {}) do
+      if poi.type == "capital" then
+        capital_towns[#capital_towns + 1] = poi
+      elseif poi.type == "lineage" then
+        lineage_towns[#lineage_towns + 1] = poi
+      end
+    end
+    local towns_to_try = {}
+    for _, t in ipairs(capital_towns) do towns_to_try[#towns_to_try + 1] = t end
+    for _, t in ipairs(lineage_towns) do towns_to_try[#towns_to_try + 1] = t end
+    if #towns_to_try > 0 then
+      origin_town_name = towns_to_try[1].name
+    else
+      return -- "Origin town not recorded - cannot return automatically"
+    end
+  end
+
+  -- viking_show_poi_menu's own guards (MAIN 11789-11814), reused via
+  -- popups/map.lua's M.poi_menu_items() (Task 5 machinery -- same sorted
+  -- item list viking_show_poi_menu built, not re-derived here).
+  if (S.vmap_px or -1) < 0 then return end -- "you are not on the map"
+  local items = map.poi_menu_items()
+  if #items == 0 then return end -- "No locations available to travel to"
+
+  -- town_index search (MAIN 12293-12299) + the visible-index arithmetic
+  -- (MAIN 12308-12309): vmap_poi_scroll was just reset to 0 by
+  -- viking_show_poi_menu, so visible_index == town_index == actual_idx --
+  -- items[town_index] IS the resolved pick, with no scroll offset to add.
+  local town_index = nil
+  for i, poi in ipairs(items) do
+    if poi.name == origin_town_name then
+      town_index = i
+      break
+    end
+  end
+  if not town_index then return end -- "Cannot find <town> in travel menu"
+
+  -- viking_poi_menu_pick -> viking_poi_menu_travel (MAIN 12330-12341,
+  -- 12343-12369), reused via popups/map.lua's M.travel_to() (Task 5
+  -- machinery -- same bfs+send dispatch, not re-implemented here). Note
+  -- this fires regardless of travel_to's own outcome (no route / already
+  -- there / real travel) -- LEGACY's own code runs the two Sends below
+  -- unconditionally after the pick, verbatim.
+  map.travel_to(items[town_index])
+
+  mud.send("enter")
+  mud.send("vmission newbie submit")
+end
+
+-- viking_mission_run_click (MAIN 12080-12143). `mission_id` is re-resolved
+-- against S.missions at CLICK time (not the `m` table captured when the
+-- button was drawn), matching LEGACY's own re-lookup by id -- a mission
+-- that expired/was removed between render and click is silently a no-op,
+-- exactly as LEGACY's "if not mission then return true end" is.
+local function mission_run_click(mission_id)
+  local mission = nil
+  for _, m in ipairs(S.missions or {}) do
+    if m.id == mission_id then mission = m; break end
+  end
+  if not mission then return end
+
+  local town_name = mission.target_town
+  if not town_name or town_name == "" then return end -- "Cannot determine mission target town"
+
+  local town_coords = nil
+  for _, poi in ipairs(S.vmap_pois or {}) do
+    if poi.name == town_name then town_coords = poi; break end
+  end
+  if not town_coords then return end -- "Cannot find coordinates for town"
+
+  if (S.vmap_px or -1) < 0 then return end -- "Player position unknown"
+
+  local path = pathfinding.bfs(S.vmap_px, S.vmap_py, town_coords.x, town_coords.y)
+  if not path then
+    return -- "No passable route to <town>" -- no send at all
+  elseif #path == 0 then
+    mud.send("enter")
+    mud.send("vmission fulfill " .. mission_id)
+  else
+    for _, dir in ipairs(path) do mud.send(dir) end
+    mud.send("enter")
+    -- LEGACY prints "After entering, use: vmission fulfill <id>" here as a
+    -- hint (ColourNote) -- it never actually Sends the fulfill command in
+    -- this branch, only in the #path==0 ("already there") branch above.
+    -- Dropped message, but the asymmetry in what gets SENT is preserved.
+  end
+end
+
+-- viking_errand_run_click (MAIN 12144-12233). `errand_id` is re-resolved
+-- against S.errand at CLICK time, matching LEGACY's own guard.
+local function errand_run_click(errand_id)
+  local e = S.errand
+  if not e or e.id ~= errand_id then return end -- "Errand not found"
+
+  if not (e.target_town and e.target_town ~= "") then
+    return -- "Cannot determine errand target town"
+  end
+
+  local town_coords = nil
+  for _, poi in ipairs(S.vmap_pois or {}) do
+    if poi.name == e.target_town then town_coords = poi; break end
+  end
+  if not town_coords then return end -- "Cannot find coordinates for town"
+
+  if (S.vmap_px or -1) < 0 then return end -- "Player position unknown"
+
+  local path = pathfinding.bfs(S.vmap_px, S.vmap_py, town_coords.x, town_coords.y)
+  if not path then
+    return -- "No passable route to <town>" -- no send, no continuation
+  elseif #path == 0 then
+    mud.send("enter")
+    mud.send("vmission newbie fetch")
+    mud.send("leave")
+    errand_return_and_submit(errand_id)
+  else
+    for _, dir in ipairs(path) do mud.send(dir) end
+    mud.send("enter")
+    mud.send("vmission newbie fetch")
+    mud.send("leave")
+    errand_return_and_submit(errand_id)
+  end
+end
 
 local function mission_town_text(origin, target)
   if (origin or "") ~= "" and (target or "") ~= "" then
@@ -636,11 +870,23 @@ local function mission_town_text(origin, target)
   return "(any town)"
 end
 
-local function mission_lines(add, width, m)
+local function mission_lines(add, width, m, targets)
   local exp_str = (m.expires_in or 0) > 0 and cc.fmt_time(m.expires_in) or "Expired"
   local exp_color = (m.expires_in or 0) < 3600 and C.bright_red or C.dim
   add(pagelib.trunc(string.format("[%s] %s  %s%s%s",
     tostring(m.id or 0), m.label or "", exp_color, exp_str, pagelib.RESET), width))
+
+  local enabled = has_sufficient_goods(m.want_goods)
+  local btn_text, btn_w = pagelib.button("Run There", enabled and C.bright_green or C.dim)
+  local btn_row = add(pagelib.trunc("  " .. btn_text, width))
+  local col_start, col_end = 2, 2 + btn_w
+  if enabled and col_end <= width then
+    local mission_id = m.id
+    targets[#targets + 1] = {
+      row = btn_row, col_start = col_start, col_end = col_end,
+      action = function() mission_run_click(mission_id) end,
+    }
+  end
 
   local reward_parts = {}
   if (m.reward or 0) > 0 then
@@ -659,11 +905,25 @@ local function mission_lines(add, width, m)
   end
 end
 
-local function errand_lines(add, width, e)
+local function errand_lines(add, width, e, targets)
   local exp_str = (e.expires_in or 0) > 0 and cc.fmt_time(e.expires_in) or "Expired"
   local exp_color = (e.expires_in or 0) < 3600 and C.bright_red or C.dim
   add(pagelib.trunc(string.format("[%s] Errand: %s  %s%s%s",
     tostring(e.id or 0), e.label or "", exp_color, exp_str, pagelib.RESET), width))
+
+  -- can_travel is hard-coded true in LEGACY (MAIN 10608) -- always the
+  -- enabled appearance, always a recorded target (see the module-section
+  -- comment's "both fetched states" note above).
+  local btn_text, btn_w = pagelib.button("Run There", C.bright_green)
+  local btn_row = add(pagelib.trunc("  " .. btn_text, width))
+  local col_start, col_end = 2, 2 + btn_w
+  if col_end <= width then
+    local errand_id = e.id
+    targets[#targets + 1] = {
+      row = btn_row, col_start = col_start, col_end = col_end,
+      action = function() errand_run_click(errand_id) end,
+    }
+  end
 
   local reward_str = ""
   if (e.reward_good or "") ~= "" and (e.reward_qty or 0) > 0 then
@@ -676,7 +936,7 @@ local function errand_lines(add, width, e)
     (reward_str ~= "" and ("   " .. reward_str) or ""), width))
 end
 
-local function missions_lines(add, width)
+local function missions_lines(add, width, targets)
   local has_missions = #(S.missions or {}) > 0 or S.errand ~= nil
   local reg_left = S.mission_reg_left or -1
   local new_left = S.mission_new_left or -1
@@ -703,11 +963,11 @@ local function missions_lines(add, width)
   end
 
   for _, m in ipairs(S.missions or {}) do
-    mission_lines(add, width, m)
+    mission_lines(add, width, m, targets)
   end
 
   if S.errand then
-    errand_lines(add, width, S.errand)
+    errand_lines(add, width, S.errand, targets)
   end
 end
 
@@ -716,7 +976,8 @@ end
 function M.lines(width)
   width = width or 80
   local lines = {}
-  local function add(s) lines[#lines + 1] = s end
+  local targets = {}
+  local function add(s) lines[#lines + 1] = s; return #lines end
 
   if page_opts.get("show_people_settlers") then
     settlers_lines(add, width)
@@ -738,10 +999,10 @@ function M.lines(width)
   end
 
   if page_opts.get("show_people_missions") then
-    missions_lines(add, width)
+    missions_lines(add, width, targets)
   end
 
-  return lines
+  return lines, targets
 end
 
 return M

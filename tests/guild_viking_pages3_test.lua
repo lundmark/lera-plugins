@@ -21,6 +21,12 @@ end
 ui = { dirty = function() end }
 lera = { render_pass = function() return "local" end }
 
+-- Task 6: the People page's mission/errand "Run There" button actions send
+-- through mud.send -- captured here so those tests can assert exact,
+-- byte-for-byte command strings.
+local send_calls = {}
+mud = { send = function(s) send_calls[#send_calls + 1] = s end }
+
 local pagelib = require("pagelib")
 local state = require("state")
 local page_opts = require("page_opts")
@@ -491,6 +497,173 @@ do
   check("people: Missions section absent with nothing active and no timers",
         find_line(people_page.lines(WIDTH), "Missions") == nil)
   S.missions, S.errand, S.mission_reg_left, S.mission_new_left = sm, se, sr, sn
+end
+
+-- =============================================================================
+-- Task 6: mission/errand "Run There" buttons -- appearance (BGR workbook),
+-- click dispatch (byte-exact mud.send strings), the disabled-button-sends-
+-- nothing case, and the errand-return path reaching Task 5's POI machinery
+-- at the correct index.
+-- =============================================================================
+do
+  local function find_target(targets, row)
+    for _, t in ipairs(targets) do
+      if t.row == row then return t end
+    end
+    return nil
+  end
+
+  local saved_wstock = S.wstock
+  local saved_missions, saved_errand = S.missions, S.errand
+  local saved_vmap = {
+    w = S.vmap_w, h = S.vmap_h, rows = S.vmap_rows,
+    east_edges = S.vmap_east_edges, pois = S.vmap_pois,
+    px = S.vmap_px, py = S.vmap_py,
+  }
+
+  -- A tiny 4x1 all-passable strip: Uppsala(0,0) decoy/start, Vestergotland
+  -- (1,0) lineage/origin, Holmgard(3,0) capital/target -- three distinct
+  -- coordinates so a wrong pick (decoy vs origin vs target) is always a
+  -- different, distinguishable send count/sequence.
+  local function seed_map(px, py)
+    S.vmap_w, S.vmap_h = 4, 1
+    S.vmap_rows = { "pppp" }
+    S.vmap_east_edges = { "111" }
+    S.vmap_pois = {
+      { type = "lineage", name = "Uppsala", x = 0, y = 0, owner = "" },
+      { type = "lineage", name = "Vestergotland", x = 1, y = 0, owner = "" },
+      { type = "capital", name = "Holmgard", x = 3, y = 0, owner = "" },
+    }
+    S.vmap_px, S.vmap_py = px, py
+  end
+
+  S.missions = {
+    { id = 7, label = "Deliver grain to Holmgard", expires_in = 1800,
+      origin_town = "Vestergotland", target_town = "Holmgard",
+      reward = 200, reward_rep = 15, want_goods = { grain = 30 } },
+  }
+  S.errand = nil
+
+  -- ---- appearance + click: SUFFICIENT goods (enabled, bright_green) -------
+  S.wstock = { { good = "grain", amount = 100, freshness_pct = 100 } }
+  seed_map(0, 0) -- away from Holmgard (3,0): a real 3-step trip
+  send_calls = {}
+  local lines_en, targets_en = people_page.lines(WIDTH)
+  local btn_row_en = find_line(lines_en, "Run There")
+  check("people: mission button row present (sufficient goods)", btn_row_en ~= nil)
+  check("people: mission button BGR workbook -- sufficient -> bright_green (0xCCFFCC: B=CC,G=FF,R=CC)",
+        lines_en[btn_row_en]:find(C.bright_green, 1, true) ~= nil, lines_en[btn_row_en])
+  local target_en = find_target(targets_en, btn_row_en)
+  check("people: enabled mission button has a recorded target", target_en ~= nil)
+  target_en.action()
+  check("people: enabled mission click (real route) sends dirs then enter, no fulfill",
+        #send_calls == 4 and send_calls[1] == "east" and send_calls[2] == "east"
+        and send_calls[3] == "east" and send_calls[4] == "enter",
+        table.concat(send_calls, ","))
+
+  -- ---- click: SUFFICIENT goods, ALREADY AT target (path == {}) -----------
+  seed_map(3, 0) -- exactly at Holmgard
+  send_calls = {}
+  target_en.action()
+  check("people: enabled mission click (already at target) sends enter + vmission fulfill",
+        #send_calls == 2 and send_calls[1] == "enter" and send_calls[2] == "vmission fulfill 7",
+        table.concat(send_calls, ","))
+
+  -- ---- appearance + click: INSUFFICIENT goods (disabled, dim) ------------
+  S.wstock = { { good = "grain", amount = 10, freshness_pct = 100 } } -- need 30
+  seed_map(0, 0)
+  send_calls = {}
+  local lines_dis, targets_dis = people_page.lines(WIDTH)
+  local btn_row_dis = find_line(lines_dis, "Run There")
+  check("people: mission button row present (insufficient goods)", btn_row_dis ~= nil)
+  check("people: mission button BGR workbook -- insufficient -> dim (0x888888: B=88,G=88,R=88)",
+        lines_dis[btn_row_dis]:find(C.dim, 1, true) ~= nil, lines_dis[btn_row_dis])
+  check("people: disabled mission button has NO recorded target (not clickable)",
+        find_target(targets_dis, btn_row_dis) == nil)
+  check("people: disabled mission button sends nothing (nothing to click)", #send_calls == 0)
+
+  S.wstock = saved_wstock
+
+  -- ---- errand button: normal path, return-and-submit reaches the RIGHT ---
+  -- origin index (distinguishable send counts prove items[town_index] was
+  -- the pick, not the decoy or the target itself).
+  S.missions = {}
+  S.errand = {
+    id = 99, label = "Fetch water", expires_in = 5400,
+    origin_town = "Vestergotland", target_town = "Holmgard",
+    reward = 0, reward_good = "water", reward_qty = 10,
+  }
+  seed_map(0, 0)
+  send_calls = {}
+  local lines_er, targets_er = people_page.lines(WIDTH)
+  local btn_row_er = find_line(lines_er, "Run There")
+  check("people: errand button row present", btn_row_er ~= nil)
+  check("people: errand button BGR workbook -- always enabled -> bright_green",
+        lines_er[btn_row_er]:find(C.bright_green, 1, true) ~= nil, lines_er[btn_row_er])
+  local target_er = find_target(targets_er, btn_row_er)
+  check("people: errand button has a recorded target (always travelable)", target_er ~= nil)
+  target_er.action()
+  check("people: errand click reaches errand_return_and_submit at the CORRECT origin index "
+        .. "(Vestergotland, 1 step) -- not the decoy (Uppsala) or the target (Holmgard)",
+        #send_calls == 9
+        and send_calls[1] == "east" and send_calls[2] == "east" and send_calls[3] == "east"
+        and send_calls[4] == "enter" and send_calls[5] == "vmission newbie fetch"
+        and send_calls[6] == "leave"
+        and send_calls[7] == "east"
+        and send_calls[8] == "enter" and send_calls[9] == "vmission newbie submit",
+        table.concat(send_calls, ","))
+
+  -- ---- errand button: BLANK origin_town falls back to the first capital --
+  -- (Holmgard) over the lineage towns (Uppsala/Vestergotland), matching
+  -- viking_errand_return_and_submit's own capital-before-lineage fallback.
+  -- Target town is Vestergotland here (NOT the capital) so the fallback's
+  -- pick (Holmgard, 3 steps back) is distinguishable from "already there".
+  S.errand = {
+    id = 99, label = "Fetch water", expires_in = 5400,
+    origin_town = "", target_town = "Vestergotland",
+    reward = 0, reward_good = "water", reward_qty = 10,
+  }
+  seed_map(0, 0)
+  send_calls = {}
+  local lines_fb, targets_fb = people_page.lines(WIDTH)
+  local btn_row_fb = find_line(lines_fb, "Run There")
+  local target_fb = find_target(targets_fb, btn_row_fb)
+  check("people: errand button (blank origin) has a recorded target", target_fb ~= nil)
+  target_fb.action()
+  check("people: blank-origin fallback picks the capital (Holmgard, 3 steps back) as the "
+        .. "return destination, not the target town itself (0 steps) or the decoy",
+        #send_calls == 9
+        and send_calls[1] == "east" -- outward: to Vestergotland (target), 1 step
+        and send_calls[2] == "enter" and send_calls[3] == "vmission newbie fetch"
+        and send_calls[4] == "leave"
+        and send_calls[5] == "east" and send_calls[6] == "east" and send_calls[7] == "east" -- return: to Holmgard
+        and send_calls[8] == "enter" and send_calls[9] == "vmission newbie submit",
+        table.concat(send_calls, ","))
+
+  -- ---- errand button: blank target_town is a no-op (guarded) -------------
+  S.errand = {
+    id = 99, label = "Fetch water", expires_in = 5400,
+    origin_town = "Vestergotland", target_town = "",
+    reward = 0, reward_good = "water", reward_qty = 10,
+  }
+  seed_map(0, 0)
+  send_calls = {}
+  local lines_blank, targets_blank = people_page.lines(WIDTH)
+  local btn_row_blank = find_line(lines_blank, "Run There")
+  local target_blank = find_target(targets_blank, btn_row_blank)
+  check("people: errand button (blank target_town) still has a recorded target "
+        .. "(the button itself is unconditional; the GUARD is inside the click handler)",
+        target_blank ~= nil)
+  target_blank.action()
+  check("people: clicking an errand with a blank target_town sends nothing", #send_calls == 0)
+
+  S.wstock = saved_wstock
+  S.missions, S.errand = saved_missions, saved_errand
+  S.vmap_w, S.vmap_h = saved_vmap.w, saved_vmap.h
+  S.vmap_rows, S.vmap_east_edges = saved_vmap.rows, saved_vmap.east_edges
+  S.vmap_pois = saved_vmap.pois
+  S.vmap_px, S.vmap_py = saved_vmap.px, saved_vmap.py
+  send_calls = {}
 end
 
 -- =============================================================================

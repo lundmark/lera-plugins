@@ -304,6 +304,151 @@ check("separator down does not change the page",
 render_pass = "local"
 
 -- =============================================================================
+-- Task 6: page-level pointer targets seam. A fake page module returns a
+-- second `lines(width)` value (a targets array) exercising the whole
+-- contract: row/col hit-testing, the SCROLLED and wrapped-tab-bar row
+-- mapping, tab-bar priority, error containment, the remote-pass guard, and
+-- (the discriminating case per the task brief) that a down on one target
+-- followed by an "up" delivered at a DIFFERENT target's coordinates never
+-- fires the second target -- because this seam fires on the DOWN alone (see
+-- window.lua's header comment for why that is safe with no separate
+-- down/up tracker, unlike the popup layer's pointer_track.lua modules).
+-- =============================================================================
+window.set_page("stats")
+render_pass = "local"
+
+local seam_fired = {}
+local seam_lines = {}
+for i = 1, 10 do seam_lines[i] = "R" .. i end
+local seam_error_row = 5
+local seam_targets = {
+  { row = 3, col_start = 2, col_end = 8, action = function() seam_fired[#seam_fired + 1] = "A" end },
+  { row = 7, col_start = 0, col_end = 4, action = function() seam_fired[#seam_fired + 1] = "B" end },
+  { row = seam_error_row, col_start = 0, col_end = 4, action = function() error("boom") end },
+}
+find_page("stats").mod = {
+  lines = function(w) return seam_lines, seam_targets end,
+}
+
+-- 100-wide -> tab bar is one row (tab_rows == 1, established earlier in this
+-- file); an 8-row rect gives body_h == 7 (y in [1,7] maps to page_row ==
+-- y at offset 0, since page_row = (y - 1) + 0 + 1 == y).
+local seam_rect = make_rect(0, 0, 100, 8)
+reset_drawn()
+window.render(seam_rect, {})
+check("(setup) seam body shows R1 first",
+      drawn.ansi[2] and drawn.ansi[2].s:find("^R1%s") ~= nil, drawn.ansi[2] and drawn.ansi[2].s)
+
+-- ---- row hit / column miss / row miss --------------------------------------
+seam_fired = {}
+local down_row3_hit = { kind = "down", button = "left", x = 4, y = 3, inside = true, width = 100, height = 8 }
+check("down inside target A's row/col span fires A and returns true",
+      window.on_pointer(down_row3_hit) == true)
+check("target A fired exactly once", #seam_fired == 1 and seam_fired[1] == "A", seam_fired)
+
+seam_fired = {}
+local down_row3_colmiss = { kind = "down", button = "left", x = 0, y = 3, inside = true, width = 100, height = 8 }
+check("down on target A's row but outside its column span returns false",
+      window.on_pointer(down_row3_colmiss) == false)
+check("column miss fires nothing", #seam_fired == 0)
+
+seam_fired = {}
+local down_rowmiss = { kind = "down", button = "left", x = 4, y = 4, inside = true, width = 100, height = 8 }
+check("down on a row with no target returns false", window.on_pointer(down_rowmiss) == false)
+check("row miss fires nothing", #seam_fired == 0)
+
+-- ---- tab-bar priority: a down on a tab span never reaches target hit-test --
+seam_fired = {}
+window.set_page("stats")
+local down_tab_wins = { kind = "down", button = "left", x = 2, y = 0, inside = true, width = 100, height = 8 }
+check("a tab-bar down still switches pages with body targets present",
+      window.on_pointer(down_tab_wins) == true)
+check("tab-bar click fired no page target", #seam_fired == 0)
+window.set_page("stats")
+
+-- ---- SCROLLED mapping: offset > 0 shifts which screen row hits which target-
+seam_fired = {}
+window.scroll(2) -- offset -> 2 (clamped against count 10 - height 7 = 3)
+check("(setup) scrolled offset is 2", window.following_tail() == false)
+reset_drawn()
+window.render(seam_rect, {}) -- re-render so recorded_offset picks up 2
+check("(setup) scrolled body now starts at R3",
+      drawn.ansi[2] and drawn.ansi[2].s:find("^R3%s") ~= nil, drawn.ansi[2] and drawn.ansi[2].s)
+-- page_row = (y - 1) + 2 + 1 = y + 2; target A (row 3) is now hit at y = 1.
+local down_scrolled_hit = { kind = "down", button = "left", x = 4, y = 1, inside = true, width = 100, height = 8 }
+check("scrolled: y=1 now maps to target A's row", window.on_pointer(down_scrolled_hit) == true)
+check("scrolled hit fired A", #seam_fired == 1 and seam_fired[1] == "A", seam_fired)
+-- the OLD unscrolled y (3) now maps to page_row 5, which has no target.
+seam_fired = {}
+local down_scrolled_oldy = { kind = "down", button = "left", x = 4, y = 3, inside = true, width = 100, height = 8 }
+check("scrolled: the old y=3 no longer hits anything", window.on_pointer(down_scrolled_oldy) == false)
+check("scrolled old-y down fires nothing", #seam_fired == 0)
+window.scroll(-2) -- back to offset 0
+reset_drawn()
+window.render(seam_rect, {})
+
+-- ---- wrapped tab bar: tab_rows > 1 shifts the row mapping too -------------
+-- A 30-wide rect wraps the twelve page tabs onto 3 rows (established
+-- earlier in this file), so tab_rows == 3 here; page_row = (y - 3) + 0 + 1.
+-- Target A (row 3) is hit at y = 3 - 1 + 3 = 5.
+seam_fired = {}
+local narrow_seam_rect = make_rect(0, 0, 30, 12)
+reset_drawn()
+window.render(narrow_seam_rect, {})
+check("(setup) narrow rect wraps the tab bar onto 3 rows", #drawn.ansi >= 4)
+local down_wrapped_hit = { kind = "down", button = "left", x = 4, y = 5, inside = true, width = 30, height = 12 }
+check("wrapped tab bar: y=5 maps onto target A's row", window.on_pointer(down_wrapped_hit) == true)
+check("wrapped-tab-bar hit fired A", #seam_fired == 1 and seam_fired[1] == "A", seam_fired)
+reset_drawn()
+window.render(seam_rect, {}) -- restore the wide layout's recorded state
+
+-- ---- errored action is contained; the pane keeps working afterward -------
+seam_fired = {}
+local down_error_row = { kind = "down", button = "left", x = 1, y = seam_error_row,
+                          inside = true, width = 100, height = 8 }
+local ok_error_call, result_error_call = pcall(window.on_pointer, down_error_row)
+check("an erroring action does not propagate the error out of on_pointer",
+      ok_error_call and result_error_call == true, result_error_call)
+seam_fired = {}
+check("the pane still dispatches normally after a contained action error",
+      window.on_pointer(down_row3_hit) == true and #seam_fired == 1 and seam_fired[1] == "A")
+
+-- ---- remote pass does not clobber recorded targets/tab_rows/offset -------
+window.set_page("stats")
+render_pass = "local"
+reset_drawn()
+window.render(seam_rect, {}) -- records targets/tab_rows/offset for the WIDE layout
+render_pass = "remote"
+reset_drawn()
+local ok_remote_seam = pcall(window.render, make_rect(0, 0, 20, 4), {}) -- a drastically different layout
+check("remote render at a different layout does not error", ok_remote_seam)
+render_pass = "local"
+seam_fired = {}
+check("remote pass did not clobber the recorded seam state -- the wide-layout hit still works",
+      window.on_pointer(down_row3_hit) == true and #seam_fired == 1 and seam_fired[1] == "A")
+
+-- ---- THE discriminating case: down on target A, up delivered at target --
+-- B's coordinates, must never fire B (or fire A a second time). This is
+-- exactly wm.lua's real dispatch shape for a captured gesture: after a
+-- down returns true, wm.lua re-invokes this SAME on_pointer with kind ==
+-- "up" at wherever the release landed, translated into the SAME pane-local
+-- coordinate space (scripts/default/wm.lua's `local_event`) -- it does not
+-- re-hit-test against the down's target first. Calling on_pointer directly
+-- with a synthetic "up" event, as below, reproduces that real shape.
+seam_fired = {}
+local down_A_for_drag = { kind = "down", button = "left", x = 4, y = 3, inside = true, width = 100, height = 8 }
+check("drag setup: down on target A fires A", window.on_pointer(down_A_for_drag) == true)
+local up_at_B = { kind = "up", button = "left", x = 2, y = 7, inside = true, width = 100, height = 8 }
+local up_result = window.on_pointer(up_at_B)
+check("drag: an 'up' event at target B's coordinates is not dispatched at all",
+      up_result == false)
+check("drag: target B never fired, and A fired exactly once (not twice)",
+      #seam_fired == 1 and seam_fired[1] == "A", seam_fired)
+
+render_pass = "local"
+window.set_page("stats")
+
+-- =============================================================================
 -- Task 10: end-to-end pane pass -- every page in window.PAGES rendered at
 -- real pane dimensions with a representative state slice, no page crashing,
 -- no emitted row overflowing the rect width, and scrolling working without
