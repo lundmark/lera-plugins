@@ -862,6 +862,55 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+-- Gate 1, ISOLATED from plan.lua's own auto_trade gate (TRADER:399). The
+-- "50 ticks send nothing" property above is real, but it does not by
+-- itself prove THIS module's own gate is what blocks it: even with that
+-- gate removed, do_plan() would still call plan.build(), which has its OWN
+-- page_opts.get("auto_trade") check and would return nil/empty regardless.
+-- To isolate tick.lua's own gate, get the state machine into "sending" with
+-- a command already staged (auto_trade legitimately ON at the time), THEN
+-- flip auto_trade OFF and tick again -- that path never reaches do_plan()/
+-- plan.lua's gate at all, so only M.tick's own top-of-function check can be
+-- what stops the next command.
+-- ---------------------------------------------------------------------------
+page_opts.set("auto_trade", true)
+S.autotrade = nil
+at_core.settings()
+S.autotrade.use_stock = true
+S.autotrade.stock_route = true
+S.autotrade.pack = true
+protocol.ingest("BUILDINGS", "trading_post:2")
+protocol.ingest("WSTOCK", "furs|50|100;timber|60|100;ore|40|100")
+protocol.ingest("STAFF", "")
+protocol.ingest("BLOCKS", "")
+protocol.ingest("CARTS", "")
+protocol.ingest("CIDLE", "11|1|100|300|standard;12|1|100|300|standard")
+protocol.ingest("TQUEUE", "")
+protocol.ingest("DALER", "1000")
+protocol.ingest("TGOODS", "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
+tick.reset()
+sent, printed = {}, {}
+local g1_t0 = fake_now + 10000
+fake_now = g1_t0
+tick.tick()   -- idle -> plan (2 transactions, 5+4 cmds) -> begin T1 -> sends T1[1]
+check("tick/gate 1 isolation setup: T1's first command sent, 4 more staged in this transaction",
+      #sent == 1 and sent[1] == "vtrade route clear quiet", sent[1])
+check("tick/gate 1 isolation setup: still sending, mid-transaction", tick.status() == "sending")
+
+page_opts.set("auto_trade", false)
+fake_now = g1_t0 + 2   -- next_at has elapsed -- ONLY the top-of-tick gate can stop this now
+tick.tick()
+check("tick/gate 1 (isolated): flipping auto_trade off mid-transaction sends NOTHING further "
+      .. "-- this path never reaches do_plan()/plan.lua's own gate at all",
+      #sent == 1, #sent)
+do
+  local phase, pending = tick.status()
+  check("tick/gate 1 (isolated): state machine reset to idle/empty",
+        phase == "idle" and pending == 0, phase)
+end
+page_opts.set("auto_trade", true)   -- restore for the sections below
+
+-- ---------------------------------------------------------------------------
 -- Turn the feature on and walk the full single-command dispatch cycle: the
 -- commands seam (plan.build()'s own `commands` list, fed through this
 -- module's port of LEGACY's transactions()) and gates 2/3 (confirming-phase
@@ -890,14 +939,22 @@ check("tick/gate 2 (confirming wait): no send while mip unchanged and before the
       #sent == 1)
 check("tick/gate 2 (confirming wait): still confirming", tick.status() == "confirming")
 
--- Gate 3: confirmation timeout (mip still unchanged at/after the 20s
--- deadline from the send) -> fail_closed: cooldown, diagnostic printed
--- verbatim, no additional send.
-fake_now = g23_t0 + 25   -- 20s after the send at g23_t0+5's tick, i.e. >= deadline (g23_t0+25)
+-- Gate 3: confirmation timeout. The send happened at g23_t0 (gate 2's probe
+-- at g23_t0+5 only READ the state, it did not send anything), so
+-- CONFIRM_TIMEOUT's deadline is g23_t0+20, not g23_t0+25. Test both sides
+-- of that exact boundary: 19s after the send, still confirming (before the
+-- deadline); 20s, fail_closed fires (>= deadline, not merely > it).
+fake_now = g23_t0 + 19
+tick.tick()
+check("tick/gate 3 (confirm timeout): 19s after the send, still confirming (before the deadline)",
+      tick.status() == "confirming")
+check("tick/gate 3 (confirm timeout): no send yet at 19s", #sent == 1)
+
+fake_now = g23_t0 + 20
 tick.tick()
 do
   local phase, pending, _, last_error = tick.status()
-  check("tick/gate 3 (confirm timeout): fail_closed moves to cooldown",
+  check("tick/gate 3 (confirm timeout): fail_closed moves to cooldown exactly at the 20s deadline",
         phase == "cooldown", phase)
   check("tick/gate 3 (confirm timeout): last_error set verbatim",
         last_error == "no MIP confirmation within 20s", last_error)
@@ -916,7 +973,7 @@ check("tick/gate 3 (confirm timeout): no additional send", #sent == 1)
 -- proves the gate actually reopened rather than merely not having
 -- re-errored.
 -- ---------------------------------------------------------------------------
-local g4_fail_at = g23_t0 + 25
+local g4_fail_at = g23_t0 + 20   -- the fail_closed above fired exactly at the 20s deadline
 fake_now = g4_fail_at + 29
 tick.tick()
 check("tick/gate 4 (cooldown): still blocked 29s after the failure", tick.status() == "cooldown")
@@ -1030,12 +1087,145 @@ check("tick/multi-tx: full 9-command sequence matches plan.build()'s own "
       table.concat(sent, "|") == table.concat(expect_commands, "|"))
 
 -- ---------------------------------------------------------------------------
+-- Baseline placement (LEGACY:837-839's own comment: "Earlier cart
+-- completions while building a route cannot confirm it"). mip_sig() must be
+-- captured immediately before the TERMINAL command of a transaction, not at
+-- its start (sm.index == 1). Mutate S mid-route -- after the first command,
+-- before the rest -- to simulate an UNRELATED cart returning while the
+-- route is still being built. If the baseline were captured at the start,
+-- that unrelated change would already satisfy mip_sig() ~= baseline the
+-- instant the route finishes sending, falsely confirming it before any real
+-- MIP push for THIS transaction arrives -- releasing the next queued
+-- transaction (more cart dispatches) early. Both of gate 2/3's existing
+-- checks above only mutate mip AFTER the terminal command, so neither would
+-- ever notice this.
+-- ---------------------------------------------------------------------------
+tick.reset()
+sent, printed = {}, {}
+S.autotrade = nil
+at_core.settings()
+S.autotrade.use_stock = true
+S.autotrade.stock_route = true
+S.autotrade.pack = true
+protocol.ingest("BUILDINGS", "trading_post:2")
+protocol.ingest("WSTOCK", "furs|50|100;timber|60|100;ore|40|100")
+protocol.ingest("STAFF", "")
+protocol.ingest("BLOCKS", "")
+protocol.ingest("CARTS", "")
+protocol.ingest("CIDLE", "11|1|100|300|standard;12|1|100|300|standard")
+protocol.ingest("TQUEUE", "")
+protocol.ingest("DALER", "1000")
+protocol.ingest("TGOODS", "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
+
+local bp_t0 = fake_now + 10000
+fake_now = bp_t0
+tick.tick()   -- T1[1] = "vtrade route clear quiet"
+check("tick/baseline placement setup: T1's first command sent",
+      #sent == 1 and sent[1] == "vtrade route clear quiet", sent[1])
+
+-- Mid-route mutation: an UNRELATED idle cart (13) appears while T1 (cart 11)
+-- is still being built -- changes mip_sig() well before T1's terminal
+-- command is even sent.
+protocol.ingest("CIDLE", "11|1|100|300|standard;12|1|100|300|standard;13|1|100|10|standard")
+
+-- Send T1's remaining 4 commands normally, with NO further state changes.
+local bt = bp_t0
+for _ = 2, 5 do
+  bt = bt + 2
+  fake_now = bt
+  tick.tick()
+end
+do
+  local phase, pending = tick.status()
+  check("tick/baseline placement setup: T1 fully sent, confirming, T2 still pending",
+        phase == "confirming" and pending == 1, phase)
+end
+check("tick/baseline placement setup: all 5 T1 commands sent", #sent == 5, #sent)
+
+-- The mid-route mutation above must NOT be mistaken for T1's own real
+-- confirmation: with no further state change since the terminal command,
+-- the next tick must still be waiting -- the baseline was captured AFTER
+-- that mid-route mutation, immediately before the terminal command
+-- (LEGACY:837-839), so it already reflects cart 13's presence.
+fake_now = bt + 1
+tick.tick()
+check("tick/baseline placement (LEGACY:837-839): an EARLIER mid-route cart change does "
+      .. "NOT falsely confirm the transaction -- still confirming",
+      tick.status() == "confirming")
+check("tick/baseline placement: no premature send of T2's commands", #sent == 5, #sent)
+
+-- A genuine change AFTER the terminal command (T1's real MIP confirmation
+-- -- cart 11 itself leaving the idle list) still correctly releases T2.
+protocol.ingest("CIDLE", "12|1|100|300|standard;13|1|100|10|standard")
+fake_now = bt + 2
+tick.tick()
+check("tick/baseline placement: a REAL post-terminal change confirms normally",
+      tick.status() == "idle")
+
+-- ---------------------------------------------------------------------------
+-- `#route > 1` (TRADER:780): a "route clear" immediately closed by "queue
+-- add" with NO adds in between must NOT become a transaction -- this is the
+-- guard Gate 8's unreachability argument (below) rests on. plan.lua's own
+-- invariants never actually produce that shape (every real "queue add" is
+-- preceded by at least one "route add"), so it is exercised here by
+-- monkey-patching autotrader.plan's M.build to hand do_plan a crafted
+-- commands list directly -- restored immediately after.
+-- ---------------------------------------------------------------------------
+tick.reset()
+sent, printed = {}, {}
+page_opts.set("auto_trade", true)
+local real_plan_build = plan.build
+plan.build = function()
+  return { status = nil, jobs = {}, commands = {
+    "vtrade route clear quiet",
+    "vtrade queue add",
+    "vtrade dispatch sell 10 furs eiriksson",   -- a genuine transaction right after the empty one
+  } }
+end
+fake_now = fake_now + 20000
+tick.tick()
+check("tick/#route>1 (empty route dropped): the bare clear+queue-add produces NO transaction "
+      .. "-- only the genuine dispatch afterward is ever sent",
+      #sent == 1 and sent[1] == "vtrade dispatch sell 10 furs eiriksson", sent[1])
+plan.build = real_plan_build
+
+-- ---------------------------------------------------------------------------
 -- Gate 8 (LEGACY:836, `if not cmd then fail_closed(...) end`): structurally
 -- unreachable through the public path -- see tick.lua's header for why
 -- transactions() can never hand begin_transaction an empty array -- so it is
 -- not given a synthetic test here, same disclosed treatment plan.lua's
--- header already gives LEGACY:339's dead code.
+-- header already gives LEGACY:339's dead code. The `#route>1` guard that
+-- unreachability rests on IS pinned above.
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- Gate 9 (LEGACY:800-802): planner failed -- do_plan()'s pcall around
+-- planner.build() catching a raised error, not just a normal return, must
+-- fail-closed exactly like a confirmation timeout rather than letting the
+-- error propagate out of M.tick().
+-- ---------------------------------------------------------------------------
+tick.reset()
+sent, printed = {}, {}
+page_opts.set("auto_trade", true)
+local real_plan_build_err = plan.build
+plan.build = function() error("boom: planner exploded") end
+fake_now = fake_now + 50000
+tick.tick()
+do
+  local phase, pending, _, last_error = tick.status()
+  check("tick/gate 9 (planner error): fail_closed moves to cooldown",
+        phase == "cooldown", phase)
+  check("tick/gate 9 (planner error): last_error names the planner failure",
+        last_error ~= nil and last_error:find("^planner failed: ") ~= nil
+          and last_error:find("boom: planner exploded", 1, true) ~= nil,
+        last_error)
+end
+check("tick/gate 9 (planner error): diagnostic printed with the failure reason",
+      printed[#printed] ~= nil and printed[#printed]:find("planner failed:", 1, true) ~= nil
+        and printed[#printed]:find("paused without retrying the dispatch", 1, true) ~= nil,
+      printed[#printed])
+check("tick/gate 9 (planner error): nothing sent", #sent == 0)
+plan.build = real_plan_build_err
 
 -- ---------------------------------------------------------------------------
 -- Gate: the planner itself finds nothing to do (no arbitrage, no stock to

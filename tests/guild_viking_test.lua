@@ -542,6 +542,24 @@ cd_before = dirty_count
 notify.countdown_tick()
 check("idle tick does not mark dirty", dirty_count == cd_before)
 
+-- ---- notify.countdown_tick's tail wiring (Task 3): calls the auto-trade
+-- tick, LAST, after the dirty check (MAIN 2885-2890's order/position) -----
+-- Monkey-patch the SAME module table notify.lua captured a local reference
+-- to at require time (require() caches by module name, so this table is
+-- identical either way) -- proves the call site itself, independent of
+-- what M.tick() does internally (already covered exhaustively in
+-- guild_viking_autotrader_test.lua).
+do
+  local tick_mod = require("autotrader.tick")
+  local trade_tick_calls = 0
+  local real_trade_tick = tick_mod.tick
+  tick_mod.tick = function() trade_tick_calls = trade_tick_calls + 1 end
+  notify.countdown_tick()
+  check("countdown_tick calls autotrader.tick's M.tick at its tail",
+        trade_tick_calls == 1, trade_tick_calls)
+  tick_mod.tick = real_trade_tick
+end
+
 -- ---- persist: price_history + source survive save/load (Task 10) -----------
 local persist = require("persist")
 -- Task 2: page_opts.lua and window.lua, required here for the persistence
@@ -704,6 +722,49 @@ check("on_connect: the hold window blocks dispatch (plan.build reports settling,
       held and held.status)
 S.at_hold_until = nil   -- clear for later tests
 page_opts.set("auto_trade", false)
+
+-- The hold boundary walked end-to-end through tick.tick() itself (not just
+-- plan.build() directly, above): 59s after connect, still held -- nothing
+-- sent; 60s, the hold lifts and a real dispatch fires. Deterministic via a
+-- temporary os.time() stub (same idiom guild_viking_autotrader_test.lua
+-- uses), restored immediately after.
+do
+  local real_os_time = os.time
+  local conn_now = 500000
+  os.time = function() return conn_now end
+
+  M.on_connect()   -- S.at_hold_until = conn_now + 60 = 500060
+  sent = {}
+
+  local tick_for_hold = require("autotrader.tick")
+  page_opts.set("auto_trade", true)
+  S.autotrade = nil
+  at_core_for_connect.settings()
+  protocol.ingest("BUILDINGS", "warehouse:1")
+  protocol.ingest("WSTOCK", "ore|380|100")
+  protocol.ingest("STAFF", "")
+  protocol.ingest("BLOCKS", "")
+  protocol.ingest("CARTS", "")
+  protocol.ingest("CIDLE", "31|1|100|200|standard")
+  protocol.ingest("TQUEUE", "")
+  protocol.ingest("DALER", "1000")
+  protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
+  tick_for_hold.reset()
+
+  conn_now = conn_now + 59   -- 500059, still < 500060
+  tick_for_hold.tick()
+  check("on_connect hold boundary (tick.tick): 59s after connect, still held -- nothing sent",
+        #sent == 0, #sent)
+
+  conn_now = conn_now + 1   -- 500060, hold lifts (now < at_hold_until is false)
+  tick_for_hold.tick()
+  check("on_connect hold boundary (tick.tick): 60s after connect, hold lifts -- a dispatch fires",
+        #sent == 1 and sent[1] == "vtrade dispatch sell 200 ore eiriksson", sent[1])
+
+  os.time = real_os_time
+  page_opts.set("auto_trade", false)
+  S.at_hold_until = nil
+end
 
 -- ---- /vik trader <sub>: LEGACY's at_config grammar, verbatim (Task 3) -----
 -- guild_viking_autotrader.lua:670-724. autotrader/core.lua's settings() is

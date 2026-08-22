@@ -59,7 +59,25 @@
 --      sm.current is never {}. Kept verbatim as LEGACY's own defensive
 --      guard (LEGACY:836); not given a dedicated test for the same reason
 --      plan.lua's header discloses LEGACY:339 as dead code -- there is no
---      code path that can produce the state it guards against.
+--      code path that can produce the state it guards against. The premise
+--      itself -- that `#route>1` (not the weaker `if route then`) is what
+--      keeps a bare "clear"+"queue add" from ever becoming a transaction --
+--      IS pinned by a dedicated test (fix round 1, Minor 4), by
+--      monkey-patching autotrader.plan's M.build to hand do_plan a crafted
+--      commands list directly, since plan.lua's own invariants never
+--      actually produce that shape for transactions() to see.
+--   9. do_plan()'s pcall around planner.build() failing (a raised error, not
+--      a normal return) -> fail_closed exactly like a confirmation timeout,
+--      instead of the error propagating out of M.tick(). (LEGACY:800-802)
+--
+-- The baseline-capture guard at line ~244 below (`sm.index == #sm.current`)
+-- is the ordering LEGACY's own comment there calls out: capturing mip_sig()
+-- at the START of a route (index == 1) instead of immediately before its
+-- TERMINAL command would let an unrelated cart completion mid-route satisfy
+-- mip_sig() ~= baseline the instant the route finishes sending, falsely
+-- confirming it before any real MIP push for THIS transaction ever arrives.
+-- Fix round 1, Important 2 added a dedicated test for this (mutating
+-- S.carts/idle_carts between a transaction's first and last command).
 --
 -- Adaptations (all mechanical, no logic changes):
 --   * Send/real_send's global-hijack wrapper (LEGACY:793-799) is dropped:
