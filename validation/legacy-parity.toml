@@ -1,7 +1,7 @@
 [scope]
 revision = 1
 approved_on = "2026-08-10"
-digest = "0dc36f69bcddb265c7c2ec7251d1f711c4830825e20b7272fd2f4d6853e8c4e3"
+digest = "55ed1dc481eb6d4d56b95d28e7f339b240f7fe7dc327e1cc1e2a23ac566134d8"
 
 [[current_plugins]]
 key = "autologin"
@@ -38,7 +38,37 @@ key = "guild_viking"
 path = "3scapes/guild_viking/init.lua"
 target_keys = ["guild_viking"]
 fixtures = []
-notes = "Directory plugin: init.lua is the mapped entry module. The guild_viking_* rows below register its other source files purely so their paths satisfy the current-refs path check (current_paths is built from every current_plugins path in this file); each carries no separate target mapping of its own. Stage 2 added the pagelib/page_opts/window shell and the twelve pages/*.lua modules (pane rendering); those rows follow the same pattern. Stage 3 added scroller.lua (extracted from window.lua), popups.lua (the named-popup registry and /vik pop), maplib.lua (grid rendering/hit-testing), and the five popups/*.lua board-view modules (map, sea, sea_common, voyage, cityplan, war, war_campaign, war_battle) -- same file-registration-only pattern."
+notes = "Directory plugin: init.lua is the mapped entry module. The guild_viking_* rows below register its other source files purely so their paths satisfy the current-refs path check (current_paths is built from every current_plugins path in this file); each carries no separate target mapping of its own. Stage 2 added the pagelib/page_opts/window shell and the twelve pages/*.lua modules (pane rendering); those rows follow the same pattern. Stage 3 added scroller.lua (extracted from window.lua), popups.lua (the named-popup registry and /vik pop), maplib.lua (grid rendering/hit-testing), and the five popups/*.lua board-view modules (map, sea, sea_common, voyage, cityplan, war, war_campaign, war_battle) -- same file-registration-only pattern. Stage 4 added autoraid.lua and autovoyage.lua (the auto-raid/auto-voyage automations), the autotrader/ directory (core.lua policy/quality math, plan.lua route planning, tick.lua paced execution + control surface), and pathfinding.lua (vmap BFS) -- same file-registration-only pattern."
+
+[[current_plugins]]
+key = "guild_viking_autoraid"
+path = "3scapes/guild_viking/autoraid.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_autotrader_core"
+path = "3scapes/guild_viking/autotrader/core.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_autotrader_plan"
+path = "3scapes/guild_viking/autotrader/plan.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_autotrader_tick"
+path = "3scapes/guild_viking/autotrader/tick.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_autovoyage"
+path = "3scapes/guild_viking/autovoyage.lua"
+target_keys = []
+fixtures = []
 
 [[current_plugins]]
 key = "guild_viking_combat"
@@ -175,6 +205,12 @@ fixtures = []
 [[current_plugins]]
 key = "guild_viking_pages_war"
 path = "3scapes/guild_viking/pages/war.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_pathfinding"
+path = "3scapes/guild_viking/pathfinding.lua"
 target_keys = []
 fixtures = []
 
@@ -7701,31 +7737,31 @@ local_key = "guild_viking-viking_base_05_market_movers_and_trade_rows-manual"
 [[legacy_targets.features]]
 key = "viking_base_06_automated_voyage_planning"
 category = "callback"
-status = "not_converted"
+status = "parity"
 summary = "Plan and advance guild-Viking automated voyages."
-current_refs = []
+current_refs = ["3scapes/guild_viking/autovoyage.lua:148", "3scapes/guild_viking/autovoyage.lua:291", "3scapes/guild_viking/autovoyage.lua:546", "3scapes/guild_viking/autovoyage.lua:732"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking automated-voyage settings, selection, path, goal, and tick callbacks."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-23"
+reviewed_scope = "Compared autovoyage.lua's settings/pick_offer/cell/label/key/skip/nearest/step/pick_resolve/has_trait/per_step/path_steps/hull_floor/goal/all_ships/tick/config/menu against LEGACY's Auto-Voyage (client-side) section, guild_viking.lua:3576-4343, and the settings mini-window menu, MAIN:11437-11541."
+result = "autovoyage.lua reproduces LEGACY's automated-voyage selection, voyage-chart routing (step/path_steps -- a router over chart nodes, distinct from pathfinding.lua's land BFS), goal evaluation, and tick, plus the settings menu and /vik voyage auto surface, with LEGACY parity. Off by default (page_opts.get(\"auto_voyage\")), gated at M.tick's first line; sends go through mud.send, so deadmans governs. notify.lua calls M.tick from countdown_tick's tail, third in LEGACY's trade/raid/voyage order."
+outcome = "pass"
 local_key = "guild_viking-viking_base_06_automated_voyage_planning-manual"
 
 [[legacy_targets.features]]
 key = "viking_base_07_autotrader_bridge_and_raid_automation"
 category = "callback"
-status = "not_converted"
+status = "parity"
 summary = "Bridge guild-Viking autotrader context and run automated raids."
-current_refs = []
+current_refs = ["3scapes/guild_viking/autoraid.lua:176", "3scapes/guild_viking/autoraid.lua:295", "3scapes/guild_viking/autotrader/plan.lua:127"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking autotrader bridge, raid settings, raid tick, and command callbacks."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-23"
+reviewed_scope = "Compared autoraid.lua's settings/merged_ships/available_ships/max_ships/tick/config/menu against LEGACY's Auto-Raid section (guild_viking.lua:4137-4303) and its settings/target-picker menus (MAIN:11386-11434, 11544-11667); compared the autotrader/plan.lua require chain against viking_autotrader_context (guild_viking.lua:4127-4134)."
+result = "autoraid.lua reproduces LEGACY's raid settings, ship lists, and tick, plus the settings/target menus and /vik raid surface, with LEGACY parity. The bridge (state/page_opts/deps handed to the TRADER chunk) has no literal port: autotrader/*.lua reaches the same via require(\"state\")/require(\"page_opts\")/require(\"market\") and its own town/lineage tables -- satisfied architecturally. Off by default; sends go through mud.send (deadmans governs); tick order is second, per LEGACY."
+outcome = "pass"
 local_key = "guild_viking-viking_base_07_autotrader_bridge_and_raid_automation-manual"
 
 [[legacy_targets.features]]
@@ -7737,9 +7773,9 @@ current_refs = []
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-23"
 reviewed_scope = "Complete guild-Viking tab, chrome, persisted detached-page, lifecycle, and broadcast region."
-result = "No current plugin mapping implements this approved behavior."
+result = "No current plugin mapping implements this approved behavior. Re-reviewed at stage 4 close: this is Portal window chrome (detachable-window tabs, persistence, and lifecycle) with no lera analog by design -- lera has no detached/floating window model for a plugin pane to detach into. Waiver candidate for the owner's judgment; not flipped to waived here."
 outcome = "fail"
 local_key = "guild_viking-viking_base_08_window_chrome_tabs_and_lifecycle-manual"
 
@@ -7752,9 +7788,9 @@ current_refs = []
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-23"
 reviewed_scope = "Complete guild-Viking detached-window resize, attach, detach, minimize, and input callbacks."
-result = "No current plugin mapping implements this approved behavior."
+result = "No current plugin mapping implements this approved behavior. Re-reviewed at stage 4 close: this is Portal window chrome (detached-window resize/attach/detach/minimize interactions) with no lera analog by design -- lera has no detached/resizable window model. Waiver candidate for the owner's judgment; not flipped to waived here."
 outcome = "fail"
 local_key = "guild_viking-viking_base_09_detached_interactions_and_resizing-manual"
 
@@ -7767,9 +7803,9 @@ current_refs = []
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-23"
 reviewed_scope = "Complete guild-Viking detached trade-page renderer and detached scrollbar behavior."
-result = "No current plugin mapping implements this approved behavior."
+result = "No current plugin mapping implements this approved behavior. Re-reviewed at stage 4 close: this is Portal window chrome (the detached-window copy of the trade page and its own scrollbar) with no lera analog by design -- the trade page itself has parity via pages/trade.lua and pages/goods.lua (see viking_base_05/base_14); only the DETACHED-window rendering of it is out of scope. Waiver candidate for the owner's judgment; not flipped to waived here."
 outcome = "fail"
 local_key = "guild_viking-viking_base_09_detached_trade_rendering-manual"
 
@@ -7782,9 +7818,9 @@ current_refs = []
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-23"
 reviewed_scope = "Complete guild-Viking detached-page update and detached-window synchronization callbacks."
-result = "No current plugin mapping implements this approved behavior."
+result = "No current plugin mapping implements this approved behavior. Re-reviewed at stage 4 close: this is Portal window chrome (synchronizing a detached window's content with the main window) with no lera analog by design -- lera has no detached-window concept for two views to synchronize. Waiver candidate for the owner's judgment; not flipped to waived here."
 outcome = "fail"
 local_key = "guild_viking-viking_base_09_detached_update_dispatch-manual"
 
@@ -7797,9 +7833,9 @@ current_refs = []
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-23"
 reviewed_scope = "Complete guild-Viking window resize and city-plan image-loading behavior."
-result = "No current plugin mapping implements this approved behavior."
+result = "No current plugin mapping implements this approved behavior. Re-reviewed at stage 4 close: Portal window chrome (native window resize + city-plan icon/image loading for the Wang-tile branch), no lera analog by design -- lera panes are sized by the strict layout engine and have no image-asset rendering; the TEXT-VIEW branch has parity elsewhere (base_12/base_18). Waiver candidate for the owner; not flipped to waived here."
 outcome = "fail"
 local_key = "guild_viking-viking_base_10_cityplan_assets_and_resize-manual"
 
@@ -7812,9 +7848,9 @@ current_refs = []
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-23"
 reviewed_scope = "Complete guild-Viking page and trade-grid scroll input and scrollbar callbacks."
-result = "No current plugin mapping implements this approved behavior."
+result = "No current plugin mapping implements this approved behavior. Re-reviewed at stage 4 close: this is Portal window chrome (the bespoke miniwin scrollbar drag/click widget) with no lera analog by design -- lera panes scroll via wm's scroller/mouse-wheel machinery instead (see CLAUDE.md's Pane Scrolling section), which every current pane and popup in this plugin already uses. Waiver candidate for the owner's judgment; not flipped to waived here."
 outcome = "fail"
 local_key = "guild_viking-viking_base_10_scroll_controls-manual"
 
@@ -7827,9 +7863,9 @@ current_refs = []
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-23"
 reviewed_scope = "Complete guild-Viking terrain, moat, bridge, coast, hill, woods, and building drawer factories."
-result = "No current plugin mapping implements this approved behavior."
+result = "No current plugin mapping implements this approved behavior. Re-reviewed at stage 4 close: this is Portal window chrome (pixel-drawn terrain/building icon assets for the graphical Wang-tile branch) with no lera analog by design -- lera has no image-drawing surface; the TEXT-VIEW terrain/POI rendering already has parity (see viking_base_16_map_page_rendering). Waiver candidate for the owner's judgment; not flipped to waived here."
 outcome = "fail"
 local_key = "guild_viking-viking_base_10_terrain_and_building_drawers-manual"
 
@@ -7842,9 +7878,9 @@ current_refs = []
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-23"
 reviewed_scope = "Complete guild-Viking voyage image-loading behavior and its local conversion helpers."
-result = "No current plugin mapping implements this approved behavior."
+result = "No current plugin mapping implements this approved behavior. Re-reviewed at stage 4 close: this is Portal window chrome (loading voyage-chart icon/image assets for the graphical branch) with no lera analog by design -- lera has no image-drawing surface; the TEXT-VIEW voyage-chart rendering already has parity (see viking_base_17_voyage_views_and_interactions). Waiver candidate for the owner's judgment; not flipped to waived here."
 outcome = "fail"
 local_key = "guild_viking-viking_base_10_voyage_assets-manual"
 
@@ -7857,9 +7893,9 @@ current_refs = []
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-23"
 reviewed_scope = "Complete guild-Viking window creation, font, minimize, mouse, chrome repaint, and page-scroll behavior."
-result = "No current plugin mapping implements this approved behavior."
+result = "No current plugin mapping implements this approved behavior. Re-reviewed at stage 4 close: Portal window chrome (native miniwin creation, font selection, minimize, chrome repaint), no lera analog by design -- lera has no plugin-owned native window to create; the non-chrome dispatch/scroll-clamp portion of the same LEGACY function has parity (base_11). Waiver candidate for the owner; not flipped to waived here."
 outcome = "fail"
 local_key = "guild_viking-viking_base_10_window_creation_and_interactions-manual"
 
@@ -7941,16 +7977,16 @@ local_key = "guild_viking-viking_base_13_logistics_and_governance_page-manual"
 [[legacy_targets.features]]
 key = "viking_base_14_trade_dashboard_and_autotrader_controls"
 category = "rendering"
-status = "not_converted"
+status = "parity"
 summary = "Render guild-Viking trade data and autotrader-specific controls."
-current_refs = []
+current_refs = ["3scapes/guild_viking/pages/goods.lua:267", "3scapes/guild_viking/autotrader/tick.lua:303", "3scapes/guild_viking/autotrader/tick.lua:443"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking trade dashboard and autotrader-control renderer."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-23"
+reviewed_scope = "Compared pages/goods.lua's autotrade_status_lines (the trade-dashboard Auto-Trade block, stage 1) against LEGACY's trade-dashboard autotrader status rendering, and autotrader/tick.lua's M.config/M.open_menu (the control surface) against the right-click Auto-Trade Options popup menu, viking_show_atrade_menu (guild_viking.lua:11321-11351) and its on/off + numeric-knob subcommands (at_config, guild_viking.lua:670-724)."
+result = "The trade-dashboard rendering half of this feature (autotrade_status_lines) shipped in stage 1; this stage closes the autotrader-controls half: the right-click Auto-Trade Options menu became a require(\"menu\") settings menu opened by bare /vik trader, and /vik trader <sub> runs the same on/off + numeric-knob subcommands LEGACY's atrade alias did. The dashboard's placeholder line (\"Auto-trade controls: stage 4\") now names that command instead. LEGACY parity for both halves."
+outcome = "pass"
 local_key = "guild_viking-viking_base_14_trade_dashboard_and_autotrader_controls-manual"
 
 [[legacy_targets.features]]
@@ -7986,46 +8022,46 @@ local_key = "guild_viking-viking_base_16_map_page_rendering-manual"
 [[legacy_targets.features]]
 key = "viking_base_16_map_pathfinding"
 category = "state"
-status = "not_converted"
+status = "parity"
 summary = "Find traversable guild-Viking map routes."
-current_refs = []
+current_refs = ["3scapes/guild_viking/pathfinding.lua:96"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking map pathfinding behavior with passability and movement decisions."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-23"
+reviewed_scope = "Compared pathfinding.lua's M.bfs (plus its private tile_passable/edge_passable/can_move helpers) against LEGACY's vmap_bfs, guild_viking.lua:11689-11761."
+result = "pathfinding.lua's M.bfs is a pure, verbatim port of vmap_bfs -- same neighbour order, same FIFO BFS, same terrain/edge passability rules, same nil/empty-array/direction-string return shape consumed by its three LEGACY call sites -- reading nothing but S.vmap_w/h/rows/east_edges/south_edges and sending/printing nothing itself. LEGACY parity."
+outcome = "pass"
 local_key = "guild_viking-viking_base_16_map_pathfinding-manual"
 
 [[legacy_targets.features]]
 key = "viking_base_16_missions_and_errands"
 category = "command"
-status = "not_converted"
+status = "parity"
 summary = "Dispatch guild-Viking missions and errands."
-current_refs = []
+current_refs = ["3scapes/guild_viking/pages/people.lua:740", "3scapes/guild_viking/pages/people.lua:804", "3scapes/guild_viking/pages/people.lua:840", "3scapes/guild_viking/window.lua:323"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking mission and errand dispatch, return, and submission callbacks."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-23"
+reviewed_scope = "Compared pages/people.lua's mission_run_click/errand_run_click/errand_return_and_submit, dispatched through window.lua's new MouseUp hotspot seam, against LEGACY's viking_mission_run_click (MAIN:12080-12143), viking_errand_run_click (MAIN:12144-12233), and viking_errand_return_and_submit (MAIN:12234-12331), including their reuse of popups/map.lua's viking_show_poi_menu/viking_poi_menu_travel equivalents (M.poi_menu_items/M.travel_to) for the errand's own POI-travel step."
+result = "The People pane's mission/errand \"Run There\" buttons re-resolve their target by id at click time (matching LEGACY's re-lookup guard), dispatch via window.lua's pointer_track-backed MouseUp hotspot seam (LEGACY's hotspots are MouseUp, not MouseDown), and reproduce the fulfill/fetch/submit commands and the target-lost guard, with LEGACY parity. Status/error ColourNote messages are dropped as display-only, the disclosed convention this plugin already follows."
+outcome = "pass"
 local_key = "guild_viking-viking_base_16_missions_and_errands-manual"
 
 [[legacy_targets.features]]
 key = "viking_base_16_point_of_interest_interactions"
 category = "command"
-status = "not_converted"
+status = "parity"
 summary = "Operate guild-Viking map point-of-interest interactions."
-current_refs = []
+current_refs = ["3scapes/guild_viking/popups/map.lua:550", "3scapes/guild_viking/popups/map.lua:587", "3scapes/guild_viking/popups/map.lua:629"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete guild-Viking point-of-interest menu, input, scrolling, selection, travel, and note callbacks."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-23"
+reviewed_scope = "Compared popups/map.lua's poi_menu_items/travel_to/on_pointer against LEGACY's viking_show_poi_menu (MAIN:11789-11814), viking_draw_poi_menu and its poi_pick_<n>/scroll hotspots (MAIN:11913-12070), viking_poi_menu_pick (MAIN:12332-12341), and viking_poi_menu_travel (MAIN:12343-12369)."
+result = "popups/map.lua reproduces the POI travel-target list and travel_to's bfs+mud.send dispatch, LEGACY parity. Menu/input/scrolling/selection use require(\"menu\") instead of the bespoke popup+scrollbar (cityplan/sea precedent). Attach point is retargeted (disclosed): LEGACY's per-page right-click menu has no lera analog; a POI/town cell click opens the same unfiltered list. Per-item colour/status text dropped, matching convention; the dead-code mouseup/resolve functions stay unported."
+outcome = "pass"
 local_key = "guild_viking-viking_base_16_point_of_interest_interactions-manual"
 
 [[legacy_targets.features]]
@@ -8142,100 +8178,100 @@ current_refs = []
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-23"
 reviewed_scope = "Complete public guild-Viking hide, show, minimize, and restore window functions."
-result = "No current plugin mapping implements this approved behavior."
+result = "No current plugin mapping implements this approved behavior. Re-reviewed at stage 4 close: this is Portal window chrome (public hide/show/minimize/restore controls over the plugin's own native miniwin) with no lera analog by design -- lera panes have no plugin-owned window to hide, show, minimize, or restore; visibility/placement belongs to the strict layout engine (see CLAUDE.md's Pane Pointer Input section). Waiver candidate for the owner's judgment; not flipped to waived here."
 outcome = "fail"
 local_key = "guild_viking-viking_base_21_public_window_controls-manual"
 
 [[legacy_targets.features]]
 key = "viking_trader_01_settings_inventory_and_cart_selection"
 category = "state"
-status = "not_converted"
+status = "parity"
 summary = "Configure the guild-Viking autotrader and select inventory and carts."
-current_refs = []
+current_refs = ["3scapes/guild_viking/autotrader/core.lua:53", "3scapes/guild_viking/autotrader/core.lua:77", "3scapes/guild_viking/autotrader/core.lua:94", "3scapes/guild_viking/autotrader/core.lua:131", "3scapes/guild_viking/autotrader/core.lua:163", "3scapes/guild_viking/autotrader/core.lua:175"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete autotrader settings, logging, inventory, cart-capacity, cart-selection, warehouse, and stop-limit helpers."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-23"
+reviewed_scope = "Compared autotrader/core.lua's settings/log/wh_amount/cart_cap/pick_cart (plus its best_idle_cart helper)/warehouse_pct/max_stops against LEGACY guild_viking_autotrader.lua:19-138 (at_settings, at_log, at_wh_amount, at_cart_cap, at_best_idle_cart, at_pick_cart, at_warehouse_pct, at_max_stops)."
+result = "autotrader/core.lua reproduces LEGACY's autotrader settings/logging, warehouse-amount and capacity accounting, cart-selection policy (stock/arb/default modes, heavy-refit-when-full, speed preference, idle-cart tie-break), and route-stop limit helpers verbatim, with LEGACY parity. Pure module: no mud.send, so no deadmans note applies to this file itself."
+outcome = "pass"
 local_key = "guild_viking-viking_trader_01_settings_inventory_and_cart_selection-manual"
 
 [[legacy_targets.features]]
 key = "viking_trader_02_quality_perishability_and_sale_policy"
 category = "state"
-status = "not_converted"
+status = "parity"
 summary = "Apply guild-Viking autotrader quality, perishability, and sale policy."
-current_refs = []
+current_refs = ["3scapes/guild_viking/autotrader/core.lua:190", "3scapes/guild_viking/autotrader/core.lua:201", "3scapes/guild_viking/autotrader/core.lua:216", "3scapes/guild_viking/autotrader/core.lua:236", "3scapes/guild_viking/autotrader/core.lua:243", "3scapes/guild_viking/autotrader/core.lua:263", "3scapes/guild_viking/autotrader/core.lua:284", "3scapes/guild_viking/autotrader/core.lua:292", "3scapes/guild_viking/autotrader/core.lua:301", "3scapes/guild_viking/autotrader/core.lua:310"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete autotrader grading, curing, perishability, freshness, quality, and sale-policy helpers."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-23"
+reviewed_scope = "Compared autotrader/core.lua's is_graded/cured_amount/cured_premium/perishable/fresh_quality/fifo_quality/route_sell_suffix/route_sell_quality/direct_sell_quality/sell_qual against LEGACY guild_viking_autotrader.lua:146-279 (at_is_graded, at_cured_amount, at_cured_premium, at_perishable, at_fresh_quality, at_fifo_quality, at_route_sell_suffix, at_route_sell_quality, at_direct_sell_quality, at_sell_qual)."
+result = "autotrader/core.lua reproduces LEGACY's graded-goods list, cure-gate/premium math (matching the server's query_refined_sale_pct grade bands), perishable-goods list, FIFO/freshest-weighted quality averaging, and the route vs. direct sale quality-suffix/multiplier policy verbatim (hand-computed test fixtures), with LEGACY parity. Pure module: no mud.send, so no deadmans note applies to this file itself."
+outcome = "pass"
 local_key = "guild_viking-viking_trader_02_quality_perishability_and_sale_policy-manual"
 
 [[legacy_targets.features]]
 key = "viking_trader_03_stock_and_deal_leg_construction"
 category = "protocol"
-status = "not_converted"
+status = "parity"
 summary = "Build guild-Viking autotrader stock and market-deal route legs."
-current_refs = []
+current_refs = ["3scapes/guild_viking/autotrader/plan.lua:174", "3scapes/guild_viking/autotrader/plan.lua:198", "3scapes/guild_viking/autotrader/plan.lua:223"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete autotrader stock-sale dispatch and stock and deal route-leg builders."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-23"
+reviewed_scope = "Compared autotrader/plan.lua's dispatch_stock_sell/add_stock_leg/add_deal_legs against LEGACY guild_viking_autotrader.lua:281-397 (at_dispatch_stock_sell, at_add_stock_leg, at_add_deal_legs)."
+result = "autotrader/plan.lua reproduces LEGACY's warehouse stock-offload dispatch decision and its stock-leg and market-deal-leg route builders verbatim, with LEGACY parity. Send(cmd) is replaced by a local capture list (mirroring LEGACY's own at.captured planning/execution split); this module itself never calls mud.send -- autotrader/tick.lua's paced runner (viking_trader_06) is what actually sends, and carries the deadmans note."
+outcome = "pass"
 local_key = "guild_viking-viking_trader_03_stock_and_deal_leg_construction-manual"
 
 [[legacy_targets.features]]
 key = "viking_trader_04_route_plan_construction"
 category = "protocol"
-status = "not_converted"
+status = "parity"
 summary = "Construct a complete guild-Viking autotrader route plan."
-current_refs = []
+current_refs = ["3scapes/guild_viking/autotrader/plan.lua:277"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete autotrader route-plan constructor with all planning branches and diagnostics."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-23"
+reviewed_scope = "Compared autotrader/plan.lua's M.build against LEGACY guild_viking_autotrader.lua:398-667 (viking_autotrader_plan)."
+result = "autotrader/plan.lua's M.build reproduces every planning branch (off/cooldown gates, settling, cart-packing cooldown, waiting for city data, no idle carts, cart limit, no deals, successful plan) and returns the pinned {status, jobs, commands, last_msg} shape, with LEGACY parity. dbg()/ColourNote diagnostics are dropped at plan time (disclosed) since the same reasons ride in the returned status string; real dispatch/output is deferred to autotrader/tick.lua's paced runner."
+outcome = "pass"
 local_key = "guild_viking-viking_trader_04_route_plan_construction-manual"
 
 [[legacy_targets.features]]
 key = "viking_trader_05_configuration_and_command_interface"
 category = "command"
-status = "not_converted"
+status = "parity"
 summary = "Configure and command the guild-Viking autotrader."
-current_refs = []
+current_refs = ["3scapes/guild_viking/autotrader/tick.lua:303", "3scapes/guild_viking/autotrader/tick.lua:396", "3scapes/guild_viking/autotrader/tick.lua:443", "3scapes/guild_viking/autotrader/tick.lua:453"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete autotrader configuration and command-handler callbacks."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-23"
+reviewed_scope = "Compared autotrader/tick.lua's M.config/menu_items/M.open_menu/menu_pick/M.trader_command against LEGACY guild_viking_autotrader.lua:670-729 (at_config, vk_atrade_handler) and guild_viking.lua:11267-11380 (AT_MARGIN_STEPS..AT_AUTOSTOCK_STEPS, at_cycle, atrade_menu_build, viking_show_atrade_menu, viking_atrade_menu_pick)."
+result = "autotrader/tick.lua reproduces LEGACY's on/off + numeric-knob (margin/reserve/carts/shown) subcommand configuration and its command dispatch verbatim, reached via /vik trader [<sub>] (init.lua); the right-click Auto-Trade Options popup menu became a require(\"menu\") menu with the same cycle-step values, opened by bare /vik trader, with LEGACY parity."
+outcome = "pass"
 local_key = "guild_viking-viking_trader_05_configuration_and_command_interface-manual"
 
 [[legacy_targets.features]]
 key = "viking_trader_06_transactional_tick_and_status"
 category = "callback"
-status = "not_converted"
+status = "parity"
 summary = "Execute fail-closed guild-Viking autotrader transactions and report status."
-current_refs = []
+current_refs = ["3scapes/guild_viking/autotrader/tick.lua:234", "3scapes/guild_viking/autotrader/tick.lua:281", "3scapes/guild_viking/autotrader/tick.lua:187"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
-reviewed_scope = "Complete autotrader transactional tick, failure, status, and transaction helper region."
-result = "No current plugin mapping implements this approved behavior."
-outcome = "fail"
+review_date = "2026-08-23"
+reviewed_scope = "Compared autotrader/tick.lua's sm state machine (M.tick, transactions, fail_closed, do_plan, begin_transaction, M.status, M.reset) against LEGACY guild_viking_autotrader.lua:741-849 (the paced runner's note/row_sig/list_sig/mip_sig/transactions/fail_closed/plan/begin_transaction helpers, auto_trade_tick, viking_autotrader_status)."
+result = "autotrader/tick.lua's M.tick reproduces every fail-closed gate (off / confirming+stale-mip-timeout / cooldown / post-success delay / no-transactions-idle / empty-transaction guard) and the MIP-confirmed paced send loop, with LEGACY parity. Sends go through mud.send, gated behind page_opts.get(\"auto_trade\") at M.tick's first line, so deadmans governs. notify.lua calls M.tick from countdown_tick's tail, first in LEGACY's order."
+outcome = "pass"
 local_key = "guild_viking-viking_trader_06_transactional_tick_and_status-manual"
 
 [[legacy_targets.features]]
@@ -8337,9 +8373,9 @@ current_refs = []
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-23"
 reviewed_scope = "Complete guild-Viking embedded window-control script and all whole functions it owns."
-result = "No current plugin mapping implements this approved behavior."
+result = "No current plugin mapping implements this approved behavior. Re-reviewed at stage 4 close: this is Portal window chrome (the embedded XML window-control script and the functions it owns) with no lera analog by design -- lera plugins have no embedded window-control script of this kind to port. Waiver candidate for the owner's judgment; not flipped to waived here."
 outcome = "fail"
 local_key = "guild_viking-viking_xml_07_embedded_window_controls-manual"
 

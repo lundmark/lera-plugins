@@ -41,6 +41,31 @@ Not rechecked at the public validation level:
 - Path: `3scapes/guild_viking/init.lua`
 - Approved targets: `guild_viking`
 
+### `guild_viking_autoraid`
+
+- Path: `3scapes/guild_viking/autoraid.lua`
+- Approved targets: None
+
+### `guild_viking_autotrader_core`
+
+- Path: `3scapes/guild_viking/autotrader/core.lua`
+- Approved targets: None
+
+### `guild_viking_autotrader_plan`
+
+- Path: `3scapes/guild_viking/autotrader/plan.lua`
+- Approved targets: None
+
+### `guild_viking_autotrader_tick`
+
+- Path: `3scapes/guild_viking/autotrader/tick.lua`
+- Approved targets: None
+
+### `guild_viking_autovoyage`
+
+- Path: `3scapes/guild_viking/autovoyage.lua`
+- Approved targets: None
+
 ### `guild_viking_combat`
 
 - Path: `3scapes/guild_viking/combat.lua`
@@ -154,6 +179,11 @@ Not rechecked at the public validation level:
 ### `guild_viking_pages_war`
 
 - Path: `3scapes/guild_viking/pages/war.lua`
+- Approved targets: None
+
+### `guild_viking_pathfinding`
+
+- Path: `3scapes/guild_viking/pathfinding.lua`
 - Approved targets: None
 
 ### `guild_viking_persist`
@@ -862,7 +892,7 @@ Not rechecked at the public validation level:
 ### `guild_viking` — plugin_gap
 
 - Current plugins: `guild_viking`
-- Feature statuses: not_converted=25, parity=26
+- Feature statuses: not_converted=13, parity=38
 - `viking_base_01_dependencies_state_and_core_helpers` (state): parity — Initialize guild-Viking dependencies, persistent state, labels, and core helpers.
 - `viking_base_02_market_history_and_demand_metrics` (state): parity — Track guild-Viking market history, price statistics, trends, and demand cycles.
 - `viking_base_03_status_bar_callbacks` (rendering): parity — Render guild-Viking health and progress status callbacks.
@@ -871,8 +901,8 @@ Not rechecked at the public validation level:
 - `viking_base_04_protocol_ingestion_and_guild_state` (protocol): parity — Ingest the complete guild-Viking protocol payload and maintain coupled guild state.
 - `viking_base_05_events_timers_and_batch_processing` (callback): parity — Handle guild-Viking events, countdowns, and protocol batches.
 - `viking_base_05_market_movers_and_trade_rows` (rendering): parity — Compute guild-Viking market movers and trade-row presentation data.
-- `viking_base_06_automated_voyage_planning` (callback): not_converted — Plan and advance guild-Viking automated voyages.
-- `viking_base_07_autotrader_bridge_and_raid_automation` (callback): not_converted — Bridge guild-Viking autotrader context and run automated raids.
+- `viking_base_06_automated_voyage_planning` (callback): parity — Plan and advance guild-Viking automated voyages.
+- `viking_base_07_autotrader_bridge_and_raid_automation` (callback): parity — Bridge guild-Viking autotrader context and run automated raids.
 - `viking_base_08_window_chrome_tabs_and_lifecycle` (persistence): not_converted — Manage guild-Viking window chrome, tabs, persistence, and lifecycle.
 - `viking_base_09_detached_interactions_and_resizing` (callback): not_converted — Handle guild-Viking detached-window interactions and resizing.
 - `viking_base_09_detached_trade_rendering` (rendering): not_converted — Render guild-Viking detached trade content and its scrollbar.
@@ -887,12 +917,12 @@ Not rechecked at the public validation level:
 - `viking_base_12_city_status_page` (rendering): parity — Render the guild-Viking city status page.
 - `viking_base_12_production_page` (rendering): parity — Render the complete guild-Viking production page.
 - `viking_base_13_logistics_and_governance_page` (rendering): parity — Render guild-Viking logistics, taxation, edicts, and governance data.
-- `viking_base_14_trade_dashboard_and_autotrader_controls` (rendering): not_converted — Render guild-Viking trade data and autotrader-specific controls.
+- `viking_base_14_trade_dashboard_and_autotrader_controls` (rendering): parity — Render guild-Viking trade data and autotrader-specific controls.
 - `viking_base_15_page_and_automation_menus` (command): not_converted — Handle guild-Viking page, autotrader, raid, and voyage menus.
 - `viking_base_16_map_page_rendering` (rendering): parity — Render the guild-Viking map page.
-- `viking_base_16_map_pathfinding` (state): not_converted — Find traversable guild-Viking map routes.
-- `viking_base_16_missions_and_errands` (command): not_converted — Dispatch guild-Viking missions and errands.
-- `viking_base_16_point_of_interest_interactions` (command): not_converted — Operate guild-Viking map point-of-interest interactions.
+- `viking_base_16_map_pathfinding` (state): parity — Find traversable guild-Viking map routes.
+- `viking_base_16_missions_and_errands` (command): parity — Dispatch guild-Viking missions and errands.
+- `viking_base_16_point_of_interest_interactions` (command): parity — Operate guild-Viking map point-of-interest interactions.
 - `viking_base_17_voyage_views_and_interactions` (rendering): parity — Render and operate guild-Viking voyage views.
 - `viking_base_18_city_planning_views_and_controls` (command): parity — Render and operate guild-Viking city planning.
 - `viking_base_19_court_army_and_battle_controls` (command): parity — Render guild-Viking court and army views and handle battle controls.
@@ -901,12 +931,12 @@ Not rechecked at the public validation level:
 - `viking_base_20_prison_panel` (rendering): parity — Render the guild-Viking prison panel.
 - `viking_base_20_war_overview` (rendering): not_converted — Render the guild-Viking war overview and its coupled battle tiles.
 - `viking_base_21_public_window_controls` (public_api): not_converted — Expose guild-Viking window visibility and minimization controls.
-- `viking_trader_01_settings_inventory_and_cart_selection` (state): not_converted — Configure the guild-Viking autotrader and select inventory and carts.
-- `viking_trader_02_quality_perishability_and_sale_policy` (state): not_converted — Apply guild-Viking autotrader quality, perishability, and sale policy.
-- `viking_trader_03_stock_and_deal_leg_construction` (protocol): not_converted — Build guild-Viking autotrader stock and market-deal route legs.
-- `viking_trader_04_route_plan_construction` (protocol): not_converted — Construct a complete guild-Viking autotrader route plan.
-- `viking_trader_05_configuration_and_command_interface` (command): not_converted — Configure and command the guild-Viking autotrader.
-- `viking_trader_06_transactional_tick_and_status` (callback): not_converted — Execute fail-closed guild-Viking autotrader transactions and report status.
+- `viking_trader_01_settings_inventory_and_cart_selection` (state): parity — Configure the guild-Viking autotrader and select inventory and carts.
+- `viking_trader_02_quality_perishability_and_sale_policy` (state): parity — Apply guild-Viking autotrader quality, perishability, and sale policy.
+- `viking_trader_03_stock_and_deal_leg_construction` (protocol): parity — Build guild-Viking autotrader stock and market-deal route legs.
+- `viking_trader_04_route_plan_construction` (protocol): parity — Construct a complete guild-Viking autotrader route plan.
+- `viking_trader_05_configuration_and_command_interface` (command): parity — Configure and command the guild-Viking autotrader.
+- `viking_trader_06_transactional_tick_and_status` (callback): parity — Execute fail-closed guild-Viking autotrader transactions and report status.
 - `viking_xml_01_metadata` (state): parity — Declare the guild-Viking plugin metadata.
 - `viking_xml_02_status_and_return_triggers` (trigger): parity — Dispatch guild-Viking status and return events.
 - `viking_xml_03_voyage_and_raid_event_triggers` (trigger): parity — Dispatch guild-Viking voyage and raid events.

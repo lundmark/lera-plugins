@@ -117,7 +117,7 @@ events or payloads for a plugin to consume.
 | `autostepper` | `/step`, `-` `-.` `->` `-!` | Automatic speedwalk execution |
 | `chat_monitor` | `/chat` | Chat channel monitoring and logging (MIP or GMCP) |
 | `guild_druid` | `/dauto`, `/resetgxp` | Druid guild utilities |
-| `guild_viking` | `/vik`, `resetvikxp` | Vikings guild: protocol/state, a 12-page tab-bar pane (`/vik <page>` or `/vik page <key>`), popup board overlays (`/vik map\|sea\|voyage\|cityplan\|war`), and detached-page parity (`/vik pop <page>`); automation pending |
+| `guild_viking` | `/vik`, `resetvikxp` | Vikings guild: protocol/state, a 12-page tab-bar pane (`/vik <page>` or `/vik page <key>`), popup board overlays (`/vik map\|sea\|voyage\|cityplan\|war`), detached-page parity (`/vik pop <page>`), map pathfinding with point-of-interest travel and mission/errand dispatch, and three client-side automations (auto-trade, auto-raid, auto-voyage; see below) -- all off by default |
 | `kill_trigger` | `/killers` | Combat automation triggers |
 | `mapper` | `/map` | Room mapping and pathfinding |
 | `mapview` | `/mapview` | Visual map display |
@@ -249,6 +249,27 @@ including anything under `Comm` that could not be read:
 [chat] mip: 143 messages    gmcp: 0 mapped, 2 unmapped
 [chat] last unmapped: Comm.Channel.List (fields: channels)
 ```
+
+### Vikings guild automation
+
+`guild_viking` ships three client-side automations, each a straight port of the matching
+LEGACY behavior: an arbitrage/stock-offload **auto-trader**, an idle-longship **auto-raider**,
+and a voyage-chart **auto-voyager**. Every one of them sends commands with no direct action from
+the player, so **all three ship OFF and must be turned on deliberately**:
+
+| Automation | Command | Setting |
+|------------|---------|---------|
+| Auto-trade | `/vik trader [<sub>]` (bare opens the settings menu) | `auto_trade` |
+| Auto-raid | `/vik raid [<sub>]` | `auto_raid` |
+| Auto-voyage | `/vik voyage auto [<sub>]` | `auto_voyage` |
+
+Each ticks on its own interval (30s / 20s / 8s) from the guild's regular per-second update timer,
+gated at the very first line of its tick function on the setting above — nothing is ever sent
+until a player flips it on with the command or its menu. Every automated send goes through the
+normal `mud.send` path, so if `deadmans` is loaded, its idle-detection `on_send` governance
+applies to these sends exactly as it would to a manually-typed command. Settings persist across
+reconnects via the guild's own store. `/vik status` reports each automation's on/off state and its
+last-action/next-check timing; the Stats page shows the same summary.
 
 ### Interop hooks
 
