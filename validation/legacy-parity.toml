@@ -7998,9 +7998,9 @@ current_refs = []
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-23"
 reviewed_scope = "Complete guild-Viking page, trade, raid, voyage, and target menu callbacks."
-result = "No current plugin mapping implements this approved behavior."
+result = "Partial coverage; outcome stays fail. Four of five menu families shipped this stage: autotrader settings (autotrader/tick.lua:396-449), auto-raid settings + target picker (autoraid.lua:383-508), and auto-voyage settings (autovoyage.lua:792-863). Only LEGACY's generic per-page right-click context menu (PAGE_MENUS/viking_page_menu_pick) remains unported -- dropped chrome, already disclosed in popups/map.lua's header. Scope says \"Complete ... menu callbacks\", which is not yet true."
 outcome = "fail"
 local_key = "guild_viking-viking_base_15_page_and_automation_menus-manual"
 
@@ -8163,9 +8163,9 @@ current_refs = []
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
-review_date = "2026-08-12"
+review_date = "2026-08-23"
 reviewed_scope = "Complete guild-Viking war-overview renderer with nested side, tile, legend, and morale helpers."
-result = "No current plugin mapping implements this approved behavior."
+result = "This row's prior sentence (\"no current plugin mapping implements this\") is stale and inaccurate: popups/war_campaign.lua and popups/war_battle.lua exist since stage 3. This note does not assess whether either covers this specific feature's scope -- that assessment is left to the owner. No parity is claimed and no status is changed here."
 outcome = "fail"
 local_key = "guild_viking-viking_base_20_war_overview-manual"
 

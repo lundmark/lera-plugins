@@ -584,6 +584,12 @@ end
 -- a player-position update that lands while the menu is open is honored),
 -- then dispatches it. ColourNote status messages are dropped -- see the
 -- module doc comment's disclosure above; every guard below still runs.
+-- Disclosure: this is a pointer-driven send (a menu pick, not typed input),
+-- and it can dispatch a whole PATH of commands, not just one. `deadmans`
+-- resets its idle timer only from `on_input`, never from pointer input, so
+-- a player who is past `deadmans`' block_time when they click a POI has
+-- every command in the path silently swallowed by its on_send governance,
+-- not just the first (see plugins/README.md's automation section).
 local function travel_to(poi)
   if (S.vmap_px or -1) < 0 then return end -- "[vmap] Player position unknown"
   local path = pathfinding.bfs(S.vmap_px, S.vmap_py, poi.x, poi.y)

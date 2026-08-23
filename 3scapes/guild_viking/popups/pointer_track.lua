@@ -1,8 +1,10 @@
 -- Down-target recording, shared by the interactive popup modules that need
 -- it (war_campaign, war_battle, cityplan, sea, and, as of Task 5's POI
--- travel menu, map). voyage's [Actions] line is its only clickable target,
--- so there is no second target for a mismatched up to land on -- it is
--- documented inline in its own module.
+-- travel menu, map) plus, as of Task 6's mission/errand "Run There" pane
+-- seam, window.lua (not a popup, but the same MouseUp-hotspot discipline
+-- applies -- see that module's own header). voyage's [Actions] line is its
+-- only clickable target, so there is no second target for a mismatched up
+-- to land on -- it is documented inline in its own module.
 --
 -- Real MUSHclient/miniwin hotspot semantics: a mouseup is only delivered to
 -- the SAME hotspot that took the matching mousedown, even for a hotspot with
@@ -49,7 +51,13 @@
 -- list (Task 5, five modules now): map's only "up" action (open_poi_menu)
 -- is gated on `poi_at_cell(...) ~= nil and track.matches(...)`, both
 -- conjuncts required, so it too never acts on an up with no recorded
--- (matching) down of its own.
+-- (matching) down of its own. Re-audited when window.lua joined this list
+-- (Task 6, six modules now): its on_pointer records a body-target hit as a
+-- "cell" (row + col_start) on down, clears the tracker on every up
+-- (matched or not) and on "cancel", and only ever pcalls a target's
+-- `action` when the up's own re-hit-test target matches what the down
+-- recorded via `track.matches` -- fail-closed the same way, so it too
+-- never acts on an up with no recorded (matching) down of its own.
 local M = {}
 
 local function same(a, b)

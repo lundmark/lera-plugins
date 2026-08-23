@@ -117,7 +117,7 @@ events or payloads for a plugin to consume.
 | `autostepper` | `/step`, `-` `-.` `->` `-!` | Automatic speedwalk execution |
 | `chat_monitor` | `/chat` | Chat channel monitoring and logging (MIP or GMCP) |
 | `guild_druid` | `/dauto`, `/resetgxp` | Druid guild utilities |
-| `guild_viking` | `/vik`, `resetvikxp` | Vikings guild: protocol/state, a 12-page tab-bar pane (`/vik <page>` or `/vik page <key>`), popup board overlays (`/vik map\|sea\|voyage\|cityplan\|war`), detached-page parity (`/vik pop <page>`), map pathfinding with point-of-interest travel and mission/errand dispatch, and three client-side automations (auto-trade, auto-raid, auto-voyage; see below) -- all off by default |
+| `guild_viking` | `/vik`, `resetvikxp` | Vikings guild: protocol/state, a 12-page tab-bar pane (`/vik <page>` or `/vik page <key>`), popup board overlays (`/vik map\|sea\|voyage\|cityplan\|war`), detached-page parity (`/vik pop <page>`), map pathfinding with point-of-interest travel and mission/errand dispatch (always available, no setting), and three client-side automations (auto-trade, auto-raid, auto-voyage; see below), which ship off by default |
 | `kill_trigger` | `/killers` | Combat automation triggers |
 | `mapper` | `/map` | Room mapping and pathfinding |
 | `mapview` | `/mapview` | Visual map display |
@@ -263,13 +263,25 @@ the player, so **all three ship OFF and must be turned on deliberately**:
 | Auto-raid | `/vik raid [<sub>]` | `auto_raid` |
 | Auto-voyage | `/vik voyage auto [<sub>]` | `auto_voyage` |
 
-Each ticks on its own interval (30s / 20s / 8s) from the guild's regular per-second update timer,
-gated at the very first line of its tick function on the setting above — nothing is ever sent
-until a player flips it on with the command or its menu. Every automated send goes through the
-normal `mud.send` path, so if `deadmans` is loaded, its idle-detection `on_send` governance
-applies to these sends exactly as it would to a manually-typed command. Settings persist across
-reconnects via the guild's own store. `/vik status` reports each automation's on/off state and its
-last-action/next-check timing; the Stats page shows the same summary.
+Auto-raid and auto-voyage tick on a flat interval (20s / 8s) from the guild's regular per-second
+update timer. Auto-trade's 30s is a *planning* interval only — once a plan is drawn, its paced
+runner sends one command every 2s and waits up to 20s for MIP confirmation before the next, so
+auto-trade can send more often than every 30s while working through a multi-command plan. All
+three are gated at the very first line of their tick function on the setting above — nothing is
+ever sent until a player flips it on with the command or its menu. Every automated send goes
+through the normal `mud.send` path, so if `deadmans` is loaded, its idle-detection `on_send`
+governance applies to these sends exactly as it would to a manually-typed command. Settings
+persist across reconnects via the guild's own store. `/vik status` reports each automation's
+on/off state and its last-action/next-check timing; the Stats page shows the on/off and
+last-action half of that (not the next-check timing).
+
+**Deadmans and pointer-driven sends.** `deadmans` resets its idle timer only from typed input
+(`on_input`), never from pointer input. That has been true since stage 3's popup click-to-send
+paths, but stage 4 raises the stakes: the map popup's point-of-interest travel and the People
+pane's mission/errand "Run There" button are both pointer-driven and can each dispatch a whole
+path of movement commands, not just one. A player who has been reading rather than typing past
+`deadmans`' `block_time` can click one of these and have deadmans silently swallow every command
+in the path.
 
 ### Interop hooks
 

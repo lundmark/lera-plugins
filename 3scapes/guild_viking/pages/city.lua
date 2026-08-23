@@ -145,6 +145,21 @@ local function raids_lines(add, width)
   -- itself is still only populated once the user actually configures the
   -- automation (client-only settings state, never wire-parsed), so this reads
   -- defensively exactly like LEGACY's own `local ar = state.autoraid or {}`.
+  --
+  -- Disclosure: `autoraid.max_ships()` below calls `autoraid.lua`'s
+  -- `M.merged_ships()`, which mutates the `S.voyage_longships`/`S.ships`
+  -- records it merges in place (copying convoy/durability/state/return_in
+  -- fields onto the matched `voyage_longships` entry) -- this render path
+  -- is therefore NOT a pure builder despite this file's own header claim
+  -- and `window.lua`'s "pages are pure ... reading S and page_opts only".
+  -- LEGACY-faithful, not a bug: MAIN 7778 calls `ar_max_ships()` from
+  -- `draw_page7` the same way, and `ar_merged_ships` mutates identically.
+  -- The mutation is idempotent (each call re-copies the same source
+  -- fields), so running it twice per frame -- once per render target, when
+  -- a WebSocket client is attached alongside the local view -- produces no
+  -- drift. One wrinkle, also LEGACY's own behavior: `vsh.durability =
+  -- sh.durability` is unconditional, so a `voyage_longships` entry with a
+  -- durability that `S.ships` doesn't carry gets nilled out by the merge.
   local ar = S.autoraid or {}
   local on = page_opts.get("auto_raid")
   local ships_txt = (ar.ships == "all") and "All Ships"
