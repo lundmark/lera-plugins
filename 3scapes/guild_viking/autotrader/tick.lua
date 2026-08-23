@@ -270,9 +270,17 @@ function M.tick()
   end
 end
 
--- LEGACY:846-848 (viking_autotrader_status).
+-- LEGACY:846-848 (viking_autotrader_status). The 5th return value (next_at)
+-- is a Task 9 addition with no LEGACY counterpart: the epoch second at which
+-- the state machine will next do something on its own (sm.deadline while
+-- confirming, sm.next_at otherwise) -- exposed so init.lua's /vik status and
+-- pages/stats.lua's Automation section can report "next eligible" without
+-- reaching into sm directly. Existing callers that only destructure the
+-- first 1-4 values (every one before this task) are unaffected -- Lua
+-- ignores a trailing return value nothing asks for.
 function M.status()
-  return sm.phase, #sm.pending, sm.current and (sm.index - 1) or 0, sm.last_error
+  local next_at = (sm.phase == "confirming") and sm.deadline or sm.next_at
+  return sm.phase, #sm.pending, sm.current and (sm.index - 1) or 0, sm.last_error, next_at
 end
 
 -- Test-only reset; see module header.

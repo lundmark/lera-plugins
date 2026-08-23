@@ -13,6 +13,17 @@
 -- the scrolling console (guild_viking.lua:655-657, 881-886), never into the
 -- Page 1 window itself, but the pane is the natural home for that summary
 -- now that it exists, and the fields are already tracked in state.lua.
+--
+-- A second lera-only section, Automation (gated show_stats_automation,
+-- default true), is appended at the very end (Task 9, stage 4's integration
+-- pass): a compact on/off + last-action line per client-side automation
+-- (auto-trade/auto-raid/auto-voyage). LEGACY has no such pane section --
+-- its own three settings mini-windows show configuration, not a running
+-- status summary, and this port's /vik status command is the fuller
+-- counterpart. Same "disclosed lera addition" disposition as the Enemy
+-- block above. Pure read: no ui.* calls, no state mutation, no mud.send --
+-- see this file's own module comment at the top for the page-purity
+-- constraint this section is held to exactly like every other one here.
 local pagelib = require("pagelib")
 local state = require("state")
 local page_opts = require("page_opts")
@@ -99,6 +110,27 @@ local STFX_CAT_ANSI = {
   Pwr  = C.bright_red,
   DoT  = C.red,
 }
+
+-- Task 9 Automation section accessors. Deferred (not required at this
+-- module's own top level): pages/stats.lua is itself required from
+-- window.lua's OWN top-level require chain (window.lua:61, BEFORE window.lua
+-- returns). autotrader.tick.lua and autovoyage.lua both require("persist")
+-- at THEIR top level, and persist.lua requires("window") at ITS top level --
+-- a top-level require here would re-enter window.lua while it is still
+-- mid-load, the exact cycle shape autoraid.lua's own module header discloses
+-- (window -> pages.city -> autoraid -> persist -> window) and mitigates the
+-- same way. Calling require() from inside a function instead defers it
+-- until the first actual render, long after every module has finished
+-- loading.
+local function trade_status()
+  return require("autotrader.tick").status()
+end
+local function raid_settings()
+  return require("autoraid").settings()
+end
+local function voyage_settings()
+  return require("autovoyage").settings()
+end
 
 function M.lines(width)
   width = width or 80
@@ -247,6 +279,37 @@ function M.lines(width)
           table.concat(parts, "  "), STFX_CAT_ANSI[cat]))
       end
     end
+  end
+
+  -- ---- Automation (lera-only, gated show_stats_automation) -- see the -----
+  -- module comment above for the disclosure and the deferred-require note.
+  if page_opts.get("show_stats_automation") then
+    add(pagelib.header(width, "Automation"))
+
+    local trade_phase, trade_pending = trade_status()
+    local trade_on = page_opts.get("auto_trade")
+    add(pagelib.kv(width, "Auto-Trade:",
+      string.format("%s (phase=%s pending=%d)", trade_on and "ON" or "off",
+        trade_phase, trade_pending),
+      trade_on and C.bright_green or C.dim))
+
+    local ar = raid_settings()
+    local raid_on = page_opts.get("auto_raid")
+    local raid_last = "none"
+    if ar.last_dispatch then
+      raid_last = string.format("%d ship%s -> %s", ar.last_dispatch.n,
+        ar.last_dispatch.n == 1 and "" or "s", ar.last_dispatch.target)
+    end
+    add(pagelib.kv(width, "Auto-Raid:",
+      string.format("%s (last: %s)", raid_on and "ON" or "off", raid_last),
+      raid_on and C.bright_green or C.dim))
+
+    local av = voyage_settings()
+    local voyage_on = page_opts.get("auto_voyage")
+    local voyage_last = (av.log and #av.log > 0) and av.log[#av.log] or "none"
+    add(pagelib.kv(width, "Auto-Voyage:",
+      string.format("%s (last: %s)", voyage_on and "ON" or "off", voyage_last),
+      voyage_on and C.bright_green or C.dim))
   end
 
   return lines

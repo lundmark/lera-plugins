@@ -94,7 +94,8 @@ if hp_idx then
 end
 
 -- ---- section headers present, in order --------------------------------------
-local section_order = { "Vitals", "Ledung / Chain", "God", "Saga XP", "Enemy", "Active Effects" }
+local section_order = { "Vitals", "Ledung / Chain", "God", "Saga XP", "Enemy", "Active Effects",
+                         "Automation" }
 local last_idx = 0
 local order_ok = true
 local missing
@@ -161,6 +162,97 @@ check("combat.lua exports STFX_CAT_ORDER", type(combat.STFX_CAT_ORDER) == "table
       and #combat.STFX_CAT_ORDER == 5)
 check("combat.lua exports STFX_CAT_LABELS", type(combat.STFX_CAT_LABELS) == "table"
       and combat.STFX_CAT_LABELS.Def == "Def")
+
+-- =============================================================================
+-- Automation section (Task 9, lera-only -- see pages/stats.lua's module
+-- comment for the disclosure). Gated show_stats_automation, default true.
+-- Pure read of autotrader.tick.status()/autoraid.settings()/
+-- autovoyage.settings() via the page's own deferred-require accessors --
+-- reached here only through require("autotrader.tick")/require("autoraid")/
+-- require("autovoyage") directly (the same module singletons, since
+-- require() caches by name), never by poking pages/stats.lua's internals.
+-- =============================================================================
+local autotrade_tick_page = require("autotrader.tick")
+local autoraid_page = require("autoraid")
+local autovoyage_page = require("autovoyage")
+
+-- pagelib.kv colors the label and value separately (dim label, RESET, a
+-- plain space, then the value's own color) -- so "Auto-Trade: off (...)" is
+-- not one contiguous substring in the raw ANSI text (there is an escape
+-- sequence between the colon and the space, and another between the space
+-- and the value). Strip escapes and trim the row's own right-padding before
+-- comparing exact content; find_line's plain substring search stays fine for
+-- the label/header-only checks elsewhere in this file, where the substring
+-- itself has no embedded escape.
+local function strip_and_trim(s)
+  return (s:gsub("\27%[[%d;]*m", ""):gsub("%s+$", ""))
+end
+local function find_row(lines_arr, label)
+  for _, l in ipairs(lines_arr) do
+    if l:find(label, 1, true) then return strip_and_trim(l) end
+  end
+  return nil
+end
+
+check("show_stats_automation defaults to true", page_opts.get("show_stats_automation") == true)
+
+-- `lines` (captured above, before any of this section's toggling) already
+-- reflects the all-off default: auto_trade/auto_raid/auto_voyage all false,
+-- fresh idle tick state, no dispatch/log history yet.
+check("Automation section: Auto-Trade row, off by default, idle/no pending",
+      find_row(lines, "Auto-Trade:") == "Auto-Trade: off (phase=idle pending=0)", find_row(lines, "Auto-Trade:"))
+check("Automation section: Auto-Raid row, off by default, no dispatch yet",
+      find_row(lines, "Auto-Raid:") == "Auto-Raid: off (last: none)", find_row(lines, "Auto-Raid:"))
+check("Automation section: Auto-Voyage row, off by default, no log yet",
+      find_row(lines, "Auto-Voyage:") == "Auto-Voyage: off (last: none)", find_row(lines, "Auto-Voyage:"))
+
+-- Flipping page_opts flags on is reflected immediately (read at render time,
+-- not cached) -- and each row picks up real state from the automation's own
+-- module, not a copy: last_dispatch/log entries set through the SAME
+-- singleton modules the page's deferred requires resolve to.
+page_opts.set("auto_trade", true)
+page_opts.set("auto_raid", true)
+page_opts.set("auto_voyage", true)
+autoraid_page.settings().last_dispatch = { t = "09:00", target = "Bjorn", n = 3, convoy = true }
+autovoyage_page.settings().log = { "08:00 explore -> B4" }
+local lines_on = stats_page.lines(WIDTH)
+check("Automation section: Auto-Trade row flips to ON",
+      find_row(lines_on, "Auto-Trade:") == "Auto-Trade: ON (phase=idle pending=0)",
+      find_row(lines_on, "Auto-Trade:"))
+check("Automation section: Auto-Raid row flips to ON and shows the last dispatch",
+      find_row(lines_on, "Auto-Raid:") == "Auto-Raid: ON (last: 3 ships -> Bjorn)",
+      find_row(lines_on, "Auto-Raid:"))
+check("Automation section: Auto-Voyage row flips to ON and shows the last log entry",
+      find_row(lines_on, "Auto-Voyage:") == "Auto-Voyage: ON (last: 08:00 explore -> B4)",
+      find_row(lines_on, "Auto-Voyage:"))
+
+page_opts.set("auto_trade", false)
+page_opts.set("auto_raid", false)
+page_opts.set("auto_voyage", false)
+autoraid_page.settings().last_dispatch = nil
+autovoyage_page.settings().log = {}
+
+-- Gate: show_stats_automation off removes the whole section, header and
+-- rows alike -- and this is the one check a mutant that deletes the gate
+-- (see the task report's mutant table) makes fail.
+page_opts.set("show_stats_automation", false)
+local lines_no_automation = stats_page.lines(WIDTH)
+check("Automation header disappears when show_stats_automation is off",
+      find_line(lines_no_automation, "Automation") == nil)
+check("Auto-Trade row disappears too",
+      find_line(lines_no_automation, "Auto-Trade:") == nil)
+page_opts.set("show_stats_automation", true)
+local lines_automation_back = stats_page.lines(WIDTH)
+check("Automation header reappears once the opt is back on",
+      find_line(lines_automation_back, "Automation") ~= nil)
+
+-- Purity, implicitly: this harness defines no `mud` or `buffer` global at
+-- all (only `ui.dirty` and `lera.render_pass`, see the top-of-file comment).
+-- Every stats_page.lines() call above (including the ones just run with the
+-- Automation section rendered in every flag combination) would have raised
+-- an uncaught "attempt to index a nil value" error had the section called
+-- mud.send or buffer.color_print -- it never did, which is the whole point
+-- of a pure lines(width) builder (this file's own module comment).
 
 -- ---- width is respected: every emitted row's visible width <= width --------
 local width_ok = true

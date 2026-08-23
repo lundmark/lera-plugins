@@ -1131,6 +1131,223 @@ check("/vik voyage auto (bare): 13 items",
 last_menu_open = nil
 S.autovoyage = nil
 
+-- =============================================================================
+-- Task 9: the safety lock + the integration ordering test.
+--
+-- The shipped default is all three automations OFF (page_opts.lua's own
+-- defaults: auto_trade/auto_raid/auto_voyage all false). The safety lock
+-- proves that default is inert: driving MANY notify.countdown_tick()s over a
+-- fixture that is genuinely, simultaneously actionable by all three
+-- automations sends nothing at all. "Genuinely actionable" is not asserted,
+-- it is DEMONSTRATED -- the same fixture, unchanged, is driven again with
+-- each automation flipped on (one at a time, then all three together) and
+-- shown to send the exact expected command. A fixture that sent nothing for
+-- an unrelated reason (missing city data, no idle ship, no charted node...)
+-- would pass the zero-sends assertion for the wrong reason; this is the
+-- exact weakness called out as having been found three times already in
+-- this stage, so it is not enough to build empty state and call it done.
+--
+-- Every wire field below goes through protocol.ingest with the REAL
+-- handlers already required at the top of this file (handlers.trade,
+-- handlers.voyage, handlers.kingdom, handlers.city) -- never a direct S.xxx
+-- poke. S.autotrade/S.autoraid/S.autovoyage remain the one documented
+-- exception (plugin-local automation SETTINGS, not wire data), exactly as
+-- every per-automation suite in this stage already establishes.
+-- =============================================================================
+local trade_tick2 = require("autotrader.tick")
+local at_core2 = require("autotrader.core")
+local raid2 = require("autoraid")
+local voyage2 = require("autovoyage")
+
+-- handlers/voyage.lua's M.VOYAGE field order (27 pipe-delimited fields) --
+-- same shape as guild_viking_autovoyage_test.lua's own VOYAGE_FIELDS/
+-- set_voyage helpers, duplicated here in miniature rather than requiring
+-- that test file.
+local SAFETY_VOYAGE_FIELDS = {
+  "state", "ship_id", "ship_name", "contract_name", "contract_type", "danger",
+  "x", "y", "width", "height", "hull", "morale", "supplies", "stress",
+  "crew_alive", "crew_max", "steps", "next_move", "threat_name", "threat_level",
+  "threat_pressure", "paused_type", "weather_key", "captain", "identity",
+  "crew_traits", "ship_traits",
+}
+local function safety_set_voyage(overrides)
+  local f = {
+    state = "idle", ship_id = "1", ship_name = "Ship1", contract_name = "c",
+    contract_type = "raid", danger = "0", x = "0", y = "0", width = "0",
+    height = "0", hull = "100", morale = "100", supplies = "100", stress = "0",
+    crew_alive = "1", crew_max = "1", steps = "0", next_move = "0",
+    threat_name = "", threat_level = "0", threat_pressure = "0", paused_type = "",
+    weather_key = "", captain = "", identity = "", crew_traits = "", ship_traits = "",
+  }
+  for k, v in pairs(overrides or {}) do f[k] = v end
+  local parts = {}
+  for _, k in ipairs(SAFETY_VOYAGE_FIELDS) do parts[#parts + 1] = tostring(f[k]) end
+  protocol.ingest("VOYAGE", table.concat(parts, "|"))
+end
+
+-- handlers/voyage.lua's M.SHIPS field order (14 pipe-delimited fields) --
+-- same shape as guild_viking_autoraid_test.lua's own ship_entry helper.
+local function safety_ship_entry(name)
+  return table.concat({ name, "2", "docked", "", "0", "", "8", "0", "0", "0",
+    "", "0", "0", "100" }, "|")
+end
+
+-- Builds ONE fixture actionable by all three automations at once:
+--   trade  -- a warehouse-stock cart ready to dispatch (same numbers as
+--             guild_viking_autotrader_test.lua's setup_single_dispatch_fixture)
+--   raid   -- one idle docked longship and a chosen target
+--   voyage -- an active voyage paused at a resolvable, non-harbor node
+-- The three do not share any state the others read (trade uses idle carts/
+-- warehouse stock/prices; raid uses S.ships/S.autoraid; voyage uses
+-- S.voyage_status/S.voyage_chart_*/S.voyage_wait, never S.ships), so building
+-- all three at once cannot make one automation's send depend on another's.
+local function build_safety_fixture()
+  S.autotrade, S.autoraid, S.autovoyage = nil, nil, nil
+  S.at_hold_until = nil
+  trade_tick2.reset()
+
+  -- Trade.
+  at_core2.settings()
+  protocol.ingest("BUILDINGS", "warehouse:1,dock:1")
+  protocol.ingest("WSTOCK", "ore|380|100")
+  protocol.ingest("STAFF", "")
+  protocol.ingest("BLOCKS", "")
+  protocol.ingest("CARTS", "")
+  protocol.ingest("CIDLE", "31|1|100|200|standard")
+  protocol.ingest("TQUEUE", "")
+  protocol.ingest("DALER", "1000")
+  protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
+
+  -- Raid.
+  protocol.ingest("SHIPS", safety_ship_entry("Drakkar1"))
+  raid2.settings().target = "Uppsala"
+
+  -- Voyage: chart with a non-harbor node paused for resolution.
+  protocol.ingest("VCHH", "3|1|explore")
+  protocol.ingest("VCR00", "H.X")
+  safety_set_voyage({ x = "1", y = "0" })
+  protocol.ingest("VOYAGE_WAIT", "island")
+  protocol.ingest("VRESOLVE", "scout,plunder")
+end
+
+local TRADE_SEND = "vtrade dispatch sell 200 ore eiriksson"
+local RAID_SEND = "vlongship raid Drakkar1 Uppsala"
+local VOYAGE_SEND = "vvoyage resolve plunder"
+
+-- ---- Actionability proof, one automation at a time -------------------------
+-- Each automation, alone, sends its expected command against the SAME
+-- fixture -- proving the fixture is genuinely eligible for each of the three,
+-- not just constructed to look rich.
+page_opts.set("auto_trade", false); page_opts.set("auto_raid", false); page_opts.set("auto_voyage", false)
+build_safety_fixture()
+page_opts.set("auto_trade", true)
+sent = {}
+trade_tick2.tick()
+check("safety-lock fixture is actionable: trade alone sends the expected dispatch",
+      #sent == 1 and sent[1] == TRADE_SEND, table.concat(sent, "|"))
+page_opts.set("auto_trade", false)
+
+build_safety_fixture()
+page_opts.set("auto_raid", true)
+sent = {}
+raid2.tick()
+check("safety-lock fixture is actionable: raid alone sends the expected dispatch",
+      #sent == 1 and sent[1] == RAID_SEND, table.concat(sent, "|"))
+page_opts.set("auto_raid", false)
+
+build_safety_fixture()
+page_opts.set("auto_voyage", true)
+sent = {}
+voyage2.tick()
+check("safety-lock fixture is actionable: voyage alone sends the expected dispatch",
+      #sent == 1 and sent[1] == VOYAGE_SEND, table.concat(sent, "|"))
+page_opts.set("auto_voyage", false)
+
+-- ---- The safety lock: all three OFF (the shipped default), many ticks -----
+-- The SHIPPED default lives in page_opts.defaults (the static table the
+-- module was loaded with), not in whatever the CURRENT flag happens to be at
+-- this point in a long test file that has already toggled all three on and
+-- off repeatedly above. Checking page_opts.defaults directly, rather than
+-- page_opts.get(), is what actually catches a page_opts.lua edit that ships
+-- one of these three ON by default -- get() only reflects this file's own
+-- explicit set(false) restores, which would mask exactly that mutation.
+check("safety lock: the SHIPPED DEFAULT (page_opts.defaults, untouched by any "
+      .. "set() call anywhere in this file) has all three automations off",
+      page_opts.defaults.auto_trade == false and page_opts.defaults.auto_raid == false
+        and page_opts.defaults.auto_voyage == false)
+
+build_safety_fixture()
+page_opts.set("auto_trade", false); page_opts.set("auto_raid", false); page_opts.set("auto_voyage", false)
+check("safety lock: all three automations are off going into this test",
+      page_opts.get("auto_trade") == false and page_opts.get("auto_raid") == false
+        and page_opts.get("auto_voyage") == false)
+sent = {}
+for _ = 1, 25 do
+  notify.countdown_tick()
+end
+check("SAFETY LOCK: 25 countdown_tick()s over a fixture proven actionable by all "
+      .. "three automations, with all three at their default OFF, send ZERO mud.send calls",
+      #sent == 0, table.concat(sent, "|"))
+
+-- ---- Ordering: all three ON, one tick, at most one action each, in --------
+-- LEGACY's trade/raid/voyage order (MAIN 2884-2890) -------------------------
+build_safety_fixture()
+page_opts.set("auto_trade", true)
+page_opts.set("auto_raid", true)
+page_opts.set("auto_voyage", true)
+sent = {}
+notify.countdown_tick()
+check("ordering: exactly one send from each automation, trade first, raid second, "
+      .. "voyage last -- LEGACY's own order",
+      #sent == 3 and sent[1] == TRADE_SEND and sent[2] == RAID_SEND and sent[3] == VOYAGE_SEND,
+      table.concat(sent, " | "))
+
+page_opts.set("auto_trade", false)
+page_opts.set("auto_raid", false)
+page_opts.set("auto_voyage", false)
+S.autotrade, S.autoraid, S.autovoyage = nil, nil, nil
+S.at_hold_until = nil
+trade_tick2.reset()
+sent = {}
+
+-- ---- /vik status: automation on/off + last-action/next-eligible (Task 9) --
+-- Lera-only extension (see init.lua's print_automation_status comment) --
+-- no LEGACY /vik status equivalent exists for these three.
+S.autotrade, S.autoraid, S.autovoyage = nil, nil, nil
+page_opts.set("auto_trade", true)
+page_opts.set("auto_raid", false)
+page_opts.set("auto_voyage", true)
+at_core2.settings()   -- fresh S.autotrade: phase idle, 0 pending, no error
+raid2.settings().last_dispatch = { t = "12:34", target = "Uppsala", n = 2, convoy = false }
+raid2.settings().last = 0
+voyage2.settings().log = { "12:00 explore -> A2" }
+voyage2.settings().last = 0
+
+printed = {}
+registered_vik.handler("status", "/vik")
+check("/vik status: Auto-Trade line reports ON, idle phase, no pending, ready",
+      printed[4] == "  Auto-Trade: ON | phase=idle pending=0 | next: ready", printed[4])
+check("/vik status: Auto-Raid line reports off + the last dispatch + ready",
+      printed[5] == "  Auto-Raid: off | last dispatch: 2 ships to Uppsala at 12:34 | next: ready",
+      printed[5])
+check("/vik status: Auto-Voyage line reports ON + the last log entry + ready",
+      printed[6] == "  Auto-Voyage: ON | last: 12:00 explore -> A2 | next: ready", printed[6])
+check("/vik status: exactly 6 lines printed (3 ingestion + 3 automation)",
+      #printed == 6, #printed)
+
+-- "next: Ns" -- not yet ready -- when a real dispatch happened recently.
+raid2.settings().last = os.time()
+printed = {}
+registered_vik.handler("status", "/vik")
+check("/vik status: Auto-Raid next check counts down from a recent dispatch, not 'ready'",
+      printed[5]:find("^  Auto%-Raid: off | last dispatch: 2 ships to Uppsala at 12:34 | next: %d+s$")
+        ~= nil,
+      printed[5])
+
+page_opts.set("auto_trade", false)
+page_opts.set("auto_voyage", false)
+S.autotrade, S.autoraid, S.autovoyage = nil, nil, nil
+
 -- ---- stats_window contract: has_data / render_guild_stats (Task 3) ---------
 -- Stage 2: render_guild_stats draws a truncated view of pages.stats.lines(w)
 -- itself (not a separate, hand-rolled 3-line summary), via ui.text_ansi.

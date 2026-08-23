@@ -114,6 +114,13 @@
 --     diff_min/diff_max/allow_abyssal were silently lost every restart,
 --     unlike LEGACY's OnPluginSaveState (MAIN 3023-3024), which serializes
 --     the whole `state` table and so persisted state.autovoyage for free.
+--   * Task 9 (integration/status surfaces): M.AV_INTERVAL exports the
+--     interval constant below (no LEGACY equivalent needed one -- it has no
+--     "/vik status"-style cross-automation summary) so init.lua's /vik
+--     status and pages/stats.lua's Automation section can compute a
+--     "next eligible" readout from M.settings().last without reaching into
+--     this module's internals -- the same accessor shape autoraid.lua's own
+--     M.AR_INTERVAL already provides.
 local S = require("state").S
 local page_opts = require("page_opts")
 local persist = require("persist")
@@ -122,6 +129,9 @@ local M = {}
 
 -- LEGACY:3581.
 local AV_INTERVAL = 8   -- seconds between auto-voyage actions
+-- Task 9: exported for the /vik status "next eligible" readout, the same
+-- accessor shape autoraid.lua's own M.AR_INTERVAL already provides.
+M.AV_INTERVAL = AV_INTERVAL
 
 -- LEGACY:3582-3590. Cells the router prefers to steer around (higher step
 -- cost). V=maelstrom and C=ice floes are the punishing Abyssal weathers;

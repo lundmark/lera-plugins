@@ -149,6 +149,51 @@ local function reregister_combat_triggers()
   register_combat_triggers()
 end
 
+-- "ready" convention: same as pages/stats.lua's own fmt_time (secs <= 0 ->
+-- "ready") -- duplicated here in miniature rather than requiring the pages
+-- module into init.lua for one helper.
+local function fmt_next(next_at)
+  if not next_at or next_at <= 0 then return "ready" end
+  local left = next_at - os.time()
+  if left <= 0 then return "ready" end
+  return left .. "s"
+end
+
+-- Task 9 (lera-only -- LEGACY has no /vik status equivalent for these
+-- three; see each automation module's own header for that disclosure).
+-- Reads each automation's own status surface rather than any internals:
+-- autotrade_tick.status() (extended this task with a 5th "next check" epoch
+-- return), autoraid.settings()/M.AR_INTERVAL, autovoyage.settings()/
+-- M.AV_INTERVAL (the latter newly exported this task, mirroring autoraid's
+-- own M.AR_INTERVAL).
+local function print_automation_status()
+  local trade_phase, trade_pending, _, trade_last_error, trade_next_at = autotrade_tick.status()
+  buffer.color_print(nil, "DAA520", string.format(
+    "  Auto-Trade: %s | phase=%s pending=%d%s | next: %s",
+    page_opts.get("auto_trade") and "ON" or "off", trade_phase, trade_pending,
+    (trade_last_error ~= "" and (" last_error=" .. trade_last_error)) or "",
+    fmt_next(trade_next_at)))
+
+  local ar = autoraid.settings()
+  local raid_last = "none"
+  if ar.last_dispatch then
+    raid_last = string.format("%d ship%s to %s%s at %s", ar.last_dispatch.n,
+      ar.last_dispatch.n == 1 and "" or "s", ar.last_dispatch.target,
+      ar.last_dispatch.convoy and " (convoy)" or "", ar.last_dispatch.t)
+  end
+  buffer.color_print(nil, "DAA520", string.format(
+    "  Auto-Raid: %s | last dispatch: %s | next: %s",
+    page_opts.get("auto_raid") and "ON" or "off", raid_last,
+    fmt_next((ar.last or 0) + autoraid.AR_INTERVAL)))
+
+  local av = autovoyage.settings()
+  local voyage_last = (av.log and #av.log > 0) and av.log[#av.log] or "none"
+  buffer.color_print(nil, "DAA520", string.format(
+    "  Auto-Voyage: %s | last: %s | next: %s",
+    page_opts.get("auto_voyage") and "ON" or "off", voyage_last,
+    fmt_next((av.last or 0) + autovoyage.AV_INTERVAL)))
+end
+
 local function print_status()
   local st = protocol.stats()
   buffer.color_print(nil, "DAA520", string.format(
@@ -175,6 +220,8 @@ local function print_status()
   end
   buffer.color_print(nil, "DAA520", string.format(
     "  parser errors: %d (%d key%s)", err_total, err_keys, err_keys == 1 and "" or "s"))
+
+  print_automation_status()
 end
 
 -- `/vik opts`: list every page option with its current value.
@@ -335,7 +382,8 @@ function M.on_load()
       .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | raid [<sub>] | "
       .. "voyage auto [<sub>]]",
     summary = "Viking guild data, pane, and controls",
-    description = "Ingestion status and counters (status), message tracing "
+    description = "Ingestion status and counters, plus each automation's "
+      .. "on/off state and last-action/next-eligible summary (status), message tracing "
       .. "(trace), explicit save (save), transport selection (source), the "
       .. "saga-XP session reset (resetxp; the bare 'resetvikxp' alias does "
       .. "the same), toggling a named popup open or closed -- map (Territory "
