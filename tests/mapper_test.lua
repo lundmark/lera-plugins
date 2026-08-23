@@ -190,6 +190,21 @@ check("legacy room loads", old ~= nil and old.name == "An old room",
 check("legacy room has no area", old ~= nil and old.area == nil,
   old and tostring(old.area))
 
+-- Kills: never clearing room.connections before rebuilding it from the current
+-- snapshot. The old MIP-era mapper invented a reverse edge for every walked
+-- exit (e.g. recording room 500 -> n -> 501 also invented 501 -> s -> 500),
+-- and process_room used to only overwrite the keys present in the current
+-- destinations table, so an invented edge with no real counterpart in a
+-- future Room.Info survived forever. Here room 500's legacy connection (n)
+-- is not one the current Room.Info reports (only s), so it must be dropped
+-- on revisit rather than left standing alongside the new one.
+enter(500, "An old room", { "s" }, { s = 502 }, nil)
+local revisited = mp.get_room(500)
+check("stale connection dropped on revisit", revisited and revisited.connections.n == nil,
+  revisited and tostring(revisited.connections.n))
+check("current connection recorded on revisit", revisited and revisited.connections.s == 502,
+  revisited and tostring(revisited.connections.s))
+
 mp.on_unload()
 
 if failures > 0 then

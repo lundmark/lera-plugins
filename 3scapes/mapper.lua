@@ -165,6 +165,7 @@ local function process_room(rid, name, exits, destinations, area)
   for _, dir in ipairs(exits or {}) do
     table.insert(room.exits, normalize_dir(dir))
   end
+  room.connections = {}
   for dir, dest in pairs(destinations or {}) do
     -- A destination of 0 means the server reported the exit but no usable id.
     -- Recording it would point pathfinding at a room that does not exist.
