@@ -72,6 +72,11 @@ local persist = require("persist")
 -- (see its own header); init.lua only needs it for the command surface.
 local autotrade_tick = require("autotrader.tick")
 
+-- Stage 4 Task 7: the auto-voyage router + its /vik voyage auto control
+-- surface and settings menu. notify.lua calls autovoyage.tick() itself (see
+-- its own header); init.lua only needs it for the command surface.
+local autovoyage = require("autovoyage")
+
 local S = state_mod.S
 
 local M = {}
@@ -247,6 +252,13 @@ function M.vik_command(args)
     set_opt(rest)
   elseif sub_lower == "trader" then
     autotrade_tick.trader_command(rest)
+  elseif sub_lower == "voyage" and rest:sub(1, 4):lower() == "auto"
+      and (#rest == 4 or rest:sub(5, 5):match("%s")) then
+    -- "/vik voyage auto [<sub>]" -- strip the "auto" token (case-
+    -- insensitively) and hand the remainder to autovoyage.lua, same shape
+    -- as the "trader" branch above. Plain "/vik voyage" (no "auto" prefix)
+    -- falls through to the POPUP_NAMES branch below, unchanged.
+    autovoyage.voyage_command((rest:sub(5):gsub("^%s+", "")))
   elseif POPUP_NAMES[sub_lower] then
     popups.toggle(sub_lower)
   elseif sub_lower == "page" then
@@ -269,7 +281,8 @@ function M.vik_command(args)
     buffer.color_print(nil, "DAA520",
       "Usage: /vik [status | trace | save | source mip|gmcp|auto | resetxp | "
       .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
-      .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>]]")
+      .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | "
+      .. "voyage auto [<sub>]]")
   end
 end
 
@@ -312,7 +325,8 @@ function M.on_load()
     name = "/vik",
     usage = "/vik [status | trace | save | source mip|gmcp|auto | resetxp | "
       .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
-      .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>]]",
+      .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | "
+      .. "voyage auto [<sub>]]",
     summary = "Viking guild data, pane, and controls",
     description = "Ingestion status and counters (status), message tracing "
       .. "(trace), explicit save (save), transport selection (source), the "
@@ -331,7 +345,11 @@ function M.on_load()
       .. "'trader <sub>' configures it (on|off, stock on|off, pack on|off, "
       .. "stockroute on|off, stockpriority on|off, debug on|off, "
       .. "reserve/margin/profit/carts/show <n>, autostock <n>|off, "
-      .. "log [clear]).",
+      .. "log [clear]); and the client-side auto-voyage router: bare "
+      .. "'voyage auto' opens its settings menu, 'voyage auto <sub>' "
+      .. "configures it (on|off, balanced|max|safe, abyssal on|off, "
+      .. "ship <name>|auto, verbose on|off, log). Both automations are "
+      .. "OFF by default and send nothing until explicitly enabled.",
     accepts_args = true,
     handler = function(args) M.vik_command(args or "") end,
   })

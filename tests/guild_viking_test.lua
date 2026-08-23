@@ -923,6 +923,86 @@ check("/vik trader menu: clearlog empties the log", #S.autotrade.log == 0)
 page_opts.set("auto_trade", false)   -- restore default for later tests
 last_menu_open = nil
 
+-- ---- /vik voyage auto <sub>: dispatch prefix-parsing (Task 7) -------------
+-- init.lua's own new branch (M.vik_command): "voyage auto" strips the "auto"
+-- token case-insensitively and forwards the remainder to
+-- autovoyage.voyage_command -- the exact same "trader <sub>" shape used
+-- above, plus the one bit of new parsing (the "auto" token itself). Plain
+-- "/vik voyage" (no "auto") must be untouched: it still falls through to
+-- POPUP_NAMES and toggles the voyage popup, not the automation.
+local av_core = require("autovoyage")
+S.autovoyage = nil
+
+check("/vik voyage auto: off by default", page_opts.get("auto_voyage") == false)
+printed = {}
+registered_vik.handler("voyage auto on", "/vik")
+check("/vik voyage auto on: exact reply", printed[1] == "[Auto-Voyage] ON.", printed[1])
+check("/vik voyage auto on: flag flipped", page_opts.get("auto_voyage") == true)
+
+printed = {}
+registered_vik.handler("voyage auto off", "/vik")
+check("/vik voyage auto off: exact reply", printed[1] == "[Auto-Voyage] OFF.", printed[1])
+check("/vik voyage auto off: flag flipped", page_opts.get("auto_voyage") == false)
+
+-- Case-insensitivity of the "auto" token itself, and tolerance of extra
+-- internal whitespace -- both handled by init.lua's own prefix match, not
+-- by autovoyage.lua.
+printed = {}
+registered_vik.handler("voyage AUTO  on", "/vik")
+check("/vik voyage AUTO  on (mixed case, extra space): still reaches the ON reply",
+      printed[1] == "[Auto-Voyage] ON.", printed[1])
+page_opts.set("auto_voyage", false)
+
+-- A bare "/vik voyage" (no "auto" token) is untouched -- still the
+-- POPUP_NAMES toggle, not the automation. popups.toggle's own behavior is
+-- exercised in guild_viking_popups_test.lua; this file has never called
+-- require("wm") before, so a minimal local stub (same shape as that suite's
+-- own preamble) lets popups.toggle run without erroring here too -- we only
+-- need proof this path did NOT reach autovoyage (no menu opened, flag
+-- untouched).
+package.loaded["wm"] = {
+  popup = {
+    is_open = function() return false end,
+    open = function() end,
+    close = function() end,
+  },
+}
+last_menu_open = nil
+local ok_bare_voyage = pcall(registered_vik.handler, "voyage", "/vik")
+check("/vik voyage (bare, no auto token): does not error", ok_bare_voyage)
+check("/vik voyage (bare, no auto token): does not open the auto-voyage menu", last_menu_open == nil)
+check("/vik voyage (bare, no auto token): does not touch the automation flag",
+      page_opts.get("auto_voyage") == false)
+
+-- "/vik voyage autosomething" (starts with "auto" but not a whitespace/end
+-- boundary) must NOT be treated as the auto-voyage sub-dispatch either.
+last_menu_open = nil
+local ok_autolike = pcall(registered_vik.handler, "voyage automatic", "/vik")
+check("/vik voyage automatic: does not error", ok_autolike)
+check("/vik voyage automatic: does not open the auto-voyage menu (word-boundary guard)",
+      last_menu_open == nil)
+
+-- Unrecognized subcommand under "voyage auto": usage message, verbatim.
+printed = {}
+local ok_bad_voyage = pcall(registered_vik.handler, "voyage auto bogus", "/vik")
+check("/vik voyage auto bogus: does not error", ok_bad_voyage)
+check("/vik voyage auto bogus: exact usage message",
+      printed[1] == "[Auto-Voyage] usage: avoyage on|off | balanced|max|safe | "
+        .. "abyssal on|off | ship <name>|auto | verbose on|off | log", printed[1])
+
+-- Bare "/vik voyage auto" opens the settings menu (the one deliberate
+-- adaptation this module's header discloses).
+S.autovoyage = nil
+last_menu_open = nil
+registered_vik.handler("voyage auto", "/vik")
+check("/vik voyage auto (bare): opens a menu", last_menu_open ~= nil)
+check("/vik voyage auto (bare): menu title",
+      last_menu_open and last_menu_open.title == "Auto-Voyage Settings")
+check("/vik voyage auto (bare): 13 items",
+      last_menu_open and #last_menu_open.items == 13, last_menu_open and #last_menu_open.items)
+last_menu_open = nil
+S.autovoyage = nil
+
 -- ---- stats_window contract: has_data / render_guild_stats (Task 3) ---------
 -- Stage 2: render_guild_stats draws a truncated view of pages.stats.lines(w)
 -- itself (not a separate, hand-rolled 3-line summary), via ui.text_ansi.

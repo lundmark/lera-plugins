@@ -83,3 +83,4 @@ LERA_ROOT=$lera_root "$luajit" tests/guild_viking_pages2_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_pages3_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_pages4_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_autotrader_test.lua
+LERA_ROOT=$lera_root "$luajit" tests/guild_viking_autovoyage_test.lua
