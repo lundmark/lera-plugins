@@ -255,9 +255,53 @@ check("nil payload leaves contents intact", ri.monster_count() == 1, ri.monster_
 deliver("Room.Contents", { full = 1, items = { { type = "monster", count = 1 }, "junk" } })
 check("nameless and non-table entries skipped", ri.monster_count() == 0, ri.monster_count())
 
+-- ---- Room.Map ---------------------------------------------------------------
+check("subscribes to Room.Map", handlers["Room.Map"] ~= nil)
+check("map nil before any Room.Map", ri.map() == nil)
+
+local legend = { O = "room", ["@"] = "you", ["|"] = "link", ["-"] = "link" }
+deliver("Room.Map", {
+  kind = "los", w = 5, h = 3,
+  rows = { "O-O-O", "  |  ", "  @  " },
+  legend = legend,
+  up = 1, down = 0, enter = 0,
+})
+
+local grid = ri.map()
+check("map kind", grid and grid.kind == "los", grid and grid.kind)
+check("map dimensions", grid and grid.w == 5 and grid.h == 3,
+  grid and (grid.w .. "x" .. grid.h))
+check("map rows", grid and grid.rows[3] == "  @  ", grid and grid.rows[3])
+check("map legend", grid and grid.legend["@"] == "you", grid and grid.legend["@"])
+
+-- Kills: passing the flags through as truthy numbers. 0 is truthy in Lua, so a
+-- renderer testing `if grid.down then` draws a down indicator for every room.
+check("up flag boolean true", grid and grid.up == true, tostring(grid and grid.up))
+check("down flag boolean false", grid and grid.down == false, tostring(grid and grid.down))
+
+-- Kills: handing out the live table. A renderer that mutates rows for path
+-- highlighting would corrupt the stored grid for every later frame.
+grid.rows[3] = "MUTATED"
+check("map returns a copy", ri.map().rows[3] == "  @  ", ri.map().rows[3])
+
+-- Kills: blanking the map on Room.Info. Two rooms with identical line-of-sight
+-- output send Room.Map once, so clearing on entry flashes the pane empty.
+deliver("Room.Info", { num = 5100, name = "A corridor", area = "Midgaard", exits = {} })
+check("map retained across Room.Info", ri.map() ~= nil and ri.map().w == 5,
+  ri.map() and ri.map().w)
+
+-- Kills: trusting the payload shape.
+deliver("Room.Map", nil)
+check("nil payload leaves map intact", ri.map() ~= nil and ri.map().w == 5)
+deliver("Room.Map", { kind = "los", w = 5, h = 3, rows = "not a list", legend = {} })
+check("malformed rows rejected", ri.map() ~= nil and ri.map().rows[1] == "O-O-O",
+  ri.map() and ri.map().rows[1])
+
 -- ---- unload -----------------------------------------------------------------
 ri.on_unload()
 check("unregisters Room.Info", removed["Room.Info"] == true)
+check("unregisters Room.Contents", removed["Room.Contents"] == true)
+check("unregisters Room.Map", removed["Room.Map"] == true)
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")

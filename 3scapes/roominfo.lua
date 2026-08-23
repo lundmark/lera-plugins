@@ -229,6 +229,40 @@ local function handle_room_contents(data)
   end
 end
 
+local function handle_room_map(data)
+  if type(data) ~= "table" then return end
+  if type(data.rows) ~= "table" then return end
+
+  local w = tonumber(data.w)
+  local h = tonumber(data.h)
+  if not w or not h or w < 1 or h < 1 then return end
+
+  local rows = {}
+  for i = 1, h do
+    if type(data.rows[i]) ~= "string" then return end
+    rows[i] = data.rows[i]
+  end
+
+  local legend = {}
+  if type(data.legend) == "table" then
+    for glyph, meaning in pairs(data.legend) do
+      legend[tostring(glyph)] = tostring(meaning)
+    end
+  end
+
+  map_grid = {
+    kind = data.kind and tostring(data.kind) or "los",
+    w = w,
+    h = h,
+    rows = rows,
+    legend = legend,
+    -- 0 is truthy in Lua; normalize so a renderer can test these directly.
+    up = data.up ~= nil and data.up ~= 0,
+    down = data.down ~= nil and data.down ~= 0,
+    enter = data.enter ~= nil and data.enter ~= 0,
+  }
+end
+
 --------------------------------------------------------------------------------
 -- Plugin Hooks
 --------------------------------------------------------------------------------
@@ -240,7 +274,10 @@ function M.on_load()
   handler_ids[#handler_ids + 1] = gmcp.on("Room.Contents", function(_, data)
     handle_room_contents(data)
   end)
-  print("[roominfo] Loaded - subscribed to GMCP Room.Info, Room.Contents")
+  handler_ids[#handler_ids + 1] = gmcp.on("Room.Map", function(_, data)
+    handle_room_map(data)
+  end)
+  print("[roominfo] Loaded - subscribed to GMCP Room.Info, Room.Contents, Room.Map")
 end
 
 function M.on_unload()
@@ -312,6 +349,26 @@ function M.exits_string()
     return ""
   end
   return "(" .. table.concat(current.exits, ", ") .. ")"
+end
+
+-- The last Room.Map grid, or nil. Returns a copy: renderers mutate rows for
+-- path highlighting.
+function M.map()
+  if not map_grid then return nil end
+  local rows = {}
+  for i, row in ipairs(map_grid.rows) do rows[i] = row end
+  local legend = {}
+  for glyph, meaning in pairs(map_grid.legend) do legend[glyph] = meaning end
+  return {
+    kind = map_grid.kind,
+    w = map_grid.w,
+    h = map_grid.h,
+    rows = rows,
+    legend = legend,
+    up = map_grid.up,
+    down = map_grid.down,
+    enter = map_grid.enter,
+  }
 end
 
 -- Name strings, one per counted individual. The mudlib stacks duplicates into a
