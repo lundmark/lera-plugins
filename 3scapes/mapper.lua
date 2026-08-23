@@ -197,11 +197,29 @@ local function process_room(rid, name, exits, destinations, area)
 
   -- Exits and their destinations come straight from Room.Info: there is nothing
   -- to learn by walking, so no mapping mode and no pending move.
+  local exit_set = {}
   room.exits = {}
   for _, dir in ipairs(exits or {}) do
-    table.insert(room.exits, normalize_dir(dir))
+    local short = normalize_dir(dir)
+    exit_set[short] = true
+    table.insert(room.exits, short)
   end
-  room.connections = {}
+
+  -- Rebuild connections from the snapshot, but delete only what the snapshot
+  -- actually contradicts. A destination of 0 means "this exit exists, but the
+  -- server could not resolve where it goes right now" -- find_object does not
+  -- load an idle room -- so an exit that is still an exit keeps whatever
+  -- destination an earlier visit learned. Dropping it would push the graph
+  -- towards backward-only edges, which is the one direction mapview's
+  -- correlation cannot follow. A direction that has left the exit set entirely
+  -- is gone for real, which is what still sheds the invented reverse edges an
+  -- older map carries: an invented direction was never an exit.
+  local kept = {}
+  for dir, dest in pairs(room.connections) do
+    if exit_set[dir] then kept[dir] = dest end
+  end
+  room.connections = kept
+
   for dir, dest in pairs(destinations or {}) do
     -- A destination of 0 means the server reported the exit but no usable id.
     -- Recording it would point pathfinding at a room that does not exist.

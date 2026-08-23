@@ -241,6 +241,27 @@ check("stale connection dropped on revisit", revisited and revisited.connections
 check("current connection recorded on revisit", revisited and revisited.connections.s == 502,
   revisited and tostring(revisited.connections.s))
 
+-- Kills: rebuilding connections by clearing them outright. A destination of 0
+-- means the server could not resolve the exit right now, not that the exit lost
+-- its destination -- so revisiting a room while its neighbour happens to be
+-- unloaded must not discard what an earlier visit learned. Since the forward
+-- destination is the systematically-unknown one, dropping it here drifts the
+-- graph towards backward-only edges, which correlate_positions cannot follow.
+enter(600, "A waiting hall", {}, {})
+enter(500, "An old room", { "s" }, { s = 0 }, nil)
+local unresolved = mp.get_room(500)
+check("connection survives a 0 destination on a surviving exit",
+  unresolved and unresolved.connections.s == 502,
+  unresolved and tostring(unresolved.connections.s))
+
+-- ...while a direction that is no longer an exit at all is still dropped.
+enter(600, "A waiting hall", {}, {})
+enter(500, "An old room", { "n" }, { n = 0 }, nil)
+local narrowed = mp.get_room(500)
+check("connection dropped when its direction stops being an exit",
+  narrowed and narrowed.connections.s == nil,
+  narrowed and tostring(narrowed.connections.s))
+
 mp.on_unload()
 
 if failures > 0 then
