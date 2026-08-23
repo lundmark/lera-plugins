@@ -63,6 +63,19 @@ function M.glyph_class(char)
   return glyph_classes[char:sub(1, 1)] or "other"
 end
 
+-- Classes that occupy a room position on the grid: everything except a
+-- corridor link, a blank cell, and an unrecognized glyph. mapview's BFS
+-- correlation uses this to recognize a room cell without re-deriving the
+-- legend from a character class of its own.
+local room_cell_classes = {
+  room = true, you = true, up = true, down = true, updown = true,
+  enter = true, dark = true, unknown = true, players = true, monsters = true,
+}
+
+function M.is_room_cell(char)
+  return room_cell_classes[M.glyph_class(char)] == true
+end
+
 --------------------------------------------------------------------------------
 -- Grid access
 --------------------------------------------------------------------------------

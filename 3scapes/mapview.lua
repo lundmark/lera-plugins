@@ -113,8 +113,16 @@ end
 -- Position Correlation
 --------------------------------------------------------------------------------
 
--- Room character pattern for matching
-local room_char_pattern = "[O@XE123456789#%?%+v%^]"
+-- A grid cell is a room position when minimap's legend says so -- minimap
+-- owns glyph semantics, so this delegates rather than matching characters
+-- itself. Absent minimap (a profile may load mapview without it), fall back
+-- to "nothing is a room cell": BFS correlation degrades to finding nothing
+-- rather than guessing at a legend it cannot see.
+local function is_room_cell(char)
+  local minimap = plugin.get("minimap")
+  if not (minimap and minimap.is_room_cell) then return false end
+  return minimap.is_room_cell(char)
+end
 
 -- Search for a room character near the expected position
 -- Minimap lines can have varying leading spaces, so rooms may not be at exact offsets
@@ -126,7 +134,7 @@ local function find_room_near(line, expected_col, max_offset)
   -- Check exact position first
   if expected_col >= 1 and expected_col <= len then
     local char = line:sub(expected_col, expected_col)
-    if char:match(room_char_pattern) then
+    if is_room_cell(char) then
       return expected_col, char
     end
   end
@@ -137,7 +145,7 @@ local function find_room_near(line, expected_col, max_offset)
     local right_col = expected_col + offset
     if right_col >= 1 and right_col <= len then
       local char = line:sub(right_col, right_col)
-      if char:match(room_char_pattern) then
+      if is_room_cell(char) then
         return right_col, char
       end
     end
@@ -146,7 +154,7 @@ local function find_room_near(line, expected_col, max_offset)
     local left_col = expected_col - offset
     if left_col >= 1 and left_col <= len then
       local char = line:sub(left_col, left_col)
-      if char:match(room_char_pattern) then
+      if is_room_cell(char) then
         return left_col, char
       end
     end
@@ -221,7 +229,7 @@ end
 --------------------------------------------------------------------------------
 
 -- Returns info about what should be displayed at a minimap position
-local function get_position_info(row, col, char, position_to_room, mapper, roominfo, waypoint_rooms)
+local function get_position_info(row, col, char, position_to_room, mapper, waypoint_rooms)
   local minimap = plugin.get("minimap")
   -- minimap owns glyph semantics: the Room.Map legend is authoritative, so X is
   -- a link and per-cell counts no longer exist.
@@ -267,12 +275,14 @@ local function get_position_info(row, col, char, position_to_room, mapper, roomi
     end
   end
 
-  -- Room.Map reports that a neighbouring room holds players or monsters, but
-  -- not how many: the mudlib collapses counts to p and m. A count is available
-  -- only for the room the player is standing in, from Room.Contents.
+  -- Room.Map reports that a room holds monsters, but not how many: the
+  -- mudlib collapses counts to a single m glyph, and the current room's own
+  -- cell renders as "you" (returned above), never as "monsters" -- so a
+  -- per-cell count is never available here. The real count for the room the
+  -- player is standing in reaches the pane separately, via the M: info line
+  -- built from roominfo.monsters() below.
   if class == "monsters" then
-    info.mob_count = info.is_current and (roominfo and roominfo.monster_count
-      and roominfo.monster_count() or 1) or 1
+    info.mob_count = 1
     if settings.show_mobs then
       info.fg = colors.mob1_fg
     end
@@ -403,7 +413,7 @@ function M.render(rect, opts)
       if char == " " then
         colored_line = colored_line .. " "
       else
-        local info = get_position_info(row_idx, actual_col, char, position_to_room, mapper, roominfo, waypoint_rooms)
+        local info = get_position_info(row_idx, actual_col, char, position_to_room, mapper, waypoint_rooms)
 
         if info.fg or info.bg then
           -- Use the original char from minimap (preserves mob counts, etc)

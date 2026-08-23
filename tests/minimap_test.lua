@@ -125,22 +125,26 @@ check("p classes as players", mm.glyph_class("p") == "players", mm.glyph_class("
 check("m classes as monsters", mm.glyph_class("m") == "monsters", mm.glyph_class("m"))
 check("digit is not a class", mm.glyph_class("3") == "other", mm.glyph_class("3"))
 
--- ---- mapview's glyph contract ------------------------------------------------
--- Kills: mapview keeping its own char patterns. It classed corridors as
--- [|%-/\\], which omits X, and read mob counts from [1-9], which GMCP never
--- sends. Both now go through minimap.glyph_class, so this is the contract
--- mapview relies on.
-local link_glyphs = { "|", "-", "/", "\\", "X" }
-for _, g in ipairs(link_glyphs) do
-  check("mapview link glyph " .. g, mm.glyph_class(g) == "link", mm.glyph_class(g))
-end
-local room_glyphs = { "O", "E", "#", "+", "v", "^" }
-for _, g in ipairs(room_glyphs) do
-  local class = mm.glyph_class(g)
-  check("mapview room-ish glyph " .. g,
-    class == "room" or class == "enter" or class == "dark" or class == "updown"
-      or class == "down" or class == "up", class)
-end
+-- ---- mapview's glyph contract: is_room_cell ---------------------------------
+-- Kills: mapview's BFS correlation (find_room_near) matching room cells with
+-- its own character class "[O@XE123456789#%?%+v%^]" -- a pattern that matches
+-- digits GMCP never sends, and, worse, omits p and m, which it does. Each
+-- Room.Map cell carries exactly one glyph, so an occupied room renders as p/m
+-- INSTEAD OF its base room glyph; missing them meant find_room_near failed on
+-- every occupied room, and the BFS never explored past it -- silently losing
+-- correlation (freshness colouring, waypoint marking) for every room
+-- reachable only through that cell.
+check("m (monsters) is a room cell", mm.is_room_cell("m") == true, mm.is_room_cell("m"))
+check("p (players) is a room cell", mm.is_room_cell("p") == true, mm.is_room_cell("p"))
+check("O (room) is a room cell", mm.is_room_cell("O") == true, mm.is_room_cell("O"))
+check("@ (you) is a room cell", mm.is_room_cell("@") == true, mm.is_room_cell("@"))
+check("X (link) is not a room cell", mm.is_room_cell("X") == false, mm.is_room_cell("X"))
+check("pipe (link) is not a room cell", mm.is_room_cell("|") == false, mm.is_room_cell("|"))
+check("space (blank) is not a room cell", mm.is_room_cell(" ") == false, mm.is_room_cell(" "))
+-- Kills: resurrecting the dead assumption that a digit can still arrive and
+-- should count as a room cell -- GMCP collapses per-cell counts to p/m, so a
+-- digit can no longer appear on the wire.
+check("digit is not a room cell", mm.is_room_cell("3") == false, mm.is_room_cell("3"))
 
 -- ---- grid accessors ---------------------------------------------------------
 set_grid({
