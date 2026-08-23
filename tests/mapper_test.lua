@@ -147,6 +147,42 @@ check("north neighbour is one row up",
   mp.get_room(101).y == mp.get_room(100).y - 1,
   mp.get_room(101).y .. " vs " .. mp.get_room(100).y)
 
+-- Kills: deriving the direction travelled from the previous room's forward
+-- destination alone. That destination is systematically 0 on first discovery --
+-- the mudlib resolves it with find_object, which does not load an idle room --
+-- so the optimistic case above is the one that never fails in practice. Without
+-- a fallback the new room keeps x=0,y=0 forever (positions are assigned on
+-- first sight only) and every newly discovered room stacks on the centre cell.
+enter(200, "A dim hollow", { "n" }, { n = 0 })
+enter(201, "A dim path", { "s" }, { s = 200 })
+local hollow, path = mp.get_room(200), mp.get_room(201)
+check("unknown forward destination still positions the new room",
+  path and hollow and path.y == hollow.y - 1 and path.x == hollow.x,
+  path and hollow and (path.x .. "," .. path.y .. " vs " .. hollow.x .. "," .. hollow.y))
+-- Kills: writing the inverted back-edge as a connection. The direction is used
+-- for positioning only; a reverse edge the server never reported must not
+-- appear in the graph.
+check("no reverse connection invented", hollow and hollow.connections.n == nil,
+  hollow and tostring(hollow.connections.n))
+
+-- Kills: picking the direction with an unordered pairs() scan. Two exits to the
+-- same destination must resolve the same way on every run; compass order makes
+-- "s" (and so a northward step) the answer, not "w".
+enter(310, "Twin gates", { "n", "e" }, { n = 0, e = 0 })
+enter(311, "Beyond the gates", { "s", "w" }, { s = 310, w = 310 })
+local twin, beyond = mp.get_room(310), mp.get_room(311)
+check("ambiguous back-edge resolves in compass order",
+  beyond and twin and beyond.x == twin.x and beyond.y == twin.y - 1,
+  beyond and twin and (beyond.x .. "," .. beyond.y .. " vs " .. twin.x .. "," .. twin.y))
+
+-- Same determinism requirement on the forward path.
+enter(320, "Forked hall", { "n", "e" }, { n = 330, e = 330 })
+enter(330, "Past the fork", { "s" }, { s = 320 })
+local fork, past = mp.get_room(320), mp.get_room(330)
+check("ambiguous forward destination resolves in compass order",
+  past and fork and past.x == fork.x and past.y == fork.y - 1,
+  past and fork and (past.x .. "," .. past.y .. " vs " .. fork.x .. "," .. fork.y))
+
 -- ---- area -------------------------------------------------------------------
 -- Kills: discarding the area name. It is the one genuinely new field, and it is
 -- additive so existing saved maps stay readable.

@@ -54,6 +54,42 @@ local function is_cardinal(dir)
   return cardinal_offsets[d] ~= nil
 end
 
+-- Positioning only. This names the opposite of a direction so the room we just
+-- walked into can tell us which way we came, and it is never used to write a
+-- connection: inventing a reverse edge is the bug this design removed.
+local dir_reverse = {
+  n = "s", s = "n", e = "w", w = "e",
+  ne = "sw", sw = "ne", nw = "se", se = "nw",
+  u = "d", d = "u",
+}
+
+-- Compass order, used only to make the direction search below deterministic
+-- when a room has two exits to the same destination. pairs() order is
+-- unspecified, so without this a two-exit room could be positioned differently
+-- from one run to the next.
+local dir_rank = {
+  n = 1, ne = 2, e = 3, se = 4, s = 5, sw = 6, w = 7, nw = 8, u = 9, d = 10,
+}
+
+local function dir_before(a, b)
+  local ra, rb = dir_rank[a], dir_rank[b]
+  if ra and rb then return ra < rb end
+  if ra then return true end
+  if rb then return false end
+  return a < b
+end
+
+-- The compass-first direction in `connections` that leads to `target`, or nil.
+local function direction_to(connections, target)
+  local best = nil
+  for dir, dest in pairs(connections or {}) do
+    if dest == target and (best == nil or dir_before(dir, best)) then
+      best = dir
+    end
+  end
+  return best
+end
+
 --------------------------------------------------------------------------------
 -- Persistence (requires store API - currently in-memory only)
 --------------------------------------------------------------------------------
@@ -179,9 +215,21 @@ local function process_room(rid, name, exits, destinations, area)
   if is_new_room and previous_id and previous_id ~= rid then
     local prev = map.rooms[previous_id]
     if prev then
-      local dir = nil
-      for d, dest in pairs(prev.connections) do
-        if dest == rid then dir = d break end
+      -- First ask the room we came from where it thought this exit led. That
+      -- answer is systematically missing on first discovery: the mudlib resolves
+      -- a destination with find_object, which does not load an object, and an
+      -- idle room destructs itself -- so a quiet area reports 0 for the room
+      -- ahead exactly when it is new to us, and a 0 is never recorded as a
+      -- connection.
+      local dir = direction_to(prev.connections, rid)
+      if not dir then
+        -- Fall back to the back-edge in the room we just entered. Its snapshot
+        -- was built while the previous room was certainly loaded, so the
+        -- destination pointing back at it is reliably present. Inverting it
+        -- yields the direction travelled -- a direction only; no connection is
+        -- written from it.
+        local back = direction_to(room.connections, previous_id)
+        if back then dir = dir_reverse[back] end
       end
       if dir and is_cardinal(dir) and not room.virtual then
         local offset = cardinal_offsets[dir]
