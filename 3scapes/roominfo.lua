@@ -135,17 +135,97 @@ local function handle_room_info(data)
   end
   current.exits_raw = table.concat(current.exits, ", ")
 
-  -- A room change abandons any half-received Room.Contents list: its remaining
-  -- pages describe the room we just left.
-  contents_accum = nil
   synced = true
 
   -- Only an actual change enters the history. The server force-sends a snapshot
   -- on every subscription change, and recording those would fill the history
-  -- with repeats of the room the player is standing in.
+  -- with repeats of the room the player is standing in. That same force-sent
+  -- snapshot is also why the accumulator reset lives here, not unconditionally
+  -- above: clearing it on every accepted Room.Info would discard an in-flight
+  -- multi-page list for the room the player is still standing in. Only an
+  -- actual room change abandons the accumulator, since its remaining pages
+  -- describe the room we just left.
   if old_room ~= current.room or old_room_id ~= current.room_id then
+    contents_accum = nil
     add_to_history(current.room)
     notify_room_change(old_room, current.room)
+  end
+end
+
+local function classify_entry(raw)
+  if type(raw) ~= "table" then return nil, nil end
+  if raw.name == nil then return nil, nil end
+  local kind = raw.type and tostring(raw.type) or ""
+  if kind ~= "player" and kind ~= "monster" and kind ~= "item" then
+    return nil, nil
+  end
+  local count = tonumber(raw.count) or 1
+  if count < 1 then count = 1 end
+  if count > 99 then count = 99 end
+  return kind, {
+    name = tostring(raw.name),
+    count = count,
+    hp = raw.hp and tostring(raw.hp) or nil,
+    attacking = raw.attacking and tostring(raw.attacking) or nil,
+  }
+end
+
+local function commit_contents(items, truncated)
+  local players, monsters, objects = {}, {}, {}
+  for _, raw in ipairs(items) do
+    local kind, entry = classify_entry(raw)
+    if kind == "player" then
+      players[#players + 1] = entry
+    elseif kind == "monster" then
+      monsters[#monsters + 1] = entry
+    elseif kind == "item" then
+      objects[#objects + 1] = entry
+    end
+  end
+  current.players = players
+  current.monsters = monsters
+  current.items = objects
+  current.truncated = truncated and true or false
+end
+
+local function handle_room_contents(data)
+  if type(data) ~= "table" then return end
+
+  local items = type(data.items) == "table" and data.items or {}
+  local truncated = data.truncated ~= nil and data.truncated ~= 0
+  local page = tonumber(data.page)
+  local pages = tonumber(data.pages)
+
+  -- page/pages appear only when there is more than one page, so a payload
+  -- without them is a complete list.
+  if not page or not pages or pages <= 1 then
+    contents_accum = nil
+    commit_contents(items, truncated)
+    return
+  end
+
+  -- A new page 1 abandons whatever was accumulating: it is a fresh list, not a
+  -- continuation.
+  if page == 1 or not contents_accum then
+    contents_accum = { pages = pages, next_page = 1, items = {}, truncated = false }
+  end
+
+  if page ~= contents_accum.next_page or pages ~= contents_accum.pages then
+    -- Out-of-order or mismatched page: the list cannot be trusted.
+    contents_accum = nil
+    return
+  end
+
+  for _, raw in ipairs(items) do
+    contents_accum.items[#contents_accum.items + 1] = raw
+  end
+  contents_accum.truncated = contents_accum.truncated or truncated
+  contents_accum.next_page = page + 1
+
+  if page == pages then
+    local accumulated = contents_accum
+    contents_accum = nil
+    commit_contents(accumulated.items, accumulated.truncated)
   end
 end
 
@@ -157,7 +237,10 @@ function M.on_load()
   handler_ids[#handler_ids + 1] = gmcp.on("Room.Info", function(_, data)
     handle_room_info(data)
   end)
-  print("[roominfo] Loaded - subscribed to GMCP Room.Info")
+  handler_ids[#handler_ids + 1] = gmcp.on("Room.Contents", function(_, data)
+    handle_room_contents(data)
+  end)
+  print("[roominfo] Loaded - subscribed to GMCP Room.Info, Room.Contents")
 end
 
 function M.on_unload()
@@ -231,42 +314,67 @@ function M.exits_string()
   return "(" .. table.concat(current.exits, ", ") .. ")"
 end
 
--- Get list of players in current room
+-- Name strings, one per counted individual. The mudlib stacks duplicates into a
+-- count; expanding restores the shape the old per-line =P=/=M= data had, which
+-- mapper, mapview and autostepper all concat or measure.
+local function expand_names(entries)
+  local names = {}
+  for _, e in ipairs(entries) do
+    for _ = 1, e.count do
+      names[#names + 1] = e.name
+    end
+  end
+  return names
+end
+
+local function copy_entries(entries)
+  local result = {}
+  for i, e in ipairs(entries) do
+    result[i] = { name = e.name, count = e.count, hp = e.hp, attacking = e.attacking }
+  end
+  return result
+end
+
+-- Get list of players in current room (name strings; see player_entries()
+-- for the rich form)
 function M.players()
-  local result = {}
-  for i, p in ipairs(current.players) do
-    result[i] = p
-  end
-  return result
+  return expand_names(current.players)
 end
 
--- Get list of monsters in current room
+-- Get list of monsters in current room (name strings; see monster_entries()
+-- for the rich form)
 function M.monsters()
-  local result = {}
-  for i, m in ipairs(current.monsters) do
-    result[i] = m
-  end
-  return result
+  return expand_names(current.monsters)
 end
 
--- Get list of items in current room (stub; Task 2 fills this in from
--- Room.Contents)
+-- Get list of items in current room
 function M.items()
-  local result = {}
-  for i, e in ipairs(current.items) do
-    result[i] = e
-  end
-  return result
+  return copy_entries(current.items)
+end
+
+-- Get rich player entries ({name, count, hp?, attacking?})
+function M.player_entries()
+  return copy_entries(current.players)
+end
+
+-- Get rich monster entries ({name, count, hp?, attacking?})
+function M.monster_entries()
+  return copy_entries(current.monsters)
 end
 
 -- Get count of players
 function M.player_count()
-  return #current.players
+  return #M.players()
 end
 
 -- Get count of monsters
 function M.monster_count()
-  return #current.monsters
+  return #M.monsters()
+end
+
+-- True when the last Room.Contents reported dropped entries
+function M.contents_truncated()
+  return current.truncated
 end
 
 -- Get all current room info as a table
@@ -303,8 +411,9 @@ end
 -- Check if a specific player is in the room
 function M.has_player(name)
   local name_lower = name:lower()
-  for _, p in ipairs(current.players) do
-    if p:lower() == name_lower or p:lower():find(name_lower, 1, true) then
+  for _, e in ipairs(current.players) do
+    local n = e.name:lower()
+    if n == name_lower or n:find(name_lower, 1, true) then
       return true
     end
   end
@@ -314,8 +423,9 @@ end
 -- Check if a specific monster is in the room
 function M.has_monster(name)
   local name_lower = name:lower()
-  for _, m in ipairs(current.monsters) do
-    if m:lower() == name_lower or m:lower():find(name_lower, 1, true) then
+  for _, e in ipairs(current.monsters) do
+    local n = e.name:lower()
+    if n == name_lower or n:find(name_lower, 1, true) then
       return true
     end
   end
