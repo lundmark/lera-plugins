@@ -73,6 +73,31 @@ be spelled as a slash token: `speedwalk`'s `.`, `..`, `.,`, `.place` and
 `.from-to`, and `autostepper`'s `-`, `-.`, `->` and `-!`. Those are movement
 syntax; everything word-shaped lives under `/speedwalk` and `/step`.
 
+## Image surfaces
+
+Directory plugins can load PNG assets relative to their own root and place
+them over cell-aligned rectangles:
+
+```lua
+local icon, err = ui.image_load("assets/icon.png")
+assert(icon, err)
+
+function M.on_render()
+  local rect = ui.rect(4, 2, 6, 3)
+  ui.text(rect, "[map]") -- always draw useful fallback cells first
+  ui.image(rect, icon, { fit = "contain", filter = "nearest" })
+end
+```
+
+`contain` preserves aspect ratio; `stretch` fills the rectangle. `nearest`
+preserves pixel art; `linear` smooths scaling. Loaded handles are immutable
+snapshots owned by the exact plugin load and become stale when it unloads.
+Profile code and single-file plugins have no asset root and cannot load images.
+
+There is deliberately no `images_supported()` branch. TTY and other cell-only
+frontends keep the fallback cells, while image-capable frontends composite the
+optional surface over the same layout.
+
 ## Generic Plugins
 
 | Plugin | Commands | Description |
