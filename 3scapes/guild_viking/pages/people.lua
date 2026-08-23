@@ -51,6 +51,15 @@
 --     renders enabled. See the "Missions" section below for the full
 --     hotspot -> port table, verbatim command strings, and the BGR
 --     workbook for both button appearances.
+--   - Known limitation (pre-existing structure, not introduced by Task 6):
+--     `/vik pop people` opens this page through popups.lua's
+--     `popups.open_page`, which wraps `mod.lines` with `on_pointer = nil`
+--     (popups.lua's own `open_page`, its "no on_pointer -- a pane page has
+--     none of its own" comment). The Run There buttons still RENDER there
+--     (their text rows are unconditional, per `M.lines` above) but are not
+--     clickable in that detached view -- only window.lua's own pane
+--     dispatch (the "Task 6 seam") consumes a page's second `lines(width)`
+--     return value at all.
 --   - `want_goods`/mat_detail are Lua tables iterated with `pairs()` in
 --     LEGACY too (so LEGACY's own on-screen order isn't guaranteed either);
 --     this port sorts keys for deterministic, testable output.

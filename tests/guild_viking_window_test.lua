@@ -35,6 +35,11 @@ ui = {
 local render_pass = "local"
 lera = { render_pass = function() return render_pass end }
 
+-- Review round 2, I3: the real People-page end-to-end case sends through
+-- mud.send -- captured here so that case can assert exact command strings.
+local send_calls = {}
+mud = { send = function(s) send_calls[#send_calls + 1] = s end }
+
 local window = require("window")
 
 -- Snapshot the real page modules right after requiring window, before any
@@ -306,13 +311,18 @@ render_pass = "local"
 -- =============================================================================
 -- Task 6: page-level pointer targets seam. A fake page module returns a
 -- second `lines(width)` value (a targets array) exercising the whole
--- contract: row/col hit-testing, the SCROLLED and wrapped-tab-bar row
--- mapping, tab-bar priority, error containment, the remote-pass guard, and
--- (the discriminating case per the task brief) that a down on one target
--- followed by an "up" delivered at a DIFFERENT target's coordinates never
--- fires the second target -- because this seam fires on the DOWN alone (see
--- window.lua's header comment for why that is safe with no separate
--- down/up tracker, unlike the popup layer's pointer_track.lua modules).
+-- contract: row/col hit-testing (both column edges), the SCROLLED and
+-- wrapped-tab-bar row mapping, GENUINE tab-bar priority (a target that
+-- would also match the SAME coordinate if the tab check didn't run first),
+-- error containment, the remote-pass guard (at a rect that actually
+-- reaches the guarded block), the I1 fix (a narrow-pane render that hits
+-- window.render's early `body_h <= 0` return must not leave stale
+-- tab-bar/target state behind), and THE discriminating case: a down on one
+-- target followed by an "up" delivered at a DIFFERENT target's coordinates
+-- must never fire either target. Review round 2 (C1) reversed this seam's
+-- dispatch from fire-on-down to a fail-closed down-record/up-fire tracker
+-- (`popups/pointer_track.lua`, same shape as `popups/map.lua`'s own
+-- on_pointer) -- see window.lua's header comment for why.
 -- =============================================================================
 window.set_page("stats")
 render_pass = "local"
@@ -321,13 +331,27 @@ local seam_fired = {}
 local seam_lines = {}
 for i = 1, 10 do seam_lines[i] = "R" .. i end
 local seam_error_row = 5
+-- Target D (row 2) exists ONLY to construct M3's genuine tab/target
+-- conflict below -- see that section for why row 2 specifically.
 local seam_targets = {
+  { row = 2, col_start = 0, col_end = 5, action = function() seam_fired[#seam_fired + 1] = "D" end },
   { row = 3, col_start = 2, col_end = 8, action = function() seam_fired[#seam_fired + 1] = "A" end },
   { row = 7, col_start = 0, col_end = 4, action = function() seam_fired[#seam_fired + 1] = "B" end },
   { row = seam_error_row, col_start = 0, col_end = 4, action = function() error("boom") end },
 }
+-- Width-sensitive (I2 fix): a width < 25 returns NO targets at all. This is
+-- what makes the remote-pass guard test below actually discriminate --
+-- same precedent as this file's own Finding 4 (`wide_lines`/`narrow_lines`)
+-- for `last_lines`. A fake page that returned the SAME `seam_targets`
+-- regardless of width would make a remote render at any width
+-- indistinguishable from a local one, so removing the guard would leave
+-- the whole suite green. width >= 25 covers every OTHER seam case in this
+-- file (100 and 30-wide rects).
 find_page("stats").mod = {
-  lines = function(w) return seam_lines, seam_targets end,
+  lines = function(w)
+    if w < 25 then return seam_lines, {} end
+    return seam_lines, seam_targets
+  end,
 }
 
 -- 100-wide -> tab bar is one row (tab_rows == 1, established earlier in this
@@ -339,31 +363,80 @@ window.render(seam_rect, {})
 check("(setup) seam body shows R1 first",
       drawn.ansi[2] and drawn.ansi[2].s:find("^R1%s") ~= nil, drawn.ansi[2] and drawn.ansi[2].s)
 
--- ---- row hit / column miss / row miss --------------------------------------
+-- Small helper: a matched down+up pair at the SAME (x, y) -- the ordinary
+-- "click" case every button-style target is dispatched through now.
+local function click(x, y, w, h)
+  window.on_pointer({ kind = "down", button = "left", x = x, y = y, inside = true, width = w, height = h })
+  return window.on_pointer({ kind = "up", button = "left", x = x, y = y, inside = true, width = w, height = h })
+end
+
+-- ---- down alone does NOT fire; only the matching up does ------------------
 seam_fired = {}
-local down_row3_hit = { kind = "down", button = "left", x = 4, y = 3, inside = true, width = 100, height = 8 }
-check("down inside target A's row/col span fires A and returns true",
-      window.on_pointer(down_row3_hit) == true)
+local down_only = window.on_pointer({ kind = "down", button = "left", x = 4, y = 3,
+                                       inside = true, width = 100, height = 8 })
+check("a down on target A consumes (returns true) but fires nothing yet",
+      down_only == true and #seam_fired == 0, seam_fired)
+local up_only = window.on_pointer({ kind = "up", button = "left", x = 4, y = 3,
+                                     inside = true, width = 100, height = 8 })
+check("the matching up (same coordinates) then fires target A",
+      up_only == true and #seam_fired == 1 and seam_fired[1] == "A", seam_fired)
+
+-- ---- row hit / column miss / row miss (full click) -------------------------
+seam_fired = {}
+check("click inside target A's row/col span fires A", click(4, 3, 100, 8) == true)
 check("target A fired exactly once", #seam_fired == 1 and seam_fired[1] == "A", seam_fired)
 
 seam_fired = {}
-local down_row3_colmiss = { kind = "down", button = "left", x = 0, y = 3, inside = true, width = 100, height = 8 }
-check("down on target A's row but outside its column span returns false",
-      window.on_pointer(down_row3_colmiss) == false)
+check("click on target A's row but outside its column span returns false",
+      click(0, 3, 100, 8) == false)
 check("column miss fires nothing", #seam_fired == 0)
 
 seam_fired = {}
-local down_rowmiss = { kind = "down", button = "left", x = 4, y = 4, inside = true, width = 100, height = 8 }
-check("down on a row with no target returns false", window.on_pointer(down_rowmiss) == false)
+check("click on a row with no target returns false", click(4, 4, 100, 8) == false)
 check("row miss fires nothing", #seam_fired == 0)
 
--- ---- tab-bar priority: a down on a tab span never reaches target hit-test --
+-- ---- M2: column boundaries at BOTH edges of a real span -------------------
+-- Target A is col_start=2, col_end=8 (exclusive) -- the boundary a real
+-- button's `[` (col_start) and one past its `]` (col_end) sit at.
+seam_fired = {}
+check("M2: x == col_start (2) is INSIDE the span (inclusive left edge)",
+      click(2, 3, 100, 8) == true and #seam_fired == 1 and seam_fired[1] == "A", seam_fired)
+seam_fired = {}
+check("M2: x == col_start - 1 (1) is OUTSIDE the span", click(1, 3, 100, 8) == false)
+check("M2: left-edge-miss fires nothing", #seam_fired == 0)
+seam_fired = {}
+check("M2: x == col_end - 1 (7) is INSIDE the span (inclusive right edge)",
+      click(7, 3, 100, 8) == true and #seam_fired == 1 and seam_fired[1] == "A", seam_fired)
+seam_fired = {}
+check("M2: x == col_end (8) is OUTSIDE the span (col_end is exclusive)",
+      click(8, 3, 100, 8) == false)
+check("M2: right-edge-miss fires nothing", #seam_fired == 0)
+
+-- ---- tab-bar priority: a GENUINE conflict, not a click where nothing else
+-- could ever match -----------------------------------------------------------
+-- Target D (row 2, col [0,5)) was placed to coincide with what page_row
+-- WOULD compute to for a tab-bar-row click, once the pane is scrolled: with
+-- tab_rows=1, offset=2, y=0 (a real "Stats" tab hit, col [0,5)) gives
+-- page_row = (0 - 1) + 2 + 1 = 2 -- exactly D's row, with an overlapping
+-- column span. So this click is a genuine ambiguity between the tab span
+-- and target D, not merely "a coordinate with no target nearby" -- the
+-- ONLY thing resolving it is on_pointer checking tab spans before ever
+-- calling `target_at`, and returning immediately on a tab match.
 seam_fired = {}
 window.set_page("stats")
-local down_tab_wins = { kind = "down", button = "left", x = 2, y = 0, inside = true, width = 100, height = 8 }
-check("a tab-bar down still switches pages with body targets present",
-      window.on_pointer(down_tab_wins) == true)
-check("tab-bar click fired no page target", #seam_fired == 0)
+window.scroll(2) -- offset -> 2
+reset_drawn()
+window.render(seam_rect, {}) -- recorded_offset picks up 2
+local down_conflict = window.on_pointer({ kind = "down", button = "left", x = 2, y = 0,
+                                           inside = true, width = 100, height = 8 })
+check("M3: a down on the ambiguous coordinate switches page (tab wins)", down_conflict == true)
+local up_conflict = window.on_pointer({ kind = "up", button = "left", x = 2, y = 0,
+                                         inside = true, width = 100, height = 8 })
+check("M3: the matching up at the SAME ambiguous coordinate still fires no body target",
+      up_conflict == false and #seam_fired == 0, seam_fired)
+window.scroll(-2) -- back to offset 0
+reset_drawn()
+window.render(seam_rect, {})
 window.set_page("stats")
 
 -- ---- SCROLLED mapping: offset > 0 shifts which screen row hits which target-
@@ -375,14 +448,14 @@ window.render(seam_rect, {}) -- re-render so recorded_offset picks up 2
 check("(setup) scrolled body now starts at R3",
       drawn.ansi[2] and drawn.ansi[2].s:find("^R3%s") ~= nil, drawn.ansi[2] and drawn.ansi[2].s)
 -- page_row = (y - 1) + 2 + 1 = y + 2; target A (row 3) is now hit at y = 1.
-local down_scrolled_hit = { kind = "down", button = "left", x = 4, y = 1, inside = true, width = 100, height = 8 }
-check("scrolled: y=1 now maps to target A's row", window.on_pointer(down_scrolled_hit) == true)
+check("scrolled: y=1 now maps to target A's row", click(4, 1, 100, 8) == true)
 check("scrolled hit fired A", #seam_fired == 1 and seam_fired[1] == "A", seam_fired)
--- the OLD unscrolled y (3) now maps to page_row 5, which has no target.
+-- the OLD unscrolled y (3) now maps to page_row 5 (the error target's row),
+-- but x=4 misses its col span [0,4) -- still a genuine miss.
 seam_fired = {}
-local down_scrolled_oldy = { kind = "down", button = "left", x = 4, y = 3, inside = true, width = 100, height = 8 }
-check("scrolled: the old y=3 no longer hits anything", window.on_pointer(down_scrolled_oldy) == false)
-check("scrolled old-y down fires nothing", #seam_fired == 0)
+check("scrolled: the old y=3 (now a different row) still misses at this column",
+      click(4, 3, 100, 8) == false)
+check("scrolled old-y click fires nothing", #seam_fired == 0)
 window.scroll(-2) -- back to offset 0
 reset_drawn()
 window.render(seam_rect, {})
@@ -396,57 +469,219 @@ local narrow_seam_rect = make_rect(0, 0, 30, 12)
 reset_drawn()
 window.render(narrow_seam_rect, {})
 check("(setup) narrow rect wraps the tab bar onto 3 rows", #drawn.ansi >= 4)
-local down_wrapped_hit = { kind = "down", button = "left", x = 4, y = 5, inside = true, width = 30, height = 12 }
-check("wrapped tab bar: y=5 maps onto target A's row", window.on_pointer(down_wrapped_hit) == true)
+check("wrapped tab bar: y=5 maps onto target A's row", click(4, 5, 30, 12) == true)
 check("wrapped-tab-bar hit fired A", #seam_fired == 1 and seam_fired[1] == "A", seam_fired)
 reset_drawn()
 window.render(seam_rect, {}) -- restore the wide layout's recorded state
 
 -- ---- errored action is contained; the pane keeps working afterward -------
 seam_fired = {}
-local down_error_row = { kind = "down", button = "left", x = 1, y = seam_error_row,
-                          inside = true, width = 100, height = 8 }
-local ok_error_call, result_error_call = pcall(window.on_pointer, down_error_row)
+local ok_error_call, result_error_call = pcall(click, 1, seam_error_row, 100, 8)
 check("an erroring action does not propagate the error out of on_pointer",
       ok_error_call and result_error_call == true, result_error_call)
 seam_fired = {}
 check("the pane still dispatches normally after a contained action error",
-      window.on_pointer(down_row3_hit) == true and #seam_fired == 1 and seam_fired[1] == "A")
+      click(4, 3, 100, 8) == true and #seam_fired == 1 and seam_fired[1] == "A")
 
--- ---- remote pass does not clobber recorded targets/tab_rows/offset -------
+-- ---- I2 fix: the remote-pass guard test now uses a rect that actually ----
+-- REACHES the guarded block (tab_rows=4, body_h=4 at 20x8 -- survivable,
+-- unlike the old 20x4 rect, where tab_rows=4 and body_h=0 made
+-- window.render bail at the `body_h <= 0` return BEFORE the guarded block,
+-- so removing the guard entirely left the whole suite green). See the I1
+-- section below for the case that specifically exercises the body_h<=0
+-- early return.
 window.set_page("stats")
 render_pass = "local"
 reset_drawn()
 window.render(seam_rect, {}) -- records targets/tab_rows/offset for the WIDE layout
 render_pass = "remote"
 reset_drawn()
-local ok_remote_seam = pcall(window.render, make_rect(0, 0, 20, 4), {}) -- a drastically different layout
-check("remote render at a different layout does not error", ok_remote_seam)
+local ok_remote_seam = pcall(window.render, make_rect(0, 0, 20, 8), {}) -- reaches the guarded block
+check("remote render at a different (but survivable) layout does not error", ok_remote_seam)
 render_pass = "local"
 seam_fired = {}
 check("remote pass did not clobber the recorded seam state -- the wide-layout hit still works",
-      window.on_pointer(down_row3_hit) == true and #seam_fired == 1 and seam_fired[1] == "A")
+      click(4, 3, 100, 8) == true and #seam_fired == 1 and seam_fired[1] == "A")
+
+-- ---- I1 fix + M1: a local render that hits the body_h<=0 early return ----
+-- must not leave `recorded_tab_rows`/`page_targets` describing the OLD
+-- (taller-bodied) layout. Reproduces the reviewer's exact scenario: render
+-- 100x8 (tab_rows=1, body_h=7, records target A at page_row=3), then
+-- render 20x4 (tab_rows=4, body_h=0 -- the early return). Before the I1
+-- fix, `recorded_tab_rows` stayed 1 (stale) while `tab_spans` already
+-- reflected the new 4-row wrapped bar, so a click on any of tab rows 1-3
+-- (all genuinely `event.y < 4`, i.e. ON the new tab bar, but NOT `< 1`)
+-- would fall through the `event.y < recorded_tab_rows` guard using the
+-- STALE value and alias page_row = y (with the stale tab_rows=1, offset=0)
+-- straight onto target A's row (3) at y=3, or the error target's row (5) --
+-- reachable at y=3 only via this exact stale-state bug (y=3 is a real
+-- tab-bar row when tab_rows==4, which no genuine body coordinate could
+-- ever be simultaneously). This test also stands in for M1 (a dedicated
+-- case for the `event.y < recorded_tab_rows` guard): the guard only
+-- becomes exercised in a way that matters once I1 keeps it in sync.
+render_pass = "local"
+window.set_page("stats")
+reset_drawn()
+window.render(seam_rect, {}) -- 100x8: tab_rows=1, records target A at row 3
+local ok_narrow = pcall(window.render, make_rect(0, 0, 20, 4), {}) -- tab_rows=4, body_h=0
+check("(I1 setup) a narrow render that hits body_h<=0 does not error", ok_narrow)
+seam_fired = {}
+local any_fired_on_tabbar_rows = false
+for y = 0, 3 do -- every row of the NEW (4-row) tab bar
+  seam_fired = {}
+  click(4, y, 20, 4)
+  if #seam_fired > 0 then any_fired_on_tabbar_rows = true end
+end
+check("I1: no tab-bar-row click on the narrow layout fires a stale body target",
+      not any_fired_on_tabbar_rows, seam_fired)
+-- The loop above clicks real tab-bar coordinates on the 20-wide wrapped
+-- bar, so some of those downs may have genuinely matched a DIFFERENT
+-- page's tab span and switched `current_page()` away from "stats" (the
+-- fake module lives only at the "stats" slot) -- restore it explicitly
+-- before re-rendering the wide layout for the drag test below.
+window.set_page("stats")
+reset_drawn()
+window.render(seam_rect, {})
 
 -- ---- THE discriminating case: down on target A, up delivered at target --
--- B's coordinates, must never fire B (or fire A a second time). This is
--- exactly wm.lua's real dispatch shape for a captured gesture: after a
--- down returns true, wm.lua re-invokes this SAME on_pointer with kind ==
--- "up" at wherever the release landed, translated into the SAME pane-local
--- coordinate space (scripts/default/wm.lua's `local_event`) -- it does not
--- re-hit-test against the down's target first. Calling on_pointer directly
--- with a synthetic "up" event, as below, reproduces that real shape.
+-- B's coordinates, must fire NEITHER (not A -- the down alone never fires
+-- anything now -- and not B, since the up's own resolved target doesn't
+-- match what the down recorded). This is wm.lua's real dispatch shape for
+-- a captured gesture: after a down returns true, wm.lua re-invokes this
+-- SAME on_pointer with kind == "up" at wherever the release landed,
+-- translated into the SAME pane-local coordinate space (scripts/default/
+-- wm.lua's `local_event`) -- it does not re-hit-test against the down's
+-- target first. Calling on_pointer directly with a synthetic "up" event,
+-- as below, reproduces that real shape.
 seam_fired = {}
 local down_A_for_drag = { kind = "down", button = "left", x = 4, y = 3, inside = true, width = 100, height = 8 }
-check("drag setup: down on target A fires A", window.on_pointer(down_A_for_drag) == true)
+check("drag setup: down on target A consumes but fires nothing",
+      window.on_pointer(down_A_for_drag) == true and #seam_fired == 0)
 local up_at_B = { kind = "up", button = "left", x = 2, y = 7, inside = true, width = 100, height = 8 }
 local up_result = window.on_pointer(up_at_B)
-check("drag: an 'up' event at target B's coordinates is not dispatched at all",
+check("drag: an 'up' event at target B's coordinates returns false (mismatch)",
       up_result == false)
-check("drag: target B never fired, and A fired exactly once (not twice)",
-      #seam_fired == 1 and seam_fired[1] == "A", seam_fired)
+check("drag: NEITHER target fired -- not B, and not A a second time",
+      #seam_fired == 0, seam_fired)
 
 render_pass = "local"
 window.set_page("stats")
+
+-- =============================================================================
+-- I3 (review round 2): the REAL People page, driven end to end through the
+-- REAL window.on_pointer dispatch, with its mission data driven through
+-- protocol.ingest (the real MISSIONS/WSTOCK/VMAPH/VMAPL/VMR/MEE wire
+-- handlers) rather than hand-poking S directly -- pinning the exact
+-- column span pages/people.lua actually records, end to end, rather than
+-- via the fake page module the rest of this section uses. Registration
+-- mirrors guild_viking_voyage_test.lua's own top-of-file idiom (the same
+-- one init.lua uses in production) -- protocol.handler/pattern_handler are
+-- one-shot per key, so this runs once, here, for the whole suite.
+-- =============================================================================
+do
+  local protocol = require("protocol")
+  local function register(mod_name)
+    local mod = require(mod_name)
+    for key, fn in pairs(mod) do
+      if key ~= "_patterns" then protocol.handler(key, fn) end
+    end
+    for _, p in ipairs(mod._patterns or {}) do
+      protocol.pattern_handler(p.pattern, p.fn)
+    end
+  end
+  register("handlers.city")   -- MISSIONS
+  register("handlers.voyage") -- VMAPH, VMAPL, VMR%d%d, MEE%d%d
+  register("handlers.trade")  -- WSTOCK
+
+  local page_opts = require("page_opts")
+  local pagelib = require("pagelib")
+  -- Isolate the Missions section: no other people-page section, no patrol
+  -- (S.patrol is never set in this file), so the ONE mission's button row
+  -- is locatable unambiguously.
+  page_opts.set("show_people_settlers", false)
+  page_opts.set("show_people_garrison", false)
+  page_opts.set("show_people_raids", false)
+  page_opts.set("show_people_thralls", false)
+  page_opts.set("show_people_missions", true)
+
+  -- Sufficient grain (100 >= 30 needed) -> the mission button renders
+  -- enabled. A tiny 4x1 all-passable strip: player at (0,0), target
+  -- Holmgard at (3,0) -- a genuine 3-step route (not "already there"),
+  -- so the send sequence below discriminates dirs-then-enter from the
+  -- #path==0 branch's enter+fulfill (pages/people.lua's mission_run_click,
+  -- MAIN 12080-12143).
+  protocol.ingest("WSTOCK", "grain|100|100")
+  protocol.ingest("MISSIONS", "7|Deliver grain to Holmgard|15|200|1800|Vestergotland|Holmgard|grain:30")
+  protocol.ingest("VMAPH", "4|1|0|0")
+  protocol.ingest("VMAPL", "lineage|Uppsala|0|0|;lineage|Vestergotland|1|0|;capital|Holmgard|3|0|")
+  protocol.ingest("VMR00", "pppp")
+  protocol.ingest("MEE00", "111")
+
+  check("(I3 setup) MISSIONS ingest populated S.missions via the real handler",
+        #(require("state").S.missions or {}) == 1)
+
+  window.set_page("people")
+  render_pass = "local"
+  reset_drawn()
+  window.render(make_rect(0, 0, 100, 40), {}) -- tall enough for the whole (isolated) section
+
+  -- Locate the button row/column from the ACTUAL RENDERED TEXT -- not
+  -- from window's own recorded targets, which is what this test exists to
+  -- pin independently. `bracket_byte` is the raw byte offset of "[Run
+  -- There]"; the VISIBLE column it starts at is the visible width of
+  -- everything before it (escape sequences cost zero width, per
+  -- pagelib.trunc's own convention), which this computes directly rather
+  -- than assuming the leading indent is exactly 2 unescaped spaces.
+  local btn_entry, bracket_byte
+  for _, d in ipairs(drawn.ansi) do
+    local b = d.s:find("%[Run There%]")
+    if b then btn_entry, bracket_byte = d, b; break end
+  end
+  check("(I3 setup) the rendered People page contains a 'Run There' button row", btn_entry ~= nil)
+
+  local col_start = pagelib.visible_width(btn_entry.s:sub(1, bracket_byte - 1))
+  local col_end = col_start + pagelib.visible_width("[Run There]")
+  local btn_y = btn_entry.y
+
+  check("(I3 pin) the button's column span is exactly [2, 13) -- 2-space indent + '[Run There]' (11 chars)",
+        col_start == 2 and col_end == 13, col_start .. ".." .. col_end)
+
+  send_calls = {}
+  local down_hit = window.on_pointer({ kind = "down", button = "left", x = col_start, y = btn_y,
+                                        inside = true, width = 100, height = 40 })
+  check("(I3) a down on the real button's column/row consumes", down_hit == true)
+  check("(I3) the down alone sends nothing yet", #send_calls == 0)
+  local up_hit = window.on_pointer({ kind = "up", button = "left", x = col_start, y = btn_y,
+                                      inside = true, width = 100, height = 40 })
+  check("(I3) the matching up fires the button", up_hit == true)
+  check("(I3) exact byte-for-byte send sequence: 3 travel directions then enter, no fulfill",
+        #send_calls == 4 and send_calls[1] == "east" and send_calls[2] == "east"
+        and send_calls[3] == "east" and send_calls[4] == "enter",
+        table.concat(send_calls, ","))
+
+  -- M2 (applied to the REAL button, not the fake one): one column short of
+  -- col_start (the '[') misses; one past col_end - 1 (the ']') misses too.
+  send_calls = {}
+  window.on_pointer({ kind = "down", button = "left", x = col_start - 1, y = btn_y,
+                       inside = true, width = 100, height = 40 })
+  window.on_pointer({ kind = "up", button = "left", x = col_start - 1, y = btn_y,
+                       inside = true, width = 100, height = 40 })
+  check("(I3) one column left of the real button's '[' sends nothing", #send_calls == 0)
+  window.on_pointer({ kind = "down", button = "left", x = col_end, y = btn_y,
+                       inside = true, width = 100, height = 40 })
+  window.on_pointer({ kind = "up", button = "left", x = col_end, y = btn_y,
+                       inside = true, width = 100, height = 40 })
+  check("(I3) one column past the real button's ']' sends nothing", #send_calls == 0)
+
+  page_opts.set("show_people_settlers", true)
+  page_opts.set("show_people_garrison", true)
+  page_opts.set("show_people_raids", true)
+  page_opts.set("show_people_thralls", true)
+end
+
+window.set_page("stats")
+render_pass = "local"
+send_calls = {}
 
 -- =============================================================================
 -- Task 10: end-to-end pane pass -- every page in window.PAGES rendered at

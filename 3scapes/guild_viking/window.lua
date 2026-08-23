@@ -18,20 +18,39 @@
 -- own (possibly different) width/height must never clobber what the local
 -- click routing depends on.
 --
--- `on_pointer` fires a hit target's `action` directly on the qualifying
--- LEFT DOWN itself (mirroring the tab bar's own down-fires dispatch just
--- below) -- there is no up-based "release inside the same element" gesture
--- at this seam, unlike the popup/pane pointer_track.lua modules. See the
--- Task 6 report for the safety argument this affords against a
--- down-on-target-A/drag/up-on-target-B misfire: because window.on_pointer's
--- very first line rejects every event that is not `kind == "down"`, a
--- later "move" or "up" delivered to this SAME function (wm.lua's
--- pointer_capture mechanism re-invokes it, per CLAUDE.md's "Pane Pointer
--- Input") can never reach the target hit-test at all, let alone fire a
--- second (or misrouted) action -- there is exactly one chance to fire per
--- physical click, taken at down time, before any drag can happen.
+-- Dispatch shape (review round 2, C1): a body-target hit fires its `action`
+-- on the matching UP, not the down -- the down only records the hit target
+-- and consumes (returns true). This is a deliberate reversal of this
+-- module's first cut, which fired on the down directly, reasoning that
+-- doing so made a down/drag/up mismatch structurally unreachable. That
+-- argument was correct on its own terms but answered the wrong question:
+-- LEGACY's own hotspots for these two buttons (MAIN 10548-10551,
+-- 10609-10631 -- `WindowAddHotspot`'s five callback slots are MouseOver,
+-- CancelMouseOver, MouseDown, CancelMouseDown, MouseUp) wire only the
+-- MouseUp slot, exactly like every other hotspot `popups/pointer_track.lua`
+-- already exists for (map/cityplan/war/sea) -- LEGACY draws this
+-- distinction deliberately elsewhere in the same file (e.g. a hotspot that
+-- DOES fill both the MouseDown and MouseUp slots), and the tab bar's own
+-- fire-on-down IS therefore correct on its own terms too, because LEGACY's
+-- chrome tab hotspot genuinely is a MouseDown hotspot (MAIN 4508 ->
+-- viking_chrome_mousedown -> SetPage) -- it isn't "mirroring" anything, it
+-- is a separate, independently-verbatim hotspot family. Firing this seam's
+-- buttons on the down was therefore an undisclosed behavioral deviation
+-- from LEGACY's own MouseUp wiring, and it silently dropped the protection
+-- `pointer_track.lua`'s header documents for exactly this hotspot class: a
+-- mouseup is delivered only to the hotspot that took the mousedown, even
+-- for a hotspot with no MouseDown callback of its own -- so in LEGACY,
+-- pressing the wrong mission row and dragging off before releasing is
+-- harmless, while a fire-on-down port would have dispatched irrevocably on
+-- the press alone. The parity consequence: this seam now needs (and has)
+-- a `popups.pointer_track` tracker, same as every other MouseUp-hotspot
+-- module in this plugin, following `popups/map.lua`'s own on_pointer
+-- shape (record-on-down, fail-closed-match-on-up, clear-on-cancel-and-
+-- after-every-up). See the Task 6 report for the mutation that confirms
+-- the row-A/row-B drag test actually discriminates on this tracker.
 local pagelib = require("pagelib")
 local scroller = require("scroller")
+local track = require("popups.pointer_track").tracker()
 
 local window = {}
 
@@ -190,6 +209,27 @@ function window.render(rect, opts)
 
   local tab_rows = render_tabbar(rect)
   local body_h = h - tab_rows
+
+  -- Fix I1 (review round 2): keep `recorded_tab_rows` in lockstep with
+  -- `tab_spans` -- both are derived from THIS SAME render_tabbar() call, on
+  -- a local pass, regardless of whether `body_h` leaves room to draw a body
+  -- at all. Before this fix, a local render that hit the `body_h <= 0`
+  -- early return below left `recorded_tab_rows` (and `page_targets`)
+  -- describing the PREVIOUS render's layout while `tab_spans` already
+  -- reflected the new one -- e.g. a resize that makes the tab bar wrap onto
+  -- more rows. A down/up on the new (taller) tab bar could then alias a
+  -- stale body target from the old, shorter tab bar, because on_pointer's
+  -- `event.y < recorded_tab_rows` guard was comparing against the wrong
+  -- number. Clearing `page_targets` here (there is no body to have targets
+  -- in) closes that window; `recorded_offset` is left alone since it is
+  -- never read when `page_targets` is empty.
+  if lera.render_pass() ~= "remote" then
+    recorded_tab_rows = tab_rows
+    if body_h <= 0 then
+      page_targets = {}
+    end
+  end
+
   if body_h <= 0 then return end
 
   local page = pages_by_key[current_key]
@@ -223,10 +263,11 @@ function window.render(rect, opts)
 
   -- Task 6 seam: same local-pass-only recording as `last_lines`/
   -- `sc.set_height` just above, and for the identical reason -- see this
-  -- module's header comment and `tab_spans`' own comment.
+  -- module's header comment and `tab_spans`' own comment. `recorded_tab_rows`
+  -- is already up to date (set above, before the `body_h <= 0` early
+  -- return -- see the I1 fix comment there).
   if lera.render_pass() ~= "remote" then
     page_targets = targets or {}
-    recorded_tab_rows = tab_rows
     recorded_offset = offset
   end
 
@@ -237,33 +278,84 @@ function window.render(rect, opts)
   end
 end
 
--- A LEFT down inside a recorded tab span switches page and returns true;
--- every other event (a down with a different/no button, e.g. a middle- or
--- right-click on a tab, or a down elsewhere, e.g. the body) returns false so
--- the pane never falsely claims an interaction it didn't handle.
--- Task 6 seam: a body-target hit fires its `action` (pcall'd, so an errant
--- action can never wedge the pane) and returns true, taking priority below
--- the tab bar's own check. `page_row` maps the down's pane-local row back
--- onto the page's own 1-based `lines` index using the SAME inputs the
--- render pass just windowed the visible rows with (`recorded_tab_rows`,
--- `recorded_offset`); a down still on a tab-bar row (`event.y <
--- recorded_tab_rows`) that missed every tab span (e.g. the separator
--- column) is deliberately excluded from that mapping rather than being
--- allowed to alias onto some body row's target.
-function window.on_pointer(event)
-  if event.kind ~= "down" or event.button ~= "left" then return false end
-  for _, s in ipairs(tab_spans) do
-    if event.y == s.row and event.x >= s.col_start and event.x < s.col_end then
-      return window.set_page(s.key)
-    end
-  end
-  if event.y < recorded_tab_rows then return false end
+-- Maps a pane-local event's row/col onto the current page's own `targets`
+-- array, or nil on a miss. `page_row` uses the SAME inputs the render pass
+-- just windowed the visible rows with (`recorded_tab_rows`,
+-- `recorded_offset`); an event still on a tab-bar row (`event.y <
+-- recorded_tab_rows`) is deliberately excluded rather than allowed to
+-- alias onto some body row's target (e.g. the separator column at a
+-- wrapped tab bar, or -- before the I1 fix above -- a stale
+-- `recorded_tab_rows` from a differently-sized previous render).
+local function target_at(event)
+  if event.y < recorded_tab_rows then return nil end
   local page_row = (event.y - recorded_tab_rows) + recorded_offset + 1
   for _, t in ipairs(page_targets) do
     if page_row == t.row and event.x >= t.col_start and event.x < t.col_end then
-      pcall(t.action)
+      return t
+    end
+  end
+  return nil
+end
+
+-- A LEFT down inside a recorded tab span switches page and returns true
+-- immediately (LEGACY's own chrome-tab hotspot fires on MouseDown -- see
+-- this module's header comment); every other down (a different/no button,
+-- e.g. a middle- or right-click on a tab, or a down elsewhere) returns
+-- false so the pane never falsely claims an interaction it didn't handle.
+--
+-- A body-target down instead just records the hit via `track` and
+-- consumes (`return true`) -- it does NOT fire `action` yet. The matching
+-- UP re-hit-tests at ITS OWN coordinates and only fires when that hit
+-- target's identity (`row`+`col_start`, encoded through `track` as a
+-- "cell") matches what the down recorded (`track.matches`, fail-closed: no
+-- recorded down at all also means no match) -- reproducing LEGACY's real
+-- MouseUp-hotspot semantics
+-- (a mouseup only reaches the hotspot that took the matching mousedown)
+-- despite wm.lua's own capture being coarser than that (button-only, no
+-- notion of which target the down landed on -- see `popups/
+-- pointer_track.lua`'s header for the full rationale, and this module's
+-- header comment for why this seam needs that discipline where the tab
+-- bar's fire-on-down dispatch does not). `action` is pcall'd so an errant
+-- target can never wedge the pane or leak an error out of `on_pointer`.
+-- `cancel` (popup-covering-pane, focus loss, a second down while
+-- captured, etc. -- see CLAUDE.md's "Pane Pointer Input") and every up
+-- (matched or not) clear the tracker.
+function window.on_pointer(event)
+  if event.button ~= "left" then return false end
+
+  if event.kind == "cancel" then
+    track.clear()
+    return false
+  end
+
+  if event.kind == "down" then
+    for _, s in ipairs(tab_spans) do
+      if event.y == s.row and event.x >= s.col_start and event.x < s.col_end then
+        return window.set_page(s.key)
+      end
+    end
+    local t = target_at(event)
+    if t then
+      -- popups/pointer_track.lua's `same()` only compares c/r for
+      -- kind=="cell" -- every OTHER kind matches on kind alone (see its
+      -- header/body). Encoding this target's identity as a "cell" with
+      -- r=row, c=col_start is what makes the match value-discriminating
+      -- (two different targets, or a stale one, correctly fail to match)
+      -- rather than degenerating into "any target matches any other".
+      track.record({ kind = "cell", r = t.row, c = t.col_start })
       return true
     end
+    return false
+  end
+
+  if event.kind ~= "up" then return false end
+
+  local t = target_at(event)
+  local matched = t ~= nil and track.matches({ kind = "cell", r = t.row, c = t.col_start })
+  track.clear()
+  if matched then
+    pcall(t.action)
+    return true
   end
   return false
 end

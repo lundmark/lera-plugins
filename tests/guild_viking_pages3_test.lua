@@ -578,11 +578,62 @@ do
   check("people: mission button row present (insufficient goods)", btn_row_dis ~= nil)
   check("people: mission button BGR workbook -- insufficient -> dim (0x888888: B=88,G=88,R=88)",
         lines_dis[btn_row_dis]:find(C.dim, 1, true) ~= nil, lines_dis[btn_row_dis])
+  -- M4: the discriminating assertion is the ABSENCE of a target -- "sends
+  -- nothing" after a render with no click ever performed is decorative
+  -- (there is nothing to send from in the first place; it would pass even
+  -- if `has_sufficient_goods` were entirely broken).
   check("people: disabled mission button has NO recorded target (not clickable)",
         find_target(targets_dis, btn_row_dis) == nil)
-  check("people: disabled mission button sends nothing (nothing to click)", #send_calls == 0)
 
   S.wstock = saved_wstock
+
+  -- ---- I4: has_sufficient_goods mutation coverage (MAIN 4817-4839) --------
+  do
+    -- (a) SUMS across multiple wstock rows for the same good, rather than
+    -- reading a single row's amount -- two rows of 15 grain each, summing
+    -- to exactly the needed 30. A mutation that replaced the running sum
+    -- with the last-seen row's amount alone would still see 15 (< 30) and
+    -- wrongly disable the button.
+    S.wstock = {
+      { good = "grain", amount = 15, freshness_pct = 100 },
+      { good = "grain", amount = 15, freshness_pct = 100 },
+    }
+    local lines_sum = people_page.lines(WIDTH)
+    local row_sum = find_line(lines_sum, "Run There")
+    check("people: I4a has_sufficient_goods SUMS multiple wstock rows for the same good (15+15 >= 30)",
+          row_sum ~= nil and lines_sum[row_sum]:find(C.bright_green, 1, true) ~= nil,
+          row_sum and lines_sum[row_sum])
+
+    -- (b) BOUNDARY: have == needed is SUFFICIENT. LEGACY's own comparison
+    -- is `if have_qty < needed_qty then return false` -- equal is not
+    -- less, so it passes; a mutation to `<=` would wrongly disable this
+    -- exact-match case.
+    S.wstock = { { good = "grain", amount = 30, freshness_pct = 100 } }
+    local lines_eq = people_page.lines(WIDTH)
+    local row_eq = find_line(lines_eq, "Run There")
+    check("people: I4b has_sufficient_goods boundary -- have == needed (30 == 30) is SUFFICIENT",
+          row_eq ~= nil and lines_eq[row_eq]:find(C.bright_green, 1, true) ~= nil,
+          row_eq and lines_eq[row_eq])
+
+    -- (c) ABSENT want_goods -> always sufficient, regardless of wstock (an
+    -- EMPTY warehouse here, which would fail every other case above). A
+    -- mutation flipping the early `return true` to `return false` would
+    -- wrongly disable a mission that asks for nothing at all.
+    S.wstock = {}
+    local saved_missions_i4c = S.missions
+    S.missions = {
+      { id = 8, label = "No goods needed", expires_in = 1800,
+        origin_town = "Vestergotland", target_town = "Holmgard",
+        reward = 50, reward_rep = 0, want_goods = nil },
+    }
+    local lines_none = people_page.lines(WIDTH)
+    local row_none = find_line(lines_none, "Run There")
+    check("people: I4c has_sufficient_goods with absent want_goods is SUFFICIENT (empty wstock)",
+          row_none ~= nil and lines_none[row_none]:find(C.bright_green, 1, true) ~= nil,
+          row_none and lines_none[row_none])
+    S.missions = saved_missions_i4c
+    S.wstock = saved_wstock
+  end
 
   -- ---- errand button: normal path, return-and-submit reaches the RIGHT ---
   -- origin index (distinguishable send counts prove items[town_index] was
@@ -611,6 +662,33 @@ do
         and send_calls[6] == "leave"
         and send_calls[7] == "east"
         and send_calls[8] == "enter" and send_calls[9] == "vmission newbie submit",
+        table.concat(send_calls, ","))
+
+  -- ---- I5: errand button, ALREADY AT the target town (#path == 0) -------
+  -- Both fixtures above (normal path, blank-origin fallback) only exercise
+  -- errand_run_click's NON-empty-path branch. This pins the OTHER
+  -- send-bearing branch (MAIN ~12194-12199): dropping `mud.send("leave")`
+  -- from the #path==0 arm would survive every other errand test in this
+  -- file. Holmgard(3,0) -> Vestergotland(1,0) is 2 "west" steps.
+  S.errand = {
+    id = 99, label = "Fetch water", expires_in = 5400,
+    origin_town = "Vestergotland", target_town = "Holmgard",
+    reward = 0, reward_good = "water", reward_qty = 10,
+  }
+  seed_map(3, 0) -- exactly at Holmgard (the errand's target)
+  send_calls = {}
+  local lines_at, targets_at = people_page.lines(WIDTH)
+  local btn_row_at = find_line(lines_at, "Run There")
+  local target_at_errand = find_target(targets_at, btn_row_at)
+  check("people: errand button (already at target) has a recorded target", target_at_errand ~= nil)
+  target_at_errand.action()
+  check("people: errand click (already at target, #path==0) sends enter+fetch+LEAVE, "
+        .. "then the return-and-submit sequence (origin Vestergotland is 2 steps back)",
+        #send_calls == 7
+        and send_calls[1] == "enter" and send_calls[2] == "vmission newbie fetch"
+        and send_calls[3] == "leave"
+        and send_calls[4] == "west" and send_calls[5] == "west"
+        and send_calls[6] == "enter" and send_calls[7] == "vmission newbie submit",
         table.concat(send_calls, ","))
 
   -- ---- errand button: BLANK origin_town falls back to the first capital --
