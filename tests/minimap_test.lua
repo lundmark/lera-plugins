@@ -125,6 +125,23 @@ check("p classes as players", mm.glyph_class("p") == "players", mm.glyph_class("
 check("m classes as monsters", mm.glyph_class("m") == "monsters", mm.glyph_class("m"))
 check("digit is not a class", mm.glyph_class("3") == "other", mm.glyph_class("3"))
 
+-- ---- mapview's glyph contract ------------------------------------------------
+-- Kills: mapview keeping its own char patterns. It classed corridors as
+-- [|%-/\\], which omits X, and read mob counts from [1-9], which GMCP never
+-- sends. Both now go through minimap.glyph_class, so this is the contract
+-- mapview relies on.
+local link_glyphs = { "|", "-", "/", "\\", "X" }
+for _, g in ipairs(link_glyphs) do
+  check("mapview link glyph " .. g, mm.glyph_class(g) == "link", mm.glyph_class(g))
+end
+local room_glyphs = { "O", "E", "#", "+", "v", "^" }
+for _, g in ipairs(room_glyphs) do
+  local class = mm.glyph_class(g)
+  check("mapview room-ish glyph " .. g,
+    class == "room" or class == "enter" or class == "dark" or class == "updown"
+      or class == "down" or class == "up", class)
+end
+
 -- ---- grid accessors ---------------------------------------------------------
 set_grid({
   kind = "los", w = 5, h = 3,

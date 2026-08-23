@@ -222,8 +222,14 @@ end
 
 -- Returns info about what should be displayed at a minimap position
 local function get_position_info(row, col, char, position_to_room, mapper, roominfo, waypoint_rooms)
+  local minimap = plugin.get("minimap")
+  -- minimap owns glyph semantics: the Room.Map legend is authoritative, so X is
+  -- a link and per-cell counts no longer exist.
+  local class = (minimap and minimap.glyph_class) and minimap.glyph_class(char) or "other"
+
   local info = {
     char = char,
+    class = class,
     fg = nil,
     bg = nil,
     is_current = false,
@@ -234,8 +240,7 @@ local function get_position_info(row, col, char, position_to_room, mapper, roomi
     freshness = 0,
   }
 
-  -- Check if this is the current room (player position)
-  if char == "@" then
+  if class == "you" then
     info.is_current = true
     info.is_mapped = true
     info.fg = colors.current_fg
@@ -262,13 +267,27 @@ local function get_position_info(row, col, char, position_to_room, mapper, roomi
     end
   end
 
-  -- Parse mob count from minimap character (1-9)
-  if char:match("[1-9]") then
-    info.mob_count = tonumber(char)
+  -- Room.Map reports that a neighbouring room holds players or monsters, but
+  -- not how many: the mudlib collapses counts to p and m. A count is available
+  -- only for the room the player is standing in, from Room.Contents.
+  if class == "monsters" then
+    info.mob_count = info.is_current and (roominfo and roominfo.monster_count
+      and roominfo.monster_count() or 1) or 1
+    if settings.show_mobs then
+      info.fg = colors.mob1_fg
+    end
+    return info
   end
 
-  -- Corridors and connections
-  if char:match("[|%-/\\]") then
+  if class == "players" then
+    info.has_players = true
+    if settings.show_players then
+      info.fg = colors.player_fg
+    end
+    return info
+  end
+
+  if class == "link" then
     if info.is_mapped then
       info.fg = colors.corridor_mapped_fg
     else
@@ -277,25 +296,14 @@ local function get_position_info(row, col, char, position_to_room, mapper, roomi
     return info
   end
 
-  -- Unknown/unexplored
-  if char == "?" then
+  if class == "unknown" then
     info.fg = colors.unknown_fg
     return info
   end
 
-  -- Room characters: determine color based on state
-  -- Include v (down exit) and ^ (up exit) as room characters
-  if char:match("[OXE#%+v%^]") or info.mob_count > 0 then
-    -- Mob coloring takes priority (if enabled)
-    if settings.show_mobs and info.mob_count >= 6 then
-      info.fg = colors.mob6_fg
-    elseif settings.show_mobs and info.mob_count >= 3 then
-      info.fg = colors.mob3_fg
-    elseif settings.show_mobs and info.mob_count >= 2 then
-      info.fg = colors.mob2_fg
-    elseif settings.show_mobs and info.mob_count >= 1 then
-      info.fg = colors.mob1_fg
-    elseif info.is_mapped and settings.show_freshness then
+  if class == "room" or class == "enter" or class == "dark"
+      or class == "updown" or class == "up" or class == "down" then
+    if info.is_mapped and settings.show_freshness then
       -- Color by freshness
       if info.freshness >= 0.7 then
         info.fg = colors.fresh_fg
@@ -363,34 +371,16 @@ function M.render(rect, opts)
   local player_pos = minimap.get_player_position()
   local current_room_id = mapper and mapper.current_room() and mapper.current_room().id
 
-  -- Build position correlation
+  -- roominfo is the sole GMCP Room.* subscriber, so its room id and mapper's
+  -- cannot disagree. The guards that tolerated two independently timed sources
+  -- are gone with the sources.
   local position_to_room = {}
   local waypoint_rooms = {}
-
-  -- Only correlate if:
-  -- 1. roominfo is fully synced (not waiting for RID from a split packet)
-  -- 2. roominfo and mapper agree on the current room_id
-  -- This prevents "one room behind" highlighting when data is out of sync
-  local roominfo_synced = not roominfo or not roominfo.is_synced or roominfo.is_synced()
-  local roominfo_rid = roominfo and roominfo.room_id and roominfo.room_id()
-  local ids_match = not roominfo_rid or not current_room_id or (roominfo_rid == current_room_id)
-
-  if mapper and roominfo_synced and ids_match then
+  if mapper then
     position_to_room = correlate_positions(minimap_lines, player_pos, mapper, current_room_id)
-
-    -- Build waypoint lookup
     local waypoints = mapper.list_waypoints()
     for _, wp in ipairs(waypoints) do
       waypoint_rooms[wp.room_id] = wp.name
-    end
-  end
-
-  -- Find minimum leading spaces to strip
-  local min_leading = 9999
-  for _, line in ipairs(minimap_lines) do
-    local leading = #(line:match("^(%s*)") or "")
-    if leading < min_leading then
-      min_leading = leading
     end
   end
 
@@ -399,8 +389,7 @@ function M.render(rect, opts)
   local max_width = 0
 
   for row_idx, raw_line in ipairs(minimap_lines) do
-    local stripped = raw_line:sub(min_leading + 1)
-    stripped = stripped:match("^(.-)%s*$") or stripped
+    local stripped = raw_line:match("^(.-)%s*$") or raw_line
 
     if #stripped > max_width then
       max_width = #stripped
@@ -409,7 +398,7 @@ function M.render(rect, opts)
     local colored_line = ""
     for col_idx = 1, #stripped do
       local char = stripped:sub(col_idx, col_idx)
-      local actual_col = min_leading + col_idx
+      local actual_col = col_idx
 
       if char == " " then
         colored_line = colored_line .. " "
