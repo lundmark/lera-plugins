@@ -1,7 +1,7 @@
 [scope]
 revision = 1
 approved_on = "2026-08-10"
-digest = "55ed1dc481eb6d4d56b95d28e7f339b240f7fe7dc327e1cc1e2a23ac566134d8"
+digest = "5c67382634e4941c4ae4ed2878f23221f05958850731d711c671c4e18b531ca2"
 
 [[current_plugins]]
 key = "autologin"
@@ -115,6 +115,12 @@ fixtures = []
 [[current_plugins]]
 key = "guild_viking_notify"
 path = "3scapes/guild_viking/notify.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_page_menu"
+path = "3scapes/guild_viking/page_menu.lua"
 target_keys = []
 fixtures = []
 
@@ -7992,16 +7998,16 @@ local_key = "guild_viking-viking_base_14_trade_dashboard_and_autotrader_controls
 [[legacy_targets.features]]
 key = "viking_base_15_page_and_automation_menus"
 category = "command"
-status = "not_converted"
+status = "parity"
 summary = "Handle guild-Viking page, autotrader, raid, and voyage menus."
-current_refs = []
+current_refs = ["3scapes/guild_viking/page_menu.lua:190", "3scapes/guild_viking/page_menu.lua:245", "3scapes/guild_viking/autotrader/tick.lua:443", "3scapes/guild_viking/autoraid.lua:502", "3scapes/guild_viking/autovoyage.lua:857"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
 review_date = "2026-08-23"
 reviewed_scope = "Complete guild-Viking page, trade, raid, voyage, and target menu callbacks."
-result = "Partial coverage; outcome stays fail. Four of five menu families shipped this stage: autotrader settings (autotrader/tick.lua:396-449), auto-raid settings + target picker (autoraid.lua:383-508), and auto-voyage settings (autovoyage.lua:792-863). Only LEGACY's generic per-page right-click context menu (PAGE_MENUS/viking_page_menu_pick) remains unported -- dropped chrome, already disclosed in popups/map.lua's header. Scope says \"Complete ... menu callbacks\", which is not yet true."
-outcome = "fail"
+result = "All five menu families now port. Four shipped in stage 4 (autotrader/tick.lua:443, autoraid.lua:502, autovoyage.lua:857); the fifth is page_menu.lua -- PAGE_MENUS, viking_show_page_menu and viking_page_menu_pick, ported verbatim per page, keyed by lera page key (LEGACY 7 = Map popup, 10 = Sea popup). Trigger retargeted to a right-click in the page's own surface, opening lera's input-line menu; prefixes byte-faithful. Change Font and three inert icons rows omitted, disclosed in the header."
+outcome = "pass"
 local_key = "guild_viking-viking_base_15_page_and_automation_menus-manual"
 
 [[legacy_targets.features]]

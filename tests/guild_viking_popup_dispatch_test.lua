@@ -706,5 +706,100 @@ do
   check("scenario E: popup closed cleanly", real_popup.is_open() == false)
 end
 
+-- =============================================================================
+-- Scenario F: the per-page context menu on RIGHT-click, driven end to end
+-- through the REAL popup.lua dispatch for both popup surfaces that have one
+-- (LEGACY's PAGE_MENUS[7] = Map, PAGES_MENUS[10] = Sea). A module-level test
+-- cannot see popup.lua swallowing an unconsumed down -- which is exactly how
+-- stage 3 shipped a dead click -- so the right-down MUST be proven to capture
+-- here, by the matching up actually arriving and opening the menu.
+-- =============================================================================
+do
+  seed_vmap({
+    w = 3, h = 1, rows = { "ppp" }, east_edges = { "111" },
+    px = 0, py = 0,
+    pois = { { type = "capital", name = "asgard", x = 2, y = 0, owner = "" } },
+  })
+  check("popups.toggle('map') opens for scenario F", popups.toggle("map") == true)
+
+  local root_w, root_h = 100, 30
+  local root = ui.rect(0, 0, root_w, root_h)
+  real_popup.render(root)
+  local _, _, bw = box_geometry(root_w, root_h)
+  local inner_w = bw - 2
+  local off = map.grid_line_offset(inner_w)
+  local pcol, prow = to_screen(root_w, root_h, cell_lx(1), off + 0)
+
+  -- A right down inside the popup, then the matching right up: the menu must
+  -- open. If the module had NOT consumed the down, popup.lua would never have
+  -- captured the gesture and this up would never reach map.lua at all.
+  last_menu_open = nil
+  real_popup.handle_pointer({ kind = "down", button = "right", x = pcol, y = prow })
+  check("scenario F: right down alone opens no menu (LEGACY fires on MouseUp)",
+    last_menu_open == nil)
+  real_popup.handle_pointer({ kind = "up", button = "right", x = pcol, y = prow })
+  check("scenario F: the matching right up opens the MAP page menu",
+    last_menu_open ~= nil and last_menu_open.title == "Map",
+    last_menu_open and last_menu_open.title)
+
+  -- The menu's content is the map page's own row set, not another page's.
+  local labels = {}
+  for _, it in ipairs(last_menu_open.items or {}) do labels[#labels + 1] = it.label end
+  local joined = table.concat(labels, "|")
+  check("scenario F: the map menu carries Show Locations List",
+    joined:find("Show Locations List", 1, true) ~= nil, joined)
+  check("scenario F: the map menu carries the Travel action row",
+    joined:find("Travel to...", 1, true) ~= nil, joined)
+  check("scenario F: the map menu omits the inert icons toggle",
+    joined:find("Map Icons", 1, true) == nil, joined)
+
+  -- Fail-closed through the REAL dispatch: a right down inside, released
+  -- OUTSIDE the popup rect. popup.lua routes an outside up to the capturing
+  -- module (capture is by button), so the tracker is what must refuse it.
+  last_menu_open = nil
+  real_popup.handle_pointer({ kind = "down", button = "right", x = pcol, y = prow })
+  real_popup.handle_pointer({ kind = "up", button = "right", x = 0, y = 0 })
+  check("scenario F: right up released outside the popup opens no menu",
+    last_menu_open == nil)
+
+  -- A right down still leaves a LEFT POI click working (the two paths share
+  -- one tracker, so a right gesture must not eat the left one's record).
+  last_menu_open = nil
+  real_popup.handle_pointer({ kind = "down", button = "right", x = pcol, y = prow })
+  real_popup.handle_pointer({ kind = "up", button = "right", x = pcol, y = prow })
+  local pcol2, prow2 = to_screen(root_w, root_h, cell_lx(2), off + 0)
+  last_menu_open = nil
+  real_popup.handle_pointer({ kind = "down", button = "left", x = pcol2, y = prow2 })
+  real_popup.handle_pointer({ kind = "up", button = "left", x = pcol2, y = prow2 })
+  check("scenario F: a LEFT POI click still opens the travel menu afterwards",
+    last_menu_open ~= nil and last_menu_open.title == "Travel to...",
+    last_menu_open and last_menu_open.title)
+
+  real_popup.close()
+  check("scenario F: map popup closed cleanly", real_popup.is_open() == false)
+
+  -- The same, for the Sea popup (LEGACY's PAGE_MENUS[10]).
+  check("popups.toggle('sea') opens for scenario F", popups.toggle("sea") == true)
+  real_popup.render(root)
+  last_menu_open = nil
+  real_popup.handle_pointer({ kind = "down", button = "right", x = 50, y = 15 })
+  real_popup.handle_pointer({ kind = "up", button = "right", x = 50, y = 15 })
+  check("scenario F: right-click in the SEA popup opens the sea page menu",
+    last_menu_open ~= nil and last_menu_open.title == "Sea",
+    last_menu_open and last_menu_open.title)
+  local sea_labels = {}
+  for _, it in ipairs(last_menu_open and last_menu_open.items or {}) do
+    sea_labels[#sea_labels + 1] = it.label
+  end
+  local sea_joined = table.concat(sea_labels, "|")
+  check("scenario F: the sea menu carries Confirm Chart Clicks",
+    sea_joined:find("Confirm Chart Clicks", 1, true) ~= nil, sea_joined)
+  check("scenario F: the sea menu omits the inert chart-icons toggle",
+    sea_joined:find("Chart Icons", 1, true) == nil, sea_joined)
+
+  real_popup.close()
+  check("scenario F: sea popup closed cleanly", real_popup.is_open() == false)
+end
+
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING POPUP DISPATCH TESTS PASSED")

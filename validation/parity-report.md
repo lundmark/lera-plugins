@@ -106,6 +106,11 @@ Not rechecked at the public validation level:
 - Path: `3scapes/guild_viking/notify.lua`
 - Approved targets: None
 
+### `guild_viking_page_menu`
+
+- Path: `3scapes/guild_viking/page_menu.lua`
+- Approved targets: None
+
 ### `guild_viking_page_opts`
 
 - Path: `3scapes/guild_viking/page_opts.lua`
@@ -892,7 +897,7 @@ Not rechecked at the public validation level:
 ### `guild_viking` — plugin_gap
 
 - Current plugins: `guild_viking`
-- Feature statuses: not_converted=13, parity=38
+- Feature statuses: not_converted=12, parity=39
 - `viking_base_01_dependencies_state_and_core_helpers` (state): parity — Initialize guild-Viking dependencies, persistent state, labels, and core helpers.
 - `viking_base_02_market_history_and_demand_metrics` (state): parity — Track guild-Viking market history, price statistics, trends, and demand cycles.
 - `viking_base_03_status_bar_callbacks` (rendering): parity — Render guild-Viking health and progress status callbacks.
@@ -918,7 +923,7 @@ Not rechecked at the public validation level:
 - `viking_base_12_production_page` (rendering): parity — Render the complete guild-Viking production page.
 - `viking_base_13_logistics_and_governance_page` (rendering): parity — Render guild-Viking logistics, taxation, edicts, and governance data.
 - `viking_base_14_trade_dashboard_and_autotrader_controls` (rendering): parity — Render guild-Viking trade data and autotrader-specific controls.
-- `viking_base_15_page_and_automation_menus` (command): not_converted — Handle guild-Viking page, autotrader, raid, and voyage menus.
+- `viking_base_15_page_and_automation_menus` (command): parity — Handle guild-Viking page, autotrader, raid, and voyage menus.
 - `viking_base_16_map_page_rendering` (rendering): parity — Render the guild-Viking map page.
 - `viking_base_16_map_pathfinding` (state): parity — Find traversable guild-Viking map routes.
 - `viking_base_16_missions_and_errands` (command): parity — Dispatch guild-Viking missions and errands.
