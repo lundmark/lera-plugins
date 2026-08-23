@@ -93,7 +93,14 @@
 --     `col=`) have no equivalent in menu.lua's plain rows and are dropped.
 --     Selecting an item performs the exact same toggle/cycle LEGACY's pick
 --     handler did, saves, then reopens the menu in place (LEGACY did the
---     same at 11539: `viking_show_avoyage_menu(mx, my)`).
+--     same at 11539: `viking_show_avoyage_menu(mx, my)`). LEGACY's
+--     `viking_avoyage_menu_pick` also calls `viking_window.update()`
+--     (11540) right after that reopen -- dropped here, same disposition as
+--     every other `viking_window.*` call cut from this port (stage 2's own
+--     ruling: that Portal detached-window repaint has no lera analog).
+--     Almost certainly inert in this architecture regardless: `menu.open`
+--     already calls `ui.dirty()`, and every renderer re-reads state fresh
+--     each frame, so there is nothing left for a second repaint to catch.
 --   * S.autovoyage is persistent shared state, exactly like S.autotrade
 --     (autotrader/core.lua's M.settings()) -- not module-local like
 --     autotrader/tick.lua's `sm`, so there is no M.reset(): a test resets it

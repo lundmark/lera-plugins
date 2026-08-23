@@ -231,6 +231,24 @@ set_chart(9, 1, "explore", { "X...I...." })
 check("nearest: centre-distance tie-break picks I (cdist 0) over X (cdist 4)",
       av.nearest({ X = true, I = true }, 2, 0).x == 4)
 
+-- Fix round 1, I-7: every fixture above uses a single-row chart, where
+-- Chebyshev (math.max(|dx|,|dy|)) and Manhattan (|dx|+|dy|) distance always
+-- agree (dy is always 0), so a mutation swapping one for the other would
+-- survive undetected. LEGACY's own comment above av_nearest calls this
+-- "Manhattan" (LEGACY:3690's own wording) but the CODE is Chebyshev
+-- (LEGACY:3703's `math.max`, ported verbatim as M.nearest's `math.max`
+-- above) -- kept exactly as LEGACY wrote it, comment included; this case
+-- pins the actual (Chebyshev) behavior against a Manhattan mutation
+-- without touching that comment.
+--   Ship at (0,0). X at (3,3): Chebyshev = max(3,3) = 3, Manhattan = 3+3 = 6.
+--   I at (1,4):    Chebyshev = max(1,4) = 4, Manhattan = 1+4 = 5.
+-- Chebyshev ranks X closer (3 < 4); Manhattan would rank I closer (5 < 6)
+-- -- the two metrics disagree outright, no tie-break involved.
+S.autovoyage = nil
+set_chart(4, 5, "explore", { "....", "....", "....", "...X", ".I.." })
+check("nearest: Chebyshev (not Manhattan) distance picks X over I",
+      av.nearest({ X = true, I = true }, 0, 0).x == 3 and av.nearest({ X = true, I = true }, 0, 0).y == 3)
+
 -- ---- av_step / av_path_steps (LEGACY:3721-3887) ----------------------------
 
 -- 1) Straight line, no hazards: first step is due east, path length 4.
@@ -294,6 +312,104 @@ check("step: same target is unreachable through the declared (narrower) grid",
       av.step(0, 0, 2, 0) == nil)
 check("path_steps: same, nil", av.path_steps(0, 0, 2, 0) == nil)
 
+-- 6) Fix round 1, I-4: M.step's OWN hazard_cost multiplier (LEGACY:272,
+--    inside M.step -- a hand-duplicate of the same line in M.path_steps,
+--    LEGACY:400, exactly the kind of transcription slip a verbatim port
+--    can introduce) was never covered by a fixture where mutating it
+--    changes the FIRST STEP av.step() returns, as opposed to just the
+--    total cost av.path_steps() reports. Every earlier `step` case above
+--    either has no alternative route (".T.") or a detour so much cheaper
+--    (3 vs 7) that no single-multiplier mutation could flip it.
+--
+--    This fixture forces a real trade-off: a hazard column 7 rows deep
+--    (rows 0-6, column 1) with its only safe crossing at row 7, target one
+--    step past the column.
+--      direct (cross at row 0): hazard_cost(safe=10) + 1 plain step = 11.
+--      detour (down to the row-7 gap and back): every other cell in the
+--        grid is plain, so cost == Chebyshev distance exactly --
+--        Chebyshev((0,0),(1,7)) + Chebyshev((1,7),(2,0)) = 7 + 7 = 14.
+--    11 < 14: the direct route wins with the real safe multiplier (10), so
+--    the first step is due east ("A2"). Mutating M.step's own hazard_cost
+--    10 -> 20 (the exact mutant the review named) makes the direct route
+--    20 + 1 = 21 > 14, so the detour wins instead -- first step becomes due
+--    south ("B1"). Hand-verified against a real run of both the unmutated
+--    and (temporarily) mutated module before being committed here.
+S.autovoyage = nil; a = av.settings(); a.risk = "safe"
+set_chart(3, 8, "explore", { ".T.", ".T.", ".T.", ".T.", ".T.", ".T.", ".T.", "..." })
+check("step: safe risk (hazard_cost=10) -- direct route through the hazard column wins -> \"A2\"",
+      av.step(0, 0, 2, 0) == "A2")
+check("path_steps: matches the direct route's cost (10+1=11)", av.path_steps(0, 0, 2, 0) == 11)
+
+-- 7) Fix round 1, I-5: AV_SEVERE's double cost (LEGACY:3586-3588, "V" costs
+--    hazard_cost*2, not hazard_cost*1 like an ordinary hazard) was untested
+--    in BOTH functions -- no fixture used a "V" cell at all.
+--
+--    7a) The plain arithmetic, via path_steps (mirrors test 2's ".T." case
+--    exactly, but with "V"): balanced hazard_cost=3, severe=3*2=6, so cost
+--    from (0,0) to (2,0) across one "V" cell = 6 + 1 (plain) = 7 -- NOT 4
+--    (which is what a "V" mistakenly treated as an ordinary hazard, or
+--    dropped from AV_SEVERE, would give).
+S.autovoyage = nil; a = av.settings(); a.risk = "balanced"
+set_chart(3, 1, "explore", { ".V." })
+check("path_steps: severe cell costs hazard_cost*2, not *1 (balanced: 3*2+1=7)",
+      av.path_steps(0, 0, 2, 0) == 7)
+
+--    7b) The route-choice sensitivity, via step -- same "forced trade-off"
+--    shape as test 6, but only 3 rows deep (rows 0-2 hazard "V", row 3
+--    open) since severe's multiplier is bigger per cell:
+--      direct (cross at row 0): severe(balanced: 3*2=6) + 1 plain = 7.
+--      detour (down to the row-3 gap and back): Chebyshev((0,0),(1,3)) +
+--        Chebyshev((1,3),(2,0)) = 3 + 3 = 6.
+--    7 > 6: the DETOUR wins with the real doubling -- first step is due
+--    south ("B1"). If AV_SEVERE's doubling were dropped (severe treated as
+--    an ordinary hazard, cost 3 instead of 6), direct becomes 3 + 1 = 4 < 6
+--    and the direct route wins instead -- first step becomes due east
+--    ("A2"). Hand-verified against a real run of both the unmutated and
+--    (temporarily) mutated module before being committed here.
+S.autovoyage = nil; a = av.settings(); a.risk = "balanced"
+set_chart(3, 4, "explore", { ".V.", ".V.", ".V.", "..." })
+check("step: severe doubling makes the detour cheaper than crossing -> \"B1\"",
+      av.step(0, 0, 2, 0) == "B1")
+check("path_steps: matches the detour's cost (6), not the direct 7", av.path_steps(0, 0, 2, 0) == 6)
+
+-- 8) Fix round 1, M-1: symbol-set membership. Every earlier fixture only
+--    ever used "T", "H", and "X" -- proving nothing about the OTHER
+--    entries LEGACY:3585-3590 lists, or its one deliberate EXCLUSION.
+S.autovoyage = nil; a = av.settings(); a.risk = "balanced"
+-- "C" (ice floes) is a hazard, same cost as "T": balanced 3+1=4.
+set_chart(3, 1, "explore", { ".C." })
+check("path_steps: \"C\" (ice floes) is a hazard (balanced 3+1=4)", av.path_steps(0, 0, 2, 0) == 4)
+-- "A" (aurora calm) is deliberately NOT a hazard -- LEGACY's own comment
+-- calls this out as intentional (a boon, not a hazard). Cost must be the
+-- plain 1+1=2, not 3+1=4.
+set_chart(3, 1, "explore", { ".A." })
+check("path_steps: \"A\" (aurora calm) is deliberately excluded from AV_HAZARD (cost 1+1=2)",
+      av.path_steps(0, 0, 2, 0) == 2)
+-- "?" (unknown node) is a POI target, same as "X"/"I" -- exercised through
+-- av.goal (which calls av.nearest(AV_POI, ...) internally), NOT by handing
+-- av.nearest a hand-built set: av.nearest takes its symbol set as a plain
+-- PARAMETER, so a check that builds its own {["?"]=true} set would prove
+-- nothing about whether AV_POI itself contains "?". No harbor here, so if
+-- "?" is not recognized as a POI, "nothing left to visit" fires and goal
+-- is "end"; if it is, goal is "explore".
+S.autovoyage = nil; a = av.settings(); a.risk = "balanced"
+set_chart(3, 1, "explore", { "..?" })
+check("goal: \"?\" (unknown node) counts as a POI via AV_POI -- explore, not end",
+      av.goal(a, { x = 0, y = 0, hull = 100, morale = 100, supplies = 100, danger = 0 }) == "explore")
+
+-- "Y" (resolved harbor) is a harbor target, same as "H" -- dropping it
+-- would silently break banking at an already-resolved harbor. Same
+-- reasoning: exercised through av.goal's own av.nearest(AV_HARBOR, ...)
+-- call, not a hand-built set. Grid "Y.X": hull is below the balanced floor
+-- (25 < 30) -- if "Y" is recognized as a harbor, av.goal's step 2 fires
+-- ("repair"); if not (and no "H" exists), that branch is skipped entirely
+-- (repair requires `h` truthy) and the POI ("X") still present means the
+-- worked-count check falls through to "explore" instead.
+S.autovoyage = nil; a = av.settings(); a.risk = "balanced"
+set_chart(3, 1, "explore", { "Y.X" })
+check("goal: \"Y\" (resolved harbor) counts as a harbor via AV_HARBOR -- repair, not explore",
+      av.goal(a, { x = 1, y = 0, hull = 25, morale = 100, supplies = 100, danger = 0 }) == "repair")
+
 -- =============================================================================
 -- av_pick_resolve (LEGACY:3789-3817)
 -- =============================================================================
@@ -320,6 +436,16 @@ check("pick_resolve: generic node, high threat -> avoid",
 check("pick_resolve: generic node, otherwise plunder",
       av.pick_resolve(vs_ok, { "scout", "plunder" }, "island", 30) == "plunder")
 
+-- Fix round 1, I-8: the `supplies < 45` threshold (LEGACY:3797) was only
+-- exercised at 10 (clearly low) and 100 (clearly fine) -- add the exact
+-- boundary in both directions: 44 (< 45, low) and 45 (NOT < 45, not low).
+check("pick_resolve: supplies at 44 (< 45) is low -- resupply",
+      av.pick_resolve({ hull = 100, supplies = 44, morale = 100, threat_level = 0 },
+        { "plunder", "resupply" }, "island", 30) == "resupply")
+check("pick_resolve: supplies at exactly 45 is NOT low -- falls through to plunder",
+      av.pick_resolve({ hull = 100, supplies = 45, morale = 100, threat_level = 0 },
+        { "plunder", "resupply" }, "island", 30) == "plunder")
+
 -- =============================================================================
 -- av_has_trait / av_per_step (LEGACY:3819-3840)
 -- =============================================================================
@@ -334,6 +460,10 @@ check("per_step: danger 0, no trait/renown discount -> 1", av.per_step({ danger 
 check("per_step: danger 9 -> 1+floor(9/3)=4", av.per_step({ danger = 9 }) == 4)
 check("per_step: hidden lockers trait -> -1",
       av.per_step({ danger = 9, crew_traits = { "hidden lockers" }, ship_traits = {} }) == 3)
+-- Fix round 1, M-2: pin the exact 60 boundary (LEGACY:3837) in both
+-- directions -- 59 must NOT discount, only 60+ does.
+S.fleet_renown = 59
+check("per_step: fleet_renown at 59 (< 60) does NOT discount", av.per_step({ danger = 9 }) == 4)
 S.fleet_renown = 60
 check("per_step: fleet_renown >= 60 -> -1", av.per_step({ danger = 9 }) == 3)
 S.fleet_renown = 60
@@ -368,6 +498,22 @@ check("goal: supplies at threshold (5) -> end",
 check("goal: supplies just above threshold (6) -> explore (POI present)",
       av.goal(a, { x = 1, y = 0, hull = 100, morale = 100, supplies = 6, danger = 0 }) == "explore")
 
+-- 1b) Fix round 1, I-3: the other two risk-profile reserves were untested
+-- (only balanced's 4 had a boundary case). safe reserve=8: threshold
+-- sup <= 1 + 8 = 9. max reserve=2: threshold sup <= 1 + 2 = 3. Same grid,
+-- same steps_harbor(1)*per_step(1)=1 as the balanced case above.
+S.autovoyage = nil; a = av.settings(); a.risk = "safe"
+check("goal: safe reserve (8) -- supplies at threshold (9) -> end",
+      av.goal(a, { x = 1, y = 0, hull = 100, morale = 100, supplies = 9, danger = 0 }) == "end")
+check("goal: safe reserve (8) -- supplies just above threshold (10) -> explore",
+      av.goal(a, { x = 1, y = 0, hull = 100, morale = 100, supplies = 10, danger = 0 }) == "explore")
+S.autovoyage = nil; a = av.settings(); a.risk = "max"
+check("goal: max reserve (2) -- supplies at threshold (3) -> end",
+      av.goal(a, { x = 1, y = 0, hull = 100, morale = 100, supplies = 3, danger = 0 }) == "end")
+check("goal: max reserve (2) -- supplies just above threshold (4) -> explore",
+      av.goal(a, { x = 1, y = 0, hull = 100, morale = 100, supplies = 4, danger = 0 }) == "explore")
+S.autovoyage = nil; a = av.settings(); a.risk = "balanced"
+
 -- 2) Hull safety: balanced floor 30. hull=25 (<30) with a harbor charted -> repair.
 check("goal: hull below floor with a harbor charted -> repair",
       av.goal(a, { x = 1, y = 0, hull = 25, morale = 100, supplies = 100, danger = 0 }) == "repair")
@@ -389,6 +535,19 @@ set_chart(3, 1, "explore", { "H.." })
 a = av.settings(); a.risk = "max"
 check("goal: no POI/unknown cell anywhere -> end even under max risk",
       av.goal(a, { x = 1, y = 0, hull = 100, morale = 100, supplies = 100, danger = 0 }) == "end")
+
+-- 4b) Fix round 1, M-2: `steps_harbor`'s literal 8 default (LEGACY:3905,
+-- used only when NO harbor is charted at all) was never pinned by value --
+-- every no-harbor fixture used supplies clearly above or the "nothing
+-- left" branch, never the boundary this constant itself sets. Grid with a
+-- POI but NO harbor: threshold is sup <= 8*per_step(1) + reserve(4) = 12.
+S.autovoyage = nil
+set_chart(3, 1, "explore", { "..X" })   -- POI, no harbor at all
+a = av.settings(); a.risk = "balanced"
+check("goal: no harbor charted -- steps_harbor default (8): supplies at threshold (12) -> end",
+      av.goal(a, { x = 0, y = 0, hull = 100, morale = 100, supplies = 12, danger = 0 }) == "end")
+check("goal: no harbor charted -- supplies just above threshold (13) -> explore (POI present)",
+      av.goal(a, { x = 0, y = 0, hull = 100, morale = 100, supplies = 13, danger = 0 }) == "explore")
 
 -- 5) Risk-based worked-count thresholds (all other gates passing: hull/
 --    supplies/morale high, a POI still present so "nothing left" doesn't
@@ -435,6 +594,16 @@ check("pick_offer: empty offer list -> index 1",
 check("pick_offer: fit 0 (suicidal) is never picked",
       av.pick_offer(a, { list = { { index = 1, type = "raid", danger = 5, fit = 0 },
                                    { index = 2, type = "raid", danger = 5, fit = 3 } } }) == 2)
+-- Fix round 1, M-2: the case above proves fit-0 loses the fit TIE-BREAK
+-- against a fit-3 competitor -- it doesn't prove fit-0 is rejected
+-- OUTRIGHT (`fit < 1`, LEGACY:3631). A single fit-0 offer, with no
+-- competitor, must fall all the way to the bare `return 1` (fit < 1 fails
+-- BOTH the eligible check and the fallback's own `fit >= 1` guard) -- never
+-- its own index (9, chosen to be unmistakably not 1). A mutation loosening
+-- the guard to `fit < 0` would let danger=5/fit=0 straight into the
+-- eligible pool instead.
+check("pick_offer: fit 0 alone (no competitor) is rejected outright -- bare fallback, not its own index",
+      av.pick_offer(a, { list = { { index = 9, type = "raid", danger = 5, fit = 0 } } }) == 1)
 check("pick_offer: danger >= 11 excluded unless allow_abyssal",
       av.pick_offer(a, { list = { { index = 1, type = "raid", danger = 12, fit = 3 },
                                    { index = 2, type = "raid", danger = 5, fit = 3 } } }) == 2)
@@ -454,6 +623,41 @@ check("pick_offer: danger tie-break -- higher danger wins at equal priority/fit"
                                    { index = 2, type = "raid", danger = 7, fit = 3 } } }) == 2)
 check("pick_offer: nothing in [diff_min,diff_max] falls back to any non-suicidal, non-Abyssal offer",
       av.pick_offer(a, { list = { { index = 1, type = "raid", danger = 20, fit = 3 } } }) == 1)
+
+-- Fix round 1, I-6: the Abyssal opt-in boundary (danger >= 11) and the
+-- fallback pool's own non-Abyssal cap (danger <= 10) were both untested at
+-- their exact boundary -- every prior case used danger=12, so a mutation
+-- widening either comparison (>= 11 -> >= 12, or <= 10 -> <= 20) survived.
+-- A SINGLE offer at exactly the boundary, with no competitor, makes both
+-- comparisons observable through the same return value: with the real
+-- code, a danger-11 offer is excluded from BOTH the eligible pool (>= 11)
+-- and the fallback pool (<= 10 fails for 11), so pick_offer falls all the
+-- way through to the bare `return 1` -- never the offer's own index (7,
+-- chosen to be unmistakably not 1). Either named mutation lets the danger-
+-- 11 offer into ONE of the two pools instead, and pick_offer would return
+-- its own index (7) rather than the bare fallback (1).
+S.autovoyage = nil
+a = av.settings()   -- default diff_min=1, diff_max=99, allow_abyssal=false
+check("pick_offer: danger exactly 11 (opt-in boundary) is excluded from BOTH pools -- bare fallback",
+      av.pick_offer(a, { list = { { index = 7, type = "raid", danger = 11, fit = 3 } } }) == 1)
+-- The other side of the same boundary: danger 10 must be eligible OUTRIGHT
+-- (>= 11 does not apply to it), not merely rescued by the fallback -- the
+-- fallback only ever runs when the eligible pool is EMPTY (LEGACY:3639's
+-- own `if #pool == 0 then`), so a single danger-10 offer alone cannot
+-- distinguish "eligible directly" from "excluded, then rescued by
+-- fallback" (both land it in `pool` and it wins either way). Adding a
+-- second, always-eligible low-danger competitor (danger 5) makes the two
+-- cases diverge: if danger-10 is eligible outright, both compete in the
+-- SAME pool and the danger tie-break (highest wins) picks the danger-10
+-- offer (index 7); if a mutation narrowed >= 11 to >= 10 and wrongly
+-- excluded it, the eligible pool becomes non-empty from the danger-5
+-- offer ALONE, the fallback branch is skipped entirely (pool isn't empty),
+-- and danger-10 is never reconsidered -- the danger-5 offer (index 9)
+-- wins instead.
+check("pick_offer: danger exactly 10 is eligible outright, wins the danger tie-break over a "
+      .. "lower-danger competitor",
+      av.pick_offer(a, { list = { { index = 7, type = "raid", danger = 10, fit = 3 },
+                                   { index = 9, type = "raid", danger = 5, fit = 3 } } }) == 7)
 
 -- =============================================================================
 -- av_log (LEGACY:3657-3663)
@@ -504,10 +708,18 @@ for i = 1, 5 do av.tick() end
 check("tick/gate 1 (off by default): many ticks over rich state send nothing", #sent == 0)
 
 -- ---- Gate 2: not connected -------------------------------------------------
+-- Isolated with the SAME "would send" scenario gate 3 uses below (fix round
+-- 1, I-1): without this, S.voyage_status stays nil and both fleet feeds stay
+-- empty, so removing the mud.connected() check would land in the
+-- no-active-voyage branch, find no ship, and return via the DIFFERENT "no
+-- idle ship" no-op -- proving nothing about this gate at all.
 reset_all()
 page_opts.set("auto_voyage", true)
 mud_connected = false
 S.mip_voyage_seen = true
+clear_voyage()
+set_longships({ longship_entry({ sid = "1", name = "Njord", state = "docked" }) })
+set_offers("Njord", { { index = 1, type = "raid", danger = 5, fit = 3 } })
 open_interval()
 av.tick()
 check("tick/gate 2 (not connected): blocks alone", #sent == 0)
@@ -531,12 +743,50 @@ av.tick()
 check("tick/gate 3 (AV_INTERVAL): 8s elapsed opens the gate", #sent == 1 and sent[1] == "vvoyage launch Njord 1", sent[1])
 
 -- ---- Gate 4: mip_voyage_seen not yet true ----------------------------------
+-- Same fix (I-2): reset_all() alone leaves S.voyage_status nil and both
+-- fleet feeds empty, so without this gate the tick would land in the
+-- no-active-voyage branch and return via "no idle ship" -- a different gate.
+-- Build the same "would send" scenario gates 2/3 use. M.VOFFERS itself never
+-- sets S.mip_voyage_seen (checked directly in handlers/voyage.lua), so
+-- set_offers() -- the real wire handler -- can be used here unlike
+-- set_longships()/M.LONGSHIP, which DOES set it (every other voyage.lua
+-- handler that could supply a ship does too) and would defeat the
+-- isolation. S.voyage_longships is therefore the one direct-`S`-poke
+-- exception in this case -- plugin-local automation INPUT shape for this
+-- isolation only, not a substitute for the wire-fixture rule elsewhere in
+-- this file.
 reset_all()
 page_opts.set("auto_voyage", true)
 S.mip_voyage_seen = false
+S.voyage_longships = { { name = "Njord", state = "docked" } }
+set_offers("Njord", { { index = 1, type = "raid", danger = 5, fit = 3 } })
 av.settings().last = os.time() - 1000   -- AV_INTERVAL already open
 av.tick()
 check("tick/gate 4 (mip_voyage_seen false): blocks alone", #sent == 0)
+-- LEGACY:3965-3967's own comment: this gate stops relaunch spam over a LIVE
+-- voyage the client just hasn't heard a fresh snapshot for yet -- prove the
+-- gate reopens the instant mip_voyage_seen flips true, with everything else
+-- unchanged, and the send fires.
+S.mip_voyage_seen = true
+av.settings().last = os.time() - 1000
+av.tick()
+check("tick/gate 4: once mip_voyage_seen flips true, the same scenario sends",
+      #sent == 1 and sent[1] == "vvoyage launch Njord 1", sent[1])
+
+-- Fix round 1, M-2: `a.last = now` (LEGACY:3963) runs BEFORE the
+-- mip_voyage_seen gate, not after -- pin that ordering directly, not just
+-- its "still blocks" symptom (which a reordering wouldn't change: either
+-- way nothing sends). Rebuild the mip-false scenario and confirm
+-- a.last was updated to "now" even though the tick returned early.
+reset_all()
+page_opts.set("auto_voyage", true)
+S.mip_voyage_seen = false
+S.voyage_longships = { { name = "Njord", state = "docked" } }
+set_offers("Njord", { { index = 1, type = "raid", danger = 5, fit = 3 } })
+av.settings().last = os.time() - 1000
+av.tick()
+check("tick/gate 4: a.last is updated even when the LATER mip_voyage_seen gate blocks",
+      os.time() - av.settings().last < 2, av.settings().last)
 
 -- ---- Gate 5: vs.state == "sailing" -----------------------------------------
 reset_all()
@@ -616,6 +866,14 @@ sent = {}
 open_interval()
 av.tick()   -- offers_req was just set to "now" -- well within the 20s window
 check("tick/branch: contract request throttled within 20s", #sent == 0)
+-- Fix round 1, M-2: pin the exact 20s boundary (`(now - a.offers_req) > 20`)
+-- in both directions -- 20s elapsed does NOT reopen it (not strictly >),
+-- 21s does.
+sent = {}
+av.settings().offers_req = os.time() - 20
+open_interval()
+av.tick()
+check("tick/branch: contract request still throttled at exactly 20s", #sent == 0)
 av.settings().offers_req = os.time() - 21
 open_interval()
 av.tick()
