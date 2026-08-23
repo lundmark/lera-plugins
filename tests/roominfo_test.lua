@@ -306,6 +306,26 @@ deliver("Room.Map", { kind = "los", w = 5, h = 3, rows = { "AAAAA", "BBBBB", "C"
 check("wrong-width row rejected", ri.map() ~= nil and ri.map().rows[1] == "O-O-O",
   ri.map() and ri.map().rows[1])
 
+-- ---- duplicate short directions --------------------------------------------
+-- Kills: inserting one exit entry per server label. Two labels can shorten to
+-- the same key ("north" and "n" in one room), which would put a duplicate in
+-- exits() and let the second label drop the first's destination. Unreachable
+-- from today's mudlib; guarded so it stays that way by construction. The
+-- resolved destination wins over the unresolved 0 whichever order pairs()
+-- happens to visit them in.
+deliver("Room.Info", { num = 4300, name = "A doubled hall", area = "Midgaard",
+                       exits = { north = 4301, n = 0 } })
+check("duplicate short direction appears once", sorted_concat(ri.exits()) == "n",
+  sorted_concat(ri.exits()))
+check("resolved destination survives the duplicate",
+  ri.exit_destinations().n == 4301, tostring(ri.exit_destinations().n))
+deliver("Room.Info", { num = 4301, name = "A doubled hall II", area = "Midgaard",
+                       exits = { north = 0, n = 4302 } })
+check("duplicate short direction appears once (reversed)",
+  sorted_concat(ri.exits()) == "n", sorted_concat(ri.exits()))
+check("resolved destination survives the duplicate (reversed)",
+  ri.exit_destinations().n == 4302, tostring(ri.exit_destinations().n))
+
 -- ---- unload -----------------------------------------------------------------
 ri.on_unload()
 check("unregisters Room.Info", removed["Room.Info"] == true)

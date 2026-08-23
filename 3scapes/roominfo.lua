@@ -24,7 +24,6 @@ local current = {
   room_id = nil,     -- Current room ID (number)
   area = nil,        -- Area name from Room.Info
   exits = {},        -- List of exit directions (short form, canonical order)
-  exits_raw = "",    -- Exits joined with ", "
   exit_dest = {},    -- short direction -> destination room number (0 = unknown)
   players = {},      -- List of player entries
   monsters = {},     -- List of monster entries
@@ -128,12 +127,20 @@ local function handle_room_info(data)
   if type(data.exits) == "table" then
     for dir, dest in pairs(data.exits) do
       local short = shorten_direction(tostring(dir))
-      table.insert(current.exits, short)
-      current.exit_dest[short] = tonumber(dest) or 0
+      local dest_num = tonumber(dest) or 0
+      -- Two server labels can shorten to the same key ("north" and "n" in one
+      -- room). One entry per short direction, so `exits` cannot hold a
+      -- duplicate and the second label cannot silently drop the first's
+      -- destination; a resolved destination still wins over an unresolved 0.
+      if current.exit_dest[short] == nil then
+        table.insert(current.exits, short)
+        current.exit_dest[short] = dest_num
+      elseif current.exit_dest[short] == 0 then
+        current.exit_dest[short] = dest_num
+      end
     end
     table.sort(current.exits, direction_less)
   end
-  current.exits_raw = table.concat(current.exits, ", ")
 
   synced = true
 
@@ -159,6 +166,10 @@ local function classify_entry(raw)
   if kind ~= "player" and kind ~= "monster" and kind ~= "item" then
     return nil, nil
   end
+  -- Defensive only: the mudlib caps a stacked count at
+  -- PROTOCOL_ROOM_CONTENTS_ENTRIES_MAX (64) and rejects count < 1 outright, so
+  -- neither clamp is reachable from a conforming server. 99 is not a guess at
+  -- the server limit; it is a bound on what expand_names() will materialize.
   local count = tonumber(raw.count) or 1
   if count < 1 then count = 1 end
   if count > 99 then count = 99 end
@@ -286,6 +297,10 @@ function M.on_unload()
     if id then gmcp.remove(id) end
   end
   handler_ids = {}
+  -- Note: this orphans every registered room-change callback, and roominfo is a
+  -- hub for four plugins now (mapper, minimap, mapview, autostepper). A
+  -- '/plugins reload roominfo' therefore leaves mapper holding a dead
+  -- registration id and no notifications; reload the subscribers too.
   on_room_change_callbacks = {}
   print("[roominfo] Unloaded")
 end
@@ -512,7 +527,6 @@ function M.clear()
   current.room_id = nil
   current.area = nil
   current.exits = {}
-  current.exits_raw = ""
   current.exit_dest = {}
   current.players = {}
   current.monsters = {}

@@ -344,7 +344,7 @@ local function handle_map_command(args)
     print("[mapper] Connections: " .. s.connections)
     print("[mapper] Waypoints: " .. s.waypoints)
     print("[mapper] Layers: " .. #s.layers)
-    print("[mapper] Mapping: " .. (s.mapping_mode and "ON" or "OFF"))
+    print("[mapper] Mapping: always on")
 
   elseif cmd == "clear" then
     print("[mapper] Are you sure? Type: /map clear confirm")
@@ -894,7 +894,7 @@ local function register_command()
   local id, err = command.register({
     name = "/map",
     usage = "/map [start|stop|status|resync|wp <name>|wps|delwp <name>|stats|find <name>|clear]",
-    summary = "Room mapping and pathfinding",
+    summary = "Room mapping and waypoints",
     description = "Learns room connections while mapping is on, tracks the "
       .. "current room, and stores named waypoints to walk back to. 'resync' "
       .. "recovers after moving faster than the mapper could follow.",

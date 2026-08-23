@@ -2,9 +2,16 @@
 -- Renders the GMCP Room.Map line-of-sight grid roominfo publishes.
 -- Integrates with speedwalk for path highlighting.
 --
--- Owns glyph semantics for itself and for mapview: the payload's legend is
--- authoritative, so X is a link, # is darkness and + is a room with both up and
--- down exits.
+-- Owns glyph semantics for itself and for mapview: X is a link, # is darkness
+-- and + is a room with both up and down exits.
+--
+-- That mapping is a fixed contract, mirrored in code below from the mudlib's
+-- protocol_map_legend(). The `legend` field Room.Map transports is
+-- informational -- it is carried for a human reading the packet and is NOT
+-- consulted when classifying a glyph. This is deliberate: a legend arriving
+-- from the server would let a mudlib change silently repaint the grid, and
+-- mapview's correlation depends on which classes count as room cells. A future
+-- legend change on the server therefore needs a matching edit here.
 
 local M = {}
 M.name = "minimap"
@@ -38,7 +45,8 @@ local settings = {
 
 -- The Room.Map legend, as protocol_map_legend() defines it. minimap is the one
 -- owner of this mapping; mapview calls glyph_class rather than re-deriving
--- meaning from characters.
+-- meaning from characters. Kept in step with the mudlib by hand -- see the
+-- header: the transported legend field is informational only.
 local glyph_classes = {
   ["O"] = "room",
   ["@"] = "you",

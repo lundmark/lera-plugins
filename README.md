@@ -119,7 +119,7 @@ events or payloads for a plugin to consume.
 | `guild_druid` | `/dauto`, `/resetgxp` | Druid guild utilities |
 | `guild_viking` | `/vik`, `resetvikxp` | Vikings guild: protocol/state, a 12-page tab-bar pane (`/vik <page>` or `/vik page <key>`), popup board overlays (`/vik map\|sea\|voyage\|cityplan\|war`), detached-page parity (`/vik pop <page>`), map pathfinding with point-of-interest travel and mission/errand dispatch (always available, no setting), and three client-side automations (auto-trade, auto-raid, auto-voyage; see below), which ship off by default |
 | `kill_trigger` | `/killers` | Combat automation triggers |
-| `mapper` | `/map` | Room mapping and pathfinding |
+| `mapper` | `/map` | Room graph from GMCP Room.Info, waypoints, name search |
 | `mapview` | `/mapview` | Visual map display |
 | `mercenary` | *(none)* | Mercenary management |
 | `minimap` | `/minimap` | Compact minimap overlay |
