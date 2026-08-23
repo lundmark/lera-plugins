@@ -1206,7 +1206,33 @@ local function build_safety_fixture()
   S.at_hold_until = nil
   trade_tick2.reset()
 
-  -- Trade.
+  -- Trade: explicit direct resets of every S field autotrader/core.lua and
+  -- autotrader/plan.lua read (S.buildings, S.wstock/wstock_by_good,
+  -- S.staff_list, S.blocks, S.carts, S.idle_carts, S.trade_queue, S.daler,
+  -- S.trade_goods/_tgoods_last, S.dispatch_cd_expires_at) BEFORE this
+  -- fixture's own ingests, not after. Review round 2, Critical: without
+  -- this, deleting every ingest call below still left the trade leg
+  -- sending its expected command, because the identical values were left
+  -- behind, unreset, by the earlier "on_connect hold boundary" test 400+
+  -- lines above (guild_viking_test.lua:802-833, the same warehouse/WSTOCK/
+  -- CIDLE/DALER/TGOODS numbers) -- this fixture was PASSING BY ACCIDENT on
+  -- 400-line-old ambient state, not by its own ingests. TGOODS in
+  -- particular cannot be relied on to self-clear across two ingest calls
+  -- inside the same wall-clock 2s (handlers/trade.lua's own burst-batching
+  -- window, M.TGOODS's `now - S._tgoods_last > 2` gate): it merges into
+  -- whatever S.trade_goods already held rather than replacing it, so an
+  -- explicit direct reset is the only way this fixture can be provably
+  -- self-contained against a deleted or reordered ingest call. This is the
+  -- one place in this fixture direct S pokes are used for WIRE state, not
+  -- just plugin-local settings -- authorized specifically for this
+  -- hermeticity fix, not a general exception to the protocol.ingest rule.
+  S.buildings, S.wstock, S.wstock_by_good = {}, {}, {}
+  S.staff_list, S.blocks = {}, {}
+  S.carts, S.idle_carts, S.trade_queue = {}, {}, {}
+  S.daler = 0
+  S.trade_goods, S._tgoods_last = {}, nil
+  S.dispatch_cd_expires_at = nil
+
   at_core2.settings()
   protocol.ingest("BUILDINGS", "warehouse:1,dock:1")
   protocol.ingest("WSTOCK", "ore|380|100")
@@ -1317,7 +1343,10 @@ S.autotrade, S.autoraid, S.autovoyage = nil, nil, nil
 page_opts.set("auto_trade", true)
 page_opts.set("auto_raid", false)
 page_opts.set("auto_voyage", true)
-at_core2.settings()   -- fresh S.autotrade: phase idle, 0 pending, no error
+-- phase=idle/pending=0 below comes from trade_tick2.reset() a few lines
+-- above (the ordering test's own cleanup), not from this call -- this just
+-- ensures S.autotrade exists so the settings table is in its normal shape.
+at_core2.settings()
 raid2.settings().last_dispatch = { t = "12:34", target = "Uppsala", n = 2, convoy = false }
 raid2.settings().last = 0
 voyage2.settings().log = { "12:00 explore -> A2" }
