@@ -8163,16 +8163,16 @@ local_key = "guild_viking-viking_base_20_prison_panel-manual"
 [[legacy_targets.features]]
 key = "viking_base_20_war_overview"
 category = "rendering"
-status = "not_converted"
+status = "parity"
 summary = "Render the guild-Viking war overview and its coupled battle tiles."
-current_refs = []
+current_refs = ["3scapes/guild_viking/pages/war.lua:270", "3scapes/guild_viking/pages/war.lua:263", "3scapes/guild_viking/pages/war.lua:287", "3scapes/guild_viking/popups/war_battle.lua:257", "3scapes/guild_viking/popups/war_battle.lua:186"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
 review_date = "2026-08-23"
 reviewed_scope = "Complete guild-Viking war-overview renderer with nested side, tile, legend, and morale helpers."
-result = "This row's prior sentence (\"no current plugin mapping implements this\") is stale and inaccurate: popups/war_campaign.lua and popups/war_battle.lua exist since stage 3. This note does not assess whether either covers this specific feature's scope -- that assessment is left to the owner. No parity is claimed and no status is changed here."
-outcome = "fail"
+result = "Covered across two files, which is why this row was missed: the overview TEXT is pages/war.lua (draw_page_war 14061-14669), with the nested side helper (turn_side_lines <- draw_side) and the morale helper (mor_col, 14571-14573); the coupled battle TILES and their unit/terrain legends are popups/war_battle.lua from stage 3, where the page's grid line points. At stage-2 time the tiles were a placeholder and the row was never revisited."
+outcome = "pass"
 local_key = "guild_viking-viking_base_20_war_overview-manual"
 
 [[legacy_targets.features]]

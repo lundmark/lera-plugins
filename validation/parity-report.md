@@ -897,7 +897,7 @@ Not rechecked at the public validation level:
 ### `guild_viking` — plugin_gap
 
 - Current plugins: `guild_viking`
-- Feature statuses: not_converted=12, parity=39
+- Feature statuses: not_converted=11, parity=40
 - `viking_base_01_dependencies_state_and_core_helpers` (state): parity — Initialize guild-Viking dependencies, persistent state, labels, and core helpers.
 - `viking_base_02_market_history_and_demand_metrics` (state): parity — Track guild-Viking market history, price statistics, trends, and demand cycles.
 - `viking_base_03_status_bar_callbacks` (rendering): parity — Render guild-Viking health and progress status callbacks.
@@ -934,7 +934,7 @@ Not rechecked at the public validation level:
 - `viking_base_20_battle_detail` (rendering): parity — Render the complete guild-Viking battle detail view.
 - `viking_base_20_campaign_map` (rendering): parity — Render the guild-Viking campaign map and campaign interactions.
 - `viking_base_20_prison_panel` (rendering): parity — Render the guild-Viking prison panel.
-- `viking_base_20_war_overview` (rendering): not_converted — Render the guild-Viking war overview and its coupled battle tiles.
+- `viking_base_20_war_overview` (rendering): parity — Render the guild-Viking war overview and its coupled battle tiles.
 - `viking_base_21_public_window_controls` (public_api): not_converted — Expose guild-Viking window visibility and minimization controls.
 - `viking_trader_01_settings_inventory_and_cart_selection` (state): parity — Configure the guild-Viking autotrader and select inventory and carts.
 - `viking_trader_02_quality_perishability_and_sale_policy` (state): parity — Apply guild-Viking autotrader quality, perishability, and sale policy.
