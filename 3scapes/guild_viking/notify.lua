@@ -16,13 +16,12 @@
 -- LEGACY 2885-2890 run in that exact order, AFTER the dirty check (LEGACY's
 -- own viking_window.update() call sits between the countdown work and the
 -- three ticks). Stage 4 Task 3 wired the first of the three
--- (autotrader/tick.lua's M.tick); Task 7 (this change) wires the third
--- (autovoyage.lua's M.tick), appended after it -- auto_raid_tick is Task 8's
--- territory and is NOT called from here yet, so today the order is
--- trade, voyage; raid will be inserted BETWEEN them (LEGACY's own order)
--- when Task 8 lands.
+-- (autotrader/tick.lua's M.tick); Task 7 wired the third (autovoyage.lua's
+-- M.tick); Task 8 (this change) inserts the second (autoraid.lua's M.tick)
+-- BETWEEN them, so the order is now trade, raid, voyage -- LEGACY's own.
 local S = require("state").S
 local autotrade_tick = require("autotrader.tick")
+local autoraid = require("autoraid")
 local autovoyage = require("autovoyage")
 
 local M = {}
@@ -359,6 +358,7 @@ function M.countdown_tick()
   -- LEGACY guild_viking.lua:2885-2890 (trade, raid, voyage order). See this
   -- function's header.
   autotrade_tick.tick()
+  autoraid.tick()
   autovoyage.tick()
 end
 

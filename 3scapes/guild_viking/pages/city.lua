@@ -22,6 +22,7 @@ local pagelib = require("pagelib")
 local state = require("state")
 local page_opts = require("page_opts")
 local cc = require("pages.city_common")
+local autoraid = require("autoraid")
 
 local S = state.S
 local C = pagelib.C
@@ -138,15 +139,16 @@ end
 local function raids_lines(add, width)
   add(pagelib.header(width, "Raids"))
   -- Auto-Raid status. LEGACY caps the displayed ship count with
-  -- ar_max_ships(), a helper entangled with the (not-yet-ported) automation
-  -- subsystem (dock tier, owned/held ship counts) -- omitted here; the raw
-  -- configured value is shown uncapped. state.autoraid itself is also not
-  -- populated by any handler yet (client-only automation config, stage 3/4
-  -- per page_opts.lua's auto_trade/auto_voyage comments), so this reads
+  -- ar_max_ships() (guild_viking.lua:7778-7779) -- now the real function,
+  -- autoraid.lua's M.max_ships() (stage 4 Task 8), which derives the cap
+  -- from the Dock building tier and owned/non-held ship counts. state.autoraid
+  -- itself is still only populated once the user actually configures the
+  -- automation (client-only settings state, never wire-parsed), so this reads
   -- defensively exactly like LEGACY's own `local ar = state.autoraid or {}`.
   local ar = S.autoraid or {}
   local on = page_opts.get("auto_raid")
-  local ships_txt = (ar.ships == "all") and "All Ships" or ((tonumber(ar.ships) or 2) .. " Ships")
+  local ships_txt = (ar.ships == "all") and "All Ships"
+    or (tostring(math.min(tonumber(ar.ships) or 2, autoraid.max_ships())) .. " Ships")
   local convoy_txt = ar.convoy and " convoy" or ""
   local has_tgt = ar.target and ar.target ~= ""
   local target_txt = has_tgt and cc.tcase(ar.target) or "(no target)"

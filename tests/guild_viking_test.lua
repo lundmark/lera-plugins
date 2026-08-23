@@ -923,6 +923,63 @@ check("/vik trader menu: clearlog empties the log", #S.autotrade.log == 0)
 page_opts.set("auto_trade", false)   -- restore default for later tests
 last_menu_open = nil
 
+-- ---- /vik raid <sub>: LEGACY's ar_config grammar (Task 8) -----------------
+-- Full gate/branch/menu coverage lives in guild_viking_autoraid_test.lua;
+-- this section only proves the DISPATCH WIRING (init.lua's `sub_lower ==
+-- "raid"` branch, added right between "trader" and the "voyage auto" prefix
+-- match, matching LEGACY's own trade/raid/voyage order) actually reaches
+-- autoraid.lua's M.raid_command/M.config, and that the immediate-persist
+-- behavior survives that whole path, not just a direct M.config() call.
+local autoraid = require("autoraid")
+S.autoraid = nil
+
+check("/vik raid: auto_raid off by default", page_opts.get("auto_raid") == false)
+printed = {}
+stored = nil
+registered_vik.handler("raid on", "/vik")
+check("/vik raid on: flips page_opts.auto_raid", page_opts.get("auto_raid") == true)
+check("/vik raid on: reply text verbatim", printed[1] == "[Auto-Raid] ON.", printed[1])
+check("/vik raid on: persists IMMEDIATELY through the full /vik dispatch path "
+      .. "(no separate /vik save needed)",
+      stored ~= nil and stored.page_opts and stored.page_opts.auto_raid == true)
+
+printed = {}
+registered_vik.handler("raid off", "/vik")
+check("/vik raid off: flips page_opts.auto_raid back", page_opts.get("auto_raid") == false)
+check("/vik raid off: reply text verbatim", printed[1] == "[Auto-Raid] OFF.", printed[1])
+
+registered_vik.handler("raid target Uppsala", "/vik")
+check("/vik raid target <name>: sets the target", S.autoraid.target == "Uppsala")
+registered_vik.handler("raid convoy on", "/vik")
+check("/vik raid convoy on: sets convoy", S.autoraid.convoy == true)
+registered_vik.handler("raid ships 3", "/vik")
+check("/vik raid ships <n>: sets ships", S.autoraid.ships == 3)
+
+printed = {}
+local ok_bad_raid = pcall(registered_vik.handler, "raid bogus", "/vik")
+check("/vik raid bogus: does not error", ok_bad_raid)
+check("/vik raid bogus: usage message verbatim",
+      printed[1] == "[Auto-Raid] usage: araid on|off | convoy on|off | ships <n>|all | target <name>"
+        and #printed == 1, printed[1])
+
+-- ---- /vik raid (bare): opens the settings menu -----------------------------
+S.autoraid = nil
+page_opts.set("auto_raid", false)
+last_menu_open = nil
+registered_vik.handler("raid", "/vik")
+check("/vik raid (bare): opens a menu", last_menu_open ~= nil)
+check("/vik raid (bare): menu title", last_menu_open and last_menu_open.title == "Auto-Raid Settings")
+check("/vik raid (bare): 5 items, LEGACY's araid_menu_build order",
+      last_menu_open and #last_menu_open.items == 5, last_menu_open and #last_menu_open.items)
+
+last_menu_open.on_select("on")
+check("/vik raid menu: selecting 'on' flips auto_raid", page_opts.get("auto_raid") == true)
+check("/vik raid menu: reopens itself in place", last_menu_open ~= nil)
+
+page_opts.set("auto_raid", false)   -- restore default for later tests
+S.autoraid = nil
+last_menu_open = nil
+
 -- ---- /vik voyage auto <sub>: dispatch prefix-parsing (Task 7) -------------
 -- init.lua's own new branch (M.vik_command): "voyage auto" strips the "auto"
 -- token case-insensitively and forwards the remainder to

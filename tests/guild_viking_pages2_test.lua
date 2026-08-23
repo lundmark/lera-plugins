@@ -24,6 +24,21 @@ local page_opts = require("page_opts")
 local city_page = require("pages.city")
 local trade_page = require("pages.trade")
 
+-- Stage 4 Task 8: pages/city.lua's Raids section now calls autoraid.lua's
+-- real M.max_ships() (LEGACY's ar_max_ships()) instead of showing the raw
+-- configured ship count uncapped -- wire the BUILDINGS/SHIPS handlers so the
+-- dock-tier/held-ship fixture below routes through protocol.ingest with the
+-- real handlers, not a direct S.buildings/S.ships poke.
+local protocol = require("protocol")
+local city_handlers = require("handlers.city")
+for key, fn in pairs(city_handlers) do
+  if key ~= "_patterns" then protocol.handler(key, fn) end
+end
+local voyage_handlers = require("handlers.voyage")
+for key, fn in pairs(voyage_handlers) do
+  if key ~= "_patterns" then protocol.handler(key, fn) end
+end
+
 local S = state.S
 local WIDTH = 80
 
@@ -115,6 +130,25 @@ check("a ship row shows the seeded ship name (Ravager)",
 check("Raids header present", find_line(city_lines, "Raids") ~= nil)
 check("raid log row shows the seeded daler gain (+150d)",
       city_all:find("150", 1, true) ~= nil)
+
+-- ---- Auto-Raid ship cap: the page now shows the REAL ar_max_ships() cap
+-- (stage 4 Task 8's autoraid.lua), not the raw configured value uncapped
+-- (stage 2's disclosed placeholder, now corrected). Dock tier 3 -> DOCK_FLEET
+-- cap 6; two ships, one held (Wolf), leaves 1 non-held (Ravager2) -- 1 < 6,
+-- so the cap clamps down to 1. Configuring 5 ships must therefore display
+-- "1 Ships", not "5 Ships".
+protocol.ingest("BUILDINGS", "dock:3,warehouse:3")
+protocol.ingest("SHIPS", "Ravager2|2|docked||0||8|0|0|0|||0|100;Wolf|2|docked||0||8|0|0|0|||1|100")
+S.autoraid = { convoy = false, ships = 5, target = "", last = 0 }
+local capped_lines = city_page.lines(WIDTH)
+local capped_all = joined(capped_lines)
+check("Raids: ship count is capped to the REAL ar_max_ships() (1), not the configured 5",
+      capped_all:find("1 Ships", 1, true) ~= nil and capped_all:find("5 Ships", 1, true) == nil,
+      capped_all)
+-- Restore the shared CITY-mode fixture for every later check in this file.
+protocol.ingest("BUILDINGS", "dock:2,warehouse:3")
+protocol.ingest("SHIPS", "Ravager|2|raiding|Vestergotland|90||8|0|0|0|||0|100")
+S.autoraid = nil
 
 -- "Warehouse  [" (not just "Warehouse") avoids matching the "Warehouse T3"
 -- building entry the Buildings section lists separately.

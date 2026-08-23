@@ -72,6 +72,11 @@ local persist = require("persist")
 -- (see its own header); init.lua only needs it for the command surface.
 local autotrade_tick = require("autotrader.tick")
 
+-- Stage 4 Task 8: the auto-raider + its /vik raid control surface and
+-- settings menu. notify.lua calls autoraid.tick() itself (see its own
+-- header); init.lua only needs it for the command surface.
+local autoraid = require("autoraid")
+
 -- Stage 4 Task 7: the auto-voyage router + its /vik voyage auto control
 -- surface and settings menu. notify.lua calls autovoyage.tick() itself (see
 -- its own header); init.lua only needs it for the command surface.
@@ -252,6 +257,8 @@ function M.vik_command(args)
     set_opt(rest)
   elseif sub_lower == "trader" then
     autotrade_tick.trader_command(rest)
+  elseif sub_lower == "raid" then
+    autoraid.raid_command(rest)
   elseif sub_lower == "voyage" and rest:sub(1, 4):lower() == "auto"
       and (#rest == 4 or rest:sub(5, 5):match("%s")) then
     -- "/vik voyage auto [<sub>]" -- strip the "auto" token (case-
