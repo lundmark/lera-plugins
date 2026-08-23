@@ -38,6 +38,7 @@ local fake_roominfo = {
   area = function() return ri_state.area end,
   exits = function() return ri_state.exits end,
   exit_destinations = function() return ri_state.dest end,
+  is_synced = function() return ri_state.room_id ~= nil end,
   on_room_change = function(fn) ri_callbacks[#ri_callbacks + 1] = fn; return #ri_callbacks end,
   off_room_change = function() return true end,
 }
@@ -261,6 +262,25 @@ local narrowed = mp.get_room(500)
 check("connection dropped when its direction stops being an exit",
   narrowed and narrowed.connections.s == nil,
   narrowed and tostring(narrowed.connections.s))
+
+-- ---- seeding at load -------------------------------------------------------
+-- Kills: registering the room-change callback and nothing else. Room.Info fires
+-- on room entry only, so a mapper loaded (or /plugins reload'ed) mid-session has
+-- no current room until the player next moves -- and mapview's correlation,
+-- which starts from the current room, colours nothing while the player stands
+-- still.
+mp.on_unload()
+mp.clear()
+ri_state.room_id = 700
+ri_state.room = "A lonely tower"
+ri_state.exits = { "n" }
+ri_state.dest = { n = 0 }
+mp.on_load()
+local seeded = mp.current_room()
+check("seeds the current room from roominfo at load",
+  seeded ~= nil and seeded.id == 700, seeded and seeded.id)
+check("seeded room carries its name", seeded and seeded.name == "A lonely tower",
+  seeded and seeded.name)
 
 mp.on_unload()
 

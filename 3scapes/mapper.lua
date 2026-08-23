@@ -938,6 +938,14 @@ function M.on_load()
 
   register_command()
 
+  -- Seed from roominfo's current state. Room.Info fires on room entry only, so
+  -- a mapper loaded (or reloaded) mid-session would otherwise have no current
+  -- room until the player next moved -- and mapview's correlation, which starts
+  -- from the current room, would colour nothing while the player stood still.
+  if roominfo and roominfo.is_synced and roominfo.is_synced() then
+    on_roominfo_change(roominfo.room and roominfo.room() or nil, nil)
+  end
+
   local stats = M.stats()
   local persist_note = has_store and "" or " (no persistence)"
   print("[mapper] Loaded: " .. stats.rooms .. " rooms, " .. stats.waypoints .. " waypoints" .. persist_note)

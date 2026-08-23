@@ -61,11 +61,10 @@ local colors = {
   -- Unmapped (visible in minimap but not in mapper DB)
   unmapped_fg = {70, 70, 80},     -- dark gray
 
-  -- Mobs (overrides freshness when mobs present)
-  mob1_fg = {255, 255, 180},      -- 1 mob: pale yellow
-  mob2_fg = {255, 200, 100},      -- 2 mobs: yellow-orange
-  mob3_fg = {255, 150, 50},       -- 3-5 mobs: orange
-  mob6_fg = {255, 80, 80},        -- 6+ mobs: red
+  -- Mobs (overrides freshness when mobs present). One colour only: a grid cell
+  -- carries a single m glyph however many monsters stand there, so the protocol
+  -- cannot express a count and there is no tiering to colour.
+  mob1_fg = {255, 255, 180},      -- monsters present: pale yellow
 
   -- Players
   player_fg = {100, 220, 220},    -- cyan tint
@@ -117,55 +116,31 @@ end
 -- owns glyph semantics, so this delegates rather than matching characters
 -- itself. Absent minimap (a profile may load mapview without it), fall back
 -- to "nothing is a room cell": BFS correlation degrades to finding nothing
--- rather than guessing at a legend it cannot see.
-local function is_room_cell(char)
-  local minimap = plugin.get("minimap")
+-- rather than guessing at a legend it cannot see. The handle is passed in:
+-- plugin.get is a C lookup and the caller resolves it once per render instead
+-- of once per grid cell.
+local function is_room_cell(minimap, char)
   if not (minimap and minimap.is_room_cell) then return false end
   return minimap.is_room_cell(char)
 end
 
--- Search for a room character near the expected position
--- Minimap lines can have varying leading spaces, so rooms may not be at exact offsets
--- Returns: col, char if found; nil otherwise
-local function find_room_near(line, expected_col, max_offset)
-  max_offset = max_offset or 2
-  local len = #line
-
-  -- Check exact position first
-  if expected_col >= 1 and expected_col <= len then
-    local char = line:sub(expected_col, expected_col)
-    if is_room_cell(char) then
-      return expected_col, char
-    end
-  end
-
-  -- Search nearby positions (left and right)
-  for offset = 1, max_offset do
-    -- Check right
-    local right_col = expected_col + offset
-    if right_col >= 1 and right_col <= len then
-      local char = line:sub(right_col, right_col)
-      if is_room_cell(char) then
-        return right_col, char
-      end
-    end
-
-    -- Check left
-    local left_col = expected_col - offset
-    if left_col >= 1 and left_col <= len then
-      local char = line:sub(left_col, left_col)
-      if is_room_cell(char) then
-        return left_col, char
-      end
-    end
-  end
-
-  return nil
+-- The room cell at an exact column, or nil.
+--
+-- There is no positional fuzz any more, and there must not be: Room.Map rows
+-- are exactly `w` glyphs, validated per row, and nothing strips leading
+-- whitespace, so a room's column is exact. Grid rooms sit two cells apart, so
+-- searching even one cell either side would land on the neighbouring room's
+-- cell and turn a missing cell into a confidently wrong room association.
+local function room_cell_at(minimap, line, col)
+  if col < 1 or col > #line then return nil end
+  local char = line:sub(col, col)
+  if not is_room_cell(minimap, char) then return nil end
+  return col, char
 end
 
 -- Build a map from minimap grid positions to mapper room IDs
 -- Uses BFS from player position following known exits
-local function correlate_positions(minimap_lines, player_pos, mapper, current_room_id)
+local function correlate_positions(minimap_lines, player_pos, mapper, current_room_id, minimap)
   if not player_pos or not current_room_id then
     return {}
   end
@@ -205,8 +180,7 @@ local function correlate_positions(minimap_lines, player_pos, mapper, current_ro
             -- Verify row is within map bounds
             if new_row >= 1 and new_row <= #minimap_lines then
               local line = minimap_lines[new_row]
-              -- Search for room near expected position (handles varying leading spaces)
-              local found_col, char = find_room_near(line, expected_col, 2)
+              local found_col = room_cell_at(minimap, line, expected_col)
               if found_col then
                 local new_key = new_row .. "," .. found_col
                 position_to_room[new_key] = target_id
@@ -229,10 +203,10 @@ end
 --------------------------------------------------------------------------------
 
 -- Returns info about what should be displayed at a minimap position
-local function get_position_info(row, col, char, position_to_room, mapper, waypoint_rooms)
-  local minimap = plugin.get("minimap")
-  -- minimap owns glyph semantics: the Room.Map legend is authoritative, so X is
-  -- a link and per-cell counts no longer exist.
+local function get_position_info(row, col, char, position_to_room, mapper, waypoint_rooms, minimap)
+  -- minimap owns glyph semantics: the fixed legend contract makes X a link, and
+  -- per-cell counts no longer exist. The handle is passed in so a render
+  -- resolves the plugin once instead of once per grid cell.
   local class = (minimap and minimap.glyph_class) and minimap.glyph_class(char) or "other"
 
   local info = {
@@ -381,13 +355,16 @@ function M.render(rect, opts)
   local player_pos = minimap.get_player_position()
   local current_room_id = mapper and mapper.current_room() and mapper.current_room().id
 
-  -- roominfo is the sole GMCP Room.* subscriber, so its room id and mapper's
-  -- cannot disagree. The guards that tolerated two independently timed sources
-  -- are gone with the sources.
+  -- roominfo is the sole GMCP Room.* subscriber and mapper seeds itself from
+  -- roominfo's current state at load, so the two room ids agree: there is no
+  -- longer even a hot-reload window where mapper trails behind. The guards that
+  -- tolerated two independently timed sources are gone with the sources, and so
+  -- is /mapview debug's divergence warning.
   local position_to_room = {}
   local waypoint_rooms = {}
   if mapper then
-    position_to_room = correlate_positions(minimap_lines, player_pos, mapper, current_room_id)
+    position_to_room = correlate_positions(minimap_lines, player_pos, mapper,
+                                          current_room_id, minimap)
     local waypoints = mapper.list_waypoints()
     for _, wp in ipairs(waypoints) do
       waypoint_rooms[wp.room_id] = wp.name
@@ -413,7 +390,8 @@ function M.render(rect, opts)
       if char == " " then
         colored_line = colored_line .. " "
       else
-        local info = get_position_info(row_idx, actual_col, char, position_to_room, mapper, waypoint_rooms)
+        local info = get_position_info(row_idx, actual_col, char, position_to_room,
+                                       mapper, waypoint_rooms, minimap)
 
         if info.fg or info.bg then
           -- Use the original char from minimap (preserves mob counts, etc)
@@ -575,13 +553,14 @@ local function handle_command(args)
     if cmd == "debug" then
       -- Roominfo sync state
       if roominfo then
-        local is_synced = roominfo.is_synced and roominfo.is_synced() or "N/A"
+        -- tostring, not `or "N/A"`: false is the normal pre-connection answer.
+        local is_synced = roominfo.is_synced and tostring(roominfo.is_synced()) or "N/A"
         local ri_room_id = roominfo.room_id and roominfo.room_id() or nil
         print("  Roominfo synced: " .. tostring(is_synced))
         print("  Roominfo room_id: " .. tostring(ri_room_id))
         if roominfo.debug_state then
           local state = roominfo.debug_state()
-          print("  Roominfo pending: " .. tostring(state.pending_room))
+          print("  Roominfo has_map: " .. tostring(state.has_map))
         end
       end
 
@@ -602,14 +581,6 @@ local function handle_command(args)
           print("  Connections: " .. conn_count .. " (" .. table.concat(conn_dirs, ", ") .. ")")
           local freshness = mapper.get_freshness(current.id)
           print("  Freshness: " .. string.format("%.2f", freshness))
-
-          -- Check if roominfo and mapper agree
-          if roominfo and roominfo.room_id then
-            local ri_id = roominfo.room_id()
-            if ri_id and ri_id ~= current.id then
-              print("  WARNING: roominfo and mapper have different room IDs!")
-            end
-          end
         else
           print("  Mapper room: nil")
         end
@@ -619,7 +590,8 @@ local function handle_command(args)
           local minimap_lines = minimap.get_map_lines()
           local player_pos = minimap.get_player_position()
           local current_room_id = current and current.id
-          local position_to_room = correlate_positions(minimap_lines, player_pos, mapper, current_room_id)
+          local position_to_room = correlate_positions(minimap_lines, player_pos, mapper,
+                                                      current_room_id, minimap)
           local corr_count = 0
           for _ in pairs(position_to_room) do corr_count = corr_count + 1 end
           print("  Correlated positions: " .. corr_count)
@@ -636,7 +608,7 @@ local function handle_command(args)
     print("  Dim blue-gray - visited within the hour")
     print("  Very dim gray - old room (< 24 hr)")
     print("  Dark gray - unmapped (visible but not explored)")
-    print("  Yellow/orange/red - rooms with mobs (1/2-5/6+)")
+    print("  Pale yellow - rooms with monsters")
     print("  Purple background - waypoint")
     print("")
     print("Commands:")
