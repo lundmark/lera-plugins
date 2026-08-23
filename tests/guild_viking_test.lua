@@ -542,22 +542,38 @@ cd_before = dirty_count
 notify.countdown_tick()
 check("idle tick does not mark dirty", dirty_count == cd_before)
 
--- ---- notify.countdown_tick's tail wiring (Task 3): calls the auto-trade
--- tick, LAST, after the dirty check (MAIN 2885-2890's order/position) -----
--- Monkey-patch the SAME module table notify.lua captured a local reference
--- to at require time (require() caches by module name, so this table is
--- identical either way) -- proves the call site itself, independent of
--- what M.tick() does internally (already covered exhaustively in
--- guild_viking_autotrader_test.lua).
+-- ---- notify.countdown_tick's tail wiring (Task 3 + Task 7 + Task 8): calls
+-- all three automation ticks, after the dirty check, in LEGACY's own
+-- trade/raid/voyage order (MAIN 2885-2890) --------------------------------
+-- Monkey-patch the SAME module tables notify.lua captured local references
+-- to at require time (require() caches by module name, so these tables are
+-- identical either way) -- proves the three call sites themselves and their
+-- relative order, independent of what each M.tick() does internally
+-- (already covered exhaustively in each automation's own test suite).
+--
+-- Fix round 1, M-4: the original version of this test only monkey-patched
+-- autotrader.tick, so deleting either autoraid.tick() or autovoyage.tick()
+-- from notify.lua's countdown_tick (LEGACY 2887/2889-equivalent) passed
+-- with 0 failures -- the exact same "tick wiring is untested" gap Task 7
+-- left for autovoyage. Confirmed by mutation (see the task report): each of
+-- the three calls was deleted from notify.lua in turn and this test caught
+-- every one, then all three were confirmed present again.
 do
-  local tick_mod = require("autotrader.tick")
-  local trade_tick_calls = 0
-  local real_trade_tick = tick_mod.tick
-  tick_mod.tick = function() trade_tick_calls = trade_tick_calls + 1 end
+  local trade_mod = require("autotrader.tick")
+  local raid_mod = require("autoraid")
+  local voyage_mod = require("autovoyage")
+  local real_trade_tick, real_raid_tick, real_voyage_tick =
+    trade_mod.tick, raid_mod.tick, voyage_mod.tick
+  local order = {}
+  trade_mod.tick = function() order[#order + 1] = "trade" end
+  raid_mod.tick = function() order[#order + 1] = "raid" end
+  voyage_mod.tick = function() order[#order + 1] = "voyage" end
   notify.countdown_tick()
-  check("countdown_tick calls autotrader.tick's M.tick at its tail",
-        trade_tick_calls == 1, trade_tick_calls)
-  tick_mod.tick = real_trade_tick
+  check("countdown_tick calls all three automation ticks exactly once each, "
+        .. "in LEGACY's trade/raid/voyage order",
+        #order == 3 and order[1] == "trade" and order[2] == "raid" and order[3] == "voyage",
+        table.concat(order, ","))
+  trade_mod.tick, raid_mod.tick, voyage_mod.tick = real_trade_tick, real_raid_tick, real_voyage_tick
 end
 
 -- ---- persist: price_history + source survive save/load (Task 10) -----------
@@ -589,6 +605,55 @@ protocol.source("auto")
 page_opts.set("show_stats_buffs", true)
 window.set_page("stats")
 
+-- ---- persist: autoraid/autovoyage settings round-trip (Fix round 1, I-2) --
+-- Before this fix, persist.lua carried autotrade's settings snapshot but had
+-- no way to carry autoraid's or autovoyage's -- only their page_opts on/off
+-- flags (auto_raid, auto_voyage, av_verbose) survived a reload; the raid
+-- target/ships/convoy and the voyage risk/ship/etc were silently lost every
+-- restart. Round-trip one setting from each through the same save()/load()
+-- pair the block above already exercises.
+local ar_mod = require("autoraid")
+local av_mod = require("autovoyage")
+S.autoraid = nil
+S.autovoyage = nil
+ar_mod.settings().target = "Uppsala"
+ar_mod.settings().ships = 3
+ar_mod.settings().convoy = true
+av_mod.settings().risk = "max"
+av_mod.settings().ship = "Njord"
+persist.save()
+S.autoraid = nil
+S.autovoyage = nil
+persist.load()
+check("persist: autoraid target round-trips", S.autoraid and S.autoraid.target == "Uppsala")
+check("persist: autoraid ships round-trips", S.autoraid and S.autoraid.ships == 3)
+check("persist: autoraid convoy round-trips", S.autoraid and S.autoraid.convoy == true)
+check("persist: autovoyage risk round-trips", S.autovoyage and S.autovoyage.risk == "max")
+check("persist: autovoyage ship round-trips", S.autovoyage and S.autovoyage.ship == "Njord")
+S.autoraid = nil
+S.autovoyage = nil
+
+-- Additive-change guard: a store file saved BEFORE this fix has no
+-- autoraid/autovoyage keys at all -- persist.load() must still restore
+-- cleanly to fresh defaults rather than erroring, since data.autoraid/
+-- data.autovoyage are simply nil in that snapshot.
+store.set({
+  settings = { source = "auto" }, price_history = {}, page_opts = {}, page = "stats",
+  -- deliberately no autotrade/autoraid/autovoyage keys, simulating a
+  -- pre-Task-8 (or pre-Task-1, for autotrade) on-disk snapshot
+})
+local ok_legacy_load = pcall(persist.load)
+check("persist.load: an old store file lacking autoraid/autovoyage keys loads without error",
+      ok_legacy_load)
+check("persist.load: autoraid falls back to fresh defaults when absent from the store",
+      ar_mod.settings().target == "" and ar_mod.settings().ships == 2
+        and ar_mod.settings().convoy == false)
+check("persist.load: autovoyage falls back to fresh defaults when absent from the store",
+      av_mod.settings().risk == "balanced" and av_mod.settings().ship == "")
+S.autoraid = nil
+S.autovoyage = nil
+persist.save()   -- restore a normal on-disk snapshot for any later test in this file
+
 -- ---- /vik registration + dispatch (Task 10) ---------------------------------
 -- M.on_load() ran once already (above); it registered the real /vik command
 -- and resetvikxp alias, captured by the stubs upgraded at the top of this file.
@@ -609,8 +674,14 @@ check("vik source with bad mode does not error", ok_badsource and protocol.sourc
 local ok_empty = pcall(registered_vik.handler, "", "/vik")
 check("vik empty args falls back to usage without error", ok_empty)
 
+printed = {}
 local ok_unknown = pcall(registered_vik.handler, "bogus", "/vik")
 check("vik unknown subcommand falls back to usage without error", ok_unknown)
+-- Fix round 1, M-6: the usage string listed "trader [<sub>]" and
+-- "voyage auto [<sub>]" but not "raid [<sub>]", so the new subcommand was
+-- missing from its own help.
+check("vik usage string names raid [<sub>] alongside trader and voyage auto",
+      printed[1] and printed[1]:find("raid %[<sub>%]", 1, false) ~= nil, printed[1])
 
 -- ---- /vik: stage-2 page switching + page options (Task 2) ------------------
 window.set_page("city")   -- somewhere other than stats, so the dispatch below

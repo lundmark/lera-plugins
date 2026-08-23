@@ -1,12 +1,17 @@
 -- Cross-session persistence: the rolling price history (market.lua), the
 -- transport source mode (protocol.lua), (stage 2) the page options and
--- current page (page_opts.lua / window.lua), and (stage 4 Task 1) the
--- auto-trade settings knobs (autotrader/core.lua), mirroring LEGACY's
+-- current page (page_opts.lua / window.lua), and (stage 4) the auto-trade
+-- settings knobs (autotrader/core.lua, Task 1), the auto-raid settings
+-- (autoraid.lua, Task 8: target/ships/convoy) and the auto-voyage settings
+-- (autovoyage.lua, Task 7: risk/ship/mission_prio/etc), mirroring LEGACY's
 -- SetVariable("popt_"..k) + SetVariable("page", ...)
--- (/home/simon/code/3s_scripts_old/lua/guild_viking.lua:3025-3040). Everything
--- else in state.lua is per-connection/session data (combat, carts in
--- transit, etc.) that would be stale on the next load, so it is deliberately
--- NOT persisted here.
+-- (/home/simon/code/3s_scripts_old/lua/guild_viking.lua:3025-3040) -- LEGACY's
+-- OnPluginSaveState (MAIN 3023-3024) actually serializes the WHOLE `state`
+-- table, so state.autoraid/state.autovoyage survived a reload there for
+-- free; this file has to carry each one explicitly instead. Everything else
+-- in state.lua is per-connection/session data (combat, carts in transit,
+-- etc.) that would be stale on the next load, so it is deliberately NOT
+-- persisted here.
 local market = require("market")
 local protocol = require("protocol")
 local page_opts = require("page_opts")
@@ -14,6 +19,21 @@ local window = require("window")
 local at_core = require("autotrader.core")
 
 local M = {}
+
+-- autoraid.lua no longer requires persist at its own top level (see that
+-- module's header), so a top-level `require("autoraid")` here would be
+-- safe on its own -- but autovoyage.lua DOES still require persist at ITS
+-- top level (via notify.lua, which requires autoraid THEN autovoyage), so
+-- persist.lua's own first load happens WHILE autovoyage.lua is still
+-- mid-load. A top-level `require("autovoyage")` here would therefore close
+-- a real cycle (autovoyage -> persist -> autovoyage, before the middle
+-- persist.lua load has anything to hand back). Deferring BOTH requires into
+-- the functions below (called only from M.save()/M.load(), long after every
+-- module has finished loading) sidesteps the cycle without depending on
+-- notify.lua's particular require order -- same idiom as autoraid.lua's own
+-- deferred require("persist") and popups.lua's deferred require("wm").
+local function ar_module() return require("autoraid") end
+local function av_module() return require("autovoyage") end
 
 function M.save()
   local opts = {}
@@ -25,6 +45,8 @@ function M.save()
     page_opts = opts,
     page = window.current_page(),
     autotrade = at_core.snapshot().autotrade,
+    autoraid = ar_module().snapshot().autoraid,
+    autovoyage = av_module().snapshot().autovoyage,
   })
   store.save()
 end
@@ -49,6 +71,16 @@ function M.load()
   end
   if data.autotrade then
     at_core.restore({ autotrade = data.autotrade })
+  end
+  -- Both keys are ABSENT in a store file saved before this fix -- data.autoraid
+  -- and data.autovoyage are simply nil then, so both branches are skipped and
+  -- autoraid.lua's/autovoyage.lua's own M.settings() lazily creates fresh
+  -- defaults on first use, exactly as if this file had never been touched.
+  if data.autoraid then
+    ar_module().restore({ autoraid = data.autoraid })
+  end
+  if data.autovoyage then
+    av_module().restore({ autovoyage = data.autovoyage })
   end
 end
 

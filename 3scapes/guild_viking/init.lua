@@ -288,7 +288,7 @@ function M.vik_command(args)
     buffer.color_print(nil, "DAA520",
       "Usage: /vik [status | trace | save | source mip|gmcp|auto | resetxp | "
       .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
-      .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | "
+      .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | raid [<sub>] | "
       .. "voyage auto [<sub>]]")
   end
 end
@@ -332,7 +332,7 @@ function M.on_load()
     name = "/vik",
     usage = "/vik [status | trace | save | source mip|gmcp|auto | resetxp | "
       .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
-      .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | "
+      .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | raid [<sub>] | "
       .. "voyage auto [<sub>]]",
     summary = "Viking guild data, pane, and controls",
     description = "Ingestion status and counters (status), message tracing "

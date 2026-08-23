@@ -105,14 +105,22 @@
 --     S.raid_targets_lin/S.raid_targets_hist data (flat list, a "Lineage
 --     Cities:"/"Other Targets:" header row per group -- the same "_hdr,
 --     no-op" idiom autovoyage.lua's own mission-priority header already
---     uses). The per-target goods hint and its colours have no equivalent
---     in menu.lua's plain-label rows and are dropped -- names only. This
---     avoids growing a new hotspot/scroll surface for a picker that is a
---     read-only city-data browse, not a new automated-send interaction
---     (the plan's Interaction Fidelity bar governs NEW send-capable pointer
---     surfaces; this one is not that -- it only feeds the SAME M.config-
---     shaped target string ar_config's "target <name>" grammar already
---     accepts).
+--     uses). Fix round 1, I-3: the goods TEXT is restored in each item's
+--     label (target_label() below, "name good1 good2", LEGACY's own
+--     cell()-closure field order) -- it was wrongly dropped in the first
+--     pass even though the data (S.raid_targets_lin/_hist's g1/g2 fields)
+--     and the display helper (pages/city_common.lua's good_label) were both
+--     already available, and LEGACY's own picker title ("Pick raid target
+--     (shows the 2 goods each yields)", MAIN 11604) makes the goods the
+--     whole point of the window. Only the per-good COLOURS have no
+--     equivalent in menu.lua's plain-label rows and stay dropped -- that
+--     narrower disclosure is the one genuinely forced by the target
+--     surface. This flat-list reshaping avoids growing a new hotspot/scroll
+--     surface for a picker that is a read-only city-data browse, not a new
+--     automated-send interaction (the plan's Interaction Fidelity bar
+--     governs NEW send-capable pointer surfaces; this one is not that -- it
+--     only feeds the SAME M.config-shaped target string ar_config's
+--     "target <name>" grammar already accepts).
 --
 --     A genuine LEGACY quirk is ported verbatim here, not fixed: selecting
 --     "Target" in viking_araid_menu_pick (11563-11567) `return true`s
@@ -136,6 +144,10 @@
 --     refuses an empty items list).
 local S = require("state").S
 local page_opts = require("page_opts")
+-- Fix round 1, I-3: cc.good_label restores the target picker's goods text
+-- (see target_label() below). Pure formatting module (no state/persist
+-- requires of its own), so this adds no cycle risk.
+local cc = require("pages.city_common")
 
 local M = {}
 
@@ -391,6 +403,21 @@ local function cycle_ships(ar)
   if cur >= mx then ar.ships = "all" else ar.ships = cur + 1 end
 end
 
+-- LEGACY:11610-11622 (the cell() closure inside viking_show_araid_target_menu).
+-- "name good1 good2", skipping a nil good -- same field order LEGACY's own
+-- cell() draws (name first, then up to two good labels, space-separated).
+-- Fix round 1, I-3: this text was dropped entirely in the first pass; only
+-- the per-good COLOURS are genuinely forced by menu.lua's plain-label rows
+-- (see the module header) -- the text itself was always preservable, and
+-- LEGACY's own picker title ("Pick raid target (shows the 2 goods each
+-- yields)", MAIN 11604) makes the goods the whole point of this window.
+local function target_label(e)
+  local parts = { e.name or "?" }
+  if e.g1 then parts[#parts + 1] = cc.good_label(e.g1) end
+  if e.g2 then parts[#parts + 1] = cc.good_label(e.g2) end
+  return table.concat(parts, " ")
+end
+
 -- LEGACY:11579-11667. Flat require("menu") replacement for the two-column
 -- WindowCreate target picker -- see module header's TARGET PICKER note.
 local function target_menu_items()
@@ -400,13 +427,13 @@ local function target_menu_items()
   if #lin > 0 then
     items[#items + 1] = { label = "Lineage Cities:", value = "_hdr" }
     for i, e in ipairs(lin) do
-      items[#items + 1] = { label = "  " .. (e.name or "?"), value = "lin_" .. i }
+      items[#items + 1] = { label = "  " .. target_label(e), value = "lin_" .. i, search = e.name }
     end
   end
   if #hist > 0 then
     items[#items + 1] = { label = "Other Targets:", value = "_hdr" }
     for i, e in ipairs(hist) do
-      items[#items + 1] = { label = "  " .. (e.name or "?"), value = "hist_" .. i }
+      items[#items + 1] = { label = "  " .. target_label(e), value = "hist_" .. i, search = e.name }
     end
   end
   return items
@@ -489,6 +516,25 @@ function M.raid_command(rest)
     return
   end
   M.config(rest)
+end
+
+-- Cross-session persistence snapshot/restore, called from persist.lua's
+-- M.save()/M.load() -- same shape as autotrader/core.lua's M.snapshot()/
+-- M.restore() (persist.lua's own established pattern for a plugin-local
+-- automation-settings table). Fix round 1, I-2: LEGACY's OnPluginSaveState
+-- serialized the whole `state` table, so state.autoraid's target/ships/
+-- convoy survived a reload there for free; without this pair persist.lua
+-- had no way to carry S.autoraid at all, so only the on/off flag (which
+-- lives in page_opts) actually persisted -- the target/ships/convoy a user
+-- configures were silently lost on restart, contradicting M.config's own
+-- "persist ... immediately" comment below.
+function M.snapshot()
+  return { autoraid = S.autoraid }
+end
+
+function M.restore(tbl)
+  if not tbl then return end
+  if tbl.autoraid then S.autoraid = tbl.autoraid end
 end
 
 return M

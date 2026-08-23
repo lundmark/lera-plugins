@@ -353,6 +353,9 @@ open_interval()
 ar.tick()
 check("tick/gate 6: restoring ships=2 (all else unchanged) sends exactly once",
       #sent == 1 and sent[1] == "vlongship raid Drakkar1 Uppsala", sent[1])
+-- Fix round 1, M-5: n=1 (singular "ship", no trailing "s"), convoy=false.
+check("tick/gate 6: note text -- singular \"ship\", no convoy suffix",
+      printed[1] == "[Auto-Raid] sent 1 ship to Uppsala", printed[1])
 
 -- ---- Gate 7: convoy wait-for-full-set (non-"all" want) ---------------------
 -- Dock T3 -> DOCK_FLEET cap 6. 4 padding ships (state "raiding": owned but
@@ -446,6 +449,10 @@ end
 check("tick/branch: last_dispatch recorded (n, target, convoy=false)",
       ar.settings().last_dispatch.n == 3 and ar.settings().last_dispatch.target == "Birka"
         and ar.settings().last_dispatch.convoy == false)
+-- Fix round 1, M-5: LEGACY:4264-4265's user-facing note was never asserted.
+-- n=3 (plural "ships"), convoy=false (no " (convoy)" suffix).
+check("tick/branch: note text -- plural \"ships\", no convoy suffix",
+      printed[1] == "[Auto-Raid] sent 3 ships to Birka", printed[1])
 
 -- ---- Branch: "ships all" solo mode sends up to the dock/fleet cap, a
 -- STRICT SUBSET (2 of 3 owned+docked ships) this time -- dock T1 -> cap 2,
@@ -474,9 +481,17 @@ do
   local chosen = {}
   local all_match = true
   for _, cmd in ipairs(sent) do
+    -- Fix round 1, M-9: guard the nil case explicitly -- `chosen[name] =
+    -- true` with name == nil ("table index is nil") would ABORT the whole
+    -- suite mid-file rather than fail this one case cleanly, hiding every
+    -- test below it (including the entire config/menu section) during
+    -- exactly the mutation runs this suite exists to support.
     local name = cmd:match("^vlongship raid (%a+) Birka$")
-    if not name or not fleet[name] or chosen[name] then all_match = false end
-    chosen[name] = true
+    if not name or not fleet[name] or chosen[name] then
+      all_match = false
+    else
+      chosen[name] = true
+    end
   end
   check("tick/branch: ships=\"all\" solo -- exactly 2 commands, each a distinct known ship, "
         .. "capped to dock tier 1's fleet cap (2), not all 3",
@@ -484,9 +499,14 @@ do
 end
 
 -- ---- Branch: convoy sails once the full requested count is docked --------
+-- Fix round 1, M-8(a): dock T2 gives DOCK_FLEET[2] = 4, but the comment
+-- previously said "cap 4" without accounting for the owned-ship-count
+-- clamp -- 2 ships owned, 0 held -> nonheld = 2 < 4, so mx actually clamps
+-- down to 2 here, not 4. target_n = min(ships=2, mx=2) = 2 either way, so
+-- the expectation below is unaffected -- only the comment was wrong.
 reset_all()
 page_opts.set("auto_raid", true)
-set_dock(2)   -- cap 4
+set_dock(2)   -- DOCK_FLEET[2]=4, but nonheld=2 clamps mx down to 2 (see above)
 set_ships({ ship_entry({ name = "S1", state = "docked" }), ship_entry({ name = "S2", state = "docked" }) })
 ar.settings().target = "Uppsala"
 ar.settings().convoy = true
@@ -496,6 +516,9 @@ ar.tick()
 check("tick/branch: convoy of exactly the requested count -- exact command",
       #sent == 1 and sent[1] == "vlongship convoy 2 Uppsala", sent[1])
 check("tick/branch: last_dispatch records convoy=true", ar.settings().last_dispatch.convoy == true)
+-- Fix round 1, M-5: n=2 (plural "ships"), convoy=true (" (convoy)" suffix).
+check("tick/branch: note text -- plural \"ships\" AND the convoy suffix",
+      printed[1] == "[Auto-Raid] sent 2 ships to Uppsala (convoy)", printed[1])
 
 print(string.format("\n%d failures so far (tick)", failures))
 
@@ -613,9 +636,15 @@ if last_menu_open then
 end
 
 -- Selecting "on" toggles, saves immediately, and reopens the menu in place.
+-- Fix round 1, I-1: clear the leftover `stored` snapshot from the earlier
+-- `raid_command("on")` call (line 592) FIRST -- that call already left
+-- stored.page_opts.auto_raid == true, and this menu action also flips
+-- auto_raid to true, so without clearing, the assertion below would pass
+-- even with menu_pick's own save() call deleted (confirmed by mutation).
+stored = nil
 last_menu_open.on_select("on")
 check("menu: selecting 'on' flips auto_raid", page_opts.get("auto_raid") == true)
-check("menu: selecting 'on' persists immediately", stored.page_opts.auto_raid == true)
+check("menu: selecting 'on' persists immediately", stored ~= nil and stored.page_opts.auto_raid == true)
 check("menu: reopens itself in place", last_menu_open ~= nil)
 if last_menu_open then
   check("menu: reopened item reflects the new ON state",
@@ -665,8 +694,13 @@ check("menu/target: opening the picker does NOT persist (LEGACY quirk, ported ve
       stored == nil)
 if last_menu_open then
   local labels = menu_item_labels(last_menu_open)
-  check("menu/target: lineage/historical groups with header rows",
-        labels[1] == "Lineage Cities:" and labels[2] == "  Uppsala"
+  -- Fix round 1, I-3: the goods text ("name good1 good2", LEGACY's own
+  -- cell()-closure field order) is restored -- Uppsala was seeded with
+  -- g1="furs"/g2="iron" -> good_label("furs")="Furs", good_label("iron")=
+  -- "Iron"; Birka was seeded with no goods at all, so its label is the bare
+  -- name (target_label appends nothing when e.g1/e.g2 are both nil).
+  check("menu/target: lineage/historical groups with header rows AND goods text",
+        labels[1] == "Lineage Cities:" and labels[2] == "  Uppsala Furs Iron"
           and labels[3] == "Other Targets:" and labels[4] == "  Birka",
         table.concat(labels, "|"))
 end

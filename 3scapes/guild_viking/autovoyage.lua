@@ -101,12 +101,19 @@
 --     Almost certainly inert in this architecture regardless: `menu.open`
 --     already calls `ui.dirty()`, and every renderer re-reads state fresh
 --     each frame, so there is nothing left for a second repaint to catch.
---   * S.autovoyage is persistent shared state, exactly like S.autotrade
+--   * S.autovoyage is shared module state, exactly like S.autotrade
 --     (autotrader/core.lua's M.settings()) -- not module-local like
 --     autotrader/tick.lua's `sm`, so there is no M.reset(): a test resets it
 --     the same documented way guild_viking_autotrader_test.lua resets
 --     S.autotrade directly (plugin-local settings state, not a wire-parsed
---     field).
+--     field). Fix round 1, I-2: it is ALSO now persisted to disk exactly
+--     like S.autotrade, through M.snapshot()/M.restore() below and
+--     persist.lua's M.save()/M.load() -- before this fix, persist.lua had
+--     no way to carry S.autovoyage at all, so only page_opts' auto_voyage/
+--     av_verbose on-off flags survived a reload; risk/ship/mission_prio/
+--     diff_min/diff_max/allow_abyssal were silently lost every restart,
+--     unlike LEGACY's OnPluginSaveState (MAIN 3023-3024), which serializes
+--     the whole `state` table and so persisted state.autovoyage for free.
 local S = require("state").S
 local page_opts = require("page_opts")
 local persist = require("persist")
@@ -854,6 +861,20 @@ function M.voyage_command(rest)
     return
   end
   M.config(rest)
+end
+
+-- Cross-session persistence snapshot/restore, called from persist.lua's
+-- M.save()/M.load() -- same shape as autotrader/core.lua's M.snapshot()/
+-- M.restore(). Fix round 1, I-2 (see the module header for the full
+-- rationale): without this pair, risk/ship/mission_prio/diff_min/diff_max/
+-- allow_abyssal were silently lost every restart.
+function M.snapshot()
+  return { autovoyage = S.autovoyage }
+end
+
+function M.restore(tbl)
+  if not tbl then return end
+  if tbl.autovoyage then S.autovoyage = tbl.autovoyage end
 end
 
 return M
