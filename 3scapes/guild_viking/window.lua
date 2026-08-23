@@ -51,6 +51,7 @@
 local pagelib = require("pagelib")
 local scroller = require("scroller")
 local track = require("popups.pointer_track").tracker()
+local page_menu = require("page_menu")
 
 local window = {}
 
@@ -321,12 +322,46 @@ end
 -- captured, etc. -- see CLAUDE.md's "Pane Pointer Input") and every up
 -- (matched or not) clear the tracker.
 function window.on_pointer(event)
-  if event.button ~= "left" then return false end
-
+  -- Cancel is handled before the button check, because wm.lua synthesizes it
+  -- with `button = capture.button` -- a RIGHT-button gesture's cancel
+  -- therefore carries button == "right", and gating this branch on "left"
+  -- would leave that gesture's record behind for a later up to match against.
   if event.kind == "cancel" then
     track.clear()
     return false
   end
+
+  -- RIGHT-click: the per-page context menu (page_menu.lua, LEGACY's
+  -- right-click page-body hotspot at guild_viking.lua:11151-11163). Body only
+  -- -- a right-click on the tab bar is a no-op, matching LEGACY's hotspot,
+  -- which covered the page body and not its chrome tabs. Same down/up
+  -- discipline as the body-target path below (record on down, consume, act on
+  -- a matching up) for the same reason: LEGACY's hotspot fired on MouseUp, so
+  -- pressing in the pane and releasing outside it must do nothing.
+  -- pointer_track's `same()` compares c/r only for kind == "cell"; every other
+  -- kind matches on kind alone, which is what this whole-body gesture wants --
+  -- there is exactly one target, so identity IS the kind.
+  if event.button == "right" then
+    if event.kind == "down" then
+      if event.y < recorded_tab_rows then return false end
+      if not page_menu.has_menu(current_key) then return false end
+      track.record({ kind = "pagemenu" })
+      return true
+    end
+    if event.kind == "up" then
+      local matched = event.inside and event.y >= recorded_tab_rows
+        and track.matches({ kind = "pagemenu" })
+      track.clear()
+      if matched then
+        page_menu.open(current_key)
+        return true
+      end
+      return false
+    end
+    return false
+  end
+
+  if event.button ~= "left" then return false end
 
   if event.kind == "down" then
     for _, s in ipairs(tab_spans) do

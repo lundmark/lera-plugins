@@ -1107,5 +1107,99 @@ end
 window.set_page("stats")
 render_pass = "local"
 
+-- =============================================================================
+-- Per-page context menu on RIGHT-click (page_menu.lua, LEGACY's right-click
+-- page-body hotspot at guild_viking.lua:11151-11163).
+--
+-- These cases drive window.on_pointer directly; the same feature is driven
+-- through the REAL scripts/default/popup.lua dispatch layer for the two popup
+-- surfaces in guild_viking_popup_dispatch_test.lua. Both layers are needed:
+-- a module-level test cannot see a swallowed down, which is exactly how a
+-- dead click shipped in stage 3.
+-- =============================================================================
+local pm_opened = nil
+package.loaded["menu"] = {
+  open = function(spec) pm_opened = spec end,
+  close = function() pm_opened = nil end,
+  is_open = function() return pm_opened ~= nil end,
+}
+package.loaded["persist"] = { save = function() end, load = function() end }
+
+-- Restore the real page modules (earlier sections swap in fakes) and render
+-- once so recorded_tab_rows/page_targets describe a real layout.
+for _, p in ipairs(window.PAGES) do
+  for _, q in ipairs(window.PAGES) do
+    if q.key == p.key then q.mod = real_mods[p.key] end
+  end
+end
+window.set_page("stats")
+window.render(make_rect(0, 0, 100, 20), {})
+
+local function rclick(kind, x, y, inside)
+  return window.on_pointer({
+    kind = kind, button = "right", x = x, y = y,
+    inside = inside == nil and true or inside, width = 100, height = 20,
+  })
+end
+
+-- A right down in the BODY consumes (so the matching up is delivered at all)
+-- but must not open anything yet -- LEGACY's hotspot fired on MouseUp.
+pm_opened = nil
+check("right down in the pane body consumes", rclick("down", 10, 5) == true)
+check("right down alone opens no menu", pm_opened == nil)
+check("the matching right up opens the page menu",
+  rclick("up", 10, 5) == true and pm_opened ~= nil)
+check("the menu opened is the CURRENT page's",
+  pm_opened and pm_opened.title == "Stats", pm_opened and pm_opened.title)
+
+-- Switching pages switches which menu a right-click opens.
+window.set_page("city")
+window.render(make_rect(0, 0, 100, 20), {})
+pm_opened = nil
+rclick("down", 10, 5); rclick("up", 10, 5)
+check("after set_page the right-click menu follows the page",
+  pm_opened and pm_opened.title == "City", pm_opened and pm_opened.title)
+
+-- Fail-closed: a right down that is released OUTSIDE the pane opens nothing.
+-- This is the protection LEGACY's MouseUp hotspot gave for free (a mouseup
+-- reaches only the hotspot that took the down), and it is what a fail-open
+-- tracker would silently lose.
+pm_opened = nil
+check("right down consumes before the drag", rclick("down", 10, 5) == true)
+check("right up released off-pane does not consume",
+  rclick("up", 10, 5, false) ~= true)
+check("right up released off-pane opens no menu", pm_opened == nil)
+
+-- A right up with no recorded down (fail-closed default) opens nothing.
+pm_opened = nil
+check("a bare right up with no recorded down does not consume",
+  rclick("up", 10, 5) ~= true)
+check("a bare right up opens no menu", pm_opened == nil)
+
+-- Cancel (popup covering the pane, focus loss, a second down) clears the
+-- record, so a later up cannot act on it. wm.lua synthesizes cancel with the
+-- CAPTURED button, i.e. "right" here -- window.on_pointer must therefore
+-- handle cancel before its button check.
+pm_opened = nil
+rclick("down", 10, 5)
+window.on_pointer({ kind = "cancel", button = "right", x = 10, y = 5,
+                    inside = true, width = 100, height = 20 })
+check("right up after a cancel does not consume", rclick("up", 10, 5) ~= true)
+check("right up after a cancel opens no menu", pm_opened == nil)
+
+-- The tab bar is chrome: LEGACY's hotspot covered the page BODY only.
+pm_opened = nil
+check("right down on the tab bar does not consume", rclick("down", 2, 0) ~= true)
+check("right down on the tab bar opens no menu", pm_opened == nil)
+
+-- A LEFT click must be entirely unaffected by any of the above.
+pm_opened = nil
+local left_consumed = window.on_pointer({
+  kind = "down", button = "left", x = 2, y = 0,
+  inside = true, width = 100, height = 20,
+})
+check("a left down on a tab still switches page (unchanged)", left_consumed == true)
+check("a left tab click opens no context menu", pm_opened == nil)
+
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING WINDOW TESTS PASSED")

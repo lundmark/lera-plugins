@@ -573,6 +573,31 @@ function M.on_pointer(ev, ctx)
     return nil
   end
 
+  -- RIGHT-click anywhere in this popup: the page context menu (page_menu.lua
+  -- -- LEGACY's PAGE_MENUS[10], whose right-click hotspot covered the whole
+  -- page body). Checked BEFORE the [Actions] line below, so right-click means
+  -- the same thing everywhere in the popup rather than depending on which row
+  -- it landed on. Note this narrows the [Actions] line, which until now fired
+  -- on a down of ANY button (it never checked `ev.button`): it is left-click
+  -- (and middle) from here on. Deliberate -- LEGACY reserved right-click for
+  -- this menu on every page.
+  if ev.button == "right" then
+    if ev.kind == "down" then
+      track.record({ kind = "pagemenu" })
+      return true
+    end
+    if ev.kind == "up" then
+      local ok = track.matches({ kind = "pagemenu" })
+      track.clear()
+      if ok then
+        require("page_menu").open("sea")
+        return true
+      end
+      return nil
+    end
+    return nil
+  end
+
   if ev.kind == "down" and ctx.line_from_y then
     local idx = M.actions_line_index(ev.width)
     if idx and ctx.line_from_y(ev.y) == idx then

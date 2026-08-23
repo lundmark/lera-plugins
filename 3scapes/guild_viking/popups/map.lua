@@ -632,6 +632,10 @@ local function open_poi_menu()
   })
 end
 
+-- Exported for page_menu.lua's "Travel to..." action row (LEGACY:11216-11221,
+-- where the page menu's travel item called viking_show_poi_menu directly).
+M.open_poi_menu = open_poi_menu
+
 function M.on_pointer(ev, ctx)
   if not ctx.cell_from_xy then return nil end
 
@@ -659,6 +663,28 @@ function M.on_pointer(ev, ctx)
   if ev.kind == "move" then
     hover = cell_tip(poi_at, c, r)
     ui.dirty()
+    return nil
+  end
+
+  -- RIGHT-click anywhere on the grid: this page's context menu (page_menu.lua
+  -- -- LEGACY's PAGE_MENUS[7], whose right-click hotspot covered the whole
+  -- page body). Same record-on-down / match-on-up discipline as the POI path
+  -- below, and deliberately NOT gated on landing on a POI: LEGACY's page-body
+  -- hotspot did not care what was under the cursor.
+  if ev.button == "right" then
+    if ev.kind == "down" then
+      track.record({ kind = "pagemenu" })
+      return true
+    end
+    if ev.kind == "up" then
+      local ok = track.matches({ kind = "pagemenu" })
+      track.clear()
+      if ok then
+        require("page_menu").open("map")
+        return true
+      end
+      return nil
+    end
     return nil
   end
 
