@@ -241,6 +241,14 @@ local function on_prompt()
     -- struck from the local view here because nothing else will: Room.Contents
     -- is not re-sent for a mob that died, so without this the next decision
     -- would attack the corpse, and the one after that, forever.
+    --
+    -- The trade-off is deliberate. This state machine has always treated the
+    -- first prompt after an attack as "combat over"; it used to re-glance and
+    -- re-attack when the refreshed room still listed the mob, which is exactly
+    -- the poll the protocol no longer supports. So a prompt arriving mid-fight
+    -- now means we step away with the mob still alive, rather than hammering
+    -- 'kill' at a live server until something changes. Only a client-side death
+    -- trigger could tell the two apart.
     forget_monster(current_target)
     current_target = nil
     state = "idle"
