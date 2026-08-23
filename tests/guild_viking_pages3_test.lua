@@ -615,22 +615,60 @@ do
           row_eq ~= nil and lines_eq[row_eq]:find(C.bright_green, 1, true) ~= nil,
           row_eq and lines_eq[row_eq])
 
-    -- (c) ABSENT want_goods -> always sufficient, regardless of wstock (an
-    -- EMPTY warehouse here, which would fail every other case above). A
-    -- mutation flipping the early `return true` to `return false` would
-    -- wrongly disable a mission that asks for nothing at all.
+    -- (c) LEGACY's early-return guard has THREE disjunct sub-conditions
+    -- (MAIN 4818: `not want_goods or type(want_goods) ~= "table" or
+    -- not next(want_goods)`). Two are fixtured below, each with an EMPTY
+    -- warehouse (S.wstock = {}); both catch a mutation that flips the
+    -- guard's own `return true` to `return false` (verified: reverted
+    -- after confirming).
+    --
+    -- The empty-table fixture (c2) does NOT independently pin the guard's
+    -- `not next(want_goods)` sub-condition on its own, though -- dropping
+    -- ONLY that sub-condition (leaving `not want_goods or type(...) ~=
+    -- "table"`) is an EQUIVALENT MUTANT for an empty table: `{}` is still
+    -- a table, so the guard's remaining conditions don't fire, but the
+    -- function falls through to `for good, needed_qty in pairs(want_
+    -- goods) do ... end`, which iterates ZERO times over an empty table
+    -- and reaches the function's own trailing `return true` regardless
+    -- (verified: applying just that mutation leaves this suite green).
+    -- Kept anyway -- it still documents and exercises the empty-table
+    -- INPUT LEGACY's guard names, and it does catch the broader
+    -- return-true/false flip above; it just isn't the mutation that
+    -- specific sub-condition alone would need to be pinned by.
+    --
+    -- The THIRD sub-condition (`type(want_goods) ~= "table"`, a non-table
+    -- value) is NOT independently fixtured here: `mission_lines`' OWN
+    -- want_goods display loop a few lines below (`sorted_keys(m.want_
+    -- goods)` -> `pairs(t or {})`) calls `pairs()` on the same value
+    -- unconditionally, which raises on a non-table just as LEGACY's own
+    -- `for g, q in pairs(m.want_goods) do` display loop would -- this is
+    -- a pre-existing shared fragility between the guard and the display
+    -- code, not something Task 6 introduced, and the MISSIONS wire parser
+    -- (handlers/city.lua) always builds a table, so a non-table
+    -- want_goods is not a state this port's own rendering path can reach
+    -- in practice. Testing it would require exporting
+    -- `has_sufficient_goods` solely for this one fixture, bypassing the
+    -- page's real rendering entry point -- not worth the added surface
+    -- for a defensive branch neither LEGACY nor this port's display code
+    -- can survive past anyway.
     S.wstock = {}
     local saved_missions_i4c = S.missions
-    S.missions = {
-      { id = 8, label = "No goods needed", expires_in = 1800,
-        origin_town = "Vestergotland", target_town = "Holmgard",
-        reward = 50, reward_rep = 0, want_goods = nil },
-    }
-    local lines_none = people_page.lines(WIDTH)
-    local row_none = find_line(lines_none, "Run There")
-    check("people: I4c has_sufficient_goods with absent want_goods is SUFFICIENT (empty wstock)",
-          row_none ~= nil and lines_none[row_none]:find(C.bright_green, 1, true) ~= nil,
-          row_none and lines_none[row_none])
+    local function check_i4c_arm(name, want_goods_value)
+      S.missions = {
+        { id = 8, label = "No goods needed", expires_in = 1800,
+          origin_town = "Vestergotland", target_town = "Holmgard",
+          reward = 50, reward_rep = 0, want_goods = want_goods_value },
+      }
+      local lines_arm = people_page.lines(WIDTH)
+      local row_arm = find_line(lines_arm, "Run There")
+      check("people: I4c has_sufficient_goods, " .. name .. ", is SUFFICIENT (empty wstock)",
+            row_arm ~= nil and lines_arm[row_arm]:find(C.bright_green, 1, true) ~= nil,
+            row_arm and lines_arm[row_arm])
+    end
+    -- (c1) ABSENT (nil) want_goods -- `not want_goods`.
+    check_i4c_arm("absent (nil) want_goods", nil)
+    -- (c2) EMPTY table want_goods -- `not next(want_goods)`.
+    check_i4c_arm("empty-table want_goods", {})
     S.missions = saved_missions_i4c
     S.wstock = saved_wstock
   end

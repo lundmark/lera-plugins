@@ -418,10 +418,27 @@ check("M2: right-edge-miss fires nothing", #seam_fired == 0)
 -- WOULD compute to for a tab-bar-row click, once the pane is scrolled: with
 -- tab_rows=1, offset=2, y=0 (a real "Stats" tab hit, col [0,5)) gives
 -- page_row = (0 - 1) + 2 + 1 = 2 -- exactly D's row, with an overlapping
--- column span. So this click is a genuine ambiguity between the tab span
--- and target D, not merely "a coordinate with no target nearby" -- the
--- ONLY thing resolving it is on_pointer checking tab spans before ever
--- calling `target_at`, and returning immediately on a tab match.
+-- column span. So this coordinate is a genuine ambiguity in NUMBERING
+-- terms -- D's row/col happen to equal what the raw page_row arithmetic
+-- produces for this tab-row click -- not merely "a coordinate with no
+-- target nearby".
+--
+-- Correction (review round 3): checking tab spans before `target_at` is
+-- NOT what resolves this ambiguity, and reordering those two checks is an
+-- EQUIVALENT MUTANT (survives the whole suite) -- because `target_at`
+-- carries its own independent guard (`event.y < recorded_tab_rows`), and
+-- every tab span's `row` is, by construction, one of the rows
+-- `render_tabbar` wrapped onto (0..recorded_tab_rows-1) while every
+-- reachable page_row is >= 1 once that guard passes. The two regions
+-- (tab-bar rows vs. body rows) are disjoint BY CONSTRUCTION, from the
+-- SAME `render_tabbar` call under the SAME `lera.render_pass() ~= "remote"`
+-- guard that also produced `recorded_tab_rows` -- so `target_at` already
+-- rejects this y before either check order could matter. What this case
+-- actually verifies is that a tab click still switches pages correctly
+-- even when a fake target's numbers happen to collide with what the raw
+-- arithmetic would produce if the guard were bypassed -- i.e. that the
+-- guard (not the check order) is doing the real work. M1 below pins the
+-- guard itself with a mutation that only it can catch.
 seam_fired = {}
 window.set_page("stats")
 window.scroll(2) -- offset -> 2
@@ -437,6 +454,49 @@ check("M3: the matching up at the SAME ambiguous coordinate still fires no body 
 window.scroll(-2) -- back to offset 0
 reset_drawn()
 window.render(seam_rect, {})
+window.set_page("stats")
+
+-- ---- M1: the `event.y < recorded_tab_rows` guard, pinned on its own -----
+-- (review round 3): M3 above is an equivalent-mutant case for check
+-- ORDER (see its corrected comment) -- this case instead removes the tab
+-- span match entirely and relies SOLELY on the guard. A WRAPPED tab bar
+-- (30-wide -> tab_rows=3, established earlier in this file) with
+-- body_h=7 (so targets ARE recorded, unlike I1's body_h<=0 case) and the
+-- pane SCROLLED to its max offset (3, clamped against count 10 - height
+-- 7): clicking a SEPARATOR column on a tab-bar row that matches NO tab
+-- span at all must still not reach a body target through the raw
+-- page_row arithmetic.
+--
+-- Row 2 of the 30-wide wrapped bar is War[col 0,3) then Trade[col 4,9)
+-- (render_tabbar's own column bookkeeping: after Goods..Army wrap onto
+-- row 1 -- established by the "wrapped row 1 contains Bonds" case earlier
+-- in this file -- War (3 chars) starts row 2 at col 0..2, a 1-col
+-- separator follows at col 3, then Trade (5 chars) occupies col 4..8);
+-- column 3 is that separator, matching NEITHER span. Without the guard,
+-- page_row for (x=3, y=2) at tab_rows=3, offset=3 would be
+-- (2 - 3) + 3 + 1 = 3 -- exactly target A's row, and x=3 IS inside A's
+-- col span [2, 8) -- the same misfire class as the original I1 defect,
+-- reachable here purely by clicking a tab-bar gap on a scrolled, wrapped
+-- pane.
+seam_fired = {}
+window.set_page("stats")
+local m1_rect = make_rect(0, 0, 30, 10)
+reset_drawn()
+window.render(m1_rect, {}) -- tab_rows=3, body_h=7 -- establishes scroller height=7
+window.scroll(3) -- offset -> 3 (clamped against count 10 - height 7 = 3)
+check("(M1 setup) scrolled to the max offset (3)", window.following_tail() == false)
+reset_drawn()
+window.render(m1_rect, {}) -- re-render so recorded_offset picks up 3
+check("(M1 setup) row 2 of the wrapped bar contains War and Trade",
+      drawn.ansi[3] and drawn.ansi[3].s:find("War", 1, true) ~= nil
+      and drawn.ansi[3].s:find("Trade", 1, true) ~= nil,
+      drawn.ansi[3] and drawn.ansi[3].s)
+check("M1: a separator column (x=3) on a wrapped, scrolled tab-bar row (y=2) fires nothing",
+      click(3, 2, 30, 10) == false)
+check("M1: no body target fired from the separator click", #seam_fired == 0, seam_fired)
+window.scroll(-3) -- back to offset 0
+reset_drawn()
+window.render(seam_rect, {}) -- restore the wide layout's recorded state
 window.set_page("stats")
 
 -- ---- SCROLLED mapping: offset > 0 shifts which screen row hits which target-
