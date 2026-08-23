@@ -1,32 +1,42 @@
 -- Room Info Plugin for Lera
--- Collects room information from =R=, =P=, =M= prefixed lines
--- Handles multi-line exits, prompt prefixes, and various formats
--- Exposes API for other plugins to query current room state
+-- Sole subscriber to the GMCP Room.* packages: Room.Info (identity, area,
+-- exits and their destinations), Room.Contents (players, monsters, items) and
+-- Room.Map (the line-of-sight grid).
+--
+-- The server suppresses a resend when a payload is identical to the last one it
+-- sent, so absence of a packet means "unchanged", never "empty". Each handler
+-- therefore writes only its own slice of state: a Room.Info must not clear
+-- contents or the map.
+--
+-- Exposes API for other plugins to query current room state.
 
 local M = {}
 M.name = "roominfo"
-M.version = "1.1"
-M.priority = 10  -- Run early to parse before other plugins
+M.version = "2.0"
+M.priority = 10
 
 --------------------------------------------------------------------------------
 -- State
 --------------------------------------------------------------------------------
 
 local current = {
-  room = nil,       -- Current room short description (string)
-  room_id = nil,    -- Current room ID (number)
-  exits = {},       -- List of exit directions (short form)
-  exits_raw = "",   -- Raw exits string
-  players = {},     -- List of player names in room
-  monsters = {},    -- List of monster names in room
-  timestamp = 0,    -- When this info was last updated
+  room = nil,        -- Current room short description (string)
+  room_id = nil,     -- Current room ID (number)
+  area = nil,        -- Area name from Room.Info
+  exits = {},        -- List of exit directions (short form, canonical order)
+  exits_raw = "",    -- Exits joined with ", "
+  exit_dest = {},    -- short direction -> destination room number (0 = unknown)
+  players = {},      -- List of player entries
+  monsters = {},     -- List of monster entries
+  items = {},        -- List of item entries
+  truncated = false, -- Room.Contents reported dropped entries
+  timestamp = 0,     -- When the room identity was last updated
 }
 
--- Pending state for multi-line parsing
-local pending = {
-  expecting_exits = false,  -- Are we expecting exit continuation?
-  room_without_rid = nil,   -- Room data waiting for RID (deferred notification)
-}
+local synced = false          -- has any Room.Info been accepted this session
+local map_grid = nil          -- last Room.Map payload
+local contents_accum = nil    -- multi-page Room.Contents accumulator
+local handler_ids = {}        -- gmcp handler ids, removed on unload
 
 -- History of recent rooms (for tracking movement)
 local history = {}
@@ -50,123 +60,20 @@ local function shorten_direction(dir)
   return direction_short[dir:lower()] or dir:lower()
 end
 
--- Parse exits string into list of short directions
-local function parse_exits(exits_str)
-  local exits = {}
-  -- Strip ANSI codes first
-  local clean = exits_str:gsub("\027%[[0-9;]*m", "")
-  for exit in clean:gmatch("[^,]+") do
-    exit = exit:match("^%s*(.-)%s*$")  -- trim
-    if exit ~= "" then
-      table.insert(exits, shorten_direction(exit))
-    end
-  end
-  return exits
-end
+-- GMCP delivers exits as a mapping, and pairs() order is undefined. Sort into a
+-- canonical compass order so the rendered exit list and the tests are stable;
+-- anything unrecognized sorts alphabetically after the known directions.
+local direction_rank = {
+  n = 1, ne = 2, e = 3, se = 4, s = 5, sw = 6, w = 7, nw = 8,
+  u = 9, d = 10, ["in"] = 11, out = 12,
+}
 
---------------------------------------------------------------------------------
--- Parsing
---------------------------------------------------------------------------------
-
--- Try to find =X= prefix anywhere in the line (handles prompt prefixes like "> ")
--- Returns: prefix_type ("R"/"P"/"M"), value after prefix, or nil
-local function find_prefix(line)
-  -- Look for =X= pattern anywhere in the line
-  local before, prefix_char, value = line:match("^(.-)=([RrPpMm])=(.*)$")
-  if prefix_char then
-    value = value:match("^%s*(.-)%s*$")  -- trim
-    return prefix_char:upper(), value
-  end
-  return nil, nil
-end
-
--- Parse room value: extract name, exits, room_id
--- Format variations:
---   "Room Name (exits) [RID:room_id]"
---   "Room Name [RID:room_id] (exits)"
---   "Room Name (exits)"
---   "Room Name [room_id]"
---   "Room Name"
-local function parse_room_value(value)
-  local room_id = nil
-  local exits_str = nil
-
-  -- Strip ANSI codes before parsing
-  local name = value:gsub("\027%[[0-9;]*m", "")
-
-  -- Extract [RID:room_id] or [room_id] from ANYWHERE in the string (not just end)
-  -- This handles both "Room (exits) [RID:123]" and "Room [RID:123] (exits)"
-  local rid_str = name:match("%[RID:(%d+)%]") or name:match("%[(%d+)%]")
-  if rid_str then
-    room_id = tonumber(rid_str)
-    -- Remove the RID from wherever it appears
-    name = name:gsub("%s*%[RID:%d+%]%s*", " "):gsub("%s*%[%d+%]%s*", " ")
-  end
-
-  -- Extract (exits) from anywhere (usually at end, but be flexible)
-  local exits_match = name:match("%(([^)]+)%)")
-  if exits_match then
-    exits_str = exits_match
-    name = name:gsub("%s*%([^)]*%)", "")
-  end
-
-  -- Collapse multiple spaces and trim
-  name = name:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
-
-  return name, exits_str, room_id
-end
-
--- Check for "There is/are N obvious exit(s): ..." format
-local function parse_obvious_exits(line)
-  -- Strip ANSI codes first
-  local plain = line:gsub("\027%[[0-9;]*m", "")
-
-  local exits = plain:match("[Tt]here%s+[ia][sr]e?%s+.-%s+obvious%s+exits?:%s*(.*)$")
-  if exits then
-    return exits:match("^%s*(.-)%s*$")
-  end
-
-  -- Simpler pattern: "obvious exit(s): n, s, e"
-  exits = plain:match("obvious%s+exits?:%s*(.*)$")
-  if exits then
-    return exits:match("^%s*(.-)%s*$")
-  end
-
-  return nil
-end
-
--- Check for standalone exits in parentheses: "(n, s, e)"
-local function parse_standalone_exits(line)
-  local exits = line:match("^%s*%(([^)]+)%)%s*$")
-  return exits
-end
-
--- Check for exit continuation line (indented directions)
-local function parse_exit_continuation(line)
-  -- Heavily indented line with just directions
-  if pending.expecting_exits then
-    -- Match line that's mostly spaces followed by direction-like content
-    local content = line:match("^%s%s%s%s%s%s+([a-z, ]+)%s*$")
-    if content and content:match("[nesw]") then
-      return content:match("^%s*(.-)%s*$")
-    end
-  end
-  return nil
-end
-
--- Check for standalone [RID:12345] line
-local function parse_standalone_rid(line)
-  -- Strip ANSI codes first
-  local plain = line:gsub("\027%[[0-9;]*m", "")
-  -- Match [RID:NNNN] anywhere in the line
-  local rid_str = plain:match("%[RID:(%d+)%]")
-  if rid_str then
-    -- Make sure this isn't part of a =R= line (which handles RID itself)
-    if not plain:match("=R=") then
-      return tonumber(rid_str)
-    end
-  end
-  return nil
+local function direction_less(a, b)
+  local ra, rb = direction_rank[a], direction_rank[b]
+  if ra and rb then return ra < rb end
+  if ra then return true end
+  if rb then return false end
+  return a < b
 end
 
 --------------------------------------------------------------------------------
@@ -196,37 +103,49 @@ local function add_to_history(room_name)
   end
 end
 
-local function set_exits(exits_str)
-  if exits_str and exits_str ~= "" then
-    current.exits_raw = exits_str
-    current.exits = parse_exits(exits_str)
-    pending.expecting_exits = false
-  end
-end
+--------------------------------------------------------------------------------
+-- GMCP Handlers
+--------------------------------------------------------------------------------
 
--- Common logic for updating room state and notifying callbacks
-local function update_room(name, exits_str, room_id)
+local function handle_room_info(data)
+  if type(data) ~= "table" then return end
+
+  local num = tonumber(data.num)
+  -- The mudlib permits num == 0 and it means "no usable id". Accepting it would
+  -- replace a good room with one nothing can key off.
+  if not num or num <= 0 then return end
+
   local old_room = current.room
   local old_room_id = current.room_id
 
-  current.room = name
-  current.room_id = room_id
+  current.room = data.name and tostring(data.name) or ""
+  current.room_id = num
+  current.area = data.area and tostring(data.area) or nil
   current.timestamp = lera.time()
-  current.players = {}
-  current.monsters = {}
 
-  if exits_str then
-    set_exits(exits_str)
-  else
-    current.exits = {}
-    current.exits_raw = ""
-    pending.expecting_exits = true
+  current.exits = {}
+  current.exit_dest = {}
+  if type(data.exits) == "table" then
+    for dir, dest in pairs(data.exits) do
+      local short = shorten_direction(tostring(dir))
+      table.insert(current.exits, short)
+      current.exit_dest[short] = tonumber(dest) or 0
+    end
+    table.sort(current.exits, direction_less)
   end
+  current.exits_raw = table.concat(current.exits, ", ")
 
-  add_to_history(name)
+  -- A room change abandons any half-received Room.Contents list: its remaining
+  -- pages describe the room we just left.
+  contents_accum = nil
+  synced = true
 
-  if old_room ~= name or old_room_id ~= room_id then
-    notify_room_change(old_room, name)
+  -- Only an actual change enters the history. The server force-sends a snapshot
+  -- on every subscription change, and recording those would fill the history
+  -- with repeats of the room the player is standing in.
+  if old_room ~= current.room or old_room_id ~= current.room_id then
+    add_to_history(current.room)
+    notify_room_change(old_room, current.room)
   end
 end
 
@@ -234,117 +153,18 @@ end
 -- Plugin Hooks
 --------------------------------------------------------------------------------
 
-function M.on_line(line)
-  -- First check for =X= prefixes (handles prompts like "> =R=...")
-  local prefix_type, value = find_prefix(line)
-
-  if prefix_type then
-    current.timestamp = lera.time()
-
-    if prefix_type == "R" then
-      local name, exits_str, room_id = parse_room_value(value)
-
-      if room_id then
-        -- Have RID - process normally with immediate notification
-        pending.room_without_rid = nil
-        update_room(name, exits_str, room_id)
-      else
-        -- No RID yet - store pending, wait for RID line before notifying
-        -- This prevents mapper from rendering with stale room_id
-        pending.room_without_rid = { name = name, exits_str = exits_str }
-
-        -- Still update basic state so exits/players/monsters work
-        current.room = name
-        current.timestamp = lera.time()
-        current.players = {}
-        current.monsters = {}
-
-        if exits_str then
-          set_exits(exits_str)
-        else
-          current.exits = {}
-          current.exits_raw = ""
-          pending.expecting_exits = true
-        end
-      end
-
-      return nil  -- suppress
-
-    elseif prefix_type == "P" then
-      if value and value ~= "" then
-        table.insert(current.players, value)
-      end
-      return nil  -- suppress
-
-    elseif prefix_type == "M" then
-      if value and value ~= "" then
-        table.insert(current.monsters, value)
-      end
-      return nil  -- suppress
-    end
-  end
-
-  -- Check for standalone [RID:12345] line (comes after =R= line)
-  local standalone_rid = parse_standalone_rid(line)
-  if standalone_rid then
-    if pending.room_without_rid then
-      -- Complete the pending room notification with full data
-      local p = pending.room_without_rid
-      pending.room_without_rid = nil
-      update_room(p.name, p.exits_str, standalone_rid)
-    elseif current.room_id ~= standalone_rid then
-      -- Update existing room with new RID
-      current.room_id = standalone_rid
-      current.timestamp = lera.time()
-      notify_room_change(current.room, current.room)
-    end
-    return nil  -- suppress the [RID:] line
-  end
-
-  -- Check for "obvious exits" format
-  local obvious_exits = parse_obvious_exits(line)
-  if obvious_exits then
-    set_exits(obvious_exits)
-    -- Don't suppress - let it display
-    return line
-  end
-
-  -- Check for standalone (exits) format
-  local standalone_exits = parse_standalone_exits(line)
-  if standalone_exits and pending.expecting_exits then
-    set_exits(standalone_exits)
-    -- Don't suppress
-    return line
-  end
-
-  -- Check for exit continuation
-  local continuation = parse_exit_continuation(line)
-  if continuation then
-    -- Append to existing exits
-    if current.exits_raw ~= "" then
-      current.exits_raw = current.exits_raw .. ", " .. continuation
-    else
-      current.exits_raw = continuation
-    end
-    current.exits = parse_exits(current.exits_raw)
-    -- Don't suppress
-    return line
-  end
-
-  -- Any other line stops exit continuation expectation
-  if pending.expecting_exits and line:match("%S") then
-    -- Non-empty line that's not exits - stop expecting
-    pending.expecting_exits = false
-  end
-
-  return line
-end
-
 function M.on_load()
-  print("[roominfo] Loaded - collecting =R=, =P=, =M= data")
+  handler_ids[#handler_ids + 1] = gmcp.on("Room.Info", function(_, data)
+    handle_room_info(data)
+  end)
+  print("[roominfo] Loaded - subscribed to GMCP Room.Info")
 end
 
 function M.on_unload()
+  for _, id in ipairs(handler_ids) do
+    if id then gmcp.remove(id) end
+  end
+  handler_ids = {}
   on_room_change_callbacks = {}
   print("[roominfo] Unloaded")
 end
@@ -363,10 +183,24 @@ function M.room_id()
   return current.room_id
 end
 
--- Check if room data is fully synced (not waiting for RID)
--- Returns false if we received =R= but are still waiting for RID
+-- True once a Room.Info has been accepted. Before that there is no room state
+-- to correlate against, which is exactly what mapview needs to know.
 function M.is_synced()
-  return pending.room_without_rid == nil
+  return synced
+end
+
+function M.area()
+  return current.area
+end
+
+-- short direction -> destination room number. 0 means the server reported the
+-- exit but no usable destination id.
+function M.exit_destinations()
+  local result = {}
+  for dir, dest in pairs(current.exit_dest) do
+    result[dir] = dest
+  end
+  return result
 end
 
 -- Debug function to check internal state
@@ -374,8 +208,9 @@ function M.debug_state()
   return {
     room = current.room,
     room_id = current.room_id,
-    is_synced = pending.room_without_rid == nil,
-    pending_room = pending.room_without_rid and pending.room_without_rid.name or nil,
+    area = current.area,
+    synced = synced,
+    has_map = map_grid ~= nil,
   }
 end
 
@@ -414,6 +249,16 @@ function M.monsters()
   return result
 end
 
+-- Get list of items in current room (stub; Task 2 fills this in from
+-- Room.Contents)
+function M.items()
+  local result = {}
+  for i, e in ipairs(current.items) do
+    result[i] = e
+  end
+  return result
+end
+
 -- Get count of players
 function M.player_count()
   return #current.players
@@ -429,12 +274,15 @@ function M.info()
   return {
     room = current.room,
     room_id = current.room_id,
+    area = current.area,
     exits = M.exits(),
     exits_string = M.exits_string(),
     players = M.players(),
     monsters = M.monsters(),
-    player_count = #current.players,
-    monster_count = #current.monsters,
+    items = M.items(),
+    player_count = M.player_count(),
+    monster_count = M.monster_count(),
+    truncated = current.truncated,
     timestamp = current.timestamp,
   }
 end
@@ -494,13 +342,18 @@ end
 function M.clear()
   current.room = nil
   current.room_id = nil
+  current.area = nil
   current.exits = {}
   current.exits_raw = ""
+  current.exit_dest = {}
   current.players = {}
   current.monsters = {}
+  current.items = {}
+  current.truncated = false
   current.timestamp = 0
-  pending.expecting_exits = false
-  pending.room_without_rid = nil
+  synced = false
+  map_grid = nil
+  contents_accum = nil
   history = {}
 end
 
