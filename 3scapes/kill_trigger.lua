@@ -375,18 +375,11 @@ local function trunc(s, w)
 end
 
 -- Render kill trigger stats for stats_window
-function M.render_stats(rect, opts)
-  opts = opts or {}
-
-  local x, y, w, h
-  if type(rect.x) == "function" then
-    x, y, w, h = rect:x(), rect:y(), rect:w(), rect:h()
-  else
-    x, y, w, h = rect.x, rect.y, rect.w, rect.h
-  end
-
-  if w <= 0 or h <= 0 then return 0 end
-
+-- The killers block as a line list, for a host that windows it itself
+-- (stats_window's scrollable info pane asks for these). render_stats below
+-- keeps the older draw-into-a-rect contract for hosts that don't.
+function M.stats_lines(w)
+  if type(w) ~= "number" or w <= 0 then return {} end
   local lines = {}
 
   -- Status line: "Killers: ON" or "Killers: OFF"
@@ -433,7 +426,22 @@ function M.render_stats(rect, opts)
     table.insert(lines, kill_text)
   end
 
-  -- Render lines
+  return lines
+end
+
+function M.render_stats(rect, opts)
+  opts = opts or {}
+
+  local x, y, w, h
+  if type(rect.x) == "function" then
+    x, y, w, h = rect:x(), rect:y(), rect:w(), rect:h()
+  else
+    x, y, w, h = rect.x, rect.y, rect.w, rect.h
+  end
+
+  if w <= 0 or h <= 0 then return 0 end
+
+  local lines = M.stats_lines(w)
   local lines_rendered = 0
   for i, line in ipairs(lines) do
     if i <= h then

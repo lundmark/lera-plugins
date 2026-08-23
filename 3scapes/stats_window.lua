@@ -178,9 +178,9 @@ end
 -- Render functions
 --------------------------------------------------------------------------------
 
-local function render_player_stats(x, y, w, h)
-  if not player_stats then return 0 end
-  if not player_stats.has_data() then return 0 end
+local function player_stat_lines(w)
+  if not player_stats then return {} end
+  if not player_stats.has_data() then return {} end
 
   local stats = player_stats.get_stats()
   local lines = {}
@@ -237,19 +237,12 @@ local function render_player_stats(x, y, w, h)
     table.insert(lines, atk_text)
   end
 
-  -- Render lines
-  for i, line in ipairs(lines) do
-    if i <= h then
-      ui.text_ansi(ui.rect(x, y + i - 1, w, 1), line)
-    end
-  end
-
-  return #lines
+  return lines
 end
 
-local function render_mercenary_stats(x, y, w, h)
-  if not mercenary then return 0 end
-  if not mercenary.has_data() then return 0 end
+local function mercenary_stat_lines(w)
+  if not mercenary then return {} end
+  if not mercenary.has_data() then return {} end
 
   local stats = mercenary.get_stats()
   local lines = {}
@@ -319,26 +312,123 @@ local function render_mercenary_stats(x, y, w, h)
     table.insert(lines, lvl_text)
   end
 
-  -- Render lines
-  for i, line in ipairs(lines) do
-    if i <= h then
-      ui.text_ansi(ui.rect(x, y + i - 1, w, 1), line)
-    end
-  end
-
-  return #lines
+  return lines
 end
 
 --------------------------------------------------------------------------------
 -- Main render function
 --------------------------------------------------------------------------------
 
+-- ---------------------------------------------------------------------------
+-- Scrolling
+--
+-- This pane could not scroll at all before: the module exported no `scroll`,
+-- so wm.assign captured none, wm.scrollable("stats") was false, and the mouse
+-- wheel silently did nothing over it while every other pane responded.
+--
+-- The fix is to assemble the whole pane into ONE line list and draw a window
+-- of it, instead of letting each section draw itself at an absolute y. Offset
+-- is TOP-anchored (0 == showing the first line), because this is a dashboard
+-- read downward -- the same convention guild_viking's pane pages use, and the
+-- opposite of wm.make_scroller's tail-anchored chat/log semantics.
+--
+-- The guild and killers blocks belong to OTHER plugins. A plugin offering a
+-- lines accessor (`guild_stats_lines(w)` / `stats_lines(w)`) joins the
+-- scrollable list. One offering only the older draw-into-a-rect contract
+-- (`render_guild_stats` / `render_stats`) still renders -- below the windowed
+-- block, in whatever space is left, exactly as it did before -- but cannot be
+-- scrolled, because a host cannot window content it never sees. Such a plugin
+-- gains scrolling for free the day it adds the accessor.
+-- ---------------------------------------------------------------------------
+local scroll_offset = 0
+local last_total, last_height = 0, 1
+
+local function clamp_offset()
+  local max = last_total - last_height
+  if max < 0 then max = 0 end
+  if scroll_offset > max then scroll_offset = max end
+  if scroll_offset < 0 then scroll_offset = 0 end
+end
+
+-- delta < 0 scrolls up (toward the first line), > 0 down -- CLAUDE.md's
+-- pane-scrolling sign convention.
+function M.scroll(delta)
+  if type(delta) ~= "number" then return false end
+  scroll_offset = scroll_offset + delta
+  clamp_offset()
+  ui.dirty()
+  return true
+end
+
+function M.scroll_to_bottom()
+  scroll_offset = last_total - last_height
+  clamp_offset()
+  ui.dirty()
+  return true
+end
+
+-- "At rest" for a top-anchored dashboard is the TOP, so this reports whether
+-- the pane is showing its first line. Same wm.assign contract name, opposite
+-- physical direction from a tail-anchored log pane -- see the note above.
+function M.following_tail()
+  clamp_offset()
+  return scroll_offset == 0
+end
+
+local function separator(w)
+  return string.rep("-", w)
+end
+
+-- Collects every section that can hand over lines, in the established order,
+-- with the same separators the drawing version placed between them.
+local function collect_lines(w)
+  local out = {}
+  local function add_all(lines)
+    if #lines == 0 then return end
+    if #out > 0 then out[#out + 1] = separator(w) end
+    for _, l in ipairs(lines) do out[#out + 1] = l end
+  end
+
+  if config.show_player and player_stats then add_all(player_stat_lines(w)) end
+  if config.show_mercenary and mercenary then add_all(mercenary_stat_lines(w)) end
+
+  local guild_draw_only, killers_draw_only = nil, nil
+
+  if config.show_guild then
+    if not guild_plugin then
+      for _, name in ipairs(guild_names) do
+        guild_plugin = plugin.get(name)
+        if guild_plugin then break end
+      end
+    end
+    if guild_plugin and guild_plugin.has_data and guild_plugin.has_data() then
+      if guild_plugin.guild_stats_lines then
+        add_all(guild_plugin.guild_stats_lines(w) or {})
+      elseif guild_plugin.render_guild_stats then
+        guild_draw_only = guild_plugin
+      end
+    end
+  end
+
+  if config.show_killers then
+    if not kill_trigger then kill_trigger = plugin.get("kill_trigger") end
+    if kill_trigger and kill_trigger.has_data and kill_trigger.has_data() then
+      if kill_trigger.stats_lines then
+        add_all(kill_trigger.stats_lines(w) or {})
+      elseif kill_trigger.render_stats then
+        killers_draw_only = kill_trigger
+      end
+    end
+  end
+
+  return out, guild_draw_only, killers_draw_only
+end
+
 function M.render(rect, opts)
   opts = opts or {}
   local show_border = opts.show_border ~= false
   local title = opts.title or "Stats"
 
-  -- Get rect dimensions
   local x, y, w, h
   if type(rect.x) == "function" then
     x, y, w, h = rect:x(), rect:y(), rect:w(), rect:h()
@@ -346,7 +436,6 @@ function M.render(rect, opts)
     x, y, w, h = rect.x, rect.y, rect.w, rect.h
   end
 
-  -- Draw border if requested
   if show_border then
     ui.box(rect, "single", title)
     x, y, w, h = x + 1, y + 1, w - 2, h - 2
@@ -362,77 +451,46 @@ function M.render(rect, opts)
     mercenary = plugin.get("mercenary")
   end
 
-  local current_y = y
-  local remaining_h = h
+  local lines, guild_draw_only, killers_draw_only = collect_lines(w)
 
-  -- Render player stats
-  if config.show_player and player_stats then
-    local lines_used = render_player_stats(x, current_y, w, remaining_h)
-    current_y = current_y + lines_used
-    remaining_h = remaining_h - lines_used
+  last_total, last_height = #lines, h
+  clamp_offset()
 
-    -- Add separator if both player and merc stats shown
-    if lines_used > 0 and remaining_h > 1 and config.show_mercenary and mercenary then
-      ui.text(ui.rect(x, current_y, w, 1), string.rep("-", w))
+  local drawn = 0
+  for i = scroll_offset + 1, math.min(#lines, scroll_offset + h) do
+    ui.text_ansi(ui.rect(x, y + drawn, w, 1), lines[i])
+    drawn = drawn + 1
+  end
+
+  -- Draw-contract-only sections render below the windowed block, in whatever
+  -- space is left (their pre-scrolling behavior). They are deliberately NOT
+  -- part of `lines`, so they are excluded from the scroll range -- see the
+  -- note above the scrolling block.
+  local current_y = y + drawn
+  local remaining_h = h - drawn
+
+  if guild_draw_only and remaining_h > 0 then
+    if drawn > 0 then
+      ui.text(ui.rect(x, current_y, w, 1), separator(w))
       current_y = current_y + 1
       remaining_h = remaining_h - 1
     end
-  end
-
-  -- Render mercenary stats
-  if config.show_mercenary and mercenary and remaining_h > 0 then
-    local lines_used = render_mercenary_stats(x, current_y, w, remaining_h)
-    current_y = current_y + lines_used
-    remaining_h = remaining_h - lines_used
-  end
-
-  -- Render guild stats if a guild plugin is available
-  if config.show_guild and remaining_h > 0 then
-    -- Try to find a guild plugin (guild_druid, then any registered guild)
-    if not guild_plugin then
-      for _, name in ipairs(guild_names) do
-        guild_plugin = plugin.get(name)
-        if guild_plugin then break end
-      end
-    end
-
-    if guild_plugin and guild_plugin.render_guild_stats and guild_plugin.has_data and guild_plugin.has_data() then
-      -- Add separator before guild section
-      if current_y > y then
-        ui.text(ui.rect(x, current_y, w, 1), string.rep("-", w))
-        current_y = current_y + 1
-        remaining_h = remaining_h - 1
-      end
-
-      -- Render guild stats
-      if remaining_h > 0 then
-        local guild_rect = ui.rect(x, current_y, w, remaining_h)
-        local lines_used = guild_plugin.render_guild_stats(guild_rect, {})
-        current_y = current_y + lines_used
-        remaining_h = remaining_h - lines_used
-      end
+    if remaining_h > 0 then
+      local used = guild_draw_only.render_guild_stats(
+        ui.rect(x, current_y, w, remaining_h), {}) or 0
+      current_y = current_y + used
+      remaining_h = remaining_h - used
     end
   end
 
-  -- Render kill trigger stats if available
-  if config.show_killers and remaining_h > 0 then
-    if not kill_trigger then
-      kill_trigger = plugin.get("kill_trigger")
+  if killers_draw_only and remaining_h > 0 then
+    if current_y > y then
+      ui.text(ui.rect(x, current_y, w, 1), separator(w))
+      current_y = current_y + 1
+      remaining_h = remaining_h - 1
     end
-
-    if kill_trigger and kill_trigger.render_stats and kill_trigger.has_data and kill_trigger.has_data() then
-      -- Add separator before killers section
-      if current_y > y then
-        ui.text(ui.rect(x, current_y, w, 1), string.rep("-", w))
-        current_y = current_y + 1
-        remaining_h = remaining_h - 1
-      end
-
-      -- Render kill trigger stats
-      if remaining_h > 0 then
-        local killers_rect = ui.rect(x, current_y, w, remaining_h)
-        kill_trigger.render_stats(killers_rect, {})
-      end
+    if remaining_h > 0 then
+      killers_draw_only.render_stats(ui.rect(x, current_y, w, remaining_h), {})
     end
   end
 end

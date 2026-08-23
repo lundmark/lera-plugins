@@ -529,12 +529,21 @@ local function rect_dims(rect)
   return rect.x, rect.y, rect.w, rect.h
 end
 
+-- The Stats page's lines, for a host that windows them itself (stats_window's
+-- scrollable info pane asks for these so the guild block can scroll like any
+-- other pane). render_guild_stats below keeps the older draw-into-a-rect
+-- contract for hosts that don't.
+function M.guild_stats_lines(width)
+  if type(width) ~= "number" or width <= 0 then return {} end
+  return stats_page.lines(width)
+end
+
 function M.render_guild_stats(rect, opts)
   opts = opts or {}
   local x, y, w, h = rect_dims(rect)
   if w <= 0 or h <= 0 then return 0 end
 
-  local lines = stats_page.lines(w)
+  local lines = M.guild_stats_lines(w)
   local n = math.min(#lines, h)
   for i = 1, n do
     ui.text_ansi(ui.rect(x, y + i - 1, w, 1), lines[i])
