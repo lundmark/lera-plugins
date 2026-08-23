@@ -1,5 +1,5 @@
 -- Mapper Plugin for Lera
--- Tracks rooms via MIP data and renders a minimal ASCII map
+-- Tracks rooms via GMCP Room.Info and renders a minimal ASCII map
 
 local M = {}
 M.name = "mapper"
@@ -14,13 +14,9 @@ local map = {
   rooms = {},           -- id -> room table
   current_room_id = nil,
   current_layer = "default",
-  pending_move = nil,   -- single pending direction
   waypoints = {},       -- name -> room_id
 }
 
-local mapping_mode = false  -- only learn connections when true
-local mapping_lost = false  -- true if we moved too fast and lost sync
-local mip_handlers = {}
 local command_id = nil
 local roominfo_callback_id = nil
 
@@ -78,6 +74,7 @@ local function save_map()
     save_data.rooms[tostring(id)] = {
       id = room.id,
       name = room.name,
+      area = room.area,
       exits = room.exits,
       connections = room.connections,
       x = room.x,
@@ -107,6 +104,7 @@ local function load_map()
         map.rooms[id] = {
           id = id,
           name = room.name or "Unknown",
+          area = room.area,
           exits = room.exits or {},
           connections = room.connections or {},
           x = room.x or 0,
@@ -124,11 +122,11 @@ local function load_map()
 end
 
 --------------------------------------------------------------------------------
--- Room Processing (shared by MIP and =R= handlers)
+-- Room Processing (fed by roominfo's GMCP Room.Info snapshot)
 --------------------------------------------------------------------------------
 
 -- Core room processing logic - called when we detect a room change
-local function process_room(rid, name)
+local function process_room(rid, name, exits, destinations, area)
   if not rid or rid == 0 then return end
 
   name = name or "Unknown"
@@ -145,6 +143,7 @@ local function process_room(rid, name)
     room = {
       id = rid,
       name = name,
+      area = area,
       exits = {},
       connections = {},
       x = 0,
@@ -156,68 +155,42 @@ local function process_room(rid, name)
     map.rooms[rid] = room
   else
     room.name = name
+    if area then room.area = area end
     room.last_seen = lera.time()
   end
 
-  -- Check if we're lost and trying to recover
-  if mapping_lost then
-    local has_connections = false
-    for _, _ in pairs(room.connections) do
-      has_connections = true
-      break
-    end
-    if has_connections then
-      mapping_lost = false
-      map.pending_move = nil
-      print("[mapper] Back in known territory. Mapping resumed.")
-    else
-      -- Still lost, just update current room
-      map.current_room_id = rid
-      if room.layer then
-        map.current_layer = room.layer
-      end
-      return
+  -- Exits and their destinations come straight from Room.Info: there is nothing
+  -- to learn by walking, so no mapping mode and no pending move.
+  room.exits = {}
+  for _, dir in ipairs(exits or {}) do
+    table.insert(room.exits, normalize_dir(dir))
+  end
+  for dir, dest in pairs(destinations or {}) do
+    -- A destination of 0 means the server reported the exit but no usable id.
+    -- Recording it would point pathfinding at a room that does not exist.
+    if dest and dest > 0 then
+      room.connections[normalize_dir(dir)] = dest
     end
   end
 
-  -- Only learn connections in mapping mode
-  local pending_dir = map.pending_move
-  map.pending_move = nil  -- clear it
-
-  if mapping_mode and pending_dir and map.current_room_id then
-    -- If same room, movement failed - don't record connection
-    if rid == map.current_room_id then
-      return
-    end
-
-    local prev = map.rooms[map.current_room_id]
-    local dir = normalize_dir(pending_dir)
-
+  -- Position the room on first sight, relative to where we came from.
+  local previous_id = map.current_room_id
+  if is_new_room and previous_id and previous_id ~= rid then
+    local prev = map.rooms[previous_id]
     if prev then
-      -- Record the connection both ways
-      prev.connections[dir] = rid
-      local reverse = { n="s", s="n", e="w", w="e", ne="sw", sw="ne", nw="se", se="nw" }
-      if reverse[dir] then
-        room.connections[reverse[dir]] = map.current_room_id
+      local dir = nil
+      for d, dest in pairs(prev.connections) do
+        if dest == rid then dir = d break end
       end
-
-      -- Only calculate position for cardinal directions on non-virtual rooms
-      if is_cardinal(dir) and not room.virtual then
+      if dir and is_cardinal(dir) and not room.virtual then
         local offset = cardinal_offsets[dir]
-
-        if is_new_room then
-          -- New room - set position relative to previous
-          room.x = prev.x + offset[1]
-          room.y = prev.y + offset[2]
-          room.layer = prev.layer
-        end
-      elseif not is_cardinal(dir) then
-        -- Non-cardinal direction = layer change
-        if is_new_room then
-          room.layer = prev.layer .. "_" .. dir
-          room.x = 0
-          room.y = 0
-        end
+        room.x = prev.x + offset[1]
+        room.y = prev.y + offset[2]
+        room.layer = prev.layer
+      elseif dir then
+        room.layer = prev.layer .. "_" .. dir
+        room.x = 0
+        room.y = 0
         map.current_layer = room.layer
       end
     end
@@ -225,120 +198,8 @@ local function process_room(rid, name)
 
   map.current_room_id = rid
 
-  -- Update current layer to match room's layer
   if room.layer then
     map.current_layer = room.layer
-  end
-end
-
---------------------------------------------------------------------------------
--- MIP Handlers
---------------------------------------------------------------------------------
-
-local function handle_room(key, code, data)
-  -- Strip any trailing whitespace/newlines
-  data = data:gsub("%s+$", "")
-
-  -- Format: "Short desc~ID"
-  local name, rid_str = data:match("^(.-)~(%d+)$")
-  if not rid_str then return end
-
-  local rid = tonumber(rid_str)
-  process_room(rid, name)
-end
-
-local function handle_exits(key, code, data)
-  -- Format: "n~s~e~ID" - exits separated by ~, last element is room ID
-  local parts = {}
-  for part in data:gmatch("[^~]+") do
-    table.insert(parts, part)
-  end
-
-  if #parts < 2 then return end  -- need at least one exit + room ID
-
-  -- Last part is the room ID
-  local rid = tonumber(parts[#parts])
-  if not rid then return end
-
-  -- Get or verify room
-  local room = map.rooms[rid]
-  if not room then return end
-
-  -- All parts except last are exits
-  room.exits = {}
-  for i = 1, #parts - 1 do
-    local exit = normalize_dir(parts[i])
-    if exit ~= "" then
-      table.insert(room.exits, exit)
-    end
-  end
-end
-
---------------------------------------------------------------------------------
--- Track movement commands (only in mapping mode)
---------------------------------------------------------------------------------
-
-local function track_movement(text)
-  if not mapping_mode then return end
-  if mapping_lost then return end  -- don't track while lost
-
-  local cmd = text:lower():match("^(%S+)")
-  if cmd then
-    local dir = normalize_dir(cmd)
-    local is_move = false
-
-    -- Check if it looks like a direction (cardinal or known exit)
-    if cardinal_offsets[dir] then
-      is_move = true
-    else
-      -- Could be a non-cardinal exit (up, down, enter, portal, etc)
-      local room = map.rooms[map.current_room_id]
-      if room then
-        for _, exit in ipairs(room.exits or {}) do
-          if exit == dir or exit == cmd then
-            is_move = true
-            break
-          end
-        end
-      end
-    end
-
-    if is_move then
-      -- If we already have a pending move, we're moving too fast
-      if map.pending_move then
-        mapping_lost = true
-        map.pending_move = nil
-        print("[mapper] Moving too fast! Mapping paused until you return to a known room.")
-      else
-        map.pending_move = cmd
-      end
-    end
-  end
-end
-
--- Patterns that indicate movement failed
-local failed_move_patterns = {
-  "cannot go",
-  "can't go",
-  "no exit",
-  "there is no",
-  "you can't",
-  "you cannot",
-  "unable to",
-  "blocked",
-  "closed",
-  "locked",
-}
-
-local function check_failed_movement(line)
-  if not mapping_mode or not map.pending_move then return end
-
-  local lower = line:lower()
-  for _, pattern in ipairs(failed_move_patterns) do
-    if lower:find(pattern, 1, true) then
-      map.pending_move = nil  -- clear the failed move
-      return
-    end
   end
 end
 
@@ -359,10 +220,7 @@ local function handle_map_command(args)
     M.toggle_mapping()
 
   elseif cmd == "status" then
-    print("[mapper] Mapping: " .. (mapping_mode and "ON" or "OFF"))
-    if mapping_lost then
-      print("[mapper] STATUS: LOST - move to a known room or use /map resync")
-    end
+    print("[mapper] Mapping: always on")
     local room = map.rooms[map.current_room_id]
     if room then
       print("[mapper] Room: " .. room.name .. " (id=" .. room.id .. ")")
@@ -374,9 +232,7 @@ local function handle_map_command(args)
     end
 
   elseif cmd == "resync" then
-    mapping_lost = false
-    map.pending_move = nil
-    print("[mapper] Resync - mapping resumed from current position")
+    print("[mapper] Resync is unnecessary - GMCP exit destinations keep the map in sync")
 
   elseif cmd == "wp" or cmd == "waypoint" then
     local name = args[2]
@@ -451,9 +307,9 @@ local function handle_map_command(args)
 
   else
     print("[mapper] Commands:")
-    print("  /map start/stop/toggle  - control mapping mode")
+    print("  /map                    - mapping is always on (GMCP)")
     print("  /map status             - show current room info")
-    print("  /map resync             - recover from 'lost' state")
+    print("  /map resync             - unnecessary now, kept for old habits")
     print("  /map wp <name>          - set waypoint here")
     print("  /map wps                - list waypoints")
     print("  /map delwp <name>       - delete waypoint")
@@ -464,33 +320,17 @@ local function handle_map_command(args)
   end
 end
 
-function M.on_input(text)
-  -- Track user-typed movement commands
-  track_movement(text)
-  return text
-end
-
-function M.on_send(text)
-  -- Track programmatic movement (from speedwalk, triggers, etc.)
-  track_movement(text)
-  return text
-end
-
-function M.on_line(line)
-  -- Check for failed movement messages
-  check_failed_movement(line)
-  return line
-end
-
--- Called by roominfo when room changes
+-- roominfo is the sole GMCP Room.* subscriber; mapper reads the snapshot it
+-- publishes whenever the room changes.
 local function on_roominfo_change(new_room, old_room)
   local roominfo = plugin.get("roominfo")
-  if roominfo and roominfo.room_id then
-    local rid = roominfo.room_id()
-    if rid and rid > 0 then
-      process_room(rid, new_room)
-    end
-  end
+  if not roominfo or not roominfo.room_id then return end
+  local rid = roominfo.room_id()
+  if not rid or rid <= 0 then return end
+  process_room(rid, new_room,
+    roominfo.exits and roominfo.exits() or {},
+    roominfo.exit_destinations and roominfo.exit_destinations() or {},
+    roominfo.area and roominfo.area() or nil)
 end
 
 --------------------------------------------------------------------------------
@@ -578,11 +418,6 @@ function M.render(rect, opts)
   opts = opts or {}
   local show_border = opts.show_border ~= false
   local title = opts.title or "Map"
-  if mapping_lost then
-    title = title .. " [LOST]"
-  elseif mapping_mode then
-    title = title .. " [MAPPING]"
-  end
 
   local rx, ry, rw, rh
   if type(rect.x) == "function" then
@@ -759,33 +594,25 @@ end
 -- Public API
 --------------------------------------------------------------------------------
 
--- Mapping mode control
+-- Mapping mode is retired: Room.Info names every exit's destination, so
+-- connections are learned on sight and there is nothing to switch on. These
+-- remain so /map start|stop|toggle and any profile calling them keep working.
 function M.start_mapping()
-  mapping_mode = true
-  mapping_lost = false
-  map.pending_move = nil
-  print("[mapper] Mapping mode ON - connections will be learned")
+  print("[mapper] Mapping is always on (GMCP Room.Info carries exit destinations)")
 end
 
 function M.stop_mapping()
-  mapping_mode = false
-  mapping_lost = false
-  map.pending_move = nil
   save_map()
-  print("[mapper] Mapping mode OFF - saved")
+  print("[mapper] Mapping is always on; map saved")
 end
 
 function M.is_mapping()
-  return mapping_mode
+  return true
 end
 
 function M.toggle_mapping()
-  if mapping_mode then
-    M.stop_mapping()
-  else
-    M.start_mapping()
-  end
-  return mapping_mode
+  print("[mapper] Mapping is always on (GMCP Room.Info carries exit destinations)")
+  return true
 end
 
 -- Waypoint management
@@ -931,9 +758,7 @@ function M.clear()
   map.rooms = {}
   map.current_room_id = nil
   map.current_layer = "default"
-  map.pending_move = nil
   map.waypoints = {}
-  mapping_lost = false
   save_map()
   print("[mapper] Map cleared")
 end
@@ -981,7 +806,7 @@ function M.stats()
     layers = layer_list,
     current_layer = map.current_layer,
     current_room_id = map.current_room_id,
-    mapping_mode = mapping_mode,
+    mapping_mode = true,
   }
 end
 
@@ -1038,10 +863,7 @@ end
 function M.on_load()
   load_map()
 
-  table.insert(mip_handlers, mip.on("BAD", handle_room))
-  table.insert(mip_handlers, mip.on("DDD", handle_exits))
-
-  -- Register roominfo callback for faster room detection (no MIP delay)
+  -- Register roominfo callback: it is the sole GMCP Room.* subscriber.
   local roominfo = plugin.get("roominfo")
   if roominfo and roominfo.on_room_change then
     roominfo_callback_id = roominfo.on_room_change(on_roominfo_change)
@@ -1056,11 +878,6 @@ end
 
 function M.on_unload()
   save_map()
-
-  for _, handler_id in ipairs(mip_handlers) do
-    mip.off(handler_id)
-  end
-  mip_handlers = {}
 
   -- Unregister roominfo callback
   if roominfo_callback_id then
