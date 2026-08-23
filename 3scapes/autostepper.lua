@@ -23,6 +23,21 @@ local prompt_count = 0  -- Count of prompts received
 local enabled = false   -- Is autostepper active?
 local prompt_trigger_id = nil  -- Trigger ID for prompt detection
 
+-- Per-room view of what the room held on arrival.
+--
+-- The GMCP Room.* packages fire on room entry only: nothing re-emits when a mob
+-- dies or a player leaves, and there is no client-initiated refresh. So
+-- roominfo.monsters() still lists the mob we just killed for as long as we stand
+-- in the room, and a decision loop that re-read it would attack the corpse
+-- forever. (The old '=M=' scraper refreshed on every 'glance', which is why this
+-- was not needed before.) Instead: seed once per room from roominfo, then prune
+-- locally as each target is finished. Every fight removes exactly one monster,
+-- so a room is always emptied in a bounded number of fights.
+local room_key = nil        -- identity of the room the view below describes
+local room_monsters = {}    -- monster names still believed to be standing
+local room_players = {}     -- player names seen on arrival
+local current_target = nil  -- monster do_attack() is working on
+
 -- Configuration
 local config = {
   glance_cmd = "glance",      -- Command to look at room
@@ -57,6 +72,48 @@ local function notify(callbacks, ...)
   end
 end
 
+local function copy_names(list)
+  local out = {}
+  for i, n in ipairs(list or {}) do out[i] = n end
+  return out
+end
+
+-- roominfo's identity for the room we are standing in. Falls back to the room
+-- name, and then to a constant, so an unsynced roominfo seeds the view once
+-- rather than on every decision.
+local function roominfo_room_key()
+  if not ri then return "?" end
+  local rid = ri.room_id and ri.room_id()
+  if rid then return "id:" .. tostring(rid) end
+  local name = ri.room and ri.room()
+  if name and name ~= "" then return "name:" .. name end
+  return "?"
+end
+
+-- Reseed the local view when roominfo says we are somewhere new. Reading
+-- roominfo here rather than from its on_room_change callback is deliberate:
+-- Room.Info fires that notification before the new room's Room.Contents has
+-- been handled, so a callback would seed the previous room's occupants.
+local function sync_room_view()
+  local key = roominfo_room_key()
+  if key == room_key then return end
+  room_key = key
+  room_monsters = copy_names(ri and ri.monsters and ri.monsters())
+  room_players = copy_names(ri and ri.players and ri.players())
+  current_target = nil
+end
+
+-- Strike one occurrence of a finished target from the local view.
+local function forget_monster(name)
+  if not name then return end
+  for i, n in ipairs(room_monsters) do
+    if n == name then
+      table.remove(room_monsters, i)
+      return
+    end
+  end
+end
+
 local function send_glance()
   state = "sent_glance"
   prompt_count = 0
@@ -67,6 +124,7 @@ end
 
 local function do_attack(monster)
   state = "fighting"
+  current_target = monster
   local cmd = config.attack_cmd .. " " .. monster
   log("Attacking: " .. monster)
   notify(on_attack_callbacks, monster, cmd)
@@ -111,8 +169,11 @@ local function process_room()
     return
   end
 
-  local players = ri.players()
-  local monsters = ri.monsters()
+  -- Decisions come from the local per-room view, not from a fresh roominfo
+  -- read: the snapshot cannot change while we stand in the room.
+  sync_room_view()
+  local players = room_players
+  local monsters = room_monsters
   local room = ri.room() or "unknown"
 
   -- Check if player in room
@@ -176,7 +237,12 @@ local function on_prompt()
     state = "idle"
     process_room()
   elseif state == "fighting" then
-    -- Combat ended (or just another prompt) - continue stepping
+    -- Combat ended (or just another prompt) - continue stepping. The target is
+    -- struck from the local view here because nothing else will: Room.Contents
+    -- is not re-sent for a mob that died, so without this the next decision
+    -- would attack the corpse, and the one after that, forever.
+    forget_monster(current_target)
+    current_target = nil
     state = "idle"
     send_glance()
   end
@@ -470,6 +536,9 @@ function M.start(targets_only)
   enabled = true
   state = "idle"
   prompt_count = 0
+  -- Forget any stale view so the room we are standing in is seeded afresh.
+  room_key = nil
+  current_target = nil
 
   -- Start by sending glance
   send_glance()
@@ -485,6 +554,7 @@ function M.stop()
   enabled = false
   state = "idle"
   prompt_count = 0
+  current_target = nil
 end
 
 -- Check if running
@@ -515,8 +585,19 @@ function M.status()
     local room = ri.room()
     log("  Room: " .. (room or "(unknown)"))
     log("  Players: " .. ri.player_count())
-    log("  Monsters: " .. ri.monster_count())
+    -- Two numbers, deliberately: roominfo's is the entry-time snapshot, which
+    -- never shrinks while we stand here, and the tracked one is what the
+    -- stepping decisions are actually made from.
+    log("  Monsters: " .. ri.monster_count() .. " on entry, "
+        .. #room_monsters .. " tracked")
+    log("  Target: " .. (current_target or "(none)"))
   end
+end
+
+-- The per-room monster view stepping decisions are made from. Unlike
+-- roominfo.monsters(), it shrinks as targets are finished.
+function M.tracked_monsters()
+  return copy_names(room_monsters)
 end
 
 -- Configuration setters
