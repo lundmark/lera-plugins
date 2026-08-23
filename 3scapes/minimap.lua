@@ -1,19 +1,20 @@
 -- Minimap Plugin for Lera
--- Captures and displays the ASCII minimap sent by the MUD
--- Integrates with speedwalk for path highlighting
+-- Renders the GMCP Room.Map line-of-sight grid roominfo publishes.
+-- Integrates with speedwalk for path highlighting.
+--
+-- Owns glyph semantics for itself and for mapview: the payload's legend is
+-- authoritative, so X is a link, # is darkness and + is a room with both up and
+-- down exits.
 
 local M = {}
 M.name = "minimap"
-M.version = "1.0"
-M.priority = 5  -- Run before roominfo (10) to capture =R= lines before they're suppressed
+M.version = "2.0"
+M.priority = 15  -- After roominfo (10), which is now this plugin's data source
 
 --------------------------------------------------------------------------------
 -- State
 --------------------------------------------------------------------------------
 
-local map_buffer = {}         -- Buffered map lines (list of {text=, styles=})
-local last_map = {}           -- Last complete map for redrawing
-local capturing = false       -- Are we currently buffering map lines?
 local command_id = nil        -- Registered command ID for cleanup
 
 -- require("command") is optional: a profile that never required 'commands' has
@@ -32,94 +33,44 @@ local settings = {
 }
 
 --------------------------------------------------------------------------------
--- Map Line Detection
+-- Glyph semantics
 --------------------------------------------------------------------------------
 
--- Valid map characters: | O X E - / \ @ # v ? + ^ 0-9 and space
--- These form the ASCII representation of the MUD's minimap:
---   | = north/south corridor
---   - = east/west corridor
---   / = NE/SW diagonal
---   \ = NW/SE diagonal
---   O = empty room
---   @ = player position
---   X = blocked/special room
---   E = exit room
---   # = wall/intersection
---   v = down exit indicator
---   ^ = up exit indicator
---   ? = unknown/unexplored
---   + = junction
---   0-9 = room with N mobs/players
+-- The Room.Map legend, as protocol_map_legend() defines it. minimap is the one
+-- owner of this mapping; mapview calls glyph_class rather than re-deriving
+-- meaning from characters.
+local glyph_classes = {
+  ["O"] = "room",
+  ["@"] = "you",
+  ["^"] = "up",
+  ["v"] = "down",
+  ["+"] = "updown",
+  ["E"] = "enter",
+  ["#"] = "dark",
+  ["?"] = "unknown",
+  ["p"] = "players",
+  ["m"] = "monsters",
+  ["|"] = "link",
+  ["-"] = "link",
+  ["/"] = "link",
+  ["\\"] = "link",
+  ["X"] = "link",
+  [" "] = "blank",
+}
 
--- Check if a line looks like a map line
-local function is_map_line(line)
-  -- Strip ANSI codes for pattern matching
-  local plain = line:gsub("\027%[[0-9;]*m", "")
-
-  -- Count leading spaces
-  local leading_spaces = #(plain:match("^(%s*)") or "")
-  local content = plain:sub(leading_spaces + 1)
-
-  -- Trim trailing spaces
-  content = content:match("^(.-)%s*$") or content
-
-  -- Empty line is not a map line
-  if #content == 0 then
-    return false
-  end
-
-  -- Pattern 1: 50+ leading spaces = definitely map output area
-  -- The MUD sends map at column 55+
-  if leading_spaces >= 50 then
-    -- Check if content is valid map characters
-    if content:match("^[|OXE%-/%\\@#v%?%+%^ 0-9]+$") then
-      return true
-    end
-  end
-
-  -- Pattern 2: Check if line is purely map characters
-  -- This catches map lines that may have fewer leading spaces
-  if content:match("^[|OXE%-/%\\@#v%?%+%^ 0-9]+$") then
-    -- Must contain at least one structural map character (not just spaces)
-    if content:match("[|OXE%-/%\\@#v%?%+%^0-9]") then
-      -- Heuristic: map lines typically have multiple map chars
-      local map_char_count = 0
-      for c in content:gmatch("[|OXE%-/%\\@#v%?%+%^0-9]") do
-        map_char_count = map_char_count + 1
-      end
-      -- At least 2 structural chars, or line is short (could be edge of map)
-      if map_char_count >= 2 or #content <= 5 then
-        return true
-      end
-    end
-  end
-
-  return false
+function M.glyph_class(char)
+  if type(char) ~= "string" or #char == 0 then return "other" end
+  return glyph_classes[char:sub(1, 1)] or "other"
 end
 
 --------------------------------------------------------------------------------
--- Map Parsing & Buffering
+-- Grid access
 --------------------------------------------------------------------------------
 
-local function add_map_line(line, styles)
-  capturing = true
-  table.insert(map_buffer, {
-    text = line,
-    styles = styles or {},
-  })
-end
-
-local function finalize_map()
-  if #map_buffer > 0 then
-    -- Copy buffer to last_map
-    last_map = {}
-    for _, entry in ipairs(map_buffer) do
-      table.insert(last_map, entry)
-    end
-    map_buffer = {}
-  end
-  capturing = false
+local function current_grid()
+  local roominfo = plugin.get("roominfo")
+  if not roominfo or not roominfo.map then return nil end
+  return roominfo.map()
 end
 
 --------------------------------------------------------------------------------
@@ -262,8 +213,11 @@ local function highlight_path(map_lines, path_positions)
       local col = pos.col
       if col >= 1 and col <= #line then
         local char = line:sub(col, col)
-        -- Only highlight room/corridor characters
-        if char:match("[O123456789|%-/\\]") then
+        -- Only highlight rooms and links. Digits are gone: the mudlib collapses
+        -- per-cell counts to p and m before they reach the wire.
+        local class = M.glyph_class(char)
+        if class == "room" or class == "link" or class == "players"
+            or class == "monsters" then
           -- Use step number as marker (1-9, then wrap to 0)
           local marker = tostring(pos.step_num % 10)
           result[row] = line:sub(1, col - 1) .. marker .. line:sub(col + 1)
@@ -299,27 +253,21 @@ local function handle_minimap_command(args)
     print("  Room name: " .. (settings.show_room_name and "ON" or "OFF"))
     print("  Exits: " .. (settings.show_exits and "ON" or "OFF"))
     print("  Steps: " .. (settings.show_steps and "ON" or "OFF"))
-    print("  Has map: " .. (#last_map > 0 and "Yes (" .. #last_map .. " lines)" or "No"))
+    local grid = current_grid()
+    print("  Has map: " .. (grid and ("Yes (" .. grid.h .. " lines)") or "No"))
 
-    -- Show room info from roominfo plugin if available
     local roominfo_plugin = plugin.get("roominfo")
-    local display_room = last_room_name
-    if roominfo_plugin then
-      local ri_room = roominfo_plugin.room()
-      if ri_room and ri_room ~= "" then
-        display_room = ri_room
-      end
-    end
+    local display_room = (roominfo_plugin and roominfo_plugin.room()) or ""
     if display_room ~= "" then
       print("  Room: " .. display_room)
     end
-    if last_exits ~= "" then
-      print("  Exits: " .. last_exits)
+    local exits_text = (roominfo_plugin and roominfo_plugin.exits_string()) or ""
+    if exits_text ~= "" then
+      print("  Exits: " .. exits_text)
     end
 
   elseif cmd == "clear" then
-    M.clear()
-    print("[minimap] Cleared")
+    print("[minimap] The grid comes from GMCP Room.Map via roominfo; nothing local to clear")
 
   else
     print("[minimap] Commands:")
@@ -335,34 +283,6 @@ end
 -- Plugin Hooks
 --------------------------------------------------------------------------------
 
-
-function M.on_line(line)
-  local plain = line:gsub("\027%[[0-9;]*m", "")
-
-  -- Check for =R= room line (roominfo handles parsing, we just detect for map finalization)
-  -- Note: =R= can be prefixed by prompts like "> "
-  if plain:match("=R=") then
-    -- Finalize any pending map
-    if capturing then
-      finalize_map()
-    end
-    -- Don't suppress - let roominfo handle it
-    return line
-  end
-
-  -- Check for map line
-  if is_map_line(line) then
-    add_map_line(line)
-    return nil  -- suppress map lines from main output
-  end
-
-  -- Non-map line - finalize any buffered map
-  if capturing and #map_buffer > 0 then
-    finalize_map()
-  end
-
-  return line
-end
 
 function M.on_load()
   -- Load settings
@@ -438,9 +358,13 @@ function M.render(rect, opts)
 
   if rw <= 0 or rh <= 0 then return end
 
+  local roominfo = plugin.get("roominfo")
+  local room_name = (roominfo and roominfo.room()) or ""
+  local exits_text = (roominfo and roominfo.exits_string()) or ""
+
   -- Calculate content heights
-  local room_height = (settings.show_room_name and last_room_name ~= "") and 1 or 0
-  local exits_height = (settings.show_exits and last_exits ~= "") and 1 or 0
+  local room_height = (settings.show_room_name and room_name ~= "") and 1 or 0
+  local exits_height = (settings.show_exits and exits_text ~= "") and 1 or 0
   local step_height = 0
 
   -- Get speedwalk info if available
@@ -470,35 +394,15 @@ function M.render(rect, opts)
   local info_height = room_height + exits_height + step_height
   local map_area_height = rh - info_height
 
-  -- No map data
-  if #last_map == 0 then
+  local grid = current_grid()
+  if not grid then
     ui.text(ui.rect(rx, ry, rw, 1), "No map data")
     return
   end
 
-  -- Find minimum leading spaces to strip
-  local min_leading = 9999
-  for _, entry in ipairs(last_map) do
-    local plain = entry.text:gsub("\027%[[0-9;]*m", "")
-    local leading = #(plain:match("^(%s*)") or "")
-    if leading < min_leading then
-      min_leading = leading
-    end
-  end
-
-  -- Calculate map dimensions and build clean lines
   local map_lines = {}
-  local max_width = 0
-  for _, entry in ipairs(last_map) do
-    local plain = entry.text:gsub("\027%[[0-9;]*m", "")
-    local stripped = plain:sub(min_leading + 1)
-    -- Trim trailing spaces
-    stripped = stripped:match("^(.-)%s*$") or stripped
-    table.insert(map_lines, stripped)
-    if #stripped > max_width then
-      max_width = #stripped
-    end
-  end
+  for i, row in ipairs(grid.rows) do map_lines[i] = row end
+  local max_width = grid.w
 
   -- Apply path highlighting if speedwalk is active
   if speedwalk_plugin and settings.show_steps and step_info and step_info.total > 0 then
@@ -557,18 +461,8 @@ function M.render(rect, opts)
   -- Draw info below map
   local info_y = ry + map_area_height
 
-  -- Get room name from roominfo plugin if available, otherwise use our own
-  local display_room_name = last_room_name
-  local roominfo_plugin = plugin.get("roominfo")
-  if roominfo_plugin then
-    local ri_room = roominfo_plugin.room()
-    if ri_room and ri_room ~= "" then
-      display_room_name = ri_room
-    end
-  end
-
-  if settings.show_room_name and display_room_name ~= "" then
-    local room_str = display_room_name
+  if settings.show_room_name and room_name ~= "" then
+    local room_str = room_name
     if #room_str > rw then
       room_str = room_str:sub(1, rw - 1) .. "~"
     end
@@ -576,8 +470,8 @@ function M.render(rect, opts)
     info_y = info_y + 1
   end
 
-  if settings.show_exits and last_exits ~= "" then
-    local exits_str = last_exits
+  if settings.show_exits and exits_text ~= "" then
+    local exits_str = exits_text
     if #exits_str > rw then
       exits_str = exits_str:sub(1, rw - 1) .. "~"
     end
@@ -601,16 +495,10 @@ end
 -- Public API
 --------------------------------------------------------------------------------
 
--- Get current room name (prefers roominfo plugin data if available)
+-- Get current room name. Uses roominfo as the authoritative source.
 function M.room_name()
   local roominfo_plugin = plugin.get("roominfo")
-  if roominfo_plugin then
-    local ri_room = roominfo_plugin.room()
-    if ri_room and ri_room ~= "" then
-      return ri_room
-    end
-  end
-  return last_room_name
+  return (roominfo_plugin and roominfo_plugin.room()) or ""
 end
 
 -- Get current exits (list of short direction names)
@@ -633,19 +521,21 @@ function M.exits_string()
   return ""
 end
 
--- Check if we have map data
 function M.has_map()
-  return #last_map > 0
+  return current_grid() ~= nil
 end
 
--- Get raw map lines (stripped of ANSI)
+-- Grid rows, top to bottom. Empty when no Room.Map has arrived.
 function M.get_map_lines()
-  local result = {}
-  for _, entry in ipairs(last_map) do
-    local plain = entry.text:gsub("\027%[[0-9;]*m", "")
-    table.insert(result, plain)
-  end
-  return result
+  local grid = current_grid()
+  if not grid then return {} end
+  return grid.rows
+end
+
+function M.vertical_exits()
+  local grid = current_grid()
+  if not grid then return { up = false, down = false, enter = false } end
+  return { up = grid.up, down = grid.down, enter = grid.enter }
 end
 
 -- Toggle settings
@@ -673,52 +563,30 @@ function M.get_settings()
   }
 end
 
--- Clear map data
 function M.clear()
-  map_buffer = {}
-  last_map = {}
-  capturing = false
+  -- The grid lives in roominfo; there is nothing cached here to drop.
 end
 
--- Get player position in the map (1-indexed row, col)
--- Returns {row=N, col=N} or nil if not found
+-- Player position in the grid (1-indexed row, col), or nil.
 function M.get_player_position()
-  if #last_map == 0 then return nil end
-
-  local map_lines = M.get_map_lines()
-  return find_player_position(map_lines)
+  local grid = current_grid()
+  if not grid then return nil end
+  return find_player_position(grid.rows)
 end
 
--- Get map dimensions
 function M.get_map_size()
-  if #last_map == 0 then
-    return {rows = 0, cols = 0}
-  end
-
-  local map_lines = M.get_map_lines()
-  local max_cols = 0
-  for _, line in ipairs(map_lines) do
-    if #line > max_cols then
-      max_cols = #line
-    end
-  end
-
-  return {rows = #map_lines, cols = max_cols}
+  local grid = current_grid()
+  if not grid then return { rows = 0, cols = 0 } end
+  return { rows = grid.h, cols = grid.w }
 end
 
--- Get the character at a specific map position
--- pos: {row=N, col=N} (1-indexed)
--- Returns the character or nil if out of bounds
 function M.get_char_at(pos)
-  if #last_map == 0 then return nil end
+  local grid = current_grid()
+  if not grid then return nil end
   if not pos or not pos.row or not pos.col then return nil end
-
-  local map_lines = M.get_map_lines()
-  if pos.row < 1 or pos.row > #map_lines then return nil end
-
-  local line = map_lines[pos.row]
+  if pos.row < 1 or pos.row > #grid.rows then return nil end
+  local line = grid.rows[pos.row]
   if pos.col < 1 or pos.col > #line then return nil end
-
   return line:sub(pos.col, pos.col)
 end
 

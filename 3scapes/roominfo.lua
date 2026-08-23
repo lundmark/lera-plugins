@@ -240,6 +240,7 @@ local function handle_room_map(data)
   local rows = {}
   for i = 1, h do
     if type(data.rows[i]) ~= "string" then return end
+    if #data.rows[i] ~= w then return end
     rows[i] = data.rows[i]
   end
 

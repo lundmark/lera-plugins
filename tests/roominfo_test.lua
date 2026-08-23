@@ -297,6 +297,15 @@ deliver("Room.Map", { kind = "los", w = 5, h = 3, rows = "not a list", legend = 
 check("malformed rows rejected", ri.map() ~= nil and ri.map().rows[1] == "O-O-O",
   ri.map() and ri.map().rows[1])
 
+-- Kills: missing a per-row width check. Without it, a row narrower or wider
+-- than w would be accepted, and every consumer that uses grid.w for column
+-- math (minimap's centering, get_char_at) would read past or short of the
+-- actual row content. Row 1 here ("AAAAA") differs from the retained grid's
+-- ("O-O-O"), so acceptance and rejection are distinguishable.
+deliver("Room.Map", { kind = "los", w = 5, h = 3, rows = { "AAAAA", "BBBBB", "C" }, legend = {} })
+check("wrong-width row rejected", ri.map() ~= nil and ri.map().rows[1] == "O-O-O",
+  ri.map() and ri.map().rows[1])
+
 -- ---- unload -----------------------------------------------------------------
 ri.on_unload()
 check("unregisters Room.Info", removed["Room.Info"] == true)
