@@ -145,6 +145,62 @@ check("raising gmcp writer not counted as applied",
 check("sibling key in the same frame still applied",
   got.SETTLERS ~= nil and got.SETTLERS.a == 2)
 
+-- ---- paging ----------------------------------------------------------------
+-- Kills: applying each page independently. The server slices an oversized array
+-- key across pages, repeating the key, so independent application truncates a
+-- long list to its final slice.
+reset()
+frame("Guild.Settlement", { guild = "viking", page = 1, pages = 2,
+                            settlers = { "a", "b" } })
+check("page 1 of 2 not applied yet", got.SETTLERS == nil)
+frame("Guild.Settlement", { guild = "viking", page = 2, pages = 2,
+                            settlers = { "c" } })
+check("sliced key rejoined, not truncated",
+  got.SETTLERS and #got.SETTLERS == 3 and got.SETTLERS[3] == "c",
+  got.SETTLERS and #got.SETTLERS)
+
+-- Kills: rejoining a key that was not sliced. A key carried once in a paged run
+-- must be applied as-is, not wrapped or concatenated with itself.
+reset()
+frame("Guild.Settlement", { guild = "viking", page = 1, pages = 2,
+                            settlers = { a = 1 } })
+frame("Guild.Settlement", { guild = "viking", page = 2, pages = 2 })
+check("unsliced key in a paged run applied whole",
+  got.SETTLERS ~= nil and got.SETTLERS.a == 1, got.SETTLERS and got.SETTLERS.a)
+
+-- Kills: an accumulator that survives a restarted run, merging two different
+-- snapshots into one.
+reset()
+frame("Guild.Settlement", { guild = "viking", page = 1, pages = 2,
+                            settlers = { "stale" } })
+frame("Guild.Settlement", { guild = "viking", page = 1, pages = 2,
+                            settlers = { "fresh" } })
+frame("Guild.Settlement", { guild = "viking", page = 2, pages = 2 })
+check("restarted run drops the abandoned page",
+  got.SETTLERS and #got.SETTLERS == 1 and got.SETTLERS[1] == "fresh",
+  got.SETTLERS and got.SETTLERS[1])
+
+-- Kills: applying an out-of-order run partially.
+reset()
+frame("Guild.Settlement", { guild = "viking", page = 2, pages = 2,
+                            settlers = { "orphan" } })
+check("orphan page not applied", got.SETTLERS == nil)
+-- Kills: an orphan leaving the accumulator wedged so later frames are ignored.
+frame("Guild.Settlement", { guild = "viking", settlers = { a = 9 } })
+check("handler recovers after an orphan page",
+  got.SETTLERS ~= nil and got.SETTLERS.a == 9, got.SETTLERS and got.SETTLERS.a)
+
+-- Kills: paging state shared across packages. Two panels can page at once.
+reset()
+frame("Guild.Settlement", { guild = "viking", page = 1, pages = 2,
+                            settlers = { "s1" } })
+frame("Guild.Trade", { guild = "viking", page = 1, pages = 2, settlers = { "t1" } })
+frame("Guild.Settlement", { guild = "viking", page = 2, pages = 2,
+                            settlers = { "s2" } })
+check("per-package paging state",
+  got.SETTLERS and #got.SETTLERS == 2 and got.SETTLERS[1] == "s1",
+  got.SETTLERS and got.SETTLERS[1])
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)

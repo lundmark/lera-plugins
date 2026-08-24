@@ -178,8 +178,36 @@ function protocol.on_bbe(text)
   feed(text)
 end
 
+-- Paging state, per package: two panels can be mid-run at once.
+local page_runs = {}
+
+local function is_array(v)
+  return type(v) == "table" and (#v > 0 or next(v) == nil)
+end
+
+-- Merge one page's keys into a run. A key repeated across pages is a sliced
+-- array and its slices concatenate in page order; only arrays are ever sliced
+-- server-side, so a repeated non-array is last-wins and counted malformed.
+local function merge_page(run, data)
+  for key, value in pairs(data) do
+    if not ENVELOPE[key] then
+      local prev = run.keys[key]
+      if prev == nil then
+        run.keys[key] = value
+      elseif is_array(prev) and is_array(value) then
+        for i = 1, #value do prev[#prev + 1] = value[i] end
+      else
+        run.keys[key] = value
+        gmcp_stats.malformed = (gmcp_stats.malformed or 0) + 1
+      end
+    end
+  end
+end
+
 -- One Guild.* frame. Keys are applied individually: a key absent from a frame
--- means unchanged, never empty, because ordinary frames are deltas.
+-- means unchanged, never empty, because ordinary frames are deltas. A frame
+-- may be split across pages, and an oversized array key sliced across those
+-- pages (the key repeated with successive slices) -- see merge_page above.
 function protocol.on_gmcp(package, data)
   if type(data) ~= "table" then return end
   gmcp_stats.frames = gmcp_stats.frames + 1
@@ -193,8 +221,39 @@ function protocol.on_gmcp(package, data)
     return
   end
 
-  for key, value in pairs(data) do
-    if not ENVELOPE[key] then
+  local page = tonumber(data.page)
+  local pages = tonumber(data.pages)
+
+  -- page/pages appear only when a frame is split, so their absence means
+  -- this frame is complete on its own.
+  if not page or not pages or pages <= 1 then
+    page_runs[package] = nil
+    for key, value in pairs(data) do
+      if not ENVELOPE[key] then protocol.apply_gmcp_key(key, value) end
+    end
+    return
+  end
+
+  local run = page_runs[package]
+  -- A fresh page 1 abandons whatever was accumulating: it is a new snapshot.
+  if page == 1 or not run then
+    run = { pages = pages, next_page = 1, keys = {} }
+    page_runs[package] = run
+  end
+
+  if page ~= run.next_page or pages ~= run.pages then
+    -- Out of order or a pages mismatch: the run cannot be trusted.
+    page_runs[package] = nil
+    gmcp_stats.malformed = (gmcp_stats.malformed or 0) + 1
+    return
+  end
+
+  merge_page(run, data)
+  run.next_page = page + 1
+
+  if page == pages then
+    page_runs[package] = nil
+    for key, value in pairs(run.keys) do
       protocol.apply_gmcp_key(key, value)
     end
   end
@@ -215,6 +274,7 @@ end
 -- stale GMCP state must not outlive the connection that produced it.
 function protocol.reset_connection()
   gmcp_stats = { frames = 0, foreign = 0, unknown = {}, applied = {}, errors = {} }
+  page_runs = {}
 end
 
 -- Legacy KEY_N (no total) batches complete only here. LEGACY
