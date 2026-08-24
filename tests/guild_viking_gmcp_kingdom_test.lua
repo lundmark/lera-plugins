@@ -187,6 +187,50 @@ check("an absent war_incoming means none", S.war ~= nil
 kd({ war_cb = {}, war_camp = {} })
 check("a war frame with nothing in it becomes nil", S.war == nil)
 
+-- ---- Guild.State ------------------------------------------------------------
+-- Only the four State keys with a MIP twin are mapped. hp, sp, points, chain,
+-- gxp, tox, fx, encounter, target and ledung are written by combat.lua's
+-- output-line triggers, which are protocol-independent and already the single
+-- source of truth for those fields, so they stay unmapped and counted.
+local function st(payload)
+  payload.guild = "viking"
+  protocol.on_gmcp("Guild.State", payload)
+end
+
+st({ daler = 4321 })
+check("daler", S.daler == 4321)
+
+-- MIP spent five keys on the god block; GMCP sends one record.
+st({ god = { name = "Freyja", seconds_left = 120, focus = "harvest" } })
+check("god name, focus and countdown all come from one record",
+      S.god_power_name == "Freyja" and S.god_power_focus == "harvest"
+      and S.god_power_next == 120)
+check("the countdown also becomes an absolute deadline",
+      S.god_power_next_at ~= nil and S.god_power_next_at >= os.time() + 119)
+-- The name is validated against a fixed list, as the MIP handler validates it:
+-- anything unrecognised reads as "no god power" rather than rendering verbatim.
+st({ god = { name = "Cthulhu", seconds_left = 5, focus = "" } })
+check("an unrecognised god name is rejected, not rendered",
+      S.god_power_name == "", S.god_power_name)
+-- A negative countdown is clamped rather than producing a deadline in the past.
+st({ god = { name = "Thor", seconds_left = -30 } })
+check("a negative countdown clamps to zero", S.god_power_next == 0)
+
+-- -1 means "unknown" for both mission counters, which is not 0 ("none left").
+st({ missions_reg = 3, missions_newbie = 0 })
+check("mission counters", S.mission_reg_left == 3 and S.mission_new_left == 0)
+st({ missions_reg = "x" })
+check("an unreadable counter falls back to -1, not 0",
+      S.mission_reg_left == -1, S.mission_reg_left)
+
+-- The trigger-owned groups must stay unmapped, so they are counted under their
+-- own names rather than routed to a second writer.
+local before = protocol.gmcp_stats().unknown["hp"] or 0
+st({ hp = { cur = 100, max = 120 }, points = { vitka = 5 }, ledung = { charges = 2 } })
+local unk = protocol.gmcp_stats().unknown
+check("trigger-owned State groups are counted, not applied",
+      (unk["hp"] or 0) > before and unk["points"] ~= nil and unk["ledung"] ~= nil)
+
 -- ---- envelope --------------------------------------------------------------
 protocol.on_gmcp("Guild.Kingdom", { guild = "berserker",
                                     grudges = { { town = "Foreign", secs = 1 } } })

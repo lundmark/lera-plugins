@@ -908,6 +908,39 @@ local function write_missions(records)
   end
 end
 
+-- ---------------------------------------------------------------------------
+-- Guild.State: the god-power block
+-- ---------------------------------------------------------------------------
+-- MIP spent five keys on this (GOD_POWER/GOD_ACTIVE naming one handler,
+-- GOD_POWER_NEXT/GOD_NEXT another, GOD_POWER_FOCUS a third); GMCP sends one
+-- `god` record carrying all three fields, so one writer covers the family.
+--
+-- The key map can only latch the MIP key a GMCP key resolves to, which is
+-- GOD_POWER. Until the MIP layer comes out, the other four keep flowing and
+-- write the same fields -- harmlessly, since both transports read the same
+-- server state, and the one value that is recomputed rather than copied
+-- (god_power_next_at, an absolute deadline derived from a duration) can differ
+-- only by the gap between the two frames.
+local VALID_GODS = {
+  Odin = true, Thor = true, Freyja = true, Freyr = true, Tyr = true,
+  Loki = true, Frigg = true, Heimdall = true, Baldr = true, Hel = true,
+  Njord = true, Skadi = true, Forseti = true,
+}
+
+local function write_god(rec)
+  if type(rec) ~= "table" then return end
+  -- The name is validated against a fixed list, as the MIP handler validates
+  -- it: anything unrecognised reads as "no god power" rather than being
+  -- rendered verbatim.
+  local name = tostring(rec.name or "")
+  S.god_power_name = VALID_GODS[name] and name or ""
+  local secs = tonumber(rec.seconds_left) or 0
+  if secs < 0 then secs = 0 end
+  S.god_power_next = secs
+  S.god_power_next_at = os.time() + secs
+  S.god_power_focus = tostring(rec.focus or "")
+end
+
 M._gmcp = {
   SUPG       = write_supg,
   SETTLERS = write_settlers,
@@ -930,6 +963,7 @@ M._gmcp = {
   PRODUCTION = write_production,
   ERRAND     = write_errand,
   MISSIONS   = write_missions,
+  GOD_POWER  = write_god,
 }
 
 return M

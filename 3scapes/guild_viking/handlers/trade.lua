@@ -1048,6 +1048,9 @@ local function write_heat(values)
   for _, v in ipairs(values) do S.heat[#S.heat + 1] = tonumber(v) or 0 end
 end
 
+-- Guild.State: banked daler. Its MIP twin lives here, so its writer does too.
+local function write_daler(v) S.daler = tonumber(v) or 0 end
+
 M._gmcp = {
   STAFF    = write_staff,
   BONDS    = write_bonds,
@@ -1069,6 +1072,7 @@ M._gmcp = {
   UPKEEP   = write_upkeep,
   RUPKEEP  = write_rupkeep,
   HEAT     = write_heat,
+  DALER    = write_daler,
 }
 
 return M

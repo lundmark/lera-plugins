@@ -479,6 +479,9 @@ local EXPECTED_GMCP_WRITERS = {
   -- Guild.Kingdom (7; the campaign war-map cluster BATTLE/WM* has no writer
   -- yet)
   "GRUDGES", "STANDINGS", "VREP", "DIPLO", "ARMY", "DYNASTY", "WAR",
+  -- Guild.State (4 -- its hp/points/gxp/ledung groups have no MIP twin and are
+  -- owned by combat.lua's protocol-independent triggers)
+  "DALER", "GOD_POWER", "VMREG", "VMNEW",
 }
 
 local function collect_gmcp_writers()

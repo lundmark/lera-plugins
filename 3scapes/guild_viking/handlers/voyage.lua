@@ -842,6 +842,11 @@ local function write_fleet_renown(v)
   S.fleet_renown = tonumber(v) or 0
 end
 
+-- Guild.State: the two mission counters. -1 means "unknown", which is not 0
+-- ("none left") -- the Missions section tests for the difference.
+local function write_mission_reg(v) S.mission_reg_left = tonumber(v) or -1 end
+local function write_mission_new(v) S.mission_new_left = tonumber(v) or -1 end
+
 M._gmcp = {
   VMAP         = write_map,
   SHIPS        = write_ships,
@@ -863,6 +868,8 @@ M._gmcp = {
   VSPOILS      = write_vspoils,
   VREAGENT     = write_vreagent,
   FLEET_RENOWN = write_fleet_renown,
+  VMREG        = write_mission_reg,
+  VMNEW        = write_mission_new,
 }
 
 

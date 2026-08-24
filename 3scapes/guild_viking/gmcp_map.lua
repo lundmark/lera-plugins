@@ -96,6 +96,15 @@ local MAP = {
   vfind_hall = "VFIND", vfind_posts = "VFIND",
   vfind_offers = "VFIND", vfind_auctions = "VFIND",
 
+  -- Guild.State. Only the keys with a MIP twin are mapped: hp, sp, points,
+  -- chain, gxp, tox, fx, encounter, target and ledung are all written by
+  -- combat.lua's output-line triggers (or, for the attacker block, by
+  -- Char.Combat), which are protocol-independent and already the single source
+  -- of truth for those fields. Mapping them here would create a second writer
+  -- for values that already have one.
+  daler = "DALER", god = "GOD_POWER",
+  missions_reg = "VMREG", missions_newbie = "VMNEW",
+
   -- Guild.Kingdom
   grudges = "GRUDGES", standings = "STANDINGS", vrep = "VREP", diplo = "DIPLO",
   army = "ARMY", army_units = "ARMY", army_traits = "ARMY",
