@@ -12,6 +12,15 @@ local M = {}
 M.COMPOSITE = {
   MONUMENTS = { "monuments_cap", "monuments_list" },
   SROLES    = { "sroles", "sroles_meta" },
+  -- Guild.Map is composite in full, not per key. Its planes cannot be read
+  -- without `enc` (which encoding packed them) and `legend` (what each code
+  -- means), and its rows cannot be sized without `w` -- so routing the keys
+  -- individually would hand a writer a packed plane it has no way to decode.
+  -- Gathering the frame's keys into one call is exactly what the composite
+  -- path exists for; the writer still treats every member as optional,
+  -- because ordinary frames are deltas and a step sends `pos` alone.
+  VMAP      = { "w", "h", "active", "pos", "legend", "legend_edge", "enc",
+                "terrain", "east", "south", "landmarks" },
 }
 
 local MAP = {
@@ -26,6 +35,11 @@ local MAP = {
   cdtime = "CDTIME", raid = "RAID", heat = "HEAT", patrol = "PATROL",
   builds = "BUILDS", garrison = "GARRISON", buildings = "BUILDINGS",
   monuments_cap = "MONUMENTS", monuments_list = "MONUMENTS",
+
+  -- Guild.Map (all composite; see M.COMPOSITE above)
+  w = "VMAP", h = "VMAP", active = "VMAP", pos = "VMAP", legend = "VMAP",
+  legend_edge = "VMAP", enc = "VMAP", terrain = "VMAP", east = "VMAP",
+  south = "VMAP", landmarks = "VMAP",
 
   -- Guild.Trade
   carts = "CARTS", queue = "TQUEUE", cidle = "CIDLE", cupg = "CUPG",

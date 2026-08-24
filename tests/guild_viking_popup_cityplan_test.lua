@@ -135,7 +135,9 @@ local cityplan = require("popups.cityplan")
 local protocol = require("protocol")
 local city = require("handlers.city")
 for key, fn in pairs(city) do
-  if key ~= "_patterns" then protocol.handler(key, fn) end
+  if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
+    protocol.handler(key, fn)
+  end
 end
 for _, p in ipairs(city._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)

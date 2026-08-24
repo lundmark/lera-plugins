@@ -129,7 +129,9 @@ local state = require("state")
 local protocol = require("protocol")
 local kingdom = require("handlers.kingdom")
 for key, fn in pairs(kingdom) do
-  if key ~= "_patterns" then protocol.handler(key, fn) end
+  if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
+    protocol.handler(key, fn)
+  end
 end
 for _, p in ipairs(kingdom._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
@@ -138,11 +140,15 @@ end
 -- Task 5 needs VMAP* too (map.lua's own popup test's seed_vmap uses the
 -- same registration).
 local voyage = require("handlers.voyage")
+local RESERVED = { _market_seam = true, _patterns = true, _gmcp = true }
 for key, fn in pairs(voyage) do
-  if key ~= "_patterns" then protocol.handler(key, fn) end
+  if not RESERVED[key] then protocol.handler(key, fn) end
 end
 for _, p in ipairs(voyage._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
+end
+for key, fn in pairs(voyage._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
 end
 
 local S = state.S
@@ -201,30 +207,37 @@ local function seed_battle(t)
   }, "|"))
 end
 
--- seed_vmap: copied verbatim from guild_viking_popup_map_test.lua's own
--- helper (same wire-format, same 1-indexed-storage-for-a-0-based-wire-row
--- translation) so a Task 5 fixture here is directly comparable to that
--- suite's own.
+-- Seeds the vmap through the real Guild.Map pipeline (protocol.on_gmcp ->
+-- handlers.voyage's composite writer), never by poking S directly. `rows`/
+-- `east_edges`/`south_edges` are plain 1-based Lua arrays in wire order
+-- (rows[1] is wire row 0), which is also the layout the planes arrive in, so
+-- there is no index translation left to get wrong. Only the keys a caller
+-- actually supplies are sent: Guild.Map frames are deltas, and a key absent
+-- from a frame means unchanged.
+--
+-- `enc` says "glyph" so the rows travel as written. The packed encodings the
+-- server normally uses are the codec's own subject
+-- (guild_viking_gmcp_grid_test.lua) and the writer's
+-- (guild_viking_voyage_test.lua); a fixture here is about what the map
+-- CONTAINS, not how it was encoded.
 local function seed_vmap(t)
-  protocol.ingest("VMAPH", string.format("%d|%d|%d|%d",
-    t.w, t.h, t.px or -1, t.py or -1))
-  for wire_row, row in ipairs(t.rows or {}) do
-    protocol.ingest(string.format("VMR%02d", wire_row - 1), row)
-  end
-  for wire_row, edge in ipairs(t.east_edges or {}) do
-    protocol.ingest(string.format("MEE%02d", wire_row - 1), edge)
-  end
-  for wire_row, edge in ipairs(t.south_edges or {}) do
-    protocol.ingest(string.format("MES%02d", wire_row - 1), edge)
-  end
-  if t.pois and #t.pois > 0 then
-    local parts = {}
+  local frame = {
+    guild = "viking", w = t.w, h = t.h, active = 1,
+    pos = { x = t.px or -1, y = t.py or -1 },
+    enc = { terrain = "glyph", east = "glyph", south = "glyph" },
+  }
+  if t.rows then frame.terrain = t.rows end
+  if t.east_edges then frame.east = t.east_edges end
+  if t.south_edges then frame.south = t.south_edges end
+  if t.pois then
+    local landmarks = {}
     for _, p in ipairs(t.pois) do
-      parts[#parts + 1] = table.concat(
-        { p.type, p.name, p.x, p.y, p.owner or "" }, "|")
+      landmarks[#landmarks + 1] =
+        { type = p.type, name = p.name, x = p.x, y = p.y, owner = p.owner or "" }
     end
-    protocol.ingest("VMAPL", table.concat(parts, ";"))
+    frame.landmarks = landmarks
   end
+  protocol.on_gmcp("Guild.Map", frame)
 end
 
 -- ---- popup.lua's OWN private box-geometry math, replicated here so this
@@ -675,13 +688,10 @@ do
   -- TRUE for the up (B is a genuine POI), so only track.matches()
   -- rejecting the mismatched cell can be what keeps the menu shut.
   --
-  -- VMAPH/VMAPL is a double-buffer (handlers/voyage.lua's own "swap
-  -- completed pending batch into live list" comment): a POI list commits
-  -- to S.vmap_pois only on the NEXT VMAPH, unless vmap_pois is currently
-  -- EMPTY (a first-load shortcut). It is NOT empty here (the single-POI
-  -- fixture above already populated it), so seed_vmap's own VMAPL alone
-  -- leaves the two-POI list pending; the extra VMAPH below is a second
-  -- heartbeat, exactly like a real second MIP packet, that promotes it.
+  -- Guild.Map's `landmarks` is one array key carrying the whole list, so
+  -- seeding it replaces the single-POI fixture above outright -- no
+  -- double-buffer, and no second heartbeat needed to promote it. (MIP's
+  -- VMAPL chunked the list across packets and needed both.)
   seed_vmap({
     w = 3, h = 1, rows = { "ppp" }, east_edges = { "111" },
     px = 0, py = 0,
@@ -690,8 +700,7 @@ do
       { type = "ruins", name = "vanaheim", x = 1, y = 0, owner = "" },
     },
   })
-  protocol.ingest("VMAPH", "3|1|0|0")
-  check("two-POI fixture promoted to the live list (scenario E)", #S.vmap_pois == 2, #S.vmap_pois)
+  check("two-POI fixture replaced the live list (scenario E)", #S.vmap_pois == 2, #S.vmap_pois)
 
   local bcol, brow = to_screen(root_w, root_h, cell_lx(1), off + 0)
   send_calls, last_menu_open = {}, nil

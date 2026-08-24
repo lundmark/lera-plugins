@@ -6,6 +6,7 @@
 -- marks ui.dirty(); parsers never do.
 local S = require("state").S
 local util = require("util")
+local gmcp_grid = require("gmcp_grid")
 
 local M = {}
 
@@ -358,81 +359,24 @@ M.WEATHER = function(val)
   end
 end
 
--- LEGACY 2523
-M.VMAPH = function(val)
-  local mw, mh, mpx, mpy = val:match("^([^|]+)|([^|]+)|([^|]+)|([^|]+)$")
-  if mw then
-    local new_w = tonumber(mw) or 0
-    local new_h = tonumber(mh) or 0
-    -- Only reset edge/row data when map dimensions change
-    if new_w ~= S.vmap_w or new_h ~= S.vmap_h then
-      S.vmap_rows = {}
-      S.vmap_east_edges = {}
-      S.vmap_south_edges = {}
-    end
-    -- Swap completed pending batch into live list (no flicker)
-    -- Always swap if a pending batch exists, even if empty (handles cleanup)
-    if S.vmap_pois_pending ~= nil then
-      S.vmap_pois = S.vmap_pois_pending
-      S.vmap_pois_keys = S.vmap_pois_pending_keys or {}
-    end
-    -- Reset pending buffer for incoming VMAPL chunks
-    S.vmap_pois_pending = nil
-    S.vmap_pois_pending_keys = {}
-    S.vmap_pois_expecting = true
-    S.vmap_w  = new_w
-    S.vmap_h  = new_h
-    S.vmap_px = tonumber(mpx) or -1
-    S.vmap_py = tonumber(mpy) or -1
-  end
-end
+-- The MIP territory-map keys (VMAPH, VMAPL, VMAPL_END, and the VMR/MEE/MES
+-- row patterns below) are received and deliberately dropped: Guild.Map
+-- replaces them outright, and `write_map` at the bottom of this file is the
+-- only thing that fills S.vmap_*. They are registered as explicit no-ops
+-- rather than left unregistered so protocol.ingest does not file three dozen
+-- keys per map push under `unknown`, where /vik status reports keys nobody
+-- has taught the client about yet.
+--
+-- Nothing is lost by dropping them. MIP's VMAPH has carried five fields
+-- (w|h|px|py|active) since send_mip_map() gained the on-map flag, while the
+-- parser this replaces anchored on exactly four -- so it never matched a real
+-- frame, S.vmap_w stayed 0, and the Territory Map popup has been drawing
+-- nothing on the MIP path regardless.
+local function ignore_mip_map_key() end
 
--- LEGACY 2549, plus the LEGACY 2659-2668 promotion check (see the fix report
--- for the mapping): in LEGACY that check runs once per whole MIP packet,
--- after the entire elseif chain, not inside any single branch -- it fires
--- whenever "vmap_pois is still empty but the pending buffer has data".
--- vmap_pois_pending can only gain data from this handler, so the equivalent
--- moment in a per-key dispatch architecture is the end of this same
--- ingest call: nothing else in this module can clear vmap_pois to empty
--- between VMAPL calls, so checking here fires under exactly the same
--- condition LEGACY's post-packet check would have found true.
-M.VMAPL = function(val)
-  -- Build into pending buffer; swapped to live list on next VMAPH
-  if S.vmap_pois_expecting then
-    S.vmap_pois_pending = {}
-    S.vmap_pois_pending_keys = {}
-    S.vmap_pois_expecting = false
-  end
-  if not S.vmap_pois_pending then S.vmap_pois_pending = {} end
-  if not S.vmap_pois_pending_keys then S.vmap_pois_pending_keys = {} end
-  for entry in val:gmatch("[^;]+") do
-    local ptype, pname, px2, py2, powner =
-      entry:match("^([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]*)$")
-    if ptype then
-      local ekey = (px2 or "?") .. "," .. (py2 or "?")
-      if not S.vmap_pois_pending_keys[ekey] then
-        S.vmap_pois_pending_keys[ekey] = true
-        table.insert(S.vmap_pois_pending, { type=ptype, name=pname,
-          x=tonumber(px2) or -1, y=tonumber(py2) or -1,
-          owner=powner or "" })
-      end
-    end
-  end
-  -- If vmap_pois is still empty but the pending buffer has data, promote it
-  -- immediately rather than waiting for the next VMAPH heartbeat cycle.
-  if S.vmap_pois_pending and #S.vmap_pois_pending > 0
-     and #(S.vmap_pois or {}) == 0 then
-    S.vmap_pois      = S.vmap_pois_pending
-    S.vmap_pois_keys = S.vmap_pois_pending_keys or {}
-    S.vmap_pois_pending = nil
-    S.vmap_pois_pending_keys = {}
-    S.vmap_pois_expecting = true
-  end
-end
-
--- LEGACY 2580. Empty branch in LEGACY -- registered as a no-op so
--- protocol.ingest doesn't record it as an unknown key.
-M.VMAPL_END = function(val) end
+M.VMAPH = ignore_mip_map_key
+M.VMAPL = ignore_mip_map_key
+M.VMAPL_END = ignore_mip_map_key
 
 -- LEGACY 2140
 M.FLEET_RENOWN = function(val)
@@ -451,29 +395,140 @@ local function vcr_row(key, val)
   S.voyage_chart_rows[ridx + 1] = val or ""
 end
 
--- LEGACY 2571-2573 (`^VMR%d%d$`)
-local function vmr_row(key, val)
-  local ridx = tonumber(key:sub(4)) or 0
-  S.vmap_rows[ridx + 1] = val
-end
-
--- LEGACY 2574-2576 (`^MEE%d%d$`)
-local function mee_row(key, val)
-  local ridx = tonumber(key:sub(4)) or 0
-  S.vmap_east_edges[ridx + 1] = val
-end
-
--- LEGACY 2577-2579 (`^MES%d%d$`)
-local function mes_row(key, val)
-  local ridx = tonumber(key:sub(4)) or 0
-  S.vmap_south_edges[ridx + 1] = val
-end
+-- The MIP terrain and edge row keys, dropped for the reason given above
+-- M.VMAPH. One shared no-op rather than three, since none of them reads its
+-- arguments.
+local function ignore_mip_map_row() end
 
 M._patterns = {
   { pattern = "^VCR%d%d$", fn = vcr_row },
-  { pattern = "^VMR%d%d$", fn = vmr_row },
-  { pattern = "^MEE%d%d$", fn = mee_row },
-  { pattern = "^MES%d%d$", fn = mes_row },
+  { pattern = "^VMR%d%d$", fn = ignore_mip_map_row },
+  { pattern = "^MEE%d%d$", fn = ignore_mip_map_row },
+  { pattern = "^MES%d%d$", fn = ignore_mip_map_row },
 }
+
+-- ---------------------------------------------------------------------------
+-- Guild.Map -- the territory map, GMCP only.
+-- ---------------------------------------------------------------------------
+--
+-- Guild.Map is the one panel in this migration whose GMCP shape deliberately
+-- differs from MIP's, and the difference is why the MIP path above is gone
+-- rather than kept alongside. MIP bakes the player's 'X' into the terrain row
+-- itself, so every single step rewrites the whole terrain plane -- about
+-- 5.3KB reshipped through the delta cache on a 60x30 grid because someone
+-- walked one tile. Guild.Map sends the rows clean and the position as its own
+-- `pos` key, so a step costs about 20 bytes and the planes change only when
+-- the world does.
+--
+-- The client model already wanted it this way: popups/map.lua has always
+-- treated S.vmap_rows as terrain alone and drawn the marker itself from
+-- S.vmap_px/S.vmap_py (see its make_grid), overwriting MIP's baked 'X' with
+-- an identical one. The one place MIP's marker was not overwritten is
+-- pathfinding.lua, which reads the same rows as terrain and therefore saw
+-- 'X' -- not a real terrain glyph -- for whichever cell the player stood on.
+-- Clean rows fix that as a side effect.
+--
+-- Every member is optional. Ordinary frames are deltas: a key absent means
+-- unchanged, never empty, so a frame carrying only `pos` must move the marker
+-- and leave the planes alone.
+local function apply_dimensions(parts)
+  local w = tonumber(parts.w)
+  local h = tonumber(parts.h)
+  if w == nil and h == nil then return end
+  local new_w = w or S.vmap_w
+  local new_h = h or S.vmap_h
+  -- Rows sized for the old grid cannot be reinterpreted at a new width, and
+  -- the surplus rows of a shrunk grid would otherwise linger below the map.
+  if new_w ~= S.vmap_w or new_h ~= S.vmap_h then
+    S.vmap_rows = {}
+    S.vmap_east_edges = {}
+    S.vmap_south_edges = {}
+  end
+  S.vmap_w = new_w
+  S.vmap_h = new_h
+end
+
+-- Planes arrive as an array of row strings, one entry per row, already in the
+-- 1-indexed-Lua-for-0-indexed-wire layout the renderer and pathfinding read
+-- (rows[1] is wire row 0). The south plane is one row shorter than the grid
+-- by construction -- it describes the boundary between row r and row r+1.
+local function apply_plane(parts, gmcp_key, state_key, glyphs)
+  local rows = parts[gmcp_key]
+  if rows == nil then return end
+  local enc = (S.vmap_enc or {})[gmcp_key]
+  local decoded, failed = gmcp_grid.decode_plane(rows, enc, S.vmap_w or 0, glyphs)
+  S[state_key] = decoded
+  if failed > 0 then
+    -- Printed per push rather than once: a plane that stops decoding is
+    -- either a legend this client has fallen behind or a corrupt frame, and
+    -- both are worth seeing every time rather than once per session.
+    print(string.format("[vik] Guild.Map: %d of %d %s rows undecodable (enc=%s)",
+      failed, #rows, gmcp_key, tostring(enc or "glyph")))
+  end
+end
+
+local function apply_landmarks(parts)
+  local landmarks = parts.landmarks
+  if type(landmarks) ~= "table" then return end
+  -- Rebuilt whole, not merged: `landmarks` is one array key, so a frame
+  -- carrying it carries the entire list.
+  local pois, keys = {}, {}
+  for _, lm in ipairs(landmarks) do
+    if type(lm) == "table" then
+      local x = tonumber(lm.x) or -1
+      local y = tonumber(lm.y) or -1
+      -- One marker per cell, first one wins -- the same dedup the MIP path
+      -- applied, and the same key shape, since popups/map.lua's own
+      -- poi_lookup is likewise one-poi-per-cell.
+      local ekey = x .. "," .. y
+      if not keys[ekey] then
+        keys[ekey] = true
+        pois[#pois + 1] = {
+          type  = tostring(lm.type or "?"),
+          name  = tostring(lm.name or "?"),
+          x = x, y = y,
+          owner = tostring(lm.owner or ""),
+        }
+      end
+    end
+  end
+  S.vmap_pois = pois
+  S.vmap_pois_keys = keys
+end
+
+local function write_map(parts)
+  if type(parts) ~= "table" then return end
+
+  -- Decoding context first, and cached in state: `enc`, `legend` and
+  -- `legend_edge` change only when the server's tables do, so a delta
+  -- carrying fresh planes will not repeat them. Applying a plane against a
+  -- stale legend from a previous connection would draw a valid-looking but
+  -- wrong map, which is why state.reset_connection clears these three.
+  if parts.enc ~= nil then S.vmap_enc = parts.enc end
+  if parts.legend ~= nil then
+    S.vmap_legend = parts.legend
+    S.vmap_terrain_glyphs = gmcp_grid.terrain_glyphs(parts.legend)
+  end
+  if parts.legend_edge ~= nil then S.vmap_legend_edge = parts.legend_edge end
+
+  -- Then dimensions, because a plane's rows are sized by the grid width.
+  apply_dimensions(parts)
+
+  local edge_glyphs = gmcp_grid.edge_glyphs()
+  apply_plane(parts, "terrain", "vmap_rows", S.vmap_terrain_glyphs)
+  apply_plane(parts, "east", "vmap_east_edges", edge_glyphs)
+  apply_plane(parts, "south", "vmap_south_edges", edge_glyphs)
+
+  if type(parts.pos) == "table" then
+    S.vmap_px = tonumber(parts.pos.x) or -1
+    S.vmap_py = tonumber(parts.pos.y) or -1
+  end
+  if parts.active ~= nil then S.vmap_active = tonumber(parts.active) or 0 end
+
+  apply_landmarks(parts)
+end
+
+M._gmcp = { VMAP = write_map }
+
 
 return M

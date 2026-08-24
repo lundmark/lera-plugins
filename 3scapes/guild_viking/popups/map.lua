@@ -410,8 +410,13 @@ end
 local function pre_grid_lines(width)
   local out = { pagelib.header(width, "Territory Map") }
   if (S.vmap_px or -1) >= 0 then
-    out[#out + 1] = pagelib.kv(width, "Position:",
-      string.format("(%d, %d)", S.vmap_px, S.vmap_py))
+    -- Guild.Map's `active` distinguishes "the player is standing here" from
+    -- "this is where we last saw them" -- the server keeps sending the last
+    -- known coordinates once they step off the biome grid, and without the
+    -- distinction the marker claims a position they left some time ago.
+    local pos = string.format("(%d, %d)", S.vmap_px, S.vmap_py)
+    if S.vmap_active == 0 then pos = pos .. " (last known)" end
+    out[#out + 1] = pagelib.kv(width, "Position:", pos)
   end
   for _, l in ipairs(maplib.legend(width, legend_entries())) do
     out[#out + 1] = l

@@ -427,14 +427,24 @@ package.loaded["menu"] = {
 -- handlers.city/handlers.kingdom/handlers.trade with protocol.handler, so
 -- these ingests drive the real handler code, not a test-local shortcut.
 
--- vmap (map popup): guild_viking_popup_map_test.lua's seed_vmap shape.
-protocol.ingest("VMAPH", "4|4|1|1")
-protocol.ingest("VMR00", "ph..")
-protocol.ingest("VMR01", "AfW.")
-protocol.ingest("VMR02", "..X.")
-protocol.ingest("VMR03", "....")
-protocol.ingest("VMAPL", "capital|asgard|0|0|")
+-- vmap (map popup): guild_viking_popup_map_test.lua's seed_vmap shape. The
+-- territory map is GMCP-only, so this one arrives as a Guild.Map frame rather
+-- than through protocol.ingest; init.lua's requires above registered the
+-- composite writer along with every MIP handler. Terrain rows carry no player
+-- marker -- popups/map.lua draws that itself from `pos`.
+protocol.on_gmcp("Guild.Map", {
+  guild = "viking", w = 4, h = 4, active = 1, pos = { x = 1, y = 1 },
+  enc = { terrain = "glyph", east = "glyph", south = "glyph" },
+  terrain = { "ph..", "AfW.", "....", "...." },
+  landmarks = { { type = "capital", name = "asgard", x = 0, y = 0, owner = "" } },
+})
 page_opts.set("show_map_towns", true)
+-- The fixture above is the only one here that travels by GMCP, where a wrong
+-- guild name or an unregistered writer drops the frame silently and leaves
+-- the map popup rendering its empty-state text -- which every case below
+-- would still pass against. Pinned so it cannot go quietly vacuous.
+check("(fixture) the Guild.Map frame reached the writer",
+      S.vmap_w == 4 and S.vmap_rows[2] == "AfW." and #S.vmap_pois == 1)
 
 -- chart + voyage status (sea + voyage popups):
 -- guild_viking_popup_sea_test.lua's VOYAGE/VCHH/VCR/VSAILED/VQPATH/VSAGA/
