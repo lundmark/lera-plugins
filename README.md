@@ -117,7 +117,7 @@ events or payloads for a plugin to consume.
 | `autostepper` | `/step`, `-` `-.` `->` `-!` | Automatic speedwalk execution |
 | `chat_monitor` | `/chat` | Chat channel monitoring and logging (MIP or GMCP) |
 | `guild_druid` | `/dauto`, `/resetgxp` | Druid guild utilities |
-| `guild_viking` | `/vik`, `resetvikxp` | Vikings guild: protocol/state, a 12-page tab-bar pane (`/vik <page>` or `/vik page <key>`), popup board overlays (`/vik map\|sea\|voyage\|cityplan\|war`), detached-page parity (`/vik pop <page>`), map pathfinding with point-of-interest travel and mission/errand dispatch (always available, no setting), and three client-side automations (auto-trade, auto-raid, auto-voyage; see below), which ship off by default |
+| `guild_viking` | `/vik`, `resetvikxp` | Vikings guild: guild state over MIP and GMCP (`Guild.Settlement` keys only so far; see guild sources below), a 12-page tab-bar pane (`/vik <page>` or `/vik page <key>`), popup board overlays (`/vik map\|sea\|voyage\|cityplan\|war`), detached-page parity (`/vik pop <page>`), map pathfinding with point-of-interest travel and mission/errand dispatch (always available, no setting), and three client-side automations (auto-trade, auto-raid, auto-voyage; see below), which ship off by default |
 | `kill_trigger` | `/killers` | Combat automation triggers |
 | `mapper` | `/map` | Room graph from GMCP Room.Info, waypoints, name search |
 | `mapview` | `/mapview` | Visual map display |
@@ -249,6 +249,38 @@ including anything under `Comm` that could not be read:
 [chat] mip: 143 messages    gmcp: 0 mapped, 2 unmapped
 [chat] last unmapped: Comm.Channel.List (fields: channels)
 ```
+
+### Guild sources: MIP and GMCP
+
+`guild_viking` receives state from either protocol, though currently only the ten
+`Guild.Settlement` keys have writers. 3K sends the same state over both, so
+selection is per key rather than per transport — a key that arrives over GMCP
+suppresses its MIP copy, but the other transport remains active for keys without
+a GMCP writer:
+
+| Key | MIP | GMCP |
+|-----|-----|------|
+| **Settlement** | BBE payload (denoted `SETTLERS`, `SACTIONS`, etc.) | `Guild.Settlement` sub-keys (`settlers`, `sactions`, etc.) |
+| **City/Trade** | BBE payload | `Guild.City` / `Guild.Trade` sub-keys (mapped, not consumed yet) |
+
+The latch is per-key because GMCP covers five panels while voyage and war have no
+GMCP source yet. A wholesale latch would take those pages dark. In the default
+`auto` mode each key picks its source independently: MIP feeds it until GMCP arrives
+for that key, then the MIP copy suppresses. Pin it with `/vik source mip|gmcp|auto`.
+`/vik source` reports which keys each protocol is feeding and the keys received but
+not consumed (no writer yet).
+
+Settlement keys use a shared decoder and writer, so they read identically regardless
+of transport. Two keys are exceptions: `SCONSUME` arrives as a hand-written
+`name:value` dictionary, and `SEVENTS` splits on the first pipe only, allowing the
+message body to contain pipes. Two composite keys gather multiple GMCP sub-keys into
+a single writer: `MONUMENTS` joins `monuments_cap` and `monuments_list`, and `SROLES`
+joins `sroles` and `sroles_meta`. A delta frame may carry one half without the other,
+and the writer applies only what arrived.
+
+`Guild.Info` and `Guild.State` are received and counted but not consumed — they
+carry identity and SP fields the plugin does not read, and the vitals they would
+duplicate are already owned by `combat.on_composite` off the MIP `FFF` channel.
 
 ### Vikings guild automation
 
