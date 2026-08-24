@@ -44,6 +44,12 @@ M.COMPOSITE = {
   -- packed the meta into the plot list as a "meta|" pseudo-entry, GMCP gives it
   -- its own key.
   FARM      = { "farm_meta", "farm_plots" },
+  -- The city plan. MIP spread this over CPLAN/CPT/CPB/CPU/CPP with a commit
+  -- protocol; GMCP sends it whole, which is why the server deliberately does
+  -- not translate CPEND -- page/pages plus the delta cache already say when a
+  -- push is complete.
+  CPLAN     = { "cityplan", "cityplan_terrain", "cityplan_buildings",
+                "cityplan_placeable", "cityplan_perks" },
   -- Guild.Voyage. A voyage's and a longship's crew/ship trait lists are
   -- containers a record may not hold, so the server deletes them from the
   -- record and sends each as its own key -- per ship, keyed by `id`. voffers
@@ -83,6 +89,9 @@ local MAP = {
   cdtime = "CDTIME", raid = "RAID", heat = "HEAT", patrol = "PATROL",
   builds = "BUILDS", garrison = "GARRISON", buildings = "BUILDINGS",
   monuments_cap = "MONUMENTS", monuments_list = "MONUMENTS",
+  cityplan = "CPLAN", cityplan_terrain = "CPLAN",
+  cityplan_buildings = "CPLAN", cityplan_placeable = "CPLAN",
+  cityplan_perks = "CPLAN",
   blot = "BLOT", weather = "WEATHER", dcycle = "DCYCLE", nexttick = "NEXTTICK",
   production = "PRODUCTION", farm_meta = "FARM", farm_plots = "FARM",
 

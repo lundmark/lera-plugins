@@ -466,11 +466,11 @@ local EXPECTED_GMCP_WRITERS = {
   -- lands -- see the gap note in gmcp_map.lua)
   "CARTS", "TQUEUE", "CIDLE", "CUPG", "ROUTES", "BLOCKS", "REFINERY", "MARKET",
   "INCOMING", "WSTOCK",
-  -- Guild.City (19; the cityplan cluster CPLAN/CPP/CPB/CPU/CPT has no writer
-  -- yet)
+  -- Guild.City (21, including the city plan -- one composite where MIP spread
+  -- it over CPLAN/CPT/CPB/CPU/CPP with a commit protocol)
   "BUILDS", "BUILDINGS", "MONUMENTS", "BLOT", "FARM", "DCYCLE", "NEXTTICK",
   "CDTIME", "PRODUCTION", "ERRAND", "MISSIONS", "RBUILD", "UPKEEP", "RUPKEEP",
-  "HEAT", "BDMG", "RAID", "PATROL", "GARRISON", "WEATHER",
+  "HEAT", "BDMG", "RAID", "PATROL", "GARRISON", "WEATHER", "CPLAN",
   -- Guild.Voyage (17; VRELICS deliberately stays MIP-only -- GMCP carries
   -- relic ids and the display-name lookup is server-side)
   "VOYAGE", "LONGSHIP", "VOYAGE_WAIT", "VOFFERS", "VRESOLVE", "VQPATH",

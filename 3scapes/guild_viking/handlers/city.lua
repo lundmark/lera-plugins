@@ -941,6 +941,80 @@ local function write_god(rec)
   S.god_power_focus = tostring(rec.focus or "")
 end
 
+-- ---------------------------------------------------------------------------
+-- Guild.City: the city plan
+-- ---------------------------------------------------------------------------
+-- Over MIP this was a multi-frame burst with its own commit protocol: CPLAN
+-- opened a pending plan, CPT rows and CPB/CPU segments accumulated into it,
+-- and CPEND either committed it or reported a dropped chunk by comparing a
+-- row count. None of that is needed here. GMCP delivers the whole plan in one
+-- frame (or across pages the protocol layer rejoins before dispatch), which is
+-- exactly why the server declines to translate CPEND into a key at all.
+--
+-- Two renames: coast_side -> coast and mood_delta -> mood. enabled, moat and
+-- wall arrive as 0/1 where the client stores booleans.
+--
+-- The terrain rows carry the grid's NATURAL glyphs -- '^' for hill, where MIP
+-- substituted 'H' to dodge a wire-delimiter collision that does not exist in
+-- JSON. popups/cityplan.lua already maps both characters to the same cell, so
+-- nothing downstream needs to change.
+local function write_cityplan(parts)
+  if type(parts) ~= "table" then return end
+  local rec = parts.cityplan
+  if type(rec) ~= "table" then return end
+
+  local plan = {
+    enabled = (tonumber(rec.enabled) or 0) == 1,
+    dim     = tonumber(rec.dim) or 12,
+    placed  = tonumber(rec.placed) or 0,
+    cap     = tonumber(rec.cap) or 0,
+    coast   = tonumber(rec.coast_side) or 0,
+    moat    = (tonumber(rec.moat) or 0) == 1,
+    wall    = (tonumber(rec.wall) or 0) == 1,
+    gate    = tonumber(rec.gate) or 6,
+    mood    = tonumber(rec.mood_delta) or 0,
+    margin  = tonumber(rec.margin) or 3,
+    rows = {}, blds = {}, unplaced = {},
+    -- Sent only when there are any, so its absence means none.
+    perks = tostring(parts.cityplan_perks or ""),
+  }
+
+  for i, row in ipairs(parts.cityplan_terrain or {}) do
+    plan.rows[i] = tostring(row)
+  end
+  for _, b in ipairs(parts.cityplan_buildings or {}) do
+    if type(b) == "table" and b.id ~= nil and tostring(b.id) ~= "" then
+      local id = tostring(b.id)
+      local name = tostring(b.name or "")
+      plan.blds[#plan.blds + 1] = {
+        id = id,
+        x = tonumber(b.x) or 0, y = tonumber(b.y) or 0,
+        w = tonumber(b.w) or 1, h = tonumber(b.h) or 1,
+        pal = tostring(b.pal or "e"), glyph = tostring(b.glyph or "?"),
+        name = (name ~= "") and name or id,
+      }
+    end
+  end
+  for _, b in ipairs(parts.cityplan_placeable or {}) do
+    if type(b) == "table" and b.id ~= nil and tostring(b.id) ~= "" then
+      local id = tostring(b.id)
+      local name = tostring(b.name or "")
+      plan.unplaced[#plan.unplaced + 1] = {
+        id = id, pal = tostring(b.pal or "e"),
+        glyph = tostring(b.glyph or "?"),
+        name = (name ~= "") and name or id,
+      }
+    end
+  end
+
+  -- Committed outright. The MIP path could only commit once it had counted the
+  -- rows it was promised, because a dropped chunk was indistinguishable from a
+  -- short grid; a GMCP frame is whole by construction, so there is no pending
+  -- copy to hold and no dropped-chunk diagnostic to carry.
+  S.city_plan = plan
+  S.cp_pending = nil
+end
+
 M._gmcp = {
   SUPG       = write_supg,
   SETTLERS = write_settlers,
@@ -964,6 +1038,7 @@ M._gmcp = {
   ERRAND     = write_errand,
   MISSIONS   = write_missions,
   GOD_POWER  = write_god,
+  CPLAN      = write_cityplan,
 }
 
 return M

@@ -1,8 +1,8 @@
 -- guild_viking Guild.City writers unit tests. Run from the lera-plugins repo
 -- root with LERA_ROOT pointing at a built Lera checkout.
 --
--- The cityplan cluster (CPLAN/CPP/CPB/CPU/CPT) is not covered here; it has no
--- GMCP writer yet.
+-- The cityplan cluster is covered at the end of this file.
+
 package.path = "3scapes/guild_viking/?.lua;" .. package.path
 
 local failures = 0
@@ -209,6 +209,56 @@ check("garrison fields", S.garrison_stationed == 12 and S.garrison_cap == 20)
 city({ weather = { season = "winter", weather = "snow", strength = 2 } })
 check("weather strength lands on weather_str",
       S.season == "winter" and S.weather == "snow" and S.weather_str == 2)
+
+-- ---- cityplan --------------------------------------------------------------
+-- Over MIP this was a multi-frame burst with a commit protocol (CPLAN opened a
+-- pending plan, CPT/CPB/CPU accumulated, CPEND committed after counting rows).
+-- GMCP sends it whole, which is why the server deliberately does not translate
+-- CPEND at all.
+city({
+  cityplan = { enabled = 1, dim = 10, placed = 4, cap = 12, coast_side = 2,
+               moat = 1, wall = 0, gate = 5, mood_delta = -3, margin = 2 },
+  cityplan_terrain = { ".f^wc", "WGMB." },
+  cityplan_buildings = {
+    { id = "BLDG_SMITHY", x = 2, y = 3, w = 2, h = 2, pal = "r",
+      glyph = "S", name = "Smithy" },
+    { id = "BLDG_APIARY", x = 1, y = 1 },
+  },
+  cityplan_placeable = { { id = "BLDG_MOAT", pal = "b", glyph = "M",
+                           name = "Moat" } },
+  cityplan_perks = "sturdy,warm",
+})
+local cp = S.city_plan
+check("the plan is committed outright, with no pending copy",
+      cp ~= nil and S.cp_pending == nil)
+check("cityplan coast_side lands on coast", cp.coast == 2)
+check("cityplan mood_delta lands on mood", cp.mood == -3)
+check("cityplan scalars", cp.dim == 10 and cp.placed == 4 and cp.cap == 12
+      and cp.gate == 5 and cp.margin == 2)
+-- Three 0/1 ints become booleans; 0 is truthy in Lua, so `wall` is the one
+-- that catches a naive assignment.
+check("enabled/moat/wall become booleans",
+      cp.enabled == true and cp.moat == true and cp.wall == false)
+-- The rows carry the grid's natural glyphs -- '^' for hill, where MIP
+-- substituted 'H' to dodge a wire-delimiter collision. popups/cityplan.lua
+-- maps both to the same cell, so the rows pass through untouched.
+check("terrain rows keep their natural glyphs",
+      #cp.rows == 2 and cp.rows[1] == ".f^wc" and cp.rows[2] == "WGMB.")
+check("placed buildings", #cp.blds == 2 and cp.blds[1].id == "BLDG_SMITHY"
+      and cp.blds[1].x == 2 and cp.blds[1].y == 3 and cp.blds[1].w == 2
+      and cp.blds[1].h == 2 and cp.blds[1].pal == "r"
+      and cp.blds[1].glyph == "S" and cp.blds[1].name == "Smithy")
+-- A building with no name renders under its own id, as it did over MIP.
+check("a nameless building falls back to its id",
+      cp.blds[2].name == "BLDG_APIARY" and cp.blds[2].w == 1
+      and cp.blds[2].pal == "e" and cp.blds[2].glyph == "?")
+check("placeable buildings", #cp.unplaced == 1
+      and cp.unplaced[1].id == "BLDG_MOAT" and cp.unplaced[1].name == "Moat")
+check("perks", cp.perks == "sturdy,warm")
+-- Perks are sent only when there are any, so their absence means none.
+city({ cityplan = { enabled = 1, dim = 8 }, cityplan_terrain = { "..." } })
+check("a plan with no perks key has empty perks", S.city_plan.perks == "")
+
 
 -- ---- envelope --------------------------------------------------------------
 protocol.on_gmcp("Guild.City", { guild = "berserker",
