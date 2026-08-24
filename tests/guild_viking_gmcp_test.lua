@@ -101,8 +101,8 @@ check("applied counted", protocol.gmcp_stats().applied.SETTLERS == 1,
 -- sending must be distinguishable from one it never sent.
 reset()
 frame("Guild.Settlement", { guild = "viking", nosuchkey = { a = 1 } })
-check("unhandled key counted", protocol.gmcp_stats().unknown.NOSUCHKEY == 1,
-  protocol.gmcp_stats().unknown.NOSUCHKEY)
+check("unhandled key counted", protocol.gmcp_stats().unknown.nosuchkey == 1,
+  protocol.gmcp_stats().unknown.nosuchkey)
 
 -- Kills: not marking the screen dirty, so a pane fed only by GMCP never
 -- repaints until unrelated output arrives.
@@ -126,22 +126,25 @@ check("non-table payload is a no-op", got.SETTLERS == nil)
 reset()
 frame("Guild.State", { guild = "viking", hp = { cur = 5, max = 10 } })
 check("Guild.State hp not applied", protocol.gmcp_stats().applied.HP == nil)
-check("Guild.State hp counted unknown", protocol.gmcp_stats().unknown.HP == 1,
-  protocol.gmcp_stats().unknown.HP)
+check("Guild.State hp counted unknown", protocol.gmcp_stats().unknown.hp == 1,
+  protocol.gmcp_stats().unknown.hp)
 
 -- ---- a raising gmcp writer is countable and does not block its siblings --
 -- Kills: routing a writer error into the MIP-scoped stats/print path instead
 -- of gmcp_stats (an observability hole: /vik source reads gmcp_stats(), which
 -- would then never show a GMCP write failure). Kills: one raising writer
--- aborting the whole frame instead of just that key -- BOOMKEY and SETTLERS
+-- aborting the whole frame instead of just that key -- CIDLE and SETTLERS
 -- are unrelated keys in the same frame.
-protocol.gmcp_handler("BOOMKEY", function() error("boom") end)
+-- (CIDLE, not the "boomkey" this case used to send: that name only routed
+-- because of the uppercase derivation this task removes, and is not in the
+-- key map. cidle/CIDLE is a real mapped key, unused elsewhere in this suite.)
+protocol.gmcp_handler("CIDLE", function() error("boom") end)
 reset()
-frame("Guild.Settlement", { guild = "viking", boomkey = "x", settlers = { a = 2 } })
+frame("Guild.Settlement", { guild = "viking", cidle = "x", settlers = { a = 2 } })
 check("raising gmcp writer counted in gmcp_stats().errors",
-  protocol.gmcp_stats().errors.BOOMKEY == 1, protocol.gmcp_stats().errors.BOOMKEY)
+  protocol.gmcp_stats().errors.CIDLE == 1, protocol.gmcp_stats().errors.CIDLE)
 check("raising gmcp writer not counted as applied",
-  protocol.gmcp_stats().applied.BOOMKEY == nil)
+  protocol.gmcp_stats().applied.CIDLE == nil)
 check("sibling key in the same frame still applied",
   got.SETTLERS ~= nil and got.SETTLERS.a == 2)
 
@@ -205,13 +208,17 @@ check("per-package paging state",
 -- key repeats across pages with mismatched shapes. Only arrays are ever
 -- sliced server-side; a repeated non-array is last-value-wins, not
 -- concatenated, and must not discard the rest of the run.
-protocol.gmcp_handler("SIBLING", recorder("SIBLING"))
+-- (sconsume/SCONSUME, not the "sibling" key this case used to send: that name
+-- only routed because of the uppercase derivation this task removes, and is
+-- not in the key map. sconsume/SCONSUME is a real mapped key, unused
+-- elsewhere in this suite.)
+protocol.gmcp_handler("SCONSUME", recorder("SCONSUME"))
 reset()
 local malformed_before = protocol.gmcp_stats().malformed or 0
 frame("Guild.Settlement", { guild = "viking", page = 1, pages = 2,
                             settlers = { "a" } })
 frame("Guild.Settlement", { guild = "viking", page = 2, pages = 2,
-                            settlers = { x = 1 }, sibling = "ok" })
+                            settlers = { x = 1 }, sconsume = "ok" })
 check("type-mismatched repeat is last-value-wins, not concatenated",
   got.SETTLERS ~= nil and got.SETTLERS.x == 1 and got.SETTLERS[1] == nil,
   got.SETTLERS)
@@ -219,7 +226,7 @@ check("type mismatch counted malformed exactly once",
   (protocol.gmcp_stats().malformed or 0) == malformed_before + 1,
   protocol.gmcp_stats().malformed)
 check("sibling key in the same run still applied",
-  got.SIBLING == "ok", got.SIBLING)
+  got.SCONSUME == "ok", got.SCONSUME)
 
 -- ---- per-key latch ---------------------------------------------------------
 -- SETTLERS already has a gmcp_handler registered above (line 37); reused here
@@ -281,6 +288,65 @@ protocol.reset_connection()
 protocol.ingest("SETTLERS", "from-mip")
 check("latch clears on disconnect", ingested.SETTLERS == "from-mip",
   tostring(ingested.SETTLERS))
+
+-- ---- key map ---------------------------------------------------------------
+local gmcp_map = require("gmcp_map")
+
+-- Kills: deriving the MIP key by uppercasing. Three keys break that rule.
+check("identity mapping", gmcp_map.mip_key("settlers") == "SETTLERS",
+  gmcp_map.mip_key("settlers"))
+check("queue renames to TQUEUE", gmcp_map.mip_key("queue") == "TQUEUE",
+  gmcp_map.mip_key("queue"))
+check("monuments_cap maps to MONUMENTS",
+  gmcp_map.mip_key("monuments_cap") == "MONUMENTS",
+  gmcp_map.mip_key("monuments_cap"))
+check("sroles_meta maps to SROLES",
+  gmcp_map.mip_key("sroles_meta") == "SROLES",
+  gmcp_map.mip_key("sroles_meta"))
+
+-- Kills: mapping a key the guild sends but nothing consumes. These four must
+-- stay unmapped so they are counted rather than routed.
+for _, k in ipairs({ "cart_legs", "queue_legs", "crpr", "refinery_grades" }) do
+  check("unmatched key " .. k .. " is unmapped", gmcp_map.mip_key(k) == nil,
+    gmcp_map.mip_key(k))
+end
+
+-- ---- shared decoder --------------------------------------------------------
+-- Kills: a decoder that returns fields positionally instead of named, which
+-- would make the MIP and GMCP paths disagree on shape.
+local recs = gmcp_map.zip({ "a", "b", "c" }, "1|2|3")
+check("zip one record", #recs == 1 and recs[1].a == "1" and recs[1].c == "3",
+  #recs)
+
+-- Kills: treating the whole value as one record. `;` separates records.
+recs = gmcp_map.zip({ "a", "b" }, "1|2;3|4")
+check("zip record list", #recs == 2 and recs[2].a == "3" and recs[2].b == "4",
+  #recs)
+
+-- Kills: dropping a trailing empty field. MIP sends empty strings for absent
+-- values, and a writer's `tonumber(x) or 0` depends on the field being present.
+recs = gmcp_map.zip({ "a", "b", "c" }, "1||")
+check("zip keeps empty fields",
+  #recs == 1 and recs[1].b == "" and recs[1].c == "", recs[1] and recs[1].c)
+
+-- Kills: an empty value producing a phantom record.
+check("zip of empty string is empty", #gmcp_map.zip({ "a" }, "") == 0)
+
+-- ---- routing through the map -----------------------------------------------
+-- Kills: apply_gmcp_key still uppercasing rather than consulting the map.
+reset()
+protocol.gmcp_handler("TQUEUE", recorder("TQUEUE"))
+frame("Guild.Trade", { guild = "viking", queue = { a = 1 } })
+check("renamed key routes to its writer",
+  got.TQUEUE ~= nil and got.TQUEUE.a == 1, got.TQUEUE and got.TQUEUE.a)
+
+-- Kills: an unmapped key counted under its own name rather than being visible
+-- as the GMCP key the guild actually sent.
+reset()
+frame("Guild.Trade", { guild = "viking", crpr = { a = 1 } })
+check("unmapped key counted by its gmcp name",
+  protocol.gmcp_stats().unknown.crpr == 1,
+  protocol.gmcp_stats().unknown.crpr)
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")

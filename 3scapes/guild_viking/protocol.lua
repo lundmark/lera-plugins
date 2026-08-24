@@ -1,6 +1,7 @@
 -- Transport-agnostic ingestion. Adapters (MIP BBE today, GMCP later) reduce
 -- their wire format to ingest(key, value); the parsers never know the source.
 local util = require("util")
+local gmcp_map = require("gmcp_map")
 
 local protocol = {}
 
@@ -280,9 +281,15 @@ function protocol.on_gmcp(package, data)
   end
 end
 
--- Route one payload key. Task 4 replaces the naive uppercase with the key map.
+-- Route one payload key through the explicit key map.
 function protocol.apply_gmcp_key(gmcp_key, value)
-  local mip_key = tostring(gmcp_key):upper()
+  local mip_key = gmcp_map.mip_key(gmcp_key)
+  if not mip_key then
+    -- Counted under the GMCP name, so /vik source shows the key the guild
+    -- actually sent rather than a synthesised MIP name.
+    gmcp_stats.unknown[gmcp_key] = (gmcp_stats.unknown[gmcp_key] or 0) + 1
+    return
+  end
   local fn = gmcp_handlers[mip_key]
   if not fn then
     gmcp_stats.unknown[mip_key] = (gmcp_stats.unknown[mip_key] or 0) + 1

@@ -305,9 +305,13 @@ mip.fire("BBE", "TESTKEY^^wired^^")
 check("mip BBE wiring feeds the payload, not the packet sequence number",
       seen[#seen] == "wired")
 
+-- CARTS, not the "wiredkey" this case used to send: that name only routed
+-- because of the uppercase derivation Task 4 removes, and is not in the
+-- gmcp_map key map. carts/CARTS is a real mapped key, unused elsewhere in
+-- this suite.
 local gmcp_wired_seen
-protocol.gmcp_handler("WIREDKEY", function(v) gmcp_wired_seen = v end)
-gmcp.fire("Guild", { guild = "viking", wiredkey = "gmcpwired" })
+protocol.gmcp_handler("CARTS", function(v) gmcp_wired_seen = v end)
+gmcp.fire("Guild", { guild = "viking", carts = "gmcpwired" })
 check("gmcp Guild wiring feeds protocol.on_gmcp", gmcp_wired_seen == "gmcpwired")
 
 -- Fix 1 regression: init.lua's sweep timer must divide lera.time()'s
