@@ -27,6 +27,11 @@ local MAP = {
   builds = "BUILDS", garrison = "GARRISON", buildings = "BUILDINGS",
   monuments_cap = "MONUMENTS", monuments_list = "MONUMENTS",
 
+  -- Guild.State: only the two groups nothing else writes when MIP is off.
+  -- The rest of Guild.State stays unmapped and counted -- see the design note
+  -- in combat.lua for why a second writer on a trigger-owned field is unsafe.
+  target = "TARGET", encounter = "ENCOUNTER",
+
   -- Guild.Trade
   carts = "CARTS", queue = "TQUEUE", cidle = "CIDLE", cupg = "CUPG",
   routes = "ROUTES", blocks = "BLOCKS", refinery = "REFINERY",

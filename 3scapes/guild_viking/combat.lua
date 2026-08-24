@@ -293,6 +293,46 @@ local function hp_bar_3_cont(line, c1)
   ui.dirty()
 end
 
+-- ---------------------------------------------------------------------------
+-- GMCP Guild.State: the encounter and target groups.
+--
+-- The hp-bar triggers above are protocol-independent -- they parse the MUD's
+-- rendered prompt -- so almost everything on the Stats page survives with MIP
+-- off. These two groups fill the exception: the fields only FFF's K and N tags
+-- ever wrote.
+--
+-- Deliberately narrow. `encounter.active` is NOT written to S.combat, and
+-- `target.name5`/`target.hp_status` are NOT written to S.en5/S.ens, because the
+-- triggers already own all three. A second writer on a field another source
+-- maintains is the collision that cost the housing totals their meaning: over
+-- GMCP frames are deltas arriving in no fixed order, so "last writer wins"
+-- stops being a stable answer.
+--
+-- S.estatus_pct has no GMCP counterpart at all: FFF's L tag carried a percent,
+-- while Guild.State's target.hp_status is a three-letter word ("wou"), which is
+-- the $ENS$ value the triggers already put in S.ens. Filling estatus_pct needs
+-- a server-side addition, not a client mapping.
+local function write_target(r)
+  if type(r) ~= "table" then return end
+  if type(r.name) == "string" and r.name ~= "" then
+    S.mob_name_full = r.name
+  end
+end
+
+local function write_encounter(r)
+  if type(r) ~= "table" then return end
+  if r.rounds ~= nil then
+    S.combat_rounds = tonumber(r.rounds) or 0
+  end
+end
+
+-- Registered by init.lua into the GMCP writer registry, keyed by the names
+-- gmcp_map maps `target` and `encounter` onto.
+M._gmcp = {
+  TARGET    = write_target,
+  ENCOUNTER = write_encounter,
+}
+
 M.triggers = {
   { name = "hp_bar_1",      pattern = hp_bar_1_pattern,      fn = hp_bar_1 },
   { name = "hp_bar_1_cont", pattern = hp_bar_1_cont_pattern, fn = hp_bar_1_cont },

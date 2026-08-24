@@ -405,6 +405,13 @@ end
 function M.on_load()
   mip_id = mip.on("BBE", function(key, code, data) protocol.on_bbe(data) end)
   fff_id = mip.on("FFF", function(key, code, data) combat.on_composite(data) end)
+
+  -- combat's GMCP writers. combat is not a handlers/ module, so it does not go
+  -- through register_handlers' loop; its two Guild.State groups are registered
+  -- here, next to the MIP channel they complement.
+  for key, fn in pairs(combat._gmcp or {}) do
+    protocol.gmcp_handler(key, fn)
+  end
   -- One registration covers every Guild.* sub-package: lera dispatches on
   -- dot-boundary prefix, and advertising `Guild 1` subscribes them all through
   -- the mudlib's root fallback. A panel added server-side later needs no change

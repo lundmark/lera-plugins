@@ -90,6 +90,53 @@ check("composite A/B", S.hp == 350 and S.mhp == 500)
 combat.on_composite("K~Wolf~")
 check("composite K sets attacker and combat", S.mob_name_full == "Wolf" and S.combat == true)
 
+
+-- ---- GMCP Guild.State: encounter / target --------------------------------
+-- The MUD's hp-bar triggers already own S.en5/S.ens/S.rndz/S.combat, so these
+-- writers deliberately fill only what nothing else writes when MIP is off.
+check("gmcp writers exported", type(combat._gmcp) == "table"
+      and type(combat._gmcp.TARGET) == "function"
+      and type(combat._gmcp.ENCOUNTER) == "function",
+      type(combat._gmcp))
+
+-- Kills: not mapping target.name, which is the enemy name the Stats page's
+-- Enemy block prints (pages/stats.lua:246) and the one field FFF's K tag owned.
+S.mob_name_full = "stale"
+combat._gmcp.TARGET({ name = "Ice Troll", name5 = "Ice T", hp_status = "wou" })
+check("gmcp target.name fills mob_name_full", S.mob_name_full == "Ice Troll",
+      S.mob_name_full)
+
+-- Kills: a writer that invents a value for an absent enemy. The server sends
+-- the literal "None", matching what FFF's K tag produced.
+combat._gmcp.TARGET({ name = "None", name5 = "None", hp_status = "" })
+check("gmcp target.name of None passes through", S.mob_name_full == "None",
+      S.mob_name_full)
+
+-- Kills: not mapping encounter.rounds (FFF's N tag).
+S.combat_rounds = 99
+combat._gmcp.ENCOUNTER({ active = 1, rounds = 7 })
+check("gmcp encounter.rounds fills combat_rounds", S.combat_rounds == 7,
+      S.combat_rounds)
+
+-- Kills: a writer that also claims S.combat. The hp-bar triggers own it, and a
+-- second writer on the same field is the collision class that bit the housing
+-- totals -- so ENCOUNTER must leave it alone even though it carries `active`.
+S.combat = "sentinel"
+combat._gmcp.ENCOUNTER({ active = 0, rounds = 3 })
+check("gmcp encounter leaves S.combat to the triggers", S.combat == "sentinel",
+      tostring(S.combat))
+
+-- Kills: trusting the payload. gmcp delivers nil for undecodable JSON, and a
+-- delta frame may carry a group with fields missing.
+S.mob_name_full = "keep"
+combat._gmcp.TARGET(nil)
+combat._gmcp.TARGET({})
+check("gmcp target tolerates nil and empty", S.mob_name_full == "keep",
+      S.mob_name_full)
+S.combat_rounds = 5
+combat._gmcp.ENCOUNTER(nil)
+check("gmcp encounter tolerates nil", S.combat_rounds == 5, S.combat_rounds)
+
 combat.on_composite("K~~")
 check("composite K empty attacker clears combat", S.mob_name_full == "None" and S.combat == false)
 
