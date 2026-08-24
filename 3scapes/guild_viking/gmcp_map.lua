@@ -44,6 +44,13 @@ M.COMPOSITE = {
   -- packed the meta into the plot list as a "meta|" pseudo-entry, GMCP gives it
   -- its own key.
   FARM      = { "farm_meta", "farm_plots" },
+  -- Guild.Voyage. A voyage's and a longship's crew/ship trait lists are
+  -- containers a record may not hold, so the server deletes them from the
+  -- record and sends each as its own key -- per ship, keyed by `id`. voffers
+  -- likewise splits the ship name off the offer list MIP packed together.
+  VOYAGE    = { "voyage", "voyage_crew_traits", "voyage_ship_traits" },
+  LONGSHIP  = { "longship", "longship_crew_traits", "longship_ship_traits" },
+  VOFFERS   = { "voffers", "voffers_ship" },
   -- Guild.Map is composite in full, not per key. Its planes cannot be read
   -- without `enc` (which encoding packed them) and `legend` (what each code
   -- means), and its rows cannot be sized without `w` -- so routing the keys
@@ -79,6 +86,19 @@ local MAP = {
   varang_out = "VARANG", varang_in = "VARANG",
   vfind_hall = "VFIND", vfind_posts = "VFIND",
   vfind_offers = "VFIND", vfind_auctions = "VFIND",
+
+  -- Guild.Voyage. vrelics is deliberately absent: GMCP carries relic IDs and
+  -- the display-name lookup is server-side logic the mudlib keeps in the MIP
+  -- serializer alone, so consuming it here would render raw ids. It stays on
+  -- MIP until the payload carries names.
+  voyage = "VOYAGE", voyage_crew_traits = "VOYAGE", voyage_ship_traits = "VOYAGE",
+  longship = "LONGSHIP", longship_crew_traits = "LONGSHIP",
+  longship_ship_traits = "LONGSHIP",
+  voffers = "VOFFERS", voffers_ship = "VOFFERS",
+  voyage_wait = "VOYAGE_WAIT", vresolve = "VRESOLVE", vqpath = "VQPATH",
+  vsaga = "VSAGA", vmem = "VMEM", vcurios = "VCURIOS", vgoods = "VGOODS",
+  vaids = "VAIDS", vrunes = "VRUNES", vboons = "VBOONS", vsailed = "VSAILED",
+  vspoils = "VSPOILS", vreagent = "VREAGENT", fleet_renown = "FLEET_RENOWN",
 
   -- Guild.Fleet
   ships = "SHIPS", supg = "SUPG",

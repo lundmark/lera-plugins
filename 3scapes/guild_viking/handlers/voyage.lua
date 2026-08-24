@@ -580,7 +580,290 @@ local function write_weather(rec)
   S.weather_str = tonumber(rec.strength) or 1
 end
 
-M._gmcp = { VMAP = write_map, SHIPS = write_ships, WEATHER = write_weather }
+-- ---------------------------------------------------------------------------
+-- Guild.Voyage writers
+-- ---------------------------------------------------------------------------
+
+-- Most of these keys set S.mip_voyage_seen. Its name is historical: the flag
+-- means "voyage data has arrived on some transport", and popups/sea.lua,
+-- popups/voyage.lua and autovoyage.lua all gate their whole no-data branch on
+-- it. Leaving it unset on the GMCP path would take those three dark on a
+-- GMCP-only profile, so the writers set it exactly where their MIP twins do.
+
+-- voyage + voyage_crew_traits + voyage_ship_traits. The two trait arrays are
+-- containers, which a record used as a container element may not hold, so the
+-- server deletes them from the record and sends each as its own key. Five
+-- fields are renamed: hull_stress -> stress, steps_sailed -> steps,
+-- next_move_in -> next_move, captain_style -> captain, ship_identity ->
+-- identity.
+local function trait_list(arr)
+  local out = {}
+  for _, t in ipairs(arr or {}) do out[#out + 1] = tostring(t) end
+  return out
+end
+
+local function write_voyage(parts)
+  if type(parts) ~= "table" then return end
+  S.mip_voyage_seen = true
+  local rec = parts.voyage
+  if rec == nil then return end
+  -- An empty record is how the server says "no active voyage", the same thing
+  -- MIP's empty VOYAGE value said.
+  if type(rec) ~= "table" or rec.state == nil then
+    S.voyage_status = nil
+    S.voyage_wait = ""
+    return
+  end
+  S.voyage_status = {
+    state           = tostring(rec.state or ""),
+    ship_id         = tonumber(rec.ship_id) or 0,
+    ship_name       = tostring(rec.ship_name or ""),
+    contract_name   = tostring(rec.contract_name or ""),
+    contract_type   = tostring(rec.contract_type or ""),
+    danger          = tonumber(rec.danger) or 0,
+    x               = tonumber(rec.x) or 0,
+    y               = tonumber(rec.y) or 0,
+    width           = tonumber(rec.width) or 0,
+    height          = tonumber(rec.height) or 0,
+    hull            = tonumber(rec.hull) or 0,
+    morale          = tonumber(rec.morale) or 0,
+    supplies        = tonumber(rec.supplies) or 0,
+    stress          = tonumber(rec.hull_stress) or 0,
+    crew_alive      = tonumber(rec.crew_alive) or 0,
+    crew_max        = tonumber(rec.crew_max) or 0,
+    steps           = tonumber(rec.steps_sailed) or 0,
+    next_move       = tonumber(rec.next_move_in) or 0,
+    threat_name     = tostring(rec.threat_name or ""),
+    threat_level    = tonumber(rec.threat_level) or 0,
+    threat_pressure = tonumber(rec.threat_pressure) or 0,
+    paused_type     = tostring(rec.paused_type or ""),
+    weather_key     = tostring(rec.weather_key or ""),
+    -- Fleet renown travels as its own key, not on this record; the MIP
+    -- handler zeroed it here for the same reason.
+    renown          = 0,
+    captain         = tostring(rec.captain_style or ""),
+    identity        = tostring(rec.ship_identity or ""),
+    crew_traits     = trait_list(parts.voyage_crew_traits),
+    ship_traits     = trait_list(parts.voyage_ship_traits),
+  }
+  -- Backward-compatible fallback the MIP handler also applies: infer the wait
+  -- status from paused_type. A voyage_wait key in the same frame is applied by
+  -- its own writer and wins, since it sorts after VOYAGE.
+  S.voyage_wait = S.voyage_status.paused_type
+end
+
+-- longship + longship_crew_traits + longship_ship_traits. Same flattening,
+-- but per ship: each trait row carries the ship `id` it belongs to. Renames:
+-- id -> ship_id, secs -> return_in, voyage_identity -> identity,
+-- captain_style -> captain.
+local function write_longship(parts)
+  if type(parts) ~= "table" then return end
+  S.mip_voyage_seen = true
+  if type(parts.longship) ~= "table" then return end
+  local crew_by_id, ship_by_id = {}, {}
+  local function collect(rows, into)
+    for _, r in ipairs(rows or {}) do
+      if type(r) == "table" and r.id ~= nil then
+        local list = into[r.id]
+        if not list then list = {}; into[r.id] = list end
+        list[#list + 1] = tostring(r.trait or "")
+      end
+    end
+  end
+  collect(parts.longship_crew_traits, crew_by_id)
+  collect(parts.longship_ship_traits, ship_by_id)
+
+  S.voyage_longships = {}
+  for _, r in ipairs(parts.longship) do
+    if #S.voyage_longships >= 20 then break end
+    if type(r) == "table" then
+      table.insert(S.voyage_longships, {
+        ship_id     = tonumber(r.id) or 0,
+        name        = tostring(r.name or ""),
+        tier        = tonumber(r.tier) or 1,
+        state       = tostring(r.state or "docked"),
+        target      = tostring(r.target or ""),
+        return_in   = tonumber(r.secs) or 0,
+        crew        = tonumber(r.crew) or 0,
+        hired_crew  = tonumber(r.hired_crew) or 0,
+        safe        = tonumber(r.safe) or 0,
+        renown      = 0,
+        identity    = tostring(r.voyage_identity or ""),
+        captain     = tostring(r.captain_style or ""),
+        crew_traits = crew_by_id[r.id] or {},
+        ship_traits = ship_by_id[r.id] or {},
+        saga_title  = tostring(r.saga_title or ""),
+        saga_raids  = tonumber(r.saga_raids) or 0,
+      })
+    end
+  end
+end
+
+local function write_voyage_wait(v)
+  S.mip_voyage_seen = true
+  S.voyage_wait = tostring(v or "")
+end
+
+-- A plain string array, capped as MIP capped it.
+local function string_list_writer(field, cap, seen)
+  return function(values)
+    if type(values) ~= "table" then return end
+    if seen then S.mip_voyage_seen = true end
+    local out = {}
+    for _, v in ipairs(values) do
+      if #out >= cap then break end
+      out[#out + 1] = tostring(v)
+    end
+    S[field] = out
+  end
+end
+
+-- voffers + voffers_ship. MIP packed the ship name and the offer list into one
+-- value; the two are separate keys here. `fit_code` -> fit, and a missing fit
+-- defaults to 3 ("ready"), matching the MIP handler.
+local function write_voffers(parts)
+  if type(parts) ~= "table" then return end
+  -- The two halves are independent keys over a delta transport. Only the
+  -- arrival of `voffers` itself may clear the list: a frame carrying just a
+  -- changed ship name must not be read as "no offers".
+  if parts.voffers == nil then
+    if parts.voffers_ship ~= nil and S.voyage_offers then
+      S.voyage_offers.ship = tostring(parts.voffers_ship)
+    end
+    return
+  end
+  if type(parts.voffers) ~= "table" or #parts.voffers == 0 then
+    S.voyage_offers = nil
+    return
+  end
+  local list = {}
+  for _, r in ipairs(parts.voffers) do
+    if type(r) == "table" then
+      list[#list + 1] = {
+        index      = tonumber(r.index) or 0,
+        type       = tostring(r.type or ""),
+        name       = tostring(r.name or ""),
+        danger     = tonumber(r.danger) or 0,
+        difficulty = tostring(r.difficulty or ""),
+        fit        = tonumber(r.fit_code) or 3,
+      }
+    end
+  end
+  local ship = parts.voffers_ship
+  if ship == nil then ship = S.voyage_offers and S.voyage_offers.ship end
+  S.voyage_offers = { ship = tostring(ship or ""), list = list }
+end
+
+-- vgoods / vaids / vrunes: a name -> count mapping on the wire, a
+-- {name, count} list in state.
+--
+-- Sorted by name. A Lua pairs() walk over a mapping has no defined order, so
+-- an unsorted list would reorder itself between frames with nothing in the
+-- data to explain it -- the same class of flicker the declared GMCP key order
+-- exists to prevent.
+local function count_map_writer(field)
+  return function(counts)
+    if type(counts) ~= "table" then return end
+    S.mip_voyage_seen = true
+    local names = {}
+    for name in pairs(counts) do names[#names + 1] = tostring(name) end
+    table.sort(names)
+    local out = {}
+    for _, name in ipairs(names) do
+      out[#out + 1] = { name = name, count = tonumber(counts[name]) or 0 }
+    end
+    S[field] = out
+  end
+end
+
+-- vboons is a flags mapping over GMCP where MIP sent the finished display
+-- string, so the phrasing has to live here now.
+--
+-- This is a FIXED CONTRACT mirrored in code, like minimap's glyph table: the
+-- five branches and their exact wording are transcribed from
+-- _mip_serialize_boons() in the mudlib's client.h, and a change there needs a
+-- matching change here. The alternative -- rendering raw flag names -- would
+-- put "storm_charm_ready" on the Sea popup where it used to read
+-- "Storm Charm ready".
+local function write_vboons(flags)
+  if type(flags) ~= "table" then return end
+  S.mip_voyage_seen = true
+  -- 0 and false are both "off"; the server sends these as 0/1 ints, but a
+  -- JSON boolean would arrive as false, and in Lua 0 is truthy.
+  local function set(v) return v ~= nil and v ~= false and v ~= 0 end
+  local parts = {}
+  if set(flags.chart_fragment_used) then
+    parts[#parts + 1] = "Chart Fragment used"
+  end
+  if set(flags.revealed_safe_cove) then
+    parts[#parts + 1] = "Safe Cove Rumor active"
+  end
+  if set(flags.storm_charm_ready) then
+    parts[#parts + 1] = "Storm Charm ready"
+  end
+  if set(flags.rigging_bonus) then
+    parts[#parts + 1] = "Deepwater Rigging active"
+  end
+  local steps = tonumber(flags.favorable_current_steps) or 0
+  if steps > 0 then
+    parts[#parts + 1] = "Favorable Current " .. steps .. " fast step"
+      .. ((steps == 1) and "" or "s") .. " left"
+  end
+  S.voyage_boons = table.concat(parts, ";")
+end
+
+-- vsailed: each element is the same "x,y" key MIP joined with ';'. Stored as a
+-- [row][col] lookup, both 1-indexed for a 0-based wire coordinate.
+local function write_vsailed(coords)
+  if type(coords) ~= "table" then return end
+  S.mip_voyage_seen = true
+  S.voyage_sailed = {}
+  for _, entry in ipairs(coords) do
+    local x, y = tostring(entry):match("^(%d+),(%d+)$")
+    if x then
+      local ri, ci = tonumber(y) + 1, tonumber(x) + 1
+      if not S.voyage_sailed[ri] then S.voyage_sailed[ri] = {} end
+      S.voyage_sailed[ri][ci] = true
+    end
+  end
+end
+
+local function write_vspoils(v)
+  S.mip_voyage_seen = true
+  S.voyage_spoils_daler = tonumber(v) or 0
+end
+
+local function write_vreagent(v)
+  S.mip_voyage_seen = true
+  S.voyage_reagents = tonumber(v) or 0
+end
+
+local function write_fleet_renown(v)
+  S.fleet_renown = tonumber(v) or 0
+end
+
+M._gmcp = {
+  VMAP         = write_map,
+  SHIPS        = write_ships,
+  WEATHER      = write_weather,
+  VOYAGE       = write_voyage,
+  LONGSHIP     = write_longship,
+  VOYAGE_WAIT  = write_voyage_wait,
+  VOFFERS      = write_voffers,
+  VRESOLVE     = string_list_writer("voyage_resolve_options", 10, true),
+  VQPATH       = string_list_writer("voyage_queue", 100, true),
+  VSAGA        = string_list_writer("voyage_saga", 200, true),
+  VMEM         = string_list_writer("voyage_memory", 100, true),
+  VCURIOS      = string_list_writer("voyage_curios", 50, true),
+  VGOODS       = count_map_writer("voyage_goods"),
+  VAIDS        = count_map_writer("voyage_aids"),
+  VRUNES       = count_map_writer("voyage_runes"),
+  VBOONS       = write_vboons,
+  VSAILED      = write_vsailed,
+  VSPOILS      = write_vspoils,
+  VREAGENT     = write_vreagent,
+  FLEET_RENOWN = write_fleet_renown,
+}
 
 
 return M

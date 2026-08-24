@@ -471,6 +471,11 @@ local EXPECTED_GMCP_WRITERS = {
   "BUILDS", "BUILDINGS", "MONUMENTS", "BLOT", "FARM", "DCYCLE", "NEXTTICK",
   "CDTIME", "PRODUCTION", "ERRAND", "MISSIONS", "RBUILD", "UPKEEP", "RUPKEEP",
   "HEAT", "BDMG", "RAID", "PATROL", "GARRISON", "WEATHER",
+  -- Guild.Voyage (17; VRELICS deliberately stays MIP-only -- GMCP carries
+  -- relic ids and the display-name lookup is server-side)
+  "VOYAGE", "LONGSHIP", "VOYAGE_WAIT", "VOFFERS", "VRESOLVE", "VQPATH",
+  "VSAGA", "VMEM", "VCURIOS", "VGOODS", "VAIDS", "VRUNES", "VBOONS",
+  "VSAILED", "VSPOILS", "VREAGENT", "FLEET_RENOWN",
 }
 
 local function collect_gmcp_writers()
