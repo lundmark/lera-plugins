@@ -294,44 +294,43 @@ local function hp_bar_3_cont(line, c1)
 end
 
 -- ---------------------------------------------------------------------------
--- GMCP Guild.State: the encounter and target groups.
+-- GMCP Char.Combat.
 --
 -- The hp-bar triggers above are protocol-independent -- they parse the MUD's
 -- rendered prompt -- so almost everything on the Stats page survives with MIP
--- off. These two groups fill the exception: the fields only FFF's K and N tags
--- ever wrote.
+-- off. Exactly three fields did not: the ones FFF's K, L and N tags owned.
 --
--- Deliberately narrow. `encounter.active` is NOT written to S.combat, and
--- `target.name5`/`target.hp_status` are NOT written to S.en5/S.ens, because the
--- triggers already own all three. A second writer on a field another source
--- maintains is the collision that cost the housing totals their meaning: over
--- GMCP frames are deltas arriving in no fixed order, so "last writer wins"
--- stops being a stable answer.
+-- Char.Combat is the purpose-built replacement for that attacker block. Its own
+-- header says it "mirrors the MIP composite's attacker block", and it carries
+-- all three: attacker, attacker_hp and rounds. Guild.State's target/encounter
+-- groups overlap it but omit the hp percent, so this is the better source and
+-- the only one mapped -- two GMCP sources writing the same fields would be the
+-- collision that cost the housing totals their meaning.
 --
--- S.estatus_pct has no GMCP counterpart at all: FFF's L tag carried a percent,
--- while Guild.State's target.hp_status is a three-letter word ("wou"), which is
--- the $ENS$ value the triggers already put in S.ens. Filling estatus_pct needs
--- a server-side addition, not a client mapping.
-local function write_target(r)
-  if type(r) ~= "table" then return end
-  if type(r.name) == "string" and r.name ~= "" then
-    S.mob_name_full = r.name
-  end
-end
+--   { attacker = "", attacker_hp = 0, rounds = 0, target = "" }
+--
+-- is the canonical idle snapshot (secure/protocol/char_combat_impl.h). Note the
+-- empty attacker string where FFF's K tag used the literal "None" -- the
+-- consumer at pages/stats.lua:246 tests for "None", so translate rather than
+-- passing "" through.
+--
+-- `target` (who the attacker is attacking, "you" when that is this player) has
+-- no field on the Stats page and is deliberately not mapped.
+function M.on_gmcp_combat(data)
+  if type(data) ~= "table" then return end
 
-local function write_encounter(r)
-  if type(r) ~= "table" then return end
-  if r.rounds ~= nil then
-    S.combat_rounds = tonumber(r.rounds) or 0
+  if type(data.attacker) == "string" then
+    S.mob_name_full = data.attacker ~= "" and data.attacker or "None"
   end
-end
+  if data.attacker_hp ~= nil then
+    S.estatus_pct = tonumber(data.attacker_hp) or 0
+  end
+  if data.rounds ~= nil then
+    S.combat_rounds = tonumber(data.rounds) or 0
+  end
 
--- Registered by init.lua into the GMCP writer registry, keyed by the names
--- gmcp_map maps `target` and `encounter` onto.
-M._gmcp = {
-  TARGET    = write_target,
-  ENCOUNTER = write_encounter,
-}
+  ui.dirty()
+end
 
 M.triggers = {
   { name = "hp_bar_1",      pattern = hp_bar_1_pattern,      fn = hp_bar_1 },

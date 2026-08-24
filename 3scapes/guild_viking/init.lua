@@ -99,7 +99,7 @@ function M.state()
   return state_mod.S
 end
 
-local mip_id, fff_id, gmcp_id, sweep_id, countdown_id
+local mip_id, fff_id, gmcp_id, combat_gmcp_id, sweep_id, countdown_id
 local combat_trigger_ids = {}
 local notify_trigger_ids = {}
 local vik_command_id, resetvikxp_id, kill_listener_id
@@ -406,12 +406,13 @@ function M.on_load()
   mip_id = mip.on("BBE", function(key, code, data) protocol.on_bbe(data) end)
   fff_id = mip.on("FFF", function(key, code, data) combat.on_composite(data) end)
 
-  -- combat's GMCP writers. combat is not a handlers/ module, so it does not go
-  -- through register_handlers' loop; its two Guild.State groups are registered
-  -- here, next to the MIP channel they complement.
-  for key, fn in pairs(combat._gmcp or {}) do
-    protocol.gmcp_handler(key, fn)
-  end
+
+  -- Char.Combat is not a Guild.* frame -- it carries no guild envelope and does
+  -- not go through protocol.on_gmcp -- so it gets its own subscription here,
+  -- next to the MIP channel it replaces. Subscribing advertises `Char 1`.
+  combat_gmcp_id = gmcp.on("Char.Combat", function(pkg, data)
+    combat.on_gmcp_combat(data)
+  end)
   -- One registration covers every Guild.* sub-package: lera dispatches on
   -- dot-boundary prefix, and advertising `Guild 1` subscribes them all through
   -- the mudlib's root fallback. A panel added server-side later needs no change
@@ -516,6 +517,7 @@ function M.on_unload()
   mip.off(mip_id)
   mip.off(fff_id)
   gmcp.remove(gmcp_id)
+  gmcp.remove(combat_gmcp_id)
   timer.remove(sweep_id)
   timer.remove(countdown_id)
   unregister_combat_triggers()

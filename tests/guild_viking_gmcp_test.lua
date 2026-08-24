@@ -487,31 +487,24 @@ check("composite key with no writer is counted unknown",
   protocol.gmcp_stats().unknown.MONUMENTS == 1,
   protocol.gmcp_stats().unknown.MONUMENTS)
 
--- ---- Guild.State routes its two mapped groups ------------------------------
--- Kills: writers that exist but are unreachable, because gmcp_map has no entry
--- for `target`/`encounter` or init.lua never registered combat._gmcp.
-check("target maps to TARGET", gmcp_map.mip_key("target") == "TARGET",
-  gmcp_map.mip_key("target"))
-check("encounter maps to ENCOUNTER", gmcp_map.mip_key("encounter") == "ENCOUNTER",
-  gmcp_map.mip_key("encounter"))
+-- ---- Guild.State stays unconsumed -----------------------------------------
+-- Kills: mapping a Guild.State group. Char.Combat owns the attacker fields --
+-- it carries the hp percent Guild.State's target group omits -- and hp/chain
+-- are owned by the hp-bar triggers. Two GMCP sources on one field is the
+-- collision this map exists to prevent.
+for _, k in ipairs({ "hp", "chain", "target", "encounter", "points", "gxp" }) do
+  check("Guild.State " .. k .. " stays unmapped", gmcp_map.mip_key(k) == nil,
+    gmcp_map.mip_key(k))
+end
 
 reset()
-protocol.gmcp_handler("TARGET", recorder("TARGET"))
-protocol.gmcp_handler("ENCOUNTER", recorder("ENCOUNTER"))
-frame("Guild.State", { guild = "viking",
-                       target = { name = "Ice Troll" },
-                       encounter = { active = 1, rounds = 7 } })
-check("Guild.State target routed", got.TARGET and got.TARGET.name == "Ice Troll",
-  got.TARGET and got.TARGET.name)
-check("Guild.State encounter routed", got.ENCOUNTER and got.ENCOUNTER.rounds == 7,
-  got.ENCOUNTER and got.ENCOUNTER.rounds)
-
--- Kills: mapping a Guild.State group that must stay unconsumed. hp is owned by
--- the hp-bar triggers; routing it would put a second writer on those fields.
-reset()
-frame("Guild.State", { guild = "viking", hp = { cur = 5, max = 10 } })
-check("Guild.State hp still unmapped and counted",
+frame("Guild.State", { guild = "viking", hp = { cur = 5, max = 10 },
+                       target = { name = "Ice Troll" } })
+check("Guild.State hp counted, not applied",
   protocol.gmcp_stats().unknown.hp == 1, protocol.gmcp_stats().unknown.hp)
+check("Guild.State target counted, not applied",
+  protocol.gmcp_stats().unknown.target == 1,
+  protocol.gmcp_stats().unknown.target)
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")

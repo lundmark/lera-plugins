@@ -91,51 +91,49 @@ combat.on_composite("K~Wolf~")
 check("composite K sets attacker and combat", S.mob_name_full == "Wolf" and S.combat == true)
 
 
--- ---- GMCP Guild.State: encounter / target --------------------------------
--- The MUD's hp-bar triggers already own S.en5/S.ens/S.rndz/S.combat, so these
--- writers deliberately fill only what nothing else writes when MIP is off.
-check("gmcp writers exported", type(combat._gmcp) == "table"
-      and type(combat._gmcp.TARGET) == "function"
-      and type(combat._gmcp.ENCOUNTER) == "function",
-      type(combat._gmcp))
+-- ---- GMCP Char.Combat -----------------------------------------------------
+-- The hp-bar triggers own S.en5/S.ens/S.rndz/S.combat, so this writer fills
+-- only the three fields FFF's K, L and N tags owned.
+check("on_gmcp_combat exported", type(combat.on_gmcp_combat) == "function",
+      type(combat.on_gmcp_combat))
 
--- Kills: not mapping target.name, which is the enemy name the Stats page's
--- Enemy block prints (pages/stats.lua:246) and the one field FFF's K tag owned.
-S.mob_name_full = "stale"
-combat._gmcp.TARGET({ name = "Ice Troll", name5 = "Ice T", hp_status = "wou" })
-check("gmcp target.name fills mob_name_full", S.mob_name_full == "Ice Troll",
+-- Kills: not mapping attacker_hp. This is the enemy HP percent the Stats page
+-- prints (pages/stats.lua:251) and the whole reason Char.Combat is the right
+-- source -- Guild.State's target group carries a three-letter word instead.
+S.mob_name_full, S.estatus_pct, S.combat_rounds = "stale", -1, -1
+combat.on_gmcp_combat({ attacker = "Ice Troll", attacker_hp = 62,
+                        rounds = 7, target = "you" })
+check("Char.Combat fills attacker name", S.mob_name_full == "Ice Troll",
       S.mob_name_full)
-
--- Kills: a writer that invents a value for an absent enemy. The server sends
--- the literal "None", matching what FFF's K tag produced.
-combat._gmcp.TARGET({ name = "None", name5 = "None", hp_status = "" })
-check("gmcp target.name of None passes through", S.mob_name_full == "None",
-      S.mob_name_full)
-
--- Kills: not mapping encounter.rounds (FFF's N tag).
-S.combat_rounds = 99
-combat._gmcp.ENCOUNTER({ active = 1, rounds = 7 })
-check("gmcp encounter.rounds fills combat_rounds", S.combat_rounds == 7,
+check("Char.Combat fills the enemy hp percent", S.estatus_pct == 62,
+      S.estatus_pct)
+check("Char.Combat fills the round counter", S.combat_rounds == 7,
       S.combat_rounds)
 
--- Kills: a writer that also claims S.combat. The hp-bar triggers own it, and a
--- second writer on the same field is the collision class that bit the housing
--- totals -- so ENCOUNTER must leave it alone even though it carries `active`.
-S.combat = "sentinel"
-combat._gmcp.ENCOUNTER({ active = 0, rounds = 3 })
-check("gmcp encounter leaves S.combat to the triggers", S.combat == "sentinel",
-      tostring(S.combat))
-
--- Kills: trusting the payload. gmcp delivers nil for undecodable JSON, and a
--- delta frame may carry a group with fields missing.
-S.mob_name_full = "keep"
-combat._gmcp.TARGET(nil)
-combat._gmcp.TARGET({})
-check("gmcp target tolerates nil and empty", S.mob_name_full == "keep",
+-- Kills: passing the idle snapshot's empty attacker straight through. FFF's K
+-- tag used the literal "None", and pages/stats.lua:246 tests for it.
+combat.on_gmcp_combat({ attacker = "", attacker_hp = 0, rounds = 0, target = "" })
+check("Char.Combat idle attacker becomes None", S.mob_name_full == "None",
       S.mob_name_full)
-S.combat_rounds = 5
-combat._gmcp.ENCOUNTER(nil)
-check("gmcp encounter tolerates nil", S.combat_rounds == 5, S.combat_rounds)
+
+-- Kills: a writer that also claims S.combat or S.ens. The hp-bar triggers own
+-- both, and a second writer on a field another source maintains is the
+-- collision that cost the housing totals their meaning.
+S.combat, S.ens = "sentinel", "sentinel"
+combat.on_gmcp_combat({ attacker = "Wolf", attacker_hp = 10, rounds = 2,
+                        target = "you" })
+check("Char.Combat leaves S.combat to the triggers", S.combat == "sentinel",
+      tostring(S.combat))
+check("Char.Combat leaves S.ens to the triggers", S.ens == "sentinel",
+      tostring(S.ens))
+
+-- Kills: trusting the payload. gmcp delivers nil for undecodable JSON.
+S.mob_name_full = "keep"
+combat.on_gmcp_combat(nil)
+combat.on_gmcp_combat({})
+check("Char.Combat tolerates nil and empty", S.mob_name_full == "keep",
+      S.mob_name_full)
+
 
 combat.on_composite("K~~")
 check("composite K empty attacker clears combat", S.mob_name_full == "None" and S.combat == false)
