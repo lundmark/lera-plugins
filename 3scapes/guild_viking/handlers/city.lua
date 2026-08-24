@@ -686,7 +686,39 @@ M._patterns = {
 -- GMCP-side writers, keyed by MIP key. init.lua registers these into the GMCP
 -- registry; `_gmcp` joins the `_patterns` / `_market_seam` convention of keys
 -- the MIP registration loop skips.
+
+-- Guild.Fleet: pending ship upgrades. The record is {name, tier, secs, mats,
+-- done, detail}; `detail` is the one field that is not a scalar, a
+-- comma-joined "good:done/need" list the server builds as a string for both
+-- transports (_v_supg in the mudlib's client.h), so it is parsed the same way
+-- here as the MIP handler parses it.
+local function write_supg(records)
+  if type(records) ~= "table" then return end
+  S.ship_upgrades = {}
+  for _, r in ipairs(records) do
+    if #S.ship_upgrades >= 20 then break end
+    if type(r) == "table" then
+      local mats = {}
+      for piece in tostring(r.detail or ""):gmatch("[^,]+") do
+        local g, d, n = piece:match("^([^:]+):(%d+)/(%d+)$")
+        if g then
+          table.insert(mats, { good = g, done = tonumber(d) or 0, need = tonumber(n) or 0 })
+        end
+      end
+      table.insert(S.ship_upgrades, {
+        name       = tostring(r.name or "?"),
+        tier       = tonumber(r.tier) or 1,
+        secs_left  = tonumber(r.secs) or 0,
+        mats_total = tonumber(r.mats) or 0,
+        mats_done  = tonumber(r.done) or 0,
+        mats       = mats,
+      })
+    end
+  end
+end
+
 M._gmcp = {
+  SUPG     = write_supg,
   SETTLERS = write_settlers,
   SETTLERX = write_settlerx,
   SACTIONS = write_sactions,

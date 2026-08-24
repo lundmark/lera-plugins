@@ -370,28 +370,25 @@ local EXPECTED_EXACT_KEYS = {
   "CARTS", "COURIER", "SPY", "HEAT", "TRAIN", "CUPG", "CIDLE", "TQUEUE",
   "WSTOCK", "BLOCKS", "CELLAR", "REFINERY", "ROUTES", "RUPKEEP", "UPKEEP",
   "RBUILD", "STAFF", "BONDS", "MARKET", "INCOMING", "DALER", "TGOODS", "VFIND",
-  -- voyage.lua (28 -- VMAPH/VMAPL/VMAPL_END are registered as explicit no-ops
+  -- voyage.lua (27 -- VMAPH/VMAPL/VMAPL_END are registered as explicit no-ops
   -- now that Guild.Map owns the territory map, so protocol.ingest does not
-  -- file the server's still-arriving MIP map keys under `unknown`; `_gmcp` is
-  -- that module's GMCP-writer table, the same convention field `_patterns`
-  -- is)
+  -- file the server's still-arriving MIP map keys under `unknown`)
   "SHIPS", "LONGSHIP", "VOYAGE", "VOYAGE_WAIT", "VRESOLVE", "VOFFERS",
   "VCHART", "VCHH", "VQPATH", "VSAGA", "VMEM", "VBOONS", "VSPOILS", "VGOODS",
   "VAIDS", "VRUNES", "VRELICS", "VCURIOS", "VREAGENT", "VSAILED", "VMREG",
-  "VMNEW", "WEATHER", "VMAPH", "VMAPL", "VMAPL_END", "FLEET_RENOWN", "_gmcp",
+  "VMNEW", "WEATHER", "VMAPH", "VMAPL", "VMAPL_END", "FLEET_RENOWN",
   -- kingdom.lua (27)
   "RAIDLOG", "RTARGETS", "DYNASTY", "ARMY", "BATTLE", "DIPLO", "WAR", "WMAP",
   "WMU", "WMP", "WSPOIL", "WSG", "WMPL", "WMO", "WMQ", "WMEND", "PATROL",
   "GARRISON", "VARANG", "THRALLS", "THRALL_FOLLOWER", "RAID", "GRUDGES",
   "BDMG", "STANDINGS", "VREP", "HIRD",
-  -- city.lua (32 -- GOD_POWER/GOD_ACTIVE and GOD_POWER_NEXT/GOD_NEXT each
-  -- register two keys sharing one fn; `_gmcp` is the Task 5 GMCP-writer
-  -- table, the same kind of convention field `_patterns` already is)
+  -- city.lua (31 -- GOD_POWER/GOD_ACTIVE and GOD_POWER_NEXT/GOD_NEXT each
+  -- register two keys sharing one fn)
   "BLOT", "FARM", "BUILDS", "SUPG", "SETTLERS", "SETTLERX", "SACTIONS",
   "SROLES", "CPLAN", "CPP", "CPB", "CPU", "CPEND", "SPROJ", "SHPLOTS",
   "SCIVICS", "SCONSUME", "BUILDINGS", "PRODUCTION", "MONUMENTS", "MISSIONS",
   "ERRAND", "NEXTTICK", "CDTIME", "GOD_POWER", "GOD_ACTIVE", "GOD_POWER_NEXT",
-  "GOD_NEXT", "GOD_POWER_FOCUS", "DCYCLE", "SEVENTS", "_gmcp",
+  "GOD_NEXT", "GOD_POWER_FOCUS", "DCYCLE", "SEVENTS",
 }
 
 local EXPECTED_PATTERNS = {
@@ -402,7 +399,12 @@ local function collect_exact_keys()
   local keys = {}
   for _, mod in ipairs({ trade, voyage, kingdom, city }) do
     for key, _ in pairs(mod) do
-      if key ~= "_patterns" and key ~= "_market_seam" then
+      -- The module-level convention fields, not MIP keys. `_gmcp` is
+      -- censused separately below: counting it here made this census churn by
+      -- one every time a handler module gained its first GMCP writer, which
+      -- says nothing about MIP porting completeness -- what this census is
+      -- for.
+      if key ~= "_patterns" and key ~= "_market_seam" and key ~= "_gmcp" then
         keys[#keys + 1] = key
       end
     end
@@ -438,7 +440,39 @@ end
 local actual_keys = collect_exact_keys()
 local ok_keys, err_keys = same_set(actual_keys, EXPECTED_EXACT_KEYS)
 check("census exact keys match hardcoded list", ok_keys, err_keys)
-check("census exact key count is 110", #actual_keys == 110, #actual_keys)
+check("census exact key count is 108", #actual_keys == 108, #actual_keys)
+
+-- ---- Census: which MIP keys have a GMCP writer ----------------------------
+-- The migration's own progress bar. A key listed here is fed by GMCP when the
+-- server sends its panel, and protocol.ingest's per-key latch then suppresses
+-- the MIP copy; a key absent from it is still MIP-only. This is the list to
+-- extend as each panel's writers land, and it is what makes an accidentally
+-- unregistered writer visible -- init.lua registers `_gmcp` for every handler
+-- module, so a writer defined but left out of the table would otherwise just
+-- silently never run.
+local EXPECTED_GMCP_WRITERS = {
+  -- Guild.Settlement (9 MIP keys; 10 GMCP keys, since SROLES is a composite
+  -- over `sroles` and `sroles_meta`)
+  "SETTLERS", "SETTLERX", "SACTIONS", "SHPLOTS", "SCONSUME", "SPROJ",
+  "SEVENTS", "SCIVICS", "SROLES",
+  -- Guild.Map (1, composite over all eleven of its payload keys)
+  "VMAP",
+  -- Guild.Fleet (4)
+  "SHIPS", "SUPG", "RAIDLOG", "RTARGETS",
+}
+
+local function collect_gmcp_writers()
+  local keys = {}
+  for _, mod in ipairs({ trade, voyage, kingdom, city }) do
+    for key in pairs(mod._gmcp or {}) do keys[#keys + 1] = key end
+  end
+  table.sort(keys)
+  return keys
+end
+
+local actual_writers = collect_gmcp_writers()
+local ok_w, err_w = same_set(actual_writers, EXPECTED_GMCP_WRITERS)
+check("census GMCP writers match hardcoded list", ok_w, err_w)
 
 local actual_patterns = collect_patterns()
 local ok_pats, err_pats = same_set(actual_patterns, EXPECTED_PATTERNS)

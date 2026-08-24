@@ -600,4 +600,110 @@ M._patterns = {
   { pattern = "^WMR%d%d$", fn = wmr_row },
 }
 
+-- ---------------------------------------------------------------------------
+-- Guild.Fleet writers
+-- ---------------------------------------------------------------------------
+
+-- raidlog + raidlog_goods. A raid entry's goods breakdown is a mapping, and a
+-- record used as a container element may not hold one, so the server flattens
+-- it into its own top-level array foreign-keyed by `idx` back to the parent
+-- entry (_v_raidlog_goods in the mudlib's client.h). Rejoining them is this
+-- writer's whole reason for being a composite.
+--
+-- Either half may arrive alone: frames are deltas, and a raid that brought
+-- back nothing produces entries with no goods rows at all. So a missing
+-- `raidlog` leaves the list alone, and missing goods simply means every entry
+-- gets an empty breakdown.
+local function write_raidlog(parts)
+  if type(parts) ~= "table" then return end
+  local entries = parts.raidlog
+  if type(entries) ~= "table" then return end
+
+  -- idx -> goods list, built in one pass. The server appends goods rows in the
+  -- order the source mapping iterates, and that order is what MIP's
+  -- comma-joined sub-list preserved, so append order is kept here too.
+  local goods_by_idx = {}
+  if type(parts.raidlog_goods) == "table" then
+    for _, g in ipairs(parts.raidlog_goods) do
+      if type(g) == "table" then
+        local idx = tonumber(g.idx)
+        if idx then
+          local list = goods_by_idx[idx]
+          if not list then list = {}; goods_by_idx[idx] = list end
+          list[#list + 1] = { good = tostring(g.good or "?"),
+                              qty = tonumber(g.amount) or 0 }
+        end
+      end
+    end
+  end
+
+  S.raidlog = {}
+  for i, r in ipairs(entries) do
+    if #S.raidlog >= 20 then break end
+    if type(r) == "table" then
+      -- `idx` is the record's own 0-based position; fall back to the array
+      -- position when a frame omits it, so a goods-less entry still lands.
+      local idx = tonumber(r.idx)
+      if idx == nil then idx = i - 1 end
+      table.insert(S.raidlog, {
+        ship    = tostring(r.ship or ""),
+        target  = tostring(r.target or ""),
+        daler   = tonumber(r.daler) or 0,
+        thralls = tonumber(r.thralls) or 0,
+        lost    = (tonumber(r.lost) or 0) ~= 0,
+        goods   = goods_by_idx[idx] or {},
+      })
+    end
+  end
+end
+
+-- rtargets_lineage + rtargets_historical. These never had a _v_ builder: MIP
+-- joined the two arrays with a '|' into one scalar, so GMCP sends them as the
+-- two arrays they always were. Each element is still the same
+-- "name:good1:good2" string the MIP entries were -- the mudlib's own
+-- _war_town_lineage reads them with explode(hold, ":")[0] -- so the per-entry
+-- parse is unchanged.
+--
+-- autoraid.lua indexes S.raid_targets_lin and S.raid_targets_hist
+-- positionally within their own group, so each group's order matters but the
+-- two are never mixed. S.raid_targets, the flat concatenation, has no reader
+-- outside this module; it is still maintained because MIP maintains it and
+-- dropping it is a separate cleanup, not part of a transport change.
+local function parse_target_group(list)
+  local out = {}
+  for _, entry in ipairs(list or {}) do
+    local t = tostring(entry)
+    local nm, g1, g2 = t:match("^([^:]+):([^:]*):([^:]*)$")
+    if not nm then nm = t end
+    out[#out + 1] = { name = nm, g1 = (g1 ~= "" and g1) or nil,
+                      g2 = (g2 ~= "" and g2) or nil }
+  end
+  return out
+end
+
+local function write_rtargets(parts)
+  if type(parts) ~= "table" then return end
+  -- Each half is replaced only when the frame actually carried it. Frames are
+  -- deltas, so rebuilding both from one half would empty the group that did
+  -- not change -- the flat list below is then regenerated from what is
+  -- STORED, not from what arrived, which is what keeps it whole.
+  if parts.rtargets_lineage ~= nil then
+    S.raid_targets_lin = parse_target_group(parts.rtargets_lineage)
+  end
+  if parts.rtargets_historical ~= nil then
+    S.raid_targets_hist = parse_target_group(parts.rtargets_historical)
+  end
+  S.raid_targets = {}
+  for _, group in ipairs({ S.raid_targets_lin or {}, S.raid_targets_hist or {} }) do
+    for _, rec in ipairs(group) do
+      S.raid_targets[#S.raid_targets + 1] = rec.name
+    end
+  end
+end
+
+M._gmcp = {
+  RAIDLOG  = write_raidlog,
+  RTARGETS = write_rtargets,
+}
+
 return M

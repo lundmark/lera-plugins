@@ -528,7 +528,50 @@ local function write_map(parts)
   apply_landmarks(parts)
 end
 
-M._gmcp = { VMAP = write_map }
+-- ---------------------------------------------------------------------------
+-- Guild.Fleet: ships
+-- ---------------------------------------------------------------------------
+-- The GMCP record is the canonical shape and MIP's row is that record's values
+-- joined in the same order (_mip_ships_value in the mudlib's client.h), so the
+-- two carry identical data under different names. Only three fields are
+-- renamed on the way in: `secs` is the countdown MIP called the return field,
+-- `id` is the ship id, and `held` arrives as 0/1 where the client stores a
+-- boolean.
+--
+-- The 20-ship cap is MIP's, kept deliberately: it is a display bound (the
+-- Fleet page renders a list), not a wire limit, so it has to survive a
+-- transport that no longer chunks.
+local function write_ships(records)
+  if type(records) ~= "table" then return end
+  S.ships = {}
+  for _, r in ipairs(records) do
+    if #S.ships >= 20 then break end
+    if type(r) == "table" then
+      table.insert(S.ships, {
+        name         = tostring(r.name or "?"),
+        tier         = tonumber(r.tier) or 1,
+        state        = tostring(r.state or "docked"),
+        target       = tostring(r.target or ""),
+        return_in    = tonumber(r.secs) or 0,
+        -- Passed through as the number it is, including 0. Two consumers
+        -- write `sh.ship_id or <fallback>` (autoraid.lua, pages/city.lua) and
+        -- 0 is truthy in Lua, so folding 0 into nil here would silently change
+        -- which branch they take. MIP yielded the number too.
+        ship_id      = tonumber(r.id),
+        crew         = tonumber(r.crew) or 0,
+        convoy       = tonumber(r.convoy) or 0,
+        convoy_size  = tonumber(r.convoy_size) or 0,
+        convoy_bonus = tonumber(r.convoy_bonus) or 0,
+        saga_title   = tostring(r.saga_title or ""),
+        saga_raids   = tonumber(r.saga_raids) or 0,
+        held         = (tonumber(r.held) or 0) ~= 0,
+        durability   = tonumber(r.durability) or 100,
+      })
+    end
+  end
+end
+
+M._gmcp = { VMAP = write_map, SHIPS = write_ships }
 
 
 return M
