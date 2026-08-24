@@ -237,48 +237,42 @@ check("partial survives young sweep", protocol.stats().batches_pending == 1)
 protocol.sweep(1003)
 check("stale partial dropped", protocol.stats().batches_pending == 0 and #seen == 0)
 
--- source latch: auto starts on mip; gmcp latches on first real message
+-- Source selection: on_bbe's mip/gmcp gate is unaffected by Task 1's
+-- rewrite of on_gmcp -- that gate only ever governed the old ^^-delimited
+-- string mirror, which never existed for real (guild_viking_gmcp_test.lua's
+-- header explains why). The GMCP path now dispatches Guild.* table frames
+-- directly through protocol.on_gmcp/apply_gmcp_key, entirely independent of
+-- source_mode; there is no wholesale latch to assert here any more (Task 3
+-- adds the real per-key latch, with its own suite).
 check("source default auto", protocol.source() == "auto")
 
--- Fix 3: an empty or garbage GMCP message (no ^^-delimited pairs) must NOT
--- latch -- only a real message should flip auto mode over to gmcp, so mip
--- keeps flowing until genuine Viking GMCP traffic actually arrives.
-check("not latched before any gmcp message", protocol.stats().latched == false)
-protocol.on_gmcp("Viking", "")
-check("empty gmcp message does not latch", protocol.stats().latched == false)
-protocol.on_gmcp("Viking", "no delimiters here")
-check("delimiter-less gmcp message does not latch", protocol.stats().latched == false)
-seen = {}
-protocol.on_bbe("TESTKEY^^stillmip^^")
-check("mip still flows after empty/garbage gmcp messages", seen[1] == "stillmip")
-
-seen = {}
-protocol.on_gmcp("Viking", "TESTKEY^^viagmcp^^")
-check("gmcp latches and ingests", seen[1] == "viagmcp" and protocol.stats().latched)
-protocol.on_bbe("TESTKEY^^viamip^^")
-check("mip suppressed after latch", #seen == 1 and protocol.stats().suppressed >= 1)
 protocol.source("mip")
+seen = {}
 protocol.on_bbe("TESTKEY^^mipforced^^")
-check("forced mip overrides latch", seen[#seen] == "mipforced")
+check("forced mip lets mip through", seen[#seen] == "mipforced")
 protocol.source("auto")
 
--- Forced gmcp direction: source("gmcp") suppresses BBE unconditionally, with
--- no latch involved at all (the forced-mode branch in active_source() never
--- consults gmcp_latched).
+-- Forced gmcp direction still suppresses BBE unconditionally.
 protocol.source("gmcp")
-local latched_before_forced = protocol.stats().latched
 seen = {}
 local suppressed_before_forced = protocol.stats().suppressed
 protocol.on_bbe("TESTKEY^^shouldnotarrive^^")
 check("forced gmcp suppresses bbe", #seen == 0
       and protocol.stats().suppressed == suppressed_before_forced + 1)
-check("forced gmcp direction does not touch the latch",
-      protocol.stats().latched == latched_before_forced)
--- Restore a clean, unlatched source state for the tests below: source("mip")
--- clears gmcp_latched explicitly, then source("auto") returns to auto mode
--- without re-touching it (mirrors the existing reset further down this file).
 protocol.source("mip")
 protocol.source("auto")
+
+-- A Guild.* GMCP frame reaches its registered writer while mip keeps flowing,
+-- untouched, for a key GMCP has not fed -- the two transports coexist with no
+-- source-selection gate between them.
+local settlers_seen
+protocol.gmcp_handler("SETTLERS", function(v) settlers_seen = v end)
+protocol.on_gmcp("Guild.Settlement", { guild = "Vikings", settlers = { a = 1 } })
+check("guild frame routes to its registered writer",
+      settlers_seen ~= nil and settlers_seen.a == 1)
+seen = {}
+protocol.on_bbe("TESTKEY^^stillmip^^")
+check("mip still flows for a key gmcp has not fed", seen[1] == "stillmip")
 
 -- LEGACY quirk, ported faithfully (guild_viking.lua:2932-2942, "dispatch
 -- whatever we have after the grace period, as before"): a lone non-contiguous
@@ -291,7 +285,7 @@ protocol.on_bbe("TESTKEY_2^^orphan^^")   -- part 1 never arrives
 protocol.sweep(1000)
 check("non-contiguous no-total part still dispatches", #seen == 1 and seen[1] == "orphan")
 
--- ---- init.lua wiring: mip "BBE" and gmcp "Viking" reach protocol correctly --
+-- ---- init.lua wiring: mip "BBE" and gmcp "Guild" reach protocol correctly --
 -- M.on_load() registers the real mip/gmcp/timer callbacks used at runtime.
 -- It must only run once in this suite -- later /vik command tests (task 10)
 -- rely on it having already run and must not call it again.
@@ -302,9 +296,10 @@ mip.fire("BBE", "TESTKEY^^wired^^")
 check("mip BBE wiring feeds the payload, not the packet sequence number",
       seen[#seen] == "wired")
 
-seen = {}
-gmcp.fire("Viking", "TESTKEY^^gmcpwired^^")
-check("gmcp Viking wiring feeds protocol.on_gmcp", seen[#seen] == "gmcpwired")
+local gmcp_wired_seen
+protocol.gmcp_handler("WIREDKEY", function(v) gmcp_wired_seen = v end)
+gmcp.fire("Guild", { guild = "Vikings", wiredkey = "gmcpwired" })
+check("gmcp Guild wiring feeds protocol.on_gmcp", gmcp_wired_seen == "gmcpwired")
 
 -- Fix 1 regression: init.lua's sweep timer must divide lera.time()'s
 -- milliseconds down to seconds before calling protocol.sweep, so a known-total
@@ -319,7 +314,7 @@ end
 check("sweep timer registered at 100ms", sweep_reg ~= nil)
 
 local real_lera_time = lera.time
-protocol.source("mip")   -- force mip: an earlier gmcp wiring test may have re-latched gmcp
+protocol.source("mip")   -- force mip: an earlier test in this file may have left source("gmcp")
 seen = {}
 lera.time = function() return 100000 end          -- simulated wall clock: 100.000s
 protocol.on_bbe("TESTKEY_2of3^^x^^")               -- incomplete known-total batch arrives
