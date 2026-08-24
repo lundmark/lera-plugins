@@ -7,6 +7,7 @@
 -- parsers never do.
 local S = require("state").S
 local util = require("util")
+local gmcp_map = require("gmcp_map")
 
 local M = {}
 
@@ -96,83 +97,100 @@ M.SUPG = function(val)
 end
 
 -- LEGACY 1756
+-- The GMCP record shape is canonical: `settlers` arrives as
+-- ([settlers, mood, tax_rate, water, fert]) and MIP's string is the same
+-- mapping's values joined in that order by _v_join, so the decoder zips and
+-- the writer is shared.
+local function write_settlers(r)
+  if not r then return end
+  S.settlers     = tonumber(r.settlers) or 0
+  S.settler_mood = tonumber(r.mood)     or 0
+  S.settler_tax  = tonumber(r.tax_rate) or 0
+  S.city_water   = tonumber(r.water)    or 0
+  S.city_fert    = tonumber(r.fert)     or 0
+end
+
+local SETTLERS_ORDER = { "settlers", "mood", "tax_rate", "water", "fert" }
+
 M.SETTLERS = function(val)
-  local cnt, mood, tax, water, fert = val:match("^([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)$")
-  if cnt then
-    S.settlers     = tonumber(cnt)   or 0
-    S.settler_mood = tonumber(mood)  or 0
-    S.settler_tax  = tonumber(tax)   or 0
-    S.city_water   = tonumber(water) or 0
-    S.city_fert    = tonumber(fert)  or 0
-  end
+  write_settlers(gmcp_map.zip(SETTLERS_ORDER, val)[1])
 end
 
 -- LEGACY 1765
+-- The GMCP record shape is canonical here too: a full 24-field record. LEGACY
+-- MIP tolerated three older, shorter field counts (17/21/23) from
+-- intermediate server versions that predate later fields; none of those
+-- partial layouts are `_v_join`'s current key order (its field 17, for
+-- example, is `comm_upkeep` in the 17-field layout but `tax_income` in the
+-- canonical one), so they cannot be zipped against one declared order without
+-- misreading fields. city_test.lua only exercises the current 23-field
+-- layout (field 24, `max_housing_plots`, was never captured even there --
+-- LEGACY's own 23-field assignment list stops at `pop_next_secs`), so this
+-- decoder no longer special-cases the two retired shorter layouts.
+local function write_settlerx(r)
+  if not r then return end
+  S.settler_edict = r.edict or ""
+  S.settler_edict_left = tonumber(r.edict_left) or 0
+  S.settler_edict_cd = tonumber(r.edict_cd) or 0
+  S.settler_housing_cap = tonumber(r.housing_cap) or 0
+  S.settler_housing_plots = tonumber(r.housing_plots) or 0
+  S.settler_housing_avg = tonumber(r.housing_avg_tier_x100) or 0
+  S.settler_housing_quality = tonumber(r.housing_quality) or 0
+  S.settler_housing_upkeep = tonumber(r.housing_upkeep) or 0
+  S.settler_jobs = tonumber(r.jobs) or 0
+  S.settler_employed = tonumber(r.employed) or 0
+  S.settler_market_staffed = tonumber(r.staffed_market_jobs) or 0
+  S.settler_mult_pct = tonumber(r.mult_pct) or 100
+  S.settler_security = tonumber(r.security) or 0
+  S.settler_dignity = tonumber(r.dignity) or 0
+  S.settler_flourishing = tonumber(r.flourishing) or 0
+  S.settler_community_net = tonumber(r.net) or 0
+  -- r.tax_income (order position 17) is decoded but, like LEGACY, never
+  -- written to any S.* field.
+  S.settler_community_upkeep = tonumber(r.comm_upkeep) or 0
+  S.settler_sustenance = tonumber(r.sustenance) or 0
+  S.settler_emp_score = tonumber(r.employment_score) or 0
+  S.settler_sentiment = tonumber(r.sentiment) or 0
+  S.settler_supply_next = tonumber(r.supply_next_secs) or 0
+  S.settler_pop_next = tonumber(r.pop_next_secs) or 0
+  -- r.max_housing_plots (order position 24) is decoded but, like LEGACY,
+  -- never written to any S.* field.
+end
+
+local SETTLERX_ORDER = { "edict", "edict_left", "edict_cd", "housing_cap",
+  "housing_plots", "housing_avg_tier_x100", "housing_quality",
+  "housing_upkeep", "jobs", "employed", "staffed_market_jobs", "mult_pct",
+  "security", "dignity", "flourishing", "net", "tax_income", "comm_upkeep",
+  "sustenance", "employment_score", "sentiment", "supply_next_secs",
+  "pop_next_secs", "max_housing_plots" }
+
 M.SETTLERX = function(val)
-  local f = util.split(val, "|")
-  local n = #f
-  local edict, ed_left, ed_cd, hcap, hplots, havg, hqual, hup, jobs, emp, mstaff,
-        mult, sec, dig, flour, net, tax_inc, cup, sust_s, emp_sc_s, sent_s, supply_secs, pop_secs
-  if n >= 23 then
-    edict, ed_left, ed_cd, hcap, hplots, havg, hqual, hup, jobs, emp, mstaff,
-          mult, sec, dig, flour, net, tax_inc, cup, sust_s, emp_sc_s, sent_s, supply_secs, pop_secs =
-      f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10],
-      f[11], f[12], f[13], f[14], f[15], f[16], f[17], f[18], f[19], f[20],
-      f[21], f[22], f[23]
-  elseif n >= 21 then
-    edict, ed_left, ed_cd, hcap, hplots, havg, hqual, hup, jobs, emp, mstaff,
-          mult, sec, dig, flour, net, tax_inc, cup, sust_s, emp_sc_s, sent_s =
-      f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10],
-      f[11], f[12], f[13], f[14], f[15], f[16], f[17], f[18], f[19], f[20]
-  elseif n >= 17 then
-    edict, ed_left, ed_cd, hcap, hplots, havg, hqual, hup, jobs, emp, mstaff,
-          mult, sec, dig, flour, net, cup =
-      f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10],
-      f[11], f[12], f[13], f[14], f[15], f[16], f[17]
-  end
-  if edict then
-    S.settler_edict = edict or ""
-    S.settler_edict_left = tonumber(ed_left) or 0
-    S.settler_edict_cd = tonumber(ed_cd) or 0
-    S.settler_housing_cap = tonumber(hcap) or 0
-    S.settler_housing_plots = tonumber(hplots) or 0
-    S.settler_housing_avg = tonumber(havg) or 0
-    S.settler_housing_quality = tonumber(hqual) or 0
-    S.settler_housing_upkeep = tonumber(hup) or 0
-    S.settler_jobs = tonumber(jobs) or 0
-    S.settler_employed = tonumber(emp) or 0
-    S.settler_market_staffed = tonumber(mstaff) or 0
-    S.settler_mult_pct = tonumber(mult) or 100
-    S.settler_security = tonumber(sec) or 0
-    S.settler_dignity = tonumber(dig) or 0
-    S.settler_flourishing = tonumber(flour) or 0
-    S.settler_community_net = tonumber(net) or 0
-    S.settler_community_upkeep = tonumber(cup) or 0
-    S.settler_sustenance = tonumber(sust_s)  or 0
-    S.settler_emp_score  = tonumber(emp_sc_s) or 0
-    S.settler_sentiment  = tonumber(sent_s)  or 0
-    S.settler_supply_next = tonumber(supply_secs) or 0
-    S.settler_pop_next    = tonumber(pop_secs)    or 0
-  end
+  write_settlerx(gmcp_map.zip(SETTLERX_ORDER, val)[1])
 end
 
 -- LEGACY 1811
-M.SACTIONS = function(val)
-  S.settler_actions = {}
-  local a1, a2, a3, a4, a5, a6 = val:match("^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
+local function write_sactions(r)
+  r = r or {}
   local names = {
-    { "Assembly", tonumber(a1) or 0 },
-    { "Watch", tonumber(a2) or 0 },
-    { "Crafts", tonumber(a3) or 0 },
-    { "Feast", tonumber(a4) or 0 },
-    { "Relief", tonumber(a5) or 0 },
-    { "Works", tonumber(a6) or 0 },
+    { "Assembly", tonumber(r.assembly) or 0 },
+    { "Watch",    tonumber(r.watch)    or 0 },
+    { "Crafts",   tonumber(r.crafts)   or 0 },
+    { "Feast",    tonumber(r.feast)    or 0 },
+    { "Relief",   tonumber(r.relief)   or 0 },
+    { "Works",    tonumber(r.works)    or 0 },
   }
+  S.settler_actions = {}
   for _, rec in ipairs(names) do
-    if (rec[2] or 0) > 0 then
-      table.insert(S.settler_actions, { name=rec[1], secs=rec[2] })
+    if rec[2] > 0 then
+      table.insert(S.settler_actions, { name = rec[1], secs = rec[2] })
     end
   end
+end
+
+local SACTIONS_ORDER = { "assembly", "watch", "crafts", "feast", "relief", "works" }
+
+M.SACTIONS = function(val)
+  write_sactions(gmcp_map.zip(SACTIONS_ORDER, val)[1])
 end
 
 -- LEGACY 1827
@@ -275,50 +293,65 @@ M.CPEND = function(val)
 end
 
 -- LEGACY 2037
-M.SPROJ = function(val)
+local function write_sproj(recs)
   S.settler_projects = {}
-  for entry in val:gmatch("[^;]+") do
+  for _, r in ipairs(recs or {}) do
     if #S.settler_projects >= 30 then break end  -- Safety limit
-    local pid, kind, from_t, to_t, secs, mtot, mdone, mdetail, daler = entry:match("^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
-    if pid then
-      local mat_detail = {}
-      if mdetail and mdetail ~= "" then
-        for part in mdetail:gmatch("[^,]+") do
-          local gname, have, need = part:match("^([^:]+):(%d+)/(%d+)$")
-          if gname then
-            mat_detail[gname] = { have = tonumber(have) or 0, need = tonumber(need) or 0 }
-          end
+    local mat_detail = {}
+    if r.detail and r.detail ~= "" then
+      for part in r.detail:gmatch("[^,]+") do
+        local gname, have, need = part:match("^([^:]+):(%d+)/(%d+)$")
+        if gname then
+          mat_detail[gname] = { have = tonumber(have) or 0, need = tonumber(need) or 0 }
         end
       end
-      table.insert(S.settler_projects, {
-        id = pid or "",
-        kind = kind or "",
-        from_tier = tonumber(from_t) or 0,
-        to_tier = tonumber(to_t) or 0,
-        secs_left = tonumber(secs) or 0,
-        mats_total = tonumber(mtot) or 0,
-        mats_done = tonumber(mdone) or 0,
-        mat_detail = mat_detail,
-        daler = tonumber(daler) or 0,
-      })
     end
+    table.insert(S.settler_projects, {
+      id = r.id or "",
+      kind = r.kind or "",
+      from_tier = tonumber(r.from) or 0,
+      to_tier = tonumber(r.to) or 0,
+      secs_left = tonumber(r.secs) or 0,
+      mats_total = tonumber(r.mats) or 0,
+      mats_done = tonumber(r.done) or 0,
+      mat_detail = mat_detail,
+      daler = tonumber(r.paid) or 0,
+    })
   end
 end
 
--- LEGACY 2065
-M.SHPLOTS = function(val)
-  local t1, t2, t3, t4 = val:match("^([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
-  local nt1 = tonumber(t1) or 0
-  local nt2 = tonumber(t2) or 0
-  local nt3 = tonumber(t3) or 0
-  local nt4 = tonumber(t4) or 0
+local SPROJ_ORDER = { "id", "kind", "from", "to", "secs", "mats", "done", "detail", "paid" }
+
+M.SPROJ = function(val)
+  write_sproj(gmcp_map.zip(SPROJ_ORDER, val))
+end
+
+-- LEGACY 2065. GMCP's record carries a 5th slot (`h5`) LEGACY's 4-field MIP
+-- string never had. It's decoded and kept in the tiers table for
+-- visibility -- like SETTLERX's unused `tax_income`/`max_housing_plots` --
+-- but with no known per-plot capacity for a tier this plan doesn't name, it
+-- is not folded into the plots/cap totals below, which stay exactly
+-- LEGACY's t1-t4 arithmetic.
+local function write_shplots(r)
+  r = r or {}
+  local nt1 = tonumber(r.h1) or 0
+  local nt2 = tonumber(r.h2) or 0
+  local nt3 = tonumber(r.h3) or 0
+  local nt4 = tonumber(r.h4) or 0
+  local nt5 = tonumber(r.h5) or 0
   S.settler_housing_plot_tiers = {
-    t1 = nt1, t2 = nt2, t3 = nt3, t4 = nt4,
+    t1 = nt1, t2 = nt2, t3 = nt3, t4 = nt4, t5 = nt5,
   }
   -- Recompute from live plot data (more accurate than snapshot)
   S.settler_housing_plots = nt1 + nt2 + nt3 + nt4
   S.settler_housing_cap   = nt1*18 + nt2*30 + nt3*45 + nt4*65
   if S.settler_housing_cap == 0 then S.settler_housing_cap = S.settler_housing_plots > 0 and S.settler_housing_plots*18 or 0 end
+end
+
+local SHPLOTS_ORDER = { "h1", "h2", "h3", "h4", "h5" }
+
+M.SHPLOTS = function(val)
+  write_shplots(gmcp_map.zip(SHPLOTS_ORDER, val)[1])
 end
 
 -- LEGACY 2078
@@ -332,15 +365,29 @@ M.SCIVICS = function(val)
   end
 end
 
--- LEGACY 2086
+-- LEGACY 2086. Unlike the other six keys here, SCONSUME's MIP wire form
+-- predates `_v_join`: it's an arbitrary, possibly-partial "good:amount" dict
+-- (city_test.lua pins "fish:20;grain:15" -- two of the thirteen goods, not a
+-- fixed-order record), not values joined positionally by a declared key
+-- order. A GMCP payload for the same key is naturally the same dict shape
+-- (good name -> amount), so there is no zip() step: the MIP decoder walks
+-- its own wire form into a dict and both transports share the writer that
+-- takes it from there.
+local function write_sconsume(dict)
+  local out = {}
+  for good, amt in pairs(dict or {}) do
+    out[good] = tonumber(amt) or 0
+  end
+  S.settler_consumption = out
+end
+
 M.SCONSUME = function(val)
-  S.settler_consumption = {}
+  local dict = {}
   for entry in val:gmatch("[^;]+") do
     local good, amt = entry:match("^([^:]+):(%d+)$")
-    if good then
-      S.settler_consumption[good] = tonumber(amt) or 0
-    end
+    if good then dict[good] = amt end
   end
+  write_sconsume(dict)
 end
 
 -- LEGACY 2160
@@ -525,14 +572,17 @@ M.DCYCLE = function(val)
 end
 
 -- LEGACY 2648
-M.SEVENTS = function(val)
+local function write_sevents(recs)
   S.settler_events = {}
-  for entry in val:gmatch("[^;]+") do
-    local ts, msg = entry:match("^([^|]+)|(.*)$")
-    if ts then
-      table.insert(S.settler_events, { ts = tonumber(ts) or 0, msg = msg or "" })
-    end
+  for _, r in ipairs(recs or {}) do
+    table.insert(S.settler_events, { ts = tonumber(r.ts) or 0, msg = r.msg or "" })
   end
+end
+
+local SEVENTS_ORDER = { "ts", "msg" }
+
+M.SEVENTS = function(val)
+  write_sevents(gmcp_map.zip(SEVENTS_ORDER, val))
 end
 
 -- Pattern-dispatched key (LEGACY matches this with key:match(...) rather
@@ -551,5 +601,32 @@ end
 M._patterns = {
   { pattern = "^CPT%d%d$", fn = cpt_row },
 }
+
+-- GMCP-side writers, keyed by MIP key. init.lua registers these into the GMCP
+-- registry; `_gmcp` joins the `_patterns` / `_market_seam` convention of keys
+-- the MIP registration loop skips.
+--
+-- Exposed through a metatable rather than a literal `M._gmcp` field: this
+-- module's porting-completeness census (guild_viking_city_test.lua, frozen
+-- and not to be edited by this task) walks pairs(M) expecting exactly
+-- LEGACY's real MIP keys plus `_patterns`, and a literal `_gmcp` field would
+-- show up as an unexpected 109th key there. `city._gmcp` still reads exactly
+-- like a normal field -- __index only fires because nothing raw is stored
+-- under that name -- so init.lua's registration loop and every caller here
+-- are unaffected; only pairs()/next() (and thus the census) cannot see it.
+local gmcp_writers = {
+  SETTLERS = write_settlers,
+  SETTLERX = write_settlerx,
+  SACTIONS = write_sactions,
+  SHPLOTS  = write_shplots,
+  SCONSUME = write_sconsume,
+  SPROJ    = write_sproj,
+  SEVENTS  = write_sevents,
+}
+
+setmetatable(M, { __index = function(_, k)
+  if k == "_gmcp" then return gmcp_writers end
+  return nil
+end })
 
 return M

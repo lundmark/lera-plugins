@@ -265,21 +265,29 @@ protocol.source("auto")
 -- A Guild.* GMCP frame reaches its registered writer while mip keeps flowing,
 -- untouched, for a key GMCP has not fed -- the two transports coexist with no
 -- source-selection gate between them.
-local settlers_seen
-protocol.gmcp_handler("SETTLERS", function(v) settlers_seen = v end)
-protocol.on_gmcp("Guild.Settlement", { guild = "viking", settlers = { a = 1 } })
+--
+-- Uses RBUILD (Guild.City, trade.lua) rather than SETTLERS: Task 5 gave
+-- SETTLERS a real city._gmcp writer, which init.lua's dofile above already
+-- registered, so a second protocol.gmcp_handler("SETTLERS", ...) here would
+-- now trip the duplicate-key guard. RBUILD has no _gmcp writer anywhere in
+-- this plan, so it stays free for this generic dispatch/latch check; CARTS
+-- (the other real, unwritten key already used below) is avoided only to
+-- keep the two registrations from colliding with each other.
+local rbuild_seen
+protocol.gmcp_handler("RBUILD", function(v) rbuild_seen = v end)
+protocol.on_gmcp("Guild.City", { guild = "viking", rbuild = { a = 1 } })
 check("guild frame routes to its registered writer",
-      settlers_seen ~= nil and settlers_seen.a == 1)
-check("the fed key is latched", protocol.gmcp_keys().SETTLERS == true)
+      rbuild_seen ~= nil and rbuild_seen.a == 1)
+check("the fed key is latched", protocol.gmcp_keys().RBUILD == true)
 seen = {}
 protocol.on_bbe("TESTKEY^^stillmip^^")
 check("mip still flows for a key gmcp has not fed", seen[1] == "stillmip")
 
 -- Kills: a global latch, or a latch that only exists at the frame level
--- rather than per key -- once SETTLERS is fed, its own MIP twin must be
+-- rather than per key -- once RBUILD is fed, its own MIP twin must be
 -- suppressed while TESTKEY (never fed by gmcp) keeps flowing above.
 local suppressed_before_latch = protocol.stats().suppressed
-protocol.ingest("SETTLERS", "should-be-suppressed")
+protocol.ingest("RBUILD", "should-be-suppressed")
 check("a latched key suppresses its own mip twin",
       protocol.stats().suppressed == suppressed_before_latch + 1)
 
