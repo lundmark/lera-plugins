@@ -148,6 +148,20 @@ check("raising gmcp writer not counted as applied",
 check("sibling key in the same frame still applied",
   got.SETTLERS ~= nil and got.SETTLERS.a == 2)
 
+-- Kills: latching a key on the mere fact that a writer was invoked, rather
+-- than on the writer succeeding. Latch-on-success is the safety property of
+-- the whole per-key design: a GMCP writer that raises has written nothing, so
+-- suppressing that key's MIP twin would take the field dark for the rest of
+-- the connection with no error the user can see on the page. Only the
+-- unknown-key path was covered before; this is the raising-writer path.
+check("raising gmcp writer does not latch its key",
+  protocol.gmcp_keys().CIDLE == nil)
+local cidle_from_mip
+protocol.handler("CIDLE", function(val) cidle_from_mip = val end)
+protocol.ingest("CIDLE", "from-mip")
+check("the MIP twin of a raising gmcp writer is still accepted",
+  cidle_from_mip == "from-mip", tostring(cidle_from_mip))
+
 -- ---- paging ----------------------------------------------------------------
 -- Kills: applying each page independently. The server slices an oversized array
 -- key across pages, repeating the key, so independent application truncates a
@@ -367,6 +381,46 @@ frame("Guild.Trade", { guild = "viking", crpr = { a = 1 } })
 check("unmapped key counted by its gmcp name",
   protocol.gmcp_stats().unknown.crpr == 1,
   protocol.gmcp_stats().unknown.crpr)
+
+-- ---- deterministic key order ----------------------------------------------
+-- Kills: applying a frame's keys in pairs() order. pairs() follows the table's
+-- internal hashing, not the frame, so two writers touching a common state
+-- field land in an arbitrary order -- and since frames are deltas, either key
+-- may also arrive alone. The symptom is a pane value flickering between two
+-- answers with no underlying state change, which is close to undebuggable
+-- from a bug report. That collision is designed out today (SETTLERX owns the
+-- housing totals outright), but a later plan adds ~20 more keys, so the order
+-- itself is pinned here.
+--
+-- The four keys below are real, mapped, otherwise-unused Guild.City keys,
+-- chosen because LuaJIT's pairs() walks them raid, heat, bdmg, cdtime -- a
+-- different order from the sorted MIP order this asserts, and from the order
+-- they are written in the frame literal. Nothing about the frame can produce
+-- BDMG, CDTIME, HEAT, RAID by accident.
+local applied_order = {}
+for _, k in ipairs({ "BDMG", "CDTIME", "HEAT", "RAID" }) do
+  protocol.gmcp_handler(k, function() applied_order[#applied_order + 1] = k end)
+end
+
+reset()
+applied_order = {}
+frame("Guild.City", { guild = "viking", raid = "1", heat = "2", bdmg = "3",
+                      cdtime = "4" })
+check("frame keys applied in a declared, stable order",
+  table.concat(applied_order, ",") == "BDMG,CDTIME,HEAT,RAID",
+  table.concat(applied_order, ","))
+
+-- The de-paged branch rebuilds its own table (merge_page -> run.keys) before
+-- applying, so it gets the same pin -- it is the call site most likely to rot.
+reset()
+applied_order = {}
+frame("Guild.City", { guild = "viking", page = 1, pages = 2,
+                      raid = "1", heat = "2" })
+frame("Guild.City", { guild = "viking", page = 2, pages = 2,
+                      bdmg = "3", cdtime = "4" })
+check("de-paged run applies keys in the same declared order",
+  table.concat(applied_order, ",") == "BDMG,CDTIME,HEAT,RAID",
+  table.concat(applied_order, ","))
 
 -- ---- composite plumbing (SROLES: two GMCP keys, one MIP key) ---------------
 -- Exercises apply_gmcp_frame/composite_of directly through protocol.on_gmcp,

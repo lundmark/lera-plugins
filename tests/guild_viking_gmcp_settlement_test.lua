@@ -45,16 +45,24 @@ local function clear(fields)
   for _, f in ipairs(fields) do S[f] = nil end
 end
 
--- Feed the MIP string, snapshot; clear; feed the GMCP structure decoded from
--- the SAME string through zip; snapshot; compare.
-local function equivalent(name, mip_key, order, val, fields, gmcp_is_list)
+-- Feed the MIP string, snapshot; clear; feed a LITERAL GMCP structure carrying
+-- the same data, snapshot; compare.
+--
+-- The GMCP form is written out by hand rather than produced by
+-- gmcp_map.zip(order, val). It used to be zipped, which made these cases
+-- unfalsifiable: city.lua defines M.<KEY> as write_<key>(zip(<KEY>_ORDER, val)),
+-- so both sides of the comparison evaluated the same expression and asserted
+-- f(x) == f(x). Only the test's private copy of the order list could ever
+-- differ. A literal keeps the field names independent of city.lua, so a drifted
+-- <KEY>_ORDER now shows up as the two transports disagreeing -- which is the
+-- failure these cases claim to catch.
+local function equivalent(name, mip_key, val, gmcp_form, fields)
   clear(fields)
   city[mip_key](val)
   local via_mip = snapshot(fields)
 
   clear(fields)
-  local recs = gmcp_map.zip(order, val)
-  city._gmcp[mip_key](gmcp_is_list and recs or recs[1])
+  city._gmcp[mip_key](gmcp_form)
   local via_gmcp = snapshot(fields)
 
   check(name .. " transport equivalence", same(via_mip, via_gmcp),
@@ -62,23 +70,32 @@ local function equivalent(name, mip_key, order, val, fields, gmcp_is_list)
 end
 
 -- ---- the seven _v_join keys ------------------------------------------------
--- Kills, for every case below: a writer that drifted from its decoder, so the
--- same data renders differently depending on which transport won.
+-- Kills, for every case below: a writer that drifted from its decoder (or a
+-- decoder whose declared field order drifted), so the same data renders
+-- differently depending on which transport won.
 
 equivalent("settlers", "SETTLERS",
-  { "settlers", "mood", "tax_rate", "water", "fert" },
   "42|75|10|3|7",
+  { settlers = "42", mood = "75", tax_rate = "10", water = "3", fert = "7" },
   { "settlers", "settler_mood", "settler_tax", "city_water", "city_fert" })
 
 equivalent("sactions", "SACTIONS",
-  { "assembly", "watch", "crafts", "feast", "relief", "works" },
   "60|0|120|0|0|30",
+  { assembly = "60", watch = "0", crafts = "120", feast = "0", relief = "0",
+    works = "30" },
   { "settler_actions" })
 
+-- The housing cap/plots fields are in the snapshot deliberately: SHPLOTS owns
+-- only settler_housing_plot_tiers now, so clear() nils those two and NEITHER
+-- transport may put anything back. See write_shplots in handlers/city.lua.
 equivalent("shplots", "SHPLOTS",
-  { "h1", "h2", "h3", "h4", "h5" },
   "4|3|2|1|0",
+  { h1 = "4", h2 = "3", h3 = "2", h4 = "1", h5 = "0" },
   { "settler_housing_cap", "settler_housing_plots", "settler_housing_plot_tiers" })
+check("shplots writes neither housing total",
+  S.settler_housing_cap == nil and S.settler_housing_plots == nil,
+  "cap=" .. tostring(S.settler_housing_cap) ..
+    " plots=" .. tostring(S.settler_housing_plots))
 
 -- sconsume is the one exception: its MIP wire form predates `_v_join` (an
 -- arbitrary, possibly-partial "good:amount" dict -- see write_sconsume's
@@ -102,13 +119,15 @@ do
 end
 
 equivalent("settlerx", "SETTLERX",
-  { "edict", "edict_left", "edict_cd", "housing_cap", "housing_plots",
-    "housing_avg_tier_x100", "housing_quality", "housing_upkeep", "jobs",
-    "employed", "staffed_market_jobs", "mult_pct", "security", "dignity",
-    "flourishing", "net", "tax_income", "comm_upkeep", "sustenance",
-    "employment_score", "sentiment", "supply_next_secs", "pop_next_secs",
-    "max_housing_plots" },
   "feast|30|300|20|8|250|60|12|40|35|4|110|70|65|1|55|80|25|90|85|5|45|600|24",
+  { edict = "feast", edict_left = "30", edict_cd = "300", housing_cap = "20",
+    housing_plots = "8", housing_avg_tier_x100 = "250", housing_quality = "60",
+    housing_upkeep = "12", jobs = "40", employed = "35",
+    staffed_market_jobs = "4", mult_pct = "110", security = "70",
+    dignity = "65", flourishing = "1", net = "55", tax_income = "80",
+    comm_upkeep = "25", sustenance = "90", employment_score = "85",
+    sentiment = "5", supply_next_secs = "45", pop_next_secs = "600",
+    max_housing_plots = "24" },
   { "settler_edict", "settler_edict_left", "settler_edict_cd",
     "settler_housing_cap", "settler_housing_plots", "settler_housing_avg",
     "settler_housing_quality", "settler_housing_upkeep", "settler_jobs",
@@ -145,9 +164,12 @@ do
 end
 
 equivalent("sproj", "SPROJ",
-  { "id", "kind", "from", "to", "secs", "mats", "done", "detail", "paid" },
   "p1|build|A1|B2|300|timber:5|0|detail one|1;p2|raze|C3|D4|120||1|detail two|0",
-  { "settler_projects" }, true)
+  { { id = "p1", kind = "build", from = "A1", to = "B2", secs = "300",
+      mats = "timber:5", done = "0", detail = "detail one", paid = "1" },
+    { id = "p2", kind = "raze", from = "C3", to = "D4", secs = "120",
+      mats = "", done = "1", detail = "detail two", paid = "0" } },
+  { "settler_projects" })
 
 -- sevents is also hand-encoded (players/viking/obj/include/client.h:
 -- `out += r["ts"] + "|" + r["msg"]"), not _v_join -- msg is inserted raw and
@@ -319,6 +341,63 @@ city.SROLES("garbage-with-no-separators")
 check("sroles on a header with no '|' still resets commoner/identity",
   S.settler_commoner == 0 and S.settler_identity == "",
   "commoner=" .. tostring(S.settler_commoner) .. " identity=" .. tostring(S.settler_identity))
+
+-- ---- one frame, two writers, one state field ------------------------------
+-- The per-key equivalence cases above are structurally blind to this: each
+-- one clears and checks a single key in isolation, so two keys writing the
+-- same field can never show up. That is exactly where the real bug was --
+-- SETTLERX and SHPLOTS both wrote settler_housing_cap/settler_housing_plots.
+-- Over MIP the server emits SETTLERX before SHPLOTS in one packet, so SHPLOTS'
+-- stale per-tier arithmetic deterministically won; over GMCP frames are deltas
+-- with no order at all.
+--
+-- Driven through protocol.on_gmcp rather than by calling the writers directly,
+-- so the real frame path (key map, ordering, dispatch) is what is under test.
+local protocol = require("protocol")
+for key, fn in pairs(city._gmcp) do protocol.gmcp_handler(key, fn) end
+
+local SETTLERX_GMCP = {
+  edict = "feast", edict_left = "30", edict_cd = "300",
+  housing_cap = "220", housing_plots = "20",
+  housing_avg_tier_x100 = "250", housing_quality = "60", housing_upkeep = "12",
+  jobs = "40", employed = "35", staffed_market_jobs = "4", mult_pct = "110",
+  security = "70", dignity = "65", flourishing = "1", net = "55",
+  tax_income = "80", comm_upkeep = "25", sustenance = "90",
+  employment_score = "85", sentiment = "5", supply_next_secs = "45",
+  pop_next_secs = "600", max_housing_plots = "24",
+}
+-- 4+3+2+1 = 10 plots over LEGACY's four tiers, and 20 over all five. Chosen so
+-- every wrong answer is a different number from the right one: the removed
+-- arithmetic would have produced plots 10 / cap 317 (4*18+3*30+2*45+1*65), and
+-- a "just add tier 5" patch would have produced plots 20 / cap 967.
+local SHPLOTS_GMCP = { h1 = "4", h2 = "3", h3 = "2", h4 = "1", h5 = "10" }
+
+local HOUSING = { "settler_housing_cap", "settler_housing_plots",
+                  "settler_housing_plot_tiers" }
+
+clear(HOUSING)
+protocol.on_gmcp("Guild.Settlement", { guild = "viking",
+  settlerx = SETTLERX_GMCP, shplots = SHPLOTS_GMCP })
+check("one frame carrying both settlerx and shplots: SETTLERX owns the totals",
+  S.settler_housing_cap == 220 and S.settler_housing_plots == 20,
+  "cap=" .. tostring(S.settler_housing_cap) ..
+    " plots=" .. tostring(S.settler_housing_plots))
+check("one frame carrying both settlerx and shplots: SHPLOTS owns the tiers",
+  S.settler_housing_plot_tiers and S.settler_housing_plot_tiers.t1 == 4
+    and S.settler_housing_plot_tiers.t5 == 10,
+  S.settler_housing_plot_tiers and S.settler_housing_plot_tiers.t5)
+
+-- The delta case: a later frame carrying only shplots must not move the
+-- totals a previous settlerx established.
+protocol.on_gmcp("Guild.Settlement", { guild = "viking",
+  shplots = { h1 = "9", h2 = "0", h3 = "0", h4 = "0", h5 = "0" } })
+check("a shplots-only delta leaves the housing totals where settlerx put them",
+  S.settler_housing_cap == 220 and S.settler_housing_plots == 20,
+  "cap=" .. tostring(S.settler_housing_cap) ..
+    " plots=" .. tostring(S.settler_housing_plots))
+check("a shplots-only delta does update the tiers",
+  S.settler_housing_plot_tiers.t1 == 9 and S.settler_housing_plot_tiers.t5 == 0,
+  S.settler_housing_plot_tiers.t1)
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")
