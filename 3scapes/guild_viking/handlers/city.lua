@@ -209,31 +209,61 @@ M.SACTIONS = function(val)
   write_sactions(gmcp_map.zip(SACTIONS_ORDER, val)[1])
 end
 
--- LEGACY 1827
-M.SROLES = function(val)
-  S.settler_roles = {}
-  S.settler_commoner = 0
-  S.settler_identity = ""
-  local segs = util.split(val, ";")
-  if segs[1] then
-    local m = util.split(segs[1], "|")
-    S.settler_commoner = tonumber(m[2]) or 0
-    S.settler_identity = m[3] or ""
+-- LEGACY 1827. Bespoke serializer (query_settler_roles_mip() in
+-- settler_roles.h): "settlers|commoner|identity;role:cur:tgt:work:bonus;..."
+-- -- the header segment packs three fields (settlers is unused here, same as
+-- LEGACY), so this is not a gmcp_map.zip() shape either. GMCP splits the same
+-- data across two keys because the snapshot nests four role->value mappings
+-- inside one record, which a flat GMCP record cannot do: `sroles` (an array
+-- of per-role records) and `sroles_meta` (the header). Both may arrive in one
+-- frame, or a delta may carry just one -- write_sroles applies only the half
+-- it was given.
+local ROLE_LABELS = { smidir="Builders", verkamenn="Laborers",
+  handverkarar="Artisans", kaupmenn="Merchants", boendr="Farmers",
+  leidangr="Militia", vitkar="Seers", hasetar="Rowers" }
+
+local function write_sroles(parts)
+  if parts.sroles then
+    S.settler_roles = {}
+    for _, r in ipairs(parts.sroles) do
+      local k = r.role
+      if k and k ~= "" then
+        table.insert(S.settler_roles, {
+          key = k, label = ROLE_LABELS[k] or k,
+          cur = tonumber(r.cur) or 0, tgt = tonumber(r.target) or 0,
+          work = tonumber(r.work) or 0, bonus = tonumber(r.bonus) or 0,
+        })
+      end
+    end
   end
-  local labels = { smidir="Builders", verkamenn="Laborers",
-    handverkarar="Artisans", kaupmenn="Merchants", boendr="Farmers",
-    leidangr="Militia", vitkar="Seers", hasetar="Rowers" }
+  -- Only the half that arrived is applied: a delta frame may carry one key
+  -- without the other, and clobbering the absent half would drop good state.
+  if parts.sroles_meta then
+    S.settler_commoner = tonumber(parts.sroles_meta.commoner) or 0
+    S.settler_identity = parts.sroles_meta.identity or ""
+  end
+end
+
+local function decode_sroles(val)
+  local segs = util.split(val, ";")
+  local parts = { sroles = {} }
+  if segs[1] then
+    -- "settlers|commoner|identity" -- m[1] (settlers) is unused, matching
+    -- the original handler.
+    local m = util.split(segs[1], "|")
+    parts.sroles_meta = { commoner = m[2], identity = m[3] }
+  end
   for i = 2, #segs do
     local k, cur, tgt, work, bon = segs[i]:match("^([^:]*):([^:]*):([^:]*):([^:]*):([^:]*)$")
     if k and k ~= "" then
-      table.insert(S.settler_roles, {
-        key = k, label = labels[k] or k,
-        cur = tonumber(cur) or 0, tgt = tonumber(tgt) or 0,
-        work = tonumber(work) or 0, bonus = tonumber(bon) or 0,
-      })
+      parts.sroles[#parts.sroles + 1] =
+        { role = k, cur = cur, target = tgt, work = work, bonus = bon }
     end
   end
+  return parts
 end
+
+M.SROLES = function(val) write_sroles(decode_sroles(val)) end
 
 -- LEGACY 1850. Begin a NEW grid in a pending buffer; committed only on CPEND
 -- once all rows arrived (double-buffer, like WMAP/WMEND's pattern).
@@ -370,16 +400,31 @@ M.SHPLOTS = function(val)
   write_shplots(gmcp_map.zip(SHPLOTS_ORDER, val)[1])
 end
 
--- LEGACY 2078
-M.SCIVICS = function(val)
-  S.settler_community_buildings = {}
+-- LEGACY 2078. Bespoke serializer (_mip_scivics_value() in client.h): joins
+-- records with ";" and writes id .. ":" .. count -- a colon inside each
+-- record, not gmcp_map.zip's "|" wire form, so this needs its own decoder.
+local function decode_scivics(val)
+  local out = {}
   for entry in val:gmatch("[^;]+") do
     local cid, ctier = entry:match("^([^:]+):(%d+)$")
     if cid then
-      S.settler_community_buildings[cid] = tonumber(ctier) or 0
+      out[#out + 1] = { id = cid, count = ctier }
     end
   end
+  return out
 end
+
+-- S.settler_community_buildings is a { civic_id = tier } mapping (state.lua,
+-- pages/people.lua's sorted_keys(cb) walk) rather than a list of records --
+-- keep that shape; only the wire decoding changes.
+local function write_scivics(recs)
+  S.settler_community_buildings = {}
+  for _, r in ipairs(recs or {}) do
+    S.settler_community_buildings[r.id] = tonumber(r.count) or 0
+  end
+end
+
+M.SCIVICS = function(val) write_scivics(decode_scivics(val)) end
 
 -- LEGACY 2086. Unlike the other six keys here, SCONSUME's MIP wire form
 -- predates `_v_join`: it's an arbitrary, possibly-partial "good:amount" dict
@@ -641,6 +686,8 @@ M._gmcp = {
   SCONSUME = write_sconsume,
   SPROJ    = write_sproj,
   SEVENTS  = write_sevents,
+  SCIVICS  = write_scivics,
+  SROLES   = write_sroles,
 }
 
 return M

@@ -30,6 +30,17 @@ local gmcp_handlers = {}
 -- Reserved envelope members the protocol layer owns (gmcp_guild_key_reserved).
 local ENVELOPE = { guild = true, full = true, page = true, pages = true }
 
+-- A composite MIP key (gmcp_map.COMPOSITE) receives two GMCP keys -- e.g.
+-- SROLES gets `sroles` and `sroles_meta`. Both halves may arrive in the same
+-- frame, or a delta may carry just one; either way the writer gets a single
+-- table keyed by GMCP key, built from whichever halves this frame had,
+-- rather than being invoked once per half. Reverse-indexed once here so
+-- frame processing can test membership in O(1).
+local composite_of = {}
+for mip_key, parts in pairs(gmcp_map.COMPOSITE) do
+  for _, gk in ipairs(parts) do composite_of[gk] = mip_key end
+end
+
 -- The mudlib stamps this from query_guild() (secure/pinc/guild.h:257, a bare
 -- `return guild;` with no normalization) into the frame's `guild` field
 -- (secure/pinc/gmcp.h:676); query_guild() in turn reflects whatever
@@ -222,6 +233,57 @@ local function merge_page(run, data)
   end
 end
 
+-- Shared tail for both the single-key and composite paths: look up the
+-- registered writer for a MIP key and dispatch it, or count the key as
+-- unknown when no writer is registered (e.g. MONUMENTS, which has no writer
+-- yet -- see composite_of's callers).
+local function dispatch_gmcp(mip_key, value)
+  local fn = gmcp_handlers[mip_key]
+  if not fn then
+    gmcp_stats.unknown[mip_key] = (gmcp_stats.unknown[mip_key] or 0) + 1
+    return
+  end
+  dispatch(mip_key, fn, gmcp_dispatch_opts, value)
+end
+
+-- Route one payload key through the explicit key map.
+function protocol.apply_gmcp_key(gmcp_key, value)
+  local mip_key = gmcp_map.mip_key(gmcp_key)
+  if not mip_key then
+    -- Counted under the GMCP name, so /vik source shows the key the guild
+    -- actually sent rather than a synthesised MIP name.
+    gmcp_stats.unknown[gmcp_key] = (gmcp_stats.unknown[gmcp_key] or 0) + 1
+    return
+  end
+  dispatch_gmcp(mip_key, value)
+end
+
+-- Apply every key of one frame, gathering a composite's halves into a single
+-- writer call instead of one call per GMCP key. `skip_envelope` is needed
+-- only for the unpaged branch's raw `data`; merge_page already excludes
+-- envelope members from a de-paged run's `keys`.
+local function apply_gmcp_frame(data, skip_envelope)
+  local pending = {}  -- mip_key -> { [gmcp_key] = value }, composites only
+  for key, value in pairs(data) do
+    if not skip_envelope or not ENVELOPE[key] then
+      local mip_key = composite_of[key]
+      if mip_key then
+        local parts = pending[mip_key]
+        if not parts then
+          parts = {}
+          pending[mip_key] = parts
+        end
+        parts[key] = value
+      else
+        protocol.apply_gmcp_key(key, value)
+      end
+    end
+  end
+  for mip_key, parts in pairs(pending) do
+    dispatch_gmcp(mip_key, parts)
+  end
+end
+
 -- One Guild.* frame. Keys are applied individually: a key absent from a frame
 -- means unchanged, never empty, because ordinary frames are deltas. A frame
 -- may be split across pages, and an oversized array key sliced across those
@@ -250,9 +312,7 @@ function protocol.on_gmcp(package, data)
   -- this frame is complete on its own.
   if not page or not pages or pages <= 1 then
     page_runs[package] = nil
-    for key, value in pairs(data) do
-      if not ENVELOPE[key] then protocol.apply_gmcp_key(key, value) end
-    end
+    apply_gmcp_frame(data, true)
     return
   end
 
@@ -275,27 +335,8 @@ function protocol.on_gmcp(package, data)
 
   if page == pages then
     page_runs[package] = nil
-    for key, value in pairs(run.keys) do
-      protocol.apply_gmcp_key(key, value)
-    end
+    apply_gmcp_frame(run.keys, false)
   end
-end
-
--- Route one payload key through the explicit key map.
-function protocol.apply_gmcp_key(gmcp_key, value)
-  local mip_key = gmcp_map.mip_key(gmcp_key)
-  if not mip_key then
-    -- Counted under the GMCP name, so /vik source shows the key the guild
-    -- actually sent rather than a synthesised MIP name.
-    gmcp_stats.unknown[gmcp_key] = (gmcp_stats.unknown[gmcp_key] or 0) + 1
-    return
-  end
-  local fn = gmcp_handlers[mip_key]
-  if not fn then
-    gmcp_stats.unknown[mip_key] = (gmcp_stats.unknown[mip_key] or 0) + 1
-    return
-  end
-  dispatch(mip_key, fn, gmcp_dispatch_opts, value)
 end
 
 -- Cleared on disconnect: the next session may not negotiate GMCP at all, and

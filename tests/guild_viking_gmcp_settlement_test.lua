@@ -212,6 +212,79 @@ for _, k in ipairs({ "SETTLERS", "SETTLERX", "SACTIONS", "SHPLOTS", "SCONSUME",
     type(city._gmcp[k]))
 end
 
+-- ---- scivics: `:` between fields, not `|` ---------------------------------
+-- Kills: decoding scivics with the shared zip. Its MIP encoder is hand-written
+-- as id .. ":" .. count, so the shared "|" decoder yields one field per record
+-- and every count comes back nil.
+--
+-- S.settler_community_buildings is a { civic_id = tier } mapping, not an
+-- array (state.lua's own comment, and pages/people.lua's sorted_keys(cb)
+-- walk) -- confirmed while verifying this key's wire form against the
+-- mudlib. "two entries" is therefore checked by counting keys, not by `#`
+-- (which is 0 on a table with no positive-integer keys).
+local function count_keys(t)
+  local n = 0
+  for _ in pairs(t) do n = n + 1 end
+  return n
+end
+
+local SCIVICS_FIELDS = { "settler_community_buildings" }
+clear(SCIVICS_FIELDS)
+city.SCIVICS("longhouse:2;forge:1")
+local scivics_mip = snapshot(SCIVICS_FIELDS)
+clear(SCIVICS_FIELDS)
+city._gmcp.SCIVICS({ { id = "longhouse", count = "2" }, { id = "forge", count = "1" } })
+check("scivics transport equivalence", same(scivics_mip, snapshot(SCIVICS_FIELDS)),
+  "mip vs gmcp differ")
+check("scivics decoded two entries", count_keys(S.settler_community_buildings) == 2,
+  count_keys(S.settler_community_buildings))
+
+-- ---- sroles: one MIP key, two GMCP keys ----------------------------------
+-- Kills: applying `sroles` without `sroles_meta`, which drops the commoner
+-- count and identity that MIP packs into the first segment.
+local SROLES_FIELDS = { "settler_roles", "settler_commoner", "settler_identity" }
+clear(SROLES_FIELDS)
+city.SROLES("meta|12|Freeholders;smidir:3:5:1:10;boendr:8:8:2:0")
+local sroles_mip = snapshot(SROLES_FIELDS)
+
+clear(SROLES_FIELDS)
+city._gmcp.SROLES({
+  sroles = {
+    { role = "smidir", cur = "3", target = "5", work = "1", bonus = "10" },
+    { role = "boendr", cur = "8", target = "8", work = "2", bonus = "0" },
+  },
+  sroles_meta = { commoner = "12", identity = "Freeholders",
+                  identity_key = "freeholders" },
+})
+check("sroles transport equivalence", same(sroles_mip, snapshot(SROLES_FIELDS)),
+  "mip vs gmcp differ")
+
+-- Kills: dropping the label lookup on the GMCP path. `label` is derived from
+-- the role key by a table the decoder owns, and the pane renders it.
+check("sroles label derived on the gmcp path",
+  S.settler_roles[1] and S.settler_roles[1].label == "Builders",
+  S.settler_roles[1] and S.settler_roles[1].label)
+
+-- Kills: GMCP's field names reaching state verbatim. It sends role/target
+-- where the writer stores key/tgt.
+check("sroles field names normalised",
+  S.settler_roles[1].key == "smidir" and S.settler_roles[1].tgt == 5,
+  S.settler_roles[1].tgt)
+
+-- Kills: a composite applied on its first half, so a frame carrying only
+-- `sroles` clobbers the meta fields the other half owns.
+S.settler_commoner = 99
+city._gmcp.SROLES({ sroles = { { role = "smidir", cur = "1", target = "1",
+                                 work = "0", bonus = "0" } } })
+check("sroles without meta leaves meta alone", S.settler_commoner == 99,
+  S.settler_commoner)
+
+-- Kills: COMPOSITE not naming both halves, so protocol cannot know to buffer
+-- them.
+check("COMPOSITE names sroles' halves",
+  gmcp_map.COMPOSITE.SROLES and #gmcp_map.COMPOSITE.SROLES == 2,
+  gmcp_map.COMPOSITE.SROLES and #gmcp_map.COMPOSITE.SROLES)
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
