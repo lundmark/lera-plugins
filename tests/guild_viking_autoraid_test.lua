@@ -59,15 +59,21 @@ local protocol = require("protocol")
 local S = require("state").S
 local voyage = require("handlers.voyage")
 for key, fn in pairs(voyage) do
-  if key ~= "_patterns" then protocol.handler(key, fn) end
+  if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
+    protocol.handler(key, fn)
+  end
 end
 local kingdom = require("handlers.kingdom")
 for key, fn in pairs(kingdom) do
-  if key ~= "_patterns" then protocol.handler(key, fn) end
+  if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
+    protocol.handler(key, fn)
+  end
 end
 local city = require("handlers.city")
 for key, fn in pairs(city) do
-  if key ~= "_patterns" then protocol.handler(key, fn) end
+  if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
+    protocol.handler(key, fn)
+  end
 end
 
 local page_opts = require("page_opts")

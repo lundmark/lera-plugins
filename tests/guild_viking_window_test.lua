@@ -630,7 +630,7 @@ window.set_page("stats")
 -- =============================================================================
 -- I3 (review round 2): the REAL People page, driven end to end through the
 -- REAL window.on_pointer dispatch, with its mission data driven through
--- protocol.ingest (the real MISSIONS/WSTOCK/VMAPH/VMAPL/VMR/MEE wire
+-- protocol.ingest (the real MISSIONS/WSTOCK wire, and Guild.Map
 -- handlers) rather than hand-poking S directly -- pinning the exact
 -- column span pages/people.lua actually records, end to end, rather than
 -- via the fake page module the rest of this section uses. Registration
@@ -640,17 +640,24 @@ window.set_page("stats")
 -- =============================================================================
 do
   local protocol = require("protocol")
+  -- Mirrors init.lua's RESERVED set and its three registration tiers; two of
+  -- these modules carry a `_gmcp` writer table, so treating it as a MIP key
+  -- would register the same name twice.
+  local RESERVED = { _market_seam = true, _patterns = true, _gmcp = true }
   local function register(mod_name)
     local mod = require(mod_name)
     for key, fn in pairs(mod) do
-      if key ~= "_patterns" then protocol.handler(key, fn) end
+      if not RESERVED[key] then protocol.handler(key, fn) end
     end
     for _, p in ipairs(mod._patterns or {}) do
       protocol.pattern_handler(p.pattern, p.fn)
     end
+    for key, fn in pairs(mod._gmcp or {}) do
+      protocol.gmcp_handler(key, fn)
+    end
   end
   register("handlers.city")   -- MISSIONS
-  register("handlers.voyage") -- VMAPH, VMAPL, VMR%d%d, MEE%d%d
+  register("handlers.voyage") -- Guild.Map
   register("handlers.trade")  -- WSTOCK
 
   local page_opts = require("page_opts")
@@ -672,10 +679,16 @@ do
   -- MAIN 12080-12143).
   protocol.ingest("WSTOCK", "grain|100|100")
   protocol.ingest("MISSIONS", "7|Deliver grain to Holmgard|15|200|1800|Vestergotland|Holmgard|grain:30")
-  protocol.ingest("VMAPH", "4|1|0|0")
-  protocol.ingest("VMAPL", "lineage|Uppsala|0|0|;lineage|Vestergotland|1|0|;capital|Holmgard|3|0|")
-  protocol.ingest("VMR00", "pppp")
-  protocol.ingest("MEE00", "111")
+  protocol.on_gmcp("Guild.Map", {
+    guild = "viking", w = 4, h = 1, active = 1, pos = { x = 0, y = 0 },
+    enc = { terrain = "glyph", east = "glyph", south = "glyph" },
+    terrain = { "pppp" }, east = { "111" },
+    landmarks = {
+      { type = "lineage", name = "Uppsala", x = 0, y = 0, owner = "" },
+      { type = "lineage", name = "Vestergotland", x = 1, y = 0, owner = "" },
+      { type = "capital", name = "Holmgard", x = 3, y = 0, owner = "" },
+    },
+  })
 
   check("(I3 setup) MISSIONS ingest populated S.missions via the real handler",
         #(require("state").S.missions or {}) == 1)

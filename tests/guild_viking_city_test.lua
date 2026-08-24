@@ -64,7 +64,9 @@ local protocol = require("protocol")
 local S = require("state").S
 local city = require("handlers.city")
 for key, fn in pairs(city) do
-  if key ~= "_patterns" then protocol.handler(key, fn) end
+  if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
+    protocol.handler(key, fn)
+  end
 end
 for _, p in ipairs(city._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
@@ -368,11 +370,15 @@ local EXPECTED_EXACT_KEYS = {
   "CARTS", "COURIER", "SPY", "HEAT", "TRAIN", "CUPG", "CIDLE", "TQUEUE",
   "WSTOCK", "BLOCKS", "CELLAR", "REFINERY", "ROUTES", "RUPKEEP", "UPKEEP",
   "RBUILD", "STAFF", "BONDS", "MARKET", "INCOMING", "DALER", "TGOODS", "VFIND",
-  -- voyage.lua (27)
+  -- voyage.lua (28 -- VMAPH/VMAPL/VMAPL_END are registered as explicit no-ops
+  -- now that Guild.Map owns the territory map, so protocol.ingest does not
+  -- file the server's still-arriving MIP map keys under `unknown`; `_gmcp` is
+  -- that module's GMCP-writer table, the same convention field `_patterns`
+  -- is)
   "SHIPS", "LONGSHIP", "VOYAGE", "VOYAGE_WAIT", "VRESOLVE", "VOFFERS",
   "VCHART", "VCHH", "VQPATH", "VSAGA", "VMEM", "VBOONS", "VSPOILS", "VGOODS",
   "VAIDS", "VRUNES", "VRELICS", "VCURIOS", "VREAGENT", "VSAILED", "VMREG",
-  "VMNEW", "WEATHER", "VMAPH", "VMAPL", "VMAPL_END", "FLEET_RENOWN",
+  "VMNEW", "WEATHER", "VMAPH", "VMAPL", "VMAPL_END", "FLEET_RENOWN", "_gmcp",
   -- kingdom.lua (27)
   "RAIDLOG", "RTARGETS", "DYNASTY", "ARMY", "BATTLE", "DIPLO", "WAR", "WMAP",
   "WMU", "WMP", "WSPOIL", "WSG", "WMPL", "WMO", "WMQ", "WMEND", "PATROL",
@@ -432,7 +438,7 @@ end
 local actual_keys = collect_exact_keys()
 local ok_keys, err_keys = same_set(actual_keys, EXPECTED_EXACT_KEYS)
 check("census exact keys match hardcoded list", ok_keys, err_keys)
-check("census exact key count is 109", #actual_keys == 109, #actual_keys)
+check("census exact key count is 110", #actual_keys == 110, #actual_keys)
 
 local actual_patterns = collect_patterns()
 local ok_pats, err_pats = same_set(actual_patterns, EXPECTED_PATTERNS)

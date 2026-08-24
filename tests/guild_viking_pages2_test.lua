@@ -32,11 +32,15 @@ local trade_page = require("pages.trade")
 local protocol = require("protocol")
 local city_handlers = require("handlers.city")
 for key, fn in pairs(city_handlers) do
-  if key ~= "_patterns" then protocol.handler(key, fn) end
+  if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
+    protocol.handler(key, fn)
+  end
 end
 local voyage_handlers = require("handlers.voyage")
 for key, fn in pairs(voyage_handlers) do
-  if key ~= "_patterns" then protocol.handler(key, fn) end
+  if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
+    protocol.handler(key, fn)
+  end
 end
 
 local S = state.S

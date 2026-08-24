@@ -347,7 +347,8 @@ function M.vik_command(args)
       buffer.color_print(nil, "DAA520", "Viking transport source set to " .. rest .. ".")
       print_sources()
     else
-      buffer.color_print(nil, "DAA520", "Usage: /vik source [mip|gmcp|auto]")
+      buffer.color_print(nil, "DAA520",
+        "Usage: /vik source [mip|gmcp|auto] -- 'mip' blanks the Territory Map")
     end
   elseif sub == "resetxp" then
     do_resetxp()
@@ -441,7 +442,9 @@ function M.on_load()
     summary = "Viking guild data, pane, and controls",
     description = "Ingestion status and counters, plus each automation's "
       .. "on/off state and last-action/next-eligible summary (status), message tracing "
-      .. "(trace), explicit save (save), transport selection (source), the "
+      .. "(trace), explicit save (save), transport selection (source; note "
+      .. "that 'source mip' blanks the Territory Map, which is fed by "
+      .. "Guild.Map and has no MIP path any more), the "
       .. "saga-XP session reset (resetxp; the bare 'resetvikxp' alias does "
       .. "the same), toggling a named popup open or closed -- map (Territory "
       .. "Map), sea (Sea Chart), voyage (Voyage Status), cityplan (City "

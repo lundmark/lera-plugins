@@ -63,11 +63,17 @@ end
 local protocol = require("protocol")
 local S = require("state").S
 local voyage = require("handlers.voyage")
+-- Mirrors init.lua's RESERVED set: everything in a handler module that is not
+-- one of the module-level conventions is an exact MIP key.
+local RESERVED = { _market_seam = true, _patterns = true, _gmcp = true }
 for key, fn in pairs(voyage) do
-  if key ~= "_patterns" then protocol.handler(key, fn) end
+  if not RESERVED[key] then protocol.handler(key, fn) end
 end
 for _, p in ipairs(voyage._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
+end
+for key, fn in pairs(voyage._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
 end
 
 -- SHIPS (LEGACY 1102): name|tier|state|target|return|sid|crew|convoy|convoy_size|
@@ -288,62 +294,189 @@ check("weather fields", S.season == "winter" and S.weather == "snow" and S.weath
 protocol.ingest("FLEET_RENOWN", "1500")
 check("fleet_renown", S.fleet_renown == 1500)
 
--- VMAPH (LEGACY 2523): width|height|player_x|player_y -- resets rows/edges only on
--- dimension change, swaps any pending POI batch into the live list.
-protocol.ingest("VMAPH", "10|8|3|4")
-check("vmaph dims", S.vmap_w == 10 and S.vmap_h == 8)
-check("vmaph player pos", S.vmap_px == 3 and S.vmap_py == 4)
-check("vmaph expecting", S.vmap_pois_expecting == true)
+-- ---- Guild.Map -------------------------------------------------------------
+--
+-- The territory map is GMCP-only: MIP's VMAPH/VMAPL/VMR/MEE/MES keys are
+-- received and dropped (see the bottom of this section). Frames arrive
+-- through protocol.on_gmcp, which strips the envelope and hands every
+-- Guild.Map key to the single composite writer as one table.
 
--- VMR%d%d / MEE%d%d / MES%d%d (LEGACY 2571-2579, pattern-dispatched): row and
--- edge content keyed by a 2-digit row index embedded in the key itself.
-protocol.ingest("VMR00", "..#..")
-protocol.ingest("VMR01", "#....")
-protocol.ingest("MEE00", "10101")
-protocol.ingest("MES00", "01010")
-check("vmr rows land at 1-indexed positions", S.vmap_rows[1] == "..#.." and S.vmap_rows[2] == "#....")
-check("vmap east edges", S.vmap_east_edges[1] == "10101")
-check("vmap south edges", S.vmap_south_edges[1] == "01010")
+-- protocol_grid_pack_row()'s packing, transcribed from
+-- secure/protocol/grid_codec_impl.h. Only used to prove a packed plane
+-- reaches the codec at all; the codec's own correctness is
+-- guild_viking_gmcp_grid_test.lua's subject.
+local B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local function pack_row(codes, bits)
+  local octets, acc, held = {}, 0, 0
+  for i = 1, #codes do
+    acc = acc * (2 ^ bits) + codes[i]
+    held = held + bits
+    if held >= 8 then
+      octets[#octets + 1] = math.floor(acc / 2 ^ (held - 8)) % 256
+      held = held - 8
+      acc = (held > 0) and (acc % 2 ^ held) or 0
+    end
+  end
+  if held > 0 then octets[#octets + 1] = (acc * 2 ^ (8 - held)) % 256 end
+  local out = {}
+  for i = 1, #octets, 3 do
+    local chunk = octets[i] * 65536
+      + (octets[i + 1] or 0) * 256 + (octets[i + 2] or 0)
+    local function ch(n) return B64:sub(n + 1, n + 1) end
+    out[#out + 1] = ch(math.floor(chunk / 262144) % 64)
+    out[#out + 1] = ch(math.floor(chunk / 4096) % 64)
+    if octets[i + 1] then out[#out + 1] = ch(math.floor(chunk / 64) % 64) end
+    if octets[i + 2] then out[#out + 1] = ch(chunk % 64) end
+  end
+  return table.concat(out)
+end
 
--- VMAPL (LEGACY 2549) + the LEGACY 2659-2668 promotion check (ported into
--- this same handler -- see the fix report's mapping note): type|name|x|y|owner
--- entries, semicolon-separated, into the pending buffer (dedup by "x,y").
--- vmap_pois is still empty at this point (never populated before in this
--- suite), so LEGACY's "promote immediately rather than waiting for the next
--- VMAPH" branch fires within this very ingest call -- no second VMAPH needed.
-protocol.ingest("VMAPL", "town|Havn|3|4|PlayerA;fort|Alpha|5|2|")
-check("vmapl promoted immediately", #S.vmap_pois == 2 and S.vmap_pois[1].type == "town"
-      and S.vmap_pois[1].name == "Havn" and S.vmap_pois[1].x == 3 and S.vmap_pois[1].y == 4
-      and S.vmap_pois[1].owner == "PlayerA")
-check("vmapl promoted owner default", S.vmap_pois[2].owner == "")
-check("vmapl pending cleared after promotion", S.vmap_pois_pending == nil)
-check("vmapl expecting reset after promotion", S.vmap_pois_expecting == true)
+local GLYPH_ENC = { terrain = "glyph", east = "glyph", south = "glyph" }
+local TERRAIN_LEGEND = {
+  ["0"] = "unexplored", ["1"] = "plains", ["2"] = "forest", ["3"] = "hills",
+  ["4"] = "mountains", ["5"] = "tundra", ["6"] = "coast",
+  ["7"] = "water (fjord/lake)", ["8"] = "bridge",
+  ["9"] = "river/ford (unbridged)", ["10"] = "road",
+}
+local EDGE_LEGEND = { ["0"] = "blocked (impassable edge)", ["1"] = "open (passable edge)" }
 
--- A second VMAPL starts a fresh pending batch (vmap_pois_expecting was reset
--- true by the promotion above) and, since vmap_pois is no longer empty, this
--- time it stays pending rather than auto-promoting. Also exercises dedup:
--- two entries sharing the same "x,y" key within one packet only keep the first.
-protocol.ingest("VMAPL", "town|Havn|3|4|PlayerA;fort|Beta|9|9|;fort|BetaDup|9|9|PlayerC")
-check("vmapl second batch stays pending", #S.vmap_pois_pending == 2
-      and S.vmap_pois_pending[2].name == "Beta")
-check("vmapl dedup drops repeated x,y", #S.vmap_pois == 2)  -- unchanged from the earlier promotion
+local function map_frame(payload)
+  payload.guild = "viking"
+  protocol.on_gmcp("Guild.Map", payload)
+end
 
--- Next VMAPH swaps the still-pending batch into the live list; same
--- dimensions preserve vmap_rows/edges.
-protocol.ingest("VMAPH", "10|8|3|4")
-check("vmaph swap", #S.vmap_pois == 2 and S.vmap_pois[2].name == "Beta")
-check("vmaph rows preserved on same dims", S.vmap_w == 10 and S.vmap_h == 8
-      and S.vmap_rows[1] == "..#..")
+-- A full frame: dimensions, position, all three planes as glyph rows, and the
+-- landmark list.
+map_frame({
+  full = 1, w = 5, h = 2, active = 1, pos = { x = 3, y = 1 },
+  enc = GLYPH_ENC, legend = TERRAIN_LEGEND, legend_edge = EDGE_LEGEND,
+  terrain = { "pp.ff", "AAtt." },
+  east = { "10101", "11110" },
+  south = { "01010" },
+  landmarks = {
+    { type = "town", name = "Havn", x = 3, y = 1, owner = "PlayerA" },
+    { type = "fort", name = "Alpha", x = 5, y = 2, owner = "" },
+  },
+})
+check("map dims", S.vmap_w == 5 and S.vmap_h == 2)
+check("map player pos", S.vmap_px == 3 and S.vmap_py == 1)
+check("map active", S.vmap_active == 1)
+check("map terrain rows land at 1-indexed positions",
+      S.vmap_rows[1] == "pp.ff" and S.vmap_rows[2] == "AAtt.")
+check("map east edges", S.vmap_east_edges[1] == "10101" and S.vmap_east_edges[2] == "11110")
+-- The south plane describes the boundary between row r and row r+1, so it is
+-- one row shorter than the grid by construction.
+check("map south edges", S.vmap_south_edges[1] == "01010" and #S.vmap_south_edges == 1)
+check("map landmarks", #S.vmap_pois == 2 and S.vmap_pois[1].type == "town"
+      and S.vmap_pois[1].name == "Havn" and S.vmap_pois[1].x == 3
+      and S.vmap_pois[1].y == 1 and S.vmap_pois[1].owner == "PlayerA")
+check("map landmark owner default", S.vmap_pois[2].owner == "")
 
--- VMAPH with changed dimensions resets rows/edges
-protocol.ingest("VMAPH", "12|9|0|0")
-check("vmaph reset rows on dim change", S.vmap_rows[1] == nil)
-check("vmaph new dims", S.vmap_w == 12 and S.vmap_h == 9)
+-- Terrain rows are CLEAN -- no player marker baked in. This is the whole
+-- reason MIP's map path is gone rather than kept: MIP wrote an 'X' into the
+-- player's own cell, which popups/map.lua overdrew but pathfinding.lua read
+-- as if it were terrain.
+check("the player's own cell carries real terrain, not a marker",
+      S.vmap_rows[2]:sub(4, 4) == "t")
 
--- VMAPL_END (LEGACY 2580): no-op in LEGACY -- registered so protocol.ingest
--- doesn't record it as unknown; state is untouched.
-protocol.ingest("VMAPL_END", "")
-check("vmapl_end no-op", S.vmap_w == 12)
+-- A step sends `pos` alone. Every other key is absent, which means unchanged
+-- -- never empty.
+map_frame({ pos = { x = 4, y = 1 } })
+check("a pos-only delta moves the marker", S.vmap_px == 4 and S.vmap_py == 1)
+check("a pos-only delta leaves the planes standing",
+      S.vmap_rows[1] == "pp.ff" and S.vmap_east_edges[1] == "10101"
+      and #S.vmap_pois == 2 and S.vmap_w == 5)
+
+-- Walking off the biome grid keeps the last known coordinates but clears
+-- `active`, which is what the popup labels the position with.
+map_frame({ active = 0 })
+check("active clears without disturbing the position",
+      S.vmap_active == 0 and S.vmap_px == 4 and S.vmap_py == 1)
+map_frame({ active = 1 })
+
+-- Same dimensions preserve the planes; a changed dimension drops them,
+-- because rows sized for the old grid cannot be reinterpreted at a new width.
+map_frame({ w = 5, h = 2 })
+check("unchanged dims preserve the planes", S.vmap_rows[1] == "pp.ff")
+map_frame({ w = 6, h = 3 })
+check("changed dims reset the planes",
+      S.vmap_rows[1] == nil and S.vmap_east_edges[1] == nil
+      and S.vmap_south_edges[1] == nil)
+check("changed dims are applied", S.vmap_w == 6 and S.vmap_h == 3)
+
+-- A frame naming only one dimension still resets, and keeps the other.
+map_frame({ w = 5, h = 2, terrain = { "ppppp", "fffff" } })
+map_frame({ h = 4 })
+check("a partial dimension change keeps the dimension it did not name",
+      S.vmap_w == 5 and S.vmap_h == 4 and S.vmap_rows[1] == nil)
+
+-- Landmarks are one array key, so a frame carrying them carries the whole
+-- list: it replaces rather than merges, and two landmarks on one cell keep
+-- the first (popups/map.lua indexes one POI per cell).
+map_frame({
+  landmarks = {
+    { type = "town", name = "Havn", x = 3, y = 4, owner = "PlayerA" },
+    { type = "fort", name = "Beta", x = 9, y = 9, owner = "" },
+    { type = "fort", name = "BetaDup", x = 9, y = 9, owner = "PlayerC" },
+  },
+})
+check("landmarks replace the previous list", #S.vmap_pois == 2)
+check("two landmarks on one cell keep the first", S.vmap_pois[2].name == "Beta")
+
+-- A packed push. `enc` names the encoding per plane and `legend` explains the
+-- codes; both are cached, so the delta that follows can ship planes alone.
+map_frame({
+  w = 3, h = 2,
+  enc = { terrain = "b4", east = "b1", south = "b1" },
+  legend = TERRAIN_LEGEND, legend_edge = EDGE_LEGEND,
+  terrain = { pack_row({ 1, 1, 0 }, 4), pack_row({ 2, 2, 4 }, 4) },
+  east = { pack_row({ 1, 0, 1 }, 1) },
+  south = { pack_row({ 0, 0, 1 }, 1) },
+})
+check("a packed terrain plane decodes to glyph rows",
+      S.vmap_rows[1] == "pp." and S.vmap_rows[2] == "ffA",
+      tostring(S.vmap_rows[1]) .. "/" .. tostring(S.vmap_rows[2]))
+check("packed edge planes decode to passability rows",
+      S.vmap_east_edges[1] == "101" and S.vmap_south_edges[1] == "001")
+
+-- enc/legend change only when the server's own tables do, so a delta shipping
+-- fresh planes will not repeat them. Decoding against the cached pair is the
+-- ordinary case, not the exception.
+map_frame({ terrain = { pack_row({ 0, 10, 8 }, 4) } })
+check("a plane arriving without enc decodes against the cached context",
+      S.vmap_rows[1] == ".+=", tostring(S.vmap_rows[1]))
+
+-- That cache must not outlive its connection: a fresh packed plane read
+-- against a previous session's legend would draw a wrong map that looks
+-- entirely plausible.
+require("state").reset_connection()
+check("disconnect clears the decoding context",
+      S.vmap_enc == nil and S.vmap_legend == nil and S.vmap_terrain_glyphs == nil)
+map_frame({ w = 3, h = 1, enc = { terrain = "b4" },
+            terrain = { pack_row({ 1, 1, 0 }, 4) } })
+check("a packed plane with no legend empties rather than guessing glyphs",
+      S.vmap_rows[1] == "", tostring(S.vmap_rows[1]))
+
+-- MIP's map keys are still sent by the server and are deliberately inert.
+-- They are registered rather than left unknown so /vik status's unknown list
+-- keeps meaning "keys nobody has taught this client about".
+map_frame({ w = 4, h = 2, enc = GLYPH_ENC, legend = TERRAIN_LEGEND,
+            terrain = { "pppp", "ffff" }, pos = { x = 1, y = 1 } })
+local before = protocol.stats().unknown["VMAPH"]
+protocol.ingest("VMAPH", "9|9|0|0|1")
+protocol.ingest("VMAPL", "town|Ignored|0|0|")
+protocol.ingest("VMAPL_END", "1")
+protocol.ingest("VMR00", "XXXX")
+protocol.ingest("MEE00", "111")
+protocol.ingest("MES00", "000")
+check("the MIP map keys leave the GMCP map untouched",
+      S.vmap_w == 4 and S.vmap_rows[1] == "pppp" and S.vmap_px == 1
+      and S.vmap_east_edges[1] == nil,
+      tostring(S.vmap_w) .. "/" .. tostring(S.vmap_rows[1]) .. "/"
+        .. tostring(S.vmap_px) .. "/" .. tostring(S.vmap_east_edges[1]))
+check("the MIP map keys are not counted unknown",
+      protocol.stats().unknown["VMAPH"] == before
+      and protocol.stats().unknown["VMR00"] == nil)
 
 -- Pattern-tier dispatch precedence and unknown-key accounting (using
 -- synthetic keys -- not real LEGACY telemetry -- since none of this module's

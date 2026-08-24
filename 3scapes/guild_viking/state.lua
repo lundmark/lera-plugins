@@ -191,10 +191,19 @@ local state = {
   vmap_south_edges = {}, -- [wire row + 1] = south edge passability string
   vmap_pois = {},   -- { type, name, x, y, owner }
   vmap_pois_keys = {},          -- { "x,y" = true } dedup lookup
-  vmap_pois_expecting = false,  -- true when waiting for first VMAPL after VMAPH
-  vmap_pois_batch_time = 0,     -- timestamp of last VMAPH for batch window
-  vmap_pois_batch_rows = 0,     -- number of rows in current batch
-  vmap_pois_batch_rows_expected = 0,  -- expected number of rows in current batch
+  -- 1 while the player is standing on the biome grid, 0 while vmap_px/py are
+  -- the last position we saw them at. Starts at 1 because Guild.Map's first
+  -- frame after connect is a full one and always carries it -- the value only
+  -- ever matters once a real frame has set it.
+  vmap_active = 1,
+  -- Guild.Map decoding context, cached across delta frames: `enc` names each
+  -- plane's encoding, `legend`/`legend_edge` explain its codes, and
+  -- vmap_terrain_glyphs is the code -> glyph table derived from `legend`.
+  -- Cleared on disconnect (see reset_connection): decoding a fresh packed
+  -- plane against a previous connection's legend draws a wrong map that
+  -- looks entirely plausible.
+  vmap_enc = nil, vmap_legend = nil, vmap_legend_edge = nil,
+  vmap_terrain_glyphs = nil,
 }
 
 local M = { S = state }
@@ -211,6 +220,13 @@ function M.reset_connection()
   state.combat_rounds = 0
   state.stfx = {}
   state.vis_gain, state.kap_gain, state.soe_gain, state.aud_gain = 0, 0, 0, 0
+  -- The map planes themselves are left standing (a reconnect redraws them on
+  -- the next Guild.Map push, and a blank map in the meantime helps nobody),
+  -- but their decoding context is not: see the field comments above.
+  state.vmap_enc = nil
+  state.vmap_legend = nil
+  state.vmap_legend_edge = nil
+  state.vmap_terrain_glyphs = nil
 end
 
 return M
