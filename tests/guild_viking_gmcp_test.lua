@@ -57,11 +57,36 @@ reset()
 frame("Guild.Settlement", { settlers = { a = 1 } })
 check("frame with no guild key dropped", got.SETTLERS == nil)
 
+-- Kills: comparing against the wrong literal. The mudlib's set_guild call
+-- for this guild (players/viking/room/gatehouse.c:254) uses a lowercase,
+-- singular value, and query_guild() returns it unnormalized. A constant
+-- shared between the implementation and its test proves nothing on its own,
+-- so these exercise the actual server value and a casing variant of it, not
+-- the literal the code happens to compare against.
+reset()
+frame("Guild.Settlement", { guild = "viking", settlers = { a = 1 } })
+check("the server's actual lowercase value routes",
+  got.SETTLERS ~= nil and got.SETTLERS.a == 1)
+
+reset()
+frame("Guild.Settlement", { guild = "Viking", settlers = { a = 1 } })
+check("a differently-cased variant still routes",
+  got.SETTLERS ~= nil and got.SETTLERS.a == 1)
+
+-- Kills: matching too loosely (e.g. any string, or a substring match) instead
+-- of comparing against this guild specifically. "druid" is another guild's
+-- real set_guild(...) value, not an invented name.
+reset()
+frame("Guild.Settlement", { guild = "druid", settlers = { a = 1 } })
+check("another real guild ('druid') dropped", got.SETTLERS == nil)
+check("another real guild counted foreign", protocol.gmcp_stats().foreign == 1,
+  protocol.gmcp_stats().foreign)
+
 -- ---- key routing -----------------------------------------------------------
 -- Kills: routing the raw lowercase key, which matches no handler, or failing to
 -- strip the envelope so `guild` is treated as data.
 reset()
-frame("Guild.Settlement", { guild = "Vikings", settlers = { a = 1 } })
+frame("Guild.Settlement", { guild = "viking", settlers = { a = 1 } })
 check("registered key applied", got.SETTLERS ~= nil and got.SETTLERS.a == 1,
   got.SETTLERS and got.SETTLERS.a)
 -- Kills: not stripping the envelope, so `guild` is routed as data. Nothing
@@ -75,7 +100,7 @@ check("applied counted", protocol.gmcp_stats().applied.SETTLERS == 1,
 -- Kills: silently dropping a key nothing handles. A key the guild starts
 -- sending must be distinguishable from one it never sent.
 reset()
-frame("Guild.Settlement", { guild = "Vikings", nosuchkey = { a = 1 } })
+frame("Guild.Settlement", { guild = "viking", nosuchkey = { a = 1 } })
 check("unhandled key counted", protocol.gmcp_stats().unknown.NOSUCHKEY == 1,
   protocol.gmcp_stats().unknown.NOSUCHKEY)
 
@@ -83,7 +108,7 @@ check("unhandled key counted", protocol.gmcp_stats().unknown.NOSUCHKEY == 1,
 -- repaints until unrelated output arrives.
 reset()
 local before = dirty_count
-frame("Guild.Settlement", { guild = "Vikings", settlers = { a = 1 } })
+frame("Guild.Settlement", { guild = "viking", settlers = { a = 1 } })
 check("applying a key marks ui dirty", dirty_count > before)
 
 -- ---- malformed -------------------------------------------------------------
@@ -99,10 +124,26 @@ check("non-table payload is a no-op", got.SETTLERS == nil)
 -- FFF channel; two transports writing the vitals through different code paths
 -- is the regression this pins.
 reset()
-frame("Guild.State", { guild = "Vikings", hp = { cur = 5, max = 10 } })
+frame("Guild.State", { guild = "viking", hp = { cur = 5, max = 10 } })
 check("Guild.State hp not applied", protocol.gmcp_stats().applied.HP == nil)
 check("Guild.State hp counted unknown", protocol.gmcp_stats().unknown.HP == 1,
   protocol.gmcp_stats().unknown.HP)
+
+-- ---- a raising gmcp writer is countable and does not block its siblings --
+-- Kills: routing a writer error into the MIP-scoped stats/print path instead
+-- of gmcp_stats (an observability hole: /vik source reads gmcp_stats(), which
+-- would then never show a GMCP write failure). Kills: one raising writer
+-- aborting the whole frame instead of just that key -- BOOMKEY and SETTLERS
+-- are unrelated keys in the same frame.
+protocol.gmcp_handler("BOOMKEY", function() error("boom") end)
+reset()
+frame("Guild.Settlement", { guild = "viking", boomkey = "x", settlers = { a = 2 } })
+check("raising gmcp writer counted in gmcp_stats().errors",
+  protocol.gmcp_stats().errors.BOOMKEY == 1, protocol.gmcp_stats().errors.BOOMKEY)
+check("raising gmcp writer not counted as applied",
+  protocol.gmcp_stats().applied.BOOMKEY == nil)
+check("sibling key in the same frame still applied",
+  got.SETTLERS ~= nil and got.SETTLERS.a == 2)
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")

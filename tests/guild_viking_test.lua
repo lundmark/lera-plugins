@@ -267,7 +267,7 @@ protocol.source("auto")
 -- source-selection gate between them.
 local settlers_seen
 protocol.gmcp_handler("SETTLERS", function(v) settlers_seen = v end)
-protocol.on_gmcp("Guild.Settlement", { guild = "Vikings", settlers = { a = 1 } })
+protocol.on_gmcp("Guild.Settlement", { guild = "viking", settlers = { a = 1 } })
 check("guild frame routes to its registered writer",
       settlers_seen ~= nil and settlers_seen.a == 1)
 seen = {}
@@ -298,7 +298,7 @@ check("mip BBE wiring feeds the payload, not the packet sequence number",
 
 local gmcp_wired_seen
 protocol.gmcp_handler("WIREDKEY", function(v) gmcp_wired_seen = v end)
-gmcp.fire("Guild", { guild = "Vikings", wiredkey = "gmcpwired" })
+gmcp.fire("Guild", { guild = "viking", wiredkey = "gmcpwired" })
 check("gmcp Guild wiring feeds protocol.on_gmcp", gmcp_wired_seen == "gmcpwired")
 
 -- Fix 1 regression: init.lua's sweep timer must divide lera.time()'s

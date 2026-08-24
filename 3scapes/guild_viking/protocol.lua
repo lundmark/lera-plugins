@@ -20,9 +20,38 @@ local gmcp_handlers = {}
 -- Reserved envelope members the protocol layer owns (gmcp_guild_key_reserved).
 local ENVELOPE = { guild = true, full = true, page = true, pages = true }
 
-local GUILD_NAME = "Vikings"
+-- The mudlib stamps this from query_guild() (secure/pinc/guild.h:257, a bare
+-- `return guild;` with no normalization) into the frame's `guild` field
+-- (secure/pinc/gmcp.h:676); query_guild() in turn reflects whatever
+-- set_guild(...) was called with, which for this guild is the lowercase
+-- singular literal "viking" (players/viking/room/gatehouse.c:254). Compare
+-- case-insensitively so a casing change on either side cannot silently turn
+-- every real frame into a dropped "foreign" one again.
+local GUILD_NAME = "viking"
 
-local gmcp_stats = { frames = 0, foreign = 0, unknown = {}, applied = {} }
+local gmcp_stats = { frames = 0, foreign = 0, unknown = {}, applied = {}, errors = {} }
+local gmcp_reported_errors = {}
+
+-- GMCP writer outcomes record into gmcp_stats, mirroring the MIP-side
+-- reported_errors dedup below but scoped separately -- a MIP key and a GMCP
+-- key that happen to share a name must not suppress each other's first-error
+-- print. Built as closures over the `gmcp_stats` upvalue (rather than
+-- snapshotting its sub-tables) so they keep working after
+-- protocol.reset_connection() reassigns gmcp_stats wholesale.
+local function gmcp_record_error(key, err)
+  gmcp_stats.errors[key] = (gmcp_stats.errors[key] or 0) + 1
+  if not gmcp_reported_errors[key] then
+    gmcp_reported_errors[key] = true
+    print("[vik] gmcp writer error " .. key .. ": " .. tostring(err))
+  end
+end
+
+local function gmcp_record_success(key)
+  gmcp_stats.applied[key] = (gmcp_stats.applied[key] or 0) + 1
+  ui.dirty()
+end
+
+local gmcp_dispatch_opts = { record_error = gmcp_record_error, record_success = gmcp_record_success }
 
 function protocol.gmcp_handler(key, fn)
   if gmcp_handlers[key] then error("duplicate gmcp handler: " .. key) end
@@ -52,33 +81,45 @@ function protocol.pattern_handler(pattern, fn)
   pattern_handlers[#pattern_handlers + 1] = { pattern = pattern, fn = fn }
 end
 
--- Shared invoke path for both tiers: same pcall/error-counting/dirty
--- semantics regardless of which tier's fn is running or how many arguments
--- it takes.
-local function dispatch(key, fn, ...)
+-- Shared invoke path for MIP's two dispatch tiers and GMCP's per-key
+-- writers: same pcall/first-error-print/success-accounting semantics
+-- regardless of transport, parameterized by opts.record_error/
+-- opts.record_success so each transport's stats scope (and error message
+-- text) stays exactly what it was before this was unified, byte-for-byte
+-- for the MIP path.
+local function dispatch(key, fn, opts, ...)
   local ok, err = pcall(fn, ...)
   if not ok then
+    opts.record_error(key, err)
+    return
+  end
+  opts.record_success(key)
+end
+
+local mip_dispatch_opts = {
+  record_error = function(key, err)
     stats.errors[key] = (stats.errors[key] or 0) + 1
     if not reported_errors[key] then
       reported_errors[key] = true
       print("[vik] parser error " .. key .. ": " .. tostring(err))
     end
-    return
-  end
-  stats.ingested = stats.ingested + 1
-  ui.dirty()
-end
+  end,
+  record_success = function()
+    stats.ingested = stats.ingested + 1
+    ui.dirty()
+  end,
+}
 
 function protocol.ingest(key, value)
   if trace_on then print("[vik] ingest " .. key) end
   local fn = handlers[key]
   if fn then
-    dispatch(key, fn, value)
+    dispatch(key, fn, mip_dispatch_opts, value)
     return
   end
   for _, p in ipairs(pattern_handlers) do
     if key:match(p.pattern) then
-      dispatch(key, p.fn, key, value)
+      dispatch(key, p.fn, mip_dispatch_opts, key, value)
       return
     end
   end
@@ -144,8 +185,10 @@ function protocol.on_gmcp(package, data)
   gmcp_stats.frames = gmcp_stats.frames + 1
 
   -- Whose guild sent this. A frame from another guild must never reach a
-  -- writer: the protocol layer stamps `guild` precisely so a client can tell.
-  if data.guild ~= GUILD_NAME then
+  -- writer: the protocol layer stamps `guild` precisely so a client can
+  -- tell. Compared case-insensitively -- see GUILD_NAME's comment above.
+  local guild = data.guild
+  if type(guild) ~= "string" or guild:lower() ~= GUILD_NAME then
     gmcp_stats.foreign = gmcp_stats.foreign + 1
     return
   end
@@ -165,23 +208,13 @@ function protocol.apply_gmcp_key(gmcp_key, value)
     gmcp_stats.unknown[mip_key] = (gmcp_stats.unknown[mip_key] or 0) + 1
     return
   end
-  local ok, err = pcall(fn, value)
-  if not ok then
-    stats.errors[mip_key] = (stats.errors[mip_key] or 0) + 1
-    if not reported_errors[mip_key] then
-      reported_errors[mip_key] = true
-      print("[vik] gmcp writer error " .. mip_key .. ": " .. tostring(err))
-    end
-    return
-  end
-  gmcp_stats.applied[mip_key] = (gmcp_stats.applied[mip_key] or 0) + 1
-  ui.dirty()
+  dispatch(mip_key, fn, gmcp_dispatch_opts, value)
 end
 
 -- Cleared on disconnect: the next session may not negotiate GMCP at all, and
 -- stale GMCP state must not outlive the connection that produced it.
 function protocol.reset_connection()
-  gmcp_stats = { frames = 0, foreign = 0, unknown = {}, applied = {} }
+  gmcp_stats = { frames = 0, foreign = 0, unknown = {}, applied = {}, errors = {} }
 end
 
 -- Legacy KEY_N (no total) batches complete only here. LEGACY
