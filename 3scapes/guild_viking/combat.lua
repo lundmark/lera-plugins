@@ -7,7 +7,7 @@
 -- gated its window repaint per-body (sometimes unconditionally, sometimes on
 -- a "did anything visibly change" computation, e.g. hp_bar_3's stfx name
 -- diff); the simplest faithful equivalent here is to call ui.dirty()
--- unconditionally at the end of every trigger fn and of on_composite.
+-- unconditionally at the end of every trigger fn.
 local S = require("state").S
 local util = require("util")
 
@@ -60,48 +60,12 @@ local STFX_DEFAULT = { cat="DoT", cs="#FF5555", ci=0x5555FF }
 M.STFX_CAT_ORDER  = { "Def", "Heal", "Off", "Pwr", "DoT" }
 M.STFX_CAT_LABELS = { Def="Def", Heal="Heal", Off="Off", Pwr="Pwr", DoT="DoT" }
 
--- ---------------------------------------------------------------------------
--- FFF composite: a `~`-separated tag stream from send_mip_city()'s combat
--- leg. LEGACY 868-905 (guild.events.mip_info).
--- ---------------------------------------------------------------------------
-function M.on_composite(text)
-  local data = util.split(text, "~")
-  local index = 1
-  local event_type = data[index]
-  while event_type do
-    if event_type == "A" then
-      -- Current HP
-      S.hp = tonumber(data[index + 1]) or S.hp
-    elseif event_type == "B" then
-      -- Max HP
-      S.mhp = tonumber(data[index + 1]) or S.mhp
-    elseif event_type == "K" then
-      local attacker = data[index + 1]
-      S.mob_name_full = (attacker and attacker ~= "") and attacker or "None"
-      if S.mob_name_full ~= "None" then
-        S.combat = true
-      end
-    elseif event_type == "L" then
-      S.estatus_pct = tonumber(data[index + 1]) or 0
-    elseif event_type == "M" then
-      -- LEGACY quirk, ported verbatim: "M" carries no value slot of its own,
-      -- so back the index up by one before the usual +2 stride advances it,
-      -- resyncing on the very next token instead of skipping it.
-      index = index - 1
-    elseif event_type == "N" then
-      S.combat_rounds = tonumber(data[index + 1]) or 0
-    end
-    index = index + 2
-    event_type = data[index]
-  end
-
-  if S.mob_name_full == "None" or S.mob_name_full == "" then
-    S.combat = false
-  end
-
-  ui.dirty()
-end
-
+-- The MIP FFF composite used to be read here. It carried six tags: A/B (hp,
+-- max hp), K (attacker), L (enemy hp percent), M (an index resync carrying no
+-- value) and N (combat rounds). Every one of those fields has another owner
+-- now -- the hp-bar triggers below write hp, mhp and S.combat, and
+-- Char.Combat writes the attacker block -- so the reader and its mip.on("FFF")
+-- subscription are gone rather than left as a second source of truth.
 -- ---------------------------------------------------------------------------
 -- Hp-bar screen-scrape triggers. LEGACY 501-776; regexes from
 -- guild_viking.xml:24-71 (Portal wildcards[n] -> the (n+1)-th callback arg).

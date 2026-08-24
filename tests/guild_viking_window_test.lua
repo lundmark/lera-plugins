@@ -640,10 +640,13 @@ window.set_page("stats")
 -- =============================================================================
 do
   local protocol = require("protocol")
+-- init.lua's RESERVED set: the module-level convention fields, not MIP keys.
+local RESERVED_KEYS = { _market_seam = true, _patterns = true, _gmcp = true,
+                        _retired_keys = true, _retired_patterns = true }
   -- Mirrors init.lua's RESERVED set and its three registration tiers; two of
   -- these modules carry a `_gmcp` writer table, so treating it as a MIP key
   -- would register the same name twice.
-  local RESERVED = { _market_seam = true, _patterns = true, _gmcp = true }
+  local RESERVED = RESERVED_KEYS
   local function register(mod_name)
     local mod = require(mod_name)
     for key, fn in pairs(mod) do
@@ -654,6 +657,12 @@ do
     end
     for key, fn in pairs(mod._gmcp or {}) do
       protocol.gmcp_handler(key, fn)
+    end
+    for _, k in ipairs(mod._retired_keys or {}) do
+      protocol.retired_key(k)
+    end
+    for _, pat in ipairs(mod._retired_patterns or {}) do
+      protocol.retired_pattern(pat)
     end
   end
   register("handlers.city")   -- MISSIONS

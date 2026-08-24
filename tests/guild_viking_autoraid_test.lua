@@ -56,33 +56,54 @@ local function menu_item_labels(opts)
 end
 
 local protocol = require("protocol")
+-- init.lua's RESERVED set: the module-level convention fields, not MIP keys.
+local RESERVED_KEYS = { _market_seam = true, _patterns = true, _gmcp = true,
+                        _retired_keys = true, _retired_patterns = true }
 local S = require("state").S
 local voyage = require("handlers.voyage")
 for key, fn in pairs(voyage) do
-  if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
+  if not RESERVED_KEYS[key] then
     protocol.handler(key, fn)
   end
 end
 for key, fn in pairs(voyage._gmcp or {}) do
   protocol.gmcp_handler(key, fn)
 end
+for _, k in ipairs(voyage._retired_keys or {}) do
+  protocol.retired_key(k)
+end
+for _, pat in ipairs(voyage._retired_patterns or {}) do
+  protocol.retired_pattern(pat)
+end
 local kingdom = require("handlers.kingdom")
 for key, fn in pairs(kingdom) do
-  if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
+  if not RESERVED_KEYS[key] then
     protocol.handler(key, fn)
   end
 end
 for key, fn in pairs(kingdom._gmcp or {}) do
   protocol.gmcp_handler(key, fn)
 end
+for _, k in ipairs(kingdom._retired_keys or {}) do
+  protocol.retired_key(k)
+end
+for _, pat in ipairs(kingdom._retired_patterns or {}) do
+  protocol.retired_pattern(pat)
+end
 local city = require("handlers.city")
 for key, fn in pairs(city) do
-  if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
+  if not RESERVED_KEYS[key] then
     protocol.handler(key, fn)
   end
 end
 for key, fn in pairs(city._gmcp or {}) do
   protocol.gmcp_handler(key, fn)
+end
+for _, k in ipairs(city._retired_keys or {}) do
+  protocol.retired_key(k)
+end
+for _, pat in ipairs(city._retired_patterns or {}) do
+  protocol.retired_pattern(pat)
 end
 
 local page_opts = require("page_opts")

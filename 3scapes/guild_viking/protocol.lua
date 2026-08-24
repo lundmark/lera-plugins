@@ -8,7 +8,7 @@ local protocol = {}
 local handlers = {}
 local pattern_handlers = {}  -- ordered list: { {pattern=p, fn=fn}, ... }
 local batches, batch_totals, batch_ts = {}, {}, {}
-local stats = { ingested = 0, unknown = {}, errors = {}, suppressed = 0 }
+local stats = { ingested = 0, unknown = {}, errors = {}, suppressed = 0, retired = 0 }
 local reported_errors = {}
 local source_mode = "auto"   -- "mip" | "gmcp" | "auto"
 local trace_on = false   -- diagnostic: /vik trace -- off by default, silent otherwise
@@ -111,6 +111,25 @@ end
 -- also have matched. The matched fn receives (key, value), unlike an exact
 -- handler's (value), since the row branches extract their row index from
 -- the key itself.
+-- Patterns whose matches are deliberately no longer consumed. The MIP row and
+-- edge keys are numbered (VMR07, CPT03), so they cannot be recognised by name
+-- the way a retired exact key is -- see protocol.ingest's `retired` branch.
+local retired_patterns = {}
+
+local retired_keys = {}
+
+function protocol.retired_pattern(pattern)
+  retired_patterns[#retired_patterns + 1] = pattern
+end
+
+-- An exact MIP key the plugin no longer reads. A key whose GMCP writer shares
+-- its name needs no declaration -- ingest recognises those on its own -- so
+-- this is for the ones a composite absorbed (CPP, WMO, the GOD_* siblings) or
+-- whose data moved wholesale (VMAPH).
+function protocol.retired_key(key)
+  retired_keys[key] = true
+end
+
 function protocol.pattern_handler(pattern, fn)
   for _, p in ipairs(pattern_handlers) do
     if p.pattern == pattern then error("duplicate pattern handler: " .. pattern) end
@@ -173,6 +192,23 @@ function protocol.ingest(key, value)
   for _, p in ipairs(pattern_handlers) do
     if key:match(p.pattern) then
       dispatch(key, p.fn, mip_dispatch_opts, key, value)
+      return
+    end
+  end
+  -- Retired, not unknown. The guild still sends every MIP key it always did,
+  -- and almost all of them now have a GMCP writer instead of a MIP handler --
+  -- so without this branch one push would file a hundred keys under `unknown`,
+  -- which /vik status reports as "keys nobody has taught this client about
+  -- yet". A key whose MIP handler is gone but whose GMCP writer exists is
+  -- exactly the opposite of unknown: it is understood, and deliberately read
+  -- from the other transport.
+  if gmcp_handlers[key] or retired_keys[key] then
+    stats.retired = stats.retired + 1
+    return
+  end
+  for _, pattern in ipairs(retired_patterns) do
+    if key:match(pattern) then
+      stats.retired = stats.retired + 1
       return
     end
   end
@@ -475,8 +511,8 @@ function protocol.stats()
   for _ in pairs(batches) do pending = pending + 1 end
   return {
     ingested = stats.ingested, unknown = stats.unknown, errors = stats.errors,
-    suppressed = stats.suppressed, batches_pending = pending,
-    source = source_mode,
+    suppressed = stats.suppressed, retired = stats.retired,
+    batches_pending = pending, source = source_mode,
   }
 end
 

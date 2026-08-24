@@ -12,9 +12,12 @@ local command = require("command")
 --
 -- The reserved keys are the module-level conventions, not MIP keys:
 -- `_market_seam` (trade's injection point for market.lua), `_patterns` (the
--- pattern-handler tier) and `_gmcp` (the GMCP writer table). Everything else
--- in a module table is an exact MIP key.
-local RESERVED = { _market_seam = true, _patterns = true, _gmcp = true }
+-- pattern-handler tier), `_gmcp` (the GMCP writer table) and
+-- `_retired_keys`/`_retired_patterns` (MIP keys the server still sends and
+-- this plugin no longer reads). Everything else in a module table is an exact
+-- MIP key -- of which five are left, all of them keys with no GMCP source yet.
+local RESERVED = { _market_seam = true, _patterns = true, _gmcp = true,
+                   _retired_keys = true, _retired_patterns = true }
 
 local function register_handlers(mod)
   for key, fn in pairs(mod) do
@@ -25,6 +28,12 @@ local function register_handlers(mod)
   end
   for key, fn in pairs(mod._gmcp or {}) do
     protocol.gmcp_handler(key, fn)
+  end
+  for _, key in ipairs(mod._retired_keys or {}) do
+    protocol.retired_key(key)
+  end
+  for _, pattern in ipairs(mod._retired_patterns or {}) do
+    protocol.retired_pattern(pattern)
   end
 end
 
@@ -99,7 +108,7 @@ function M.state()
   return state_mod.S
 end
 
-local mip_id, fff_id, gmcp_id, combat_gmcp_id, sweep_id, countdown_id
+local mip_id, gmcp_id, combat_gmcp_id, sweep_id, countdown_id
 local combat_trigger_ids = {}
 local notify_trigger_ids = {}
 local vik_command_id, resetvikxp_id, kill_listener_id
@@ -243,9 +252,16 @@ local function print_status()
   -- The old boolean latch is gone; a count of keys GMCP has actually fed
   -- reads true of the per-key design, where it's never all-or-nothing.
   -- `/vik source` names them; this stays a one-line summary.
+  --
+  -- `retired` counts MIP keys the guild still sends and this plugin no longer
+  -- reads -- almost all of them, since every key with a GMCP source moved. It
+  -- is deliberately separate from `unknown`, which means "keys nobody has
+  -- taught this client about yet" and would otherwise be swamped.
   buffer.color_print(nil, "DAA520", string.format(
-    "Viking: source=%s gmcp_keys=%d ingested=%d suppressed=%d pending_batches=%d",
-    st.source, #gmcp_key_names(), st.ingested, st.suppressed, st.batches_pending))
+    "Viking: source=%s gmcp_keys=%d ingested=%d suppressed=%d retired=%d " ..
+    "pending_batches=%d",
+    st.source, #gmcp_key_names(), st.ingested, st.suppressed, st.retired,
+    st.batches_pending))
 
   local unknown = {}
   for k, n in pairs(st.unknown) do unknown[#unknown + 1] = { key = k, n = n } end
@@ -405,7 +421,6 @@ end
 
 function M.on_load()
   mip_id = mip.on("BBE", function(key, code, data) protocol.on_bbe(data) end)
-  fff_id = mip.on("FFF", function(key, code, data) combat.on_composite(data) end)
 
 
   -- Char.Combat is not a Guild.* frame -- it carries no guild envelope and does
@@ -518,7 +533,6 @@ function M.on_unload()
   persist.save()
 
   mip.off(mip_id)
-  mip.off(fff_id)
   gmcp.remove(gmcp_id)
   gmcp.remove(combat_gmcp_id)
   timer.remove(sweep_id)

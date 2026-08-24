@@ -133,9 +133,12 @@ local sea_common = require("popups.sea_common")
 -- matching a buggy read convention can mask an off-by-one that production
 -- would also have).
 local protocol = require("protocol")
+-- init.lua's RESERVED set: the module-level convention fields, not MIP keys.
+local RESERVED_KEYS = { _market_seam = true, _patterns = true, _gmcp = true,
+                        _retired_keys = true, _retired_patterns = true }
 local voyage_h = require("handlers.voyage")
 for key, fn in pairs(voyage_h) do
-  if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
+  if not RESERVED_KEYS[key] then
     protocol.handler(key, fn)
   end
 end
@@ -144,6 +147,12 @@ for _, p in ipairs(voyage_h._patterns or {}) do
 end
 for key, fn in pairs(voyage_h._gmcp or {}) do
   protocol.gmcp_handler(key, fn)
+end
+for _, k in ipairs(voyage_h._retired_keys or {}) do
+  protocol.retired_key(k)
+end
+for _, pat in ipairs(voyage_h._retired_patterns or {}) do
+  protocol.retired_pattern(pat)
 end
 
 local S = state.S

@@ -82,13 +82,12 @@ for _, t in ipairs(combat.triggers) do
   trigger.add(t.pattern, t.fn)
 end
 
--- ---- FFF composite: guild.events.mip_info (LEGACY 868-905) -----------------
-
-combat.on_composite("A~350~B~500~")
-check("composite A/B", S.hp == 350 and S.mhp == 500)
-
-combat.on_composite("K~Wolf~")
-check("composite K sets attacker and combat", S.mob_name_full == "Wolf" and S.combat == true)
+-- The MIP FFF composite reader used to be exercised here. It is gone: every
+-- field it wrote has another owner -- the hp-bar triggers write hp, mhp and
+-- S.combat, and Char.Combat writes the attacker block -- so the cases moved
+-- to whichever of those two now owns the field.
+check("the FFF composite reader is gone", combat.on_composite == nil,
+      type(combat.on_composite))
 
 
 -- ---- GMCP Char.Combat -----------------------------------------------------
@@ -135,25 +134,14 @@ check("Char.Combat tolerates nil and empty", S.mob_name_full == "keep",
       S.mob_name_full)
 
 
-combat.on_composite("K~~")
-check("composite K empty attacker clears combat", S.mob_name_full == "None" and S.combat == false)
-
-combat.on_composite("L~42~")
-check("composite L", S.estatus_pct == 42)
-
-combat.on_composite("N~7~")
-check("composite N", S.combat_rounds == 7)
-
--- M carries no value slot: LEGACY backs the index up by one instead of the
--- usual +2 stride, resyncing on the very next token rather than skipping it.
-S.hp = 0
-combat.on_composite("M~A~350~")
-check("composite M resyncs onto the next tag", S.hp == 350)
-
+-- The attacker block's three fields, previously FFF's K/L/N tags, are asserted
+-- against Char.Combat above. S.combat is the triggers' -- see hp_bar_1 below.
 do
+  -- Every writer marks the pane dirty; Char.Combat's is the one left that is
+  -- not a trigger.
   local before = dirty_count
-  combat.on_composite("A~1~")
-  check("composite marks dirty", dirty_count > before)
+  combat.on_gmcp_combat({ attacker = "Wolf", attacker_hp = 5, rounds = 1 })
+  check("Char.Combat marks dirty", dirty_count > before)
 end
 
 -- ---- hp_bar_1 (LEGACY 501) --------------------------------------------------

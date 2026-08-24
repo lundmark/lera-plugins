@@ -180,6 +180,127 @@ check("hooks exist", type(M.on_load) == "function" and type(M.on_unload) == "fun
 -- ---- protocol: dispatch, batching, latch ------------------------------------
 local protocol = require("protocol")
 
+-- ---------------------------------------------------------------------------
+-- Fixture seeding
+-- ---------------------------------------------------------------------------
+-- Same arrangement as guild_viking_autotrader_test.lua: the fixtures keep the
+-- compact notation this suite has always used, and these functions translate
+-- it into the Guild.* frames the production writers take. TGOODS and the Sea
+-- Chart (VCHH/VCR) still seed over MIP, since they have no GMCP source yet.
+local function fixture_fields(entry)
+  local out = {}
+  for piece in (entry .. "|"):gmatch("([^|]*)|") do out[#out + 1] = piece end
+  return out
+end
+
+local function fixture_gmcp(pkg, payload)
+  payload.guild = "viking"
+  protocol.on_gmcp(pkg, payload)
+end
+
+local function seed_buildings(str)
+  local entries = {}
+  for e in tostring(str or ""):gmatch("[^,]+") do
+    local id, tier = e:match("^([^:]+):(%d+)$")
+    if id then entries[#entries + 1] = { id = id, tier = tonumber(tier) } end
+  end
+  fixture_gmcp("Guild.City", { buildings = entries })
+end
+
+local function seed_wstock(str)
+  local entries = {}
+  for e in tostring(str or ""):gmatch("[^;]+") do
+    local f = fixture_fields(e)
+    entries[#entries + 1] = { good = f[1], amount = tonumber(f[2]) or 0,
+                              pct = tonumber(f[3]) or 100 }
+  end
+  fixture_gmcp("Guild.Trade", { wstock = entries })
+end
+
+local function seed_staff(str)
+  local entries = {}
+  for e in tostring(str or ""):gmatch("[^;]+") do
+    local f = fixture_fields(e)
+    entries[#entries + 1] = { name = f[1], assigned = f[2], stat = f[3],
+                              stats = f[4], trait = f[5],
+                              loyalty = tonumber(f[6]) or 3, age = f[7],
+                              arrive = tonumber(f[8]) or 0 }
+  end
+  fixture_gmcp("Guild.Roster", { staff = entries })
+end
+
+local function seed_blocks(str)
+  local entries = {}
+  for e in tostring(str or ""):gmatch("[^;]+") do
+    local good, amount = e:match("^([^:]+):(%d+)$")
+    if good then entries[#entries + 1] = { good = good, amount = tonumber(amount) } end
+  end
+  fixture_gmcp("Guild.Trade", { blocks = entries })
+end
+
+local function seed_carts(str)
+  local entries = {}
+  for e in tostring(str or ""):gmatch("[^;]+") do
+    local f = fixture_fields(e)
+    entries[#entries + 1] = { mode = f[1], good = f[2], village = f[3],
+      secs = tonumber(f[4]) or 0, amount = tonumber(f[5]) or 0,
+      half_in = tonumber(f[6]) or 0, quality_pct = tonumber(f[7]) or 100,
+      cart_id = tonumber(f[8]) or 0, tier = tonumber(f[9]) or 1,
+      durability = tonumber(f[10]) or 100, cap = tonumber(f[11]) or 0,
+      escort = tonumber(f[12]) or 0, refit = f[13] or "" }
+  end
+  fixture_gmcp("Guild.Trade", { carts = entries, cart_legs = {} })
+end
+
+local function seed_cidle(str)
+  local entries = {}
+  for e in tostring(str or ""):gmatch("[^;]+") do
+    local f = fixture_fields(e)
+    entries[#entries + 1] = { slot = tonumber(f[1]) or 0, tier = tonumber(f[2]) or 1,
+                              durability = tonumber(f[3]) or 100,
+                              cap = tonumber(f[4]) or 0, refit = f[5] or "" }
+  end
+  fixture_gmcp("Guild.Trade", { cidle = entries })
+end
+
+local function seed_tqueue(str)
+  local jobs, legs = {}, {}
+  local index = 0
+  for job in tostring(str or ""):gmatch("[^;]+") do
+    index = index + 1
+    local seq = 0
+    for ls in job:gmatch("[^!]+") do
+      seq = seq + 1
+      local f = fixture_fields(ls)
+      if #f >= 4 then
+        legs[#legs + 1] = { job = index, seq = seq, mode = f[1], good = f[2],
+                            amount = tonumber(f[3]) or 0, village = f[4] }
+      end
+    end
+    jobs[#jobs + 1] = { job = index, escort = 0 }
+  end
+  fixture_gmcp("Guild.Trade", { queue = jobs, queue_legs = legs })
+end
+
+local function seed_daler(v)
+  fixture_gmcp("Guild.State", { daler = tonumber(v) or 0 })
+end
+
+local function seed_ships(str)
+  local entries = {}
+  for e in tostring(str or ""):gmatch("[^;]+") do
+    local f = fixture_fields(e)
+    entries[#entries + 1] = { name = f[1], tier = tonumber(f[2]) or 1,
+      state = f[3], target = f[4], secs = tonumber(f[5]) or 0,
+      id = tonumber(f[6]), crew = tonumber(f[7]) or 0,
+      convoy = tonumber(f[8]) or 0, convoy_size = tonumber(f[9]) or 0,
+      convoy_bonus = tonumber(f[10]) or 0, saga_title = f[11] or "",
+      saga_raids = tonumber(f[12]) or 0, held = tonumber(f[13]) or 0,
+      durability = tonumber(f[14]) or 100 }
+  end
+  fixture_gmcp("Guild.Fleet", { ships = entries })
+end
+
 local seen = {}
 protocol.handler("TESTKEY", function(v) seen[#seen + 1] = v end)
 check("duplicate handler rejected", not pcall(protocol.handler, "TESTKEY", function() end))
@@ -283,9 +404,12 @@ seen = {}
 protocol.on_bbe("TESTKEY^^stillmip^^")
 check("mip still flows for a key gmcp has not fed", seen[1] == "stillmip")
 
--- Kills: a global latch, or a latch that only exists at the frame level
--- rather than per key -- once BLOCKS is fed, its own MIP twin must be
--- suppressed while TESTKEY (never fed by gmcp) keeps flowing above.
+-- Kills: a global latch, or a latch that only exists at the frame level rather
+-- than per key -- once BLOCKS is fed, an arriving BLOCKS must be suppressed
+-- while TESTKEY (never fed by gmcp) keeps flowing above. The suppression
+-- happens before any handler lookup, which is why it still reads the same way
+-- now that BLOCKS has no MIP handler left to suppress: the latch is about the
+-- key, not about what would have consumed it.
 local suppressed_before_latch = protocol.stats().suppressed
 protocol.ingest("BLOCKS", "should-be-suppressed")
 check("a latched key suppresses its own mip twin",
@@ -793,13 +917,13 @@ local plan_for_connect = require("autotrader.plan")
 page_opts.set("auto_trade", true)
 S.autotrade = nil
 at_core_for_connect.settings()
-protocol.ingest("BUILDINGS", "warehouse:1")
-protocol.ingest("WSTOCK", "ore|380|100")
-protocol.ingest("STAFF", "")
-protocol.ingest("BLOCKS", "")
-protocol.ingest("CIDLE", "31|1|100|200|standard")
-protocol.ingest("TQUEUE", "")
-protocol.ingest("DALER", "1000")
+seed_buildings( "warehouse:1")
+seed_wstock( "ore|380|100")
+seed_staff( "")
+seed_blocks( "")
+seed_cidle( "31|1|100|200|standard")
+seed_tqueue( "")
+seed_daler( "1000")
 protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
 local held = plan_for_connect.build()
 check("on_connect: the hold window blocks dispatch (plan.build reports settling, sends nothing)",
@@ -826,14 +950,14 @@ do
   page_opts.set("auto_trade", true)
   S.autotrade = nil
   at_core_for_connect.settings()
-  protocol.ingest("BUILDINGS", "warehouse:1")
-  protocol.ingest("WSTOCK", "ore|380|100")
-  protocol.ingest("STAFF", "")
-  protocol.ingest("BLOCKS", "")
-  protocol.ingest("CARTS", "")
-  protocol.ingest("CIDLE", "31|1|100|200|standard")
-  protocol.ingest("TQUEUE", "")
-  protocol.ingest("DALER", "1000")
+  seed_buildings( "warehouse:1")
+  seed_wstock( "ore|380|100")
+  seed_staff( "")
+  seed_blocks( "")
+  seed_carts( "")
+  seed_cidle( "31|1|100|200|standard")
+  seed_tqueue( "")
+  seed_daler( "1000")
   protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
   tick_for_hold.reset()
 
@@ -1187,17 +1311,28 @@ local SAFETY_VOYAGE_FIELDS = {
 }
 local function safety_set_voyage(overrides)
   local f = {
-    state = "idle", ship_id = "1", ship_name = "Ship1", contract_name = "c",
-    contract_type = "raid", danger = "0", x = "0", y = "0", width = "0",
-    height = "0", hull = "100", morale = "100", supplies = "100", stress = "0",
-    crew_alive = "1", crew_max = "1", steps = "0", next_move = "0",
-    threat_name = "", threat_level = "0", threat_pressure = "0", paused_type = "",
-    weather_key = "", captain = "", identity = "", crew_traits = "", ship_traits = "",
+    state = "idle", ship_id = 1, ship_name = "Ship1", contract_name = "c",
+    contract_type = "raid", danger = 0, x = 0, y = 0, width = 0,
+    height = 0, hull = 100, morale = 100, supplies = 100, stress = 0,
+    crew_alive = 1, crew_max = 1, steps = 0, next_move = 0,
+    threat_name = "", threat_level = 0, threat_pressure = 0, paused_type = "",
+    weather_key = "", captain = "", identity = "",
   }
   for k, v in pairs(overrides or {}) do f[k] = v end
-  local parts = {}
-  for _, k in ipairs(SAFETY_VOYAGE_FIELDS) do parts[#parts + 1] = tostring(f[k]) end
-  protocol.ingest("VOYAGE", table.concat(parts, "|"))
+  fixture_gmcp("Guild.Voyage", { voyage = {
+    state = f.state, ship_id = tonumber(f.ship_id), ship_name = f.ship_name,
+    contract_name = f.contract_name, contract_type = f.contract_type,
+    danger = tonumber(f.danger), x = tonumber(f.x), y = tonumber(f.y),
+    width = tonumber(f.width), height = tonumber(f.height),
+    hull = tonumber(f.hull), morale = tonumber(f.morale),
+    supplies = tonumber(f.supplies), hull_stress = tonumber(f.stress),
+    crew_alive = tonumber(f.crew_alive), crew_max = tonumber(f.crew_max),
+    steps_sailed = tonumber(f.steps), next_move_in = tonumber(f.next_move),
+    threat_name = f.threat_name, threat_level = tonumber(f.threat_level),
+    threat_pressure = tonumber(f.threat_pressure), paused_type = f.paused_type,
+    weather_key = f.weather_key, captain_style = f.captain,
+    ship_identity = f.identity,
+  } })
 end
 
 -- handlers/voyage.lua's M.SHIPS field order (14 pipe-delimited fields) --
@@ -1249,26 +1384,26 @@ local function build_safety_fixture()
   S.dispatch_cd_expires_at = nil
 
   at_core2.settings()
-  protocol.ingest("BUILDINGS", "warehouse:1,dock:1")
-  protocol.ingest("WSTOCK", "ore|380|100")
-  protocol.ingest("STAFF", "")
-  protocol.ingest("BLOCKS", "")
-  protocol.ingest("CARTS", "")
-  protocol.ingest("CIDLE", "31|1|100|200|standard")
-  protocol.ingest("TQUEUE", "")
-  protocol.ingest("DALER", "1000")
+  seed_buildings( "warehouse:1,dock:1")
+  seed_wstock( "ore|380|100")
+  seed_staff( "")
+  seed_blocks( "")
+  seed_carts( "")
+  seed_cidle( "31|1|100|200|standard")
+  seed_tqueue( "")
+  seed_daler( "1000")
   protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
 
   -- Raid.
-  protocol.ingest("SHIPS", safety_ship_entry("Drakkar1"))
+  seed_ships( safety_ship_entry("Drakkar1"))
   raid2.settings().target = "Uppsala"
 
   -- Voyage: chart with a non-harbor node paused for resolution.
   protocol.ingest("VCHH", "3|1|explore")
   protocol.ingest("VCR00", "H.X")
   safety_set_voyage({ x = "1", y = "0" })
-  protocol.ingest("VOYAGE_WAIT", "island")
-  protocol.ingest("VRESOLVE", "scout,plunder")
+  fixture_gmcp("Guild.Voyage", { voyage_wait = "island",
+                                vresolve = { "scout", "plunder" } })
 end
 
 local TRADE_SEND = "vtrade dispatch sell 200 ore eiriksson"

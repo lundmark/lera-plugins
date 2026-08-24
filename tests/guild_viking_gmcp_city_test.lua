@@ -20,9 +20,12 @@ lera = { time = function() return 1000 end }
 buffer = { color_print = function() end }
 
 local protocol = require("protocol")
+-- init.lua's RESERVED set: the module-level convention fields, not MIP keys.
+local RESERVED_KEYS = { _market_seam = true, _patterns = true, _gmcp = true,
+                        _retired_keys = true, _retired_patterns = true }
 local S = require("state").S
 
-local RESERVED = { _market_seam = true, _patterns = true, _gmcp = true }
+local RESERVED = RESERVED_KEYS
 for _, name in ipairs({ "handlers.trade", "handlers.kingdom", "handlers.voyage",
                         "handlers.city" }) do
   local mod = require(name)
@@ -34,6 +37,12 @@ for _, name in ipairs({ "handlers.trade", "handlers.kingdom", "handlers.voyage",
   end
   for key, fn in pairs(mod._gmcp or {}) do
     protocol.gmcp_handler(key, fn)
+  end
+  for _, k in ipairs(mod._retired_keys or {}) do
+    protocol.retired_key(k)
+  end
+  for _, pat in ipairs(mod._retired_patterns or {}) do
+    protocol.retired_pattern(pat)
   end
 end
 

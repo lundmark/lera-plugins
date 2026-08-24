@@ -29,8 +29,11 @@ local pathfinding = require("pathfinding")
 -- [ridx+1], and hand-poked fixtures agreed with the bug instead of exposing
 -- it.
 local protocol = require("protocol")
+-- init.lua's RESERVED set: the module-level convention fields, not MIP keys.
+local RESERVED_KEYS = { _market_seam = true, _patterns = true, _gmcp = true,
+                        _retired_keys = true, _retired_patterns = true }
 local voyage = require("handlers.voyage")
-local RESERVED = { _market_seam = true, _patterns = true, _gmcp = true }
+local RESERVED = RESERVED_KEYS
 for key, fn in pairs(voyage) do
   if not RESERVED[key] then protocol.handler(key, fn) end
 end
@@ -39,6 +42,12 @@ for _, p in ipairs(voyage._patterns or {}) do
 end
 for key, fn in pairs(voyage._gmcp or {}) do
   protocol.gmcp_handler(key, fn)
+end
+for _, k in ipairs(voyage._retired_keys or {}) do
+  protocol.retired_key(k)
+end
+for _, pat in ipairs(voyage._retired_patterns or {}) do
+  protocol.retired_pattern(pat)
 end
 
 local S = state.S

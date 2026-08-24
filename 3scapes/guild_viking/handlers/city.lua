@@ -11,91 +11,6 @@ local gmcp_map = require("gmcp_map")
 
 local M = {}
 
--- LEGACY 1683
-M.BLOT = function(val)
-  local blot_state, reset_in, filled, total = val:match("^([^|]+)|([^|]+)|([^|]+)|([^|]+)$")
-  if blot_state then
-    S.blot_status   = blot_state
-    S.blot_reset_in = tonumber(reset_in) or 0
-    S.blot_filled   = tonumber(filled)   or 0
-    S.blot_total    = tonumber(total)     or 9
-  end
-end
-
--- LEGACY 1691
-M.FARM = function(val)
-  S.farm_plots = {}
-  S.farm_wmod  = 0
-  for entry in val:gmatch("[^;]+") do
-    if #S.farm_plots >= 50 then break end  -- Safety limit
-    local meta_wmod = entry:match("^meta|(.+)$")
-    if meta_wmod then
-      S.farm_wmod = tonumber(meta_wmod) or 0
-    else
-      -- Format: coord|shroom|time_left|fertilized|wilt_left
-      local coord, shroom, tl, fert, wilt = entry:match("^([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]*)$")
-      if coord then
-        table.insert(S.farm_plots, { coord=coord, shroom=shroom,
-          time_left=tonumber(tl) or 0, fertilized=tonumber(fert) or 0,
-          wilt_left=tonumber(wilt) or -1 })
-      end
-    end
-  end
-end
-
--- LEGACY 1709
-M.BUILDS = function(val)
-  S.pending_builds = {}
-  for entry in val:gmatch("[^;]+") do
-    if #S.pending_builds >= 30 then break end  -- Safety limit
-    local bid, btier, mt, md, cs, tbs, mat_str = entry:match("^([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]*)|?(.*)$")
-    if not bid then
-      -- old 6-field server fallback (no total_build_secs)
-      bid, btier, mt, md, cs, mat_str = entry:match("^([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|?(.*)$")
-    end
-    if bid then
-      local mats = {}
-      if mat_str and mat_str ~= "" then
-        for gentry in mat_str:gmatch("[^,]+") do
-          local good, done, need = gentry:match("^([^:]+):(%d+)/(%d+)$")
-          if good then
-            table.insert(mats, { good=good, done=tonumber(done) or 0, need=tonumber(need) or 0 })
-          end
-        end
-      end
-      table.insert(S.pending_builds, { bldg_id=bid,
-        tier=tonumber(btier) or 1, mats_total=tonumber(mt) or 0,
-        mats_done=tonumber(md) or 0, complete_at_secs=tonumber(cs) or -1,
-        total_build_secs=tonumber(tbs) or 0,
-        mats=mats })
-    end
-  end
-end
-
--- LEGACY 1735
-M.SUPG = function(val)
-  S.ship_upgrades = {}
-  for entry in val:gmatch("[^;]+") do
-    if #S.ship_upgrades >= 20 then break end  -- Safety limit
-    local sname, stier, scs, mt, md, mat_str = entry:match("^([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|?(.*)$")
-    if sname then
-      local mats = {}
-      if mat_str and #mat_str > 0 then
-        for piece in mat_str:gmatch("[^,]+") do
-          local g, d, n = piece:match("^([^:]+):(%d+)/(%d+)$")
-          if g then
-            table.insert(mats, { good=g, done=tonumber(d) or 0, need=tonumber(n) or 0 })
-          end
-        end
-      end
-      table.insert(S.ship_upgrades, { name=sname,
-        tier=tonumber(stier) or 1, secs_left=tonumber(scs) or 0,
-        mats_total=tonumber(mt) or 0, mats_done=tonumber(md) or 0,
-        mats=mats })
-    end
-  end
-end
-
 -- LEGACY 1756
 -- The GMCP record shape is canonical: `settlers` arrives as
 -- ([settlers, mood, tax_rate, water, fert]) and MIP's string is the same
@@ -111,10 +26,6 @@ local function write_settlers(r)
 end
 
 local SETTLERS_ORDER = { "settlers", "mood", "tax_rate", "water", "fert" }
-
-M.SETTLERS = function(val)
-  write_settlers(gmcp_map.zip(SETTLERS_ORDER, val)[1])
-end
 
 -- LEGACY 1765
 -- The GMCP record shape is canonical here too: a full 24-field record. LEGACY
@@ -177,13 +88,6 @@ local SETTLERX_ORDER = { "edict", "edict_left", "edict_cd", "housing_cap",
 -- shorter uses an incompatible position layout and is rejected outright.
 local SETTLERX_MIN_FIELDS = 23
 
-M.SETTLERX = function(val)
-  if type(val) ~= "string" or #util.split(val, "|") < SETTLERX_MIN_FIELDS then
-    return
-  end
-  write_settlerx(gmcp_map.zip(SETTLERX_ORDER, val)[1])
-end
-
 -- LEGACY 1811
 local function write_sactions(r)
   r = r or {}
@@ -204,10 +108,6 @@ local function write_sactions(r)
 end
 
 local SACTIONS_ORDER = { "assembly", "watch", "crafts", "feast", "relief", "works" }
-
-M.SACTIONS = function(val)
-  write_sactions(gmcp_map.zip(SACTIONS_ORDER, val)[1])
-end
 
 -- LEGACY 1827. Bespoke serializer (query_settler_roles_mip() in
 -- settler_roles.h): "settlers|commoner|identity;role:cur:tgt:work:bonus;..."
@@ -263,81 +163,6 @@ local function decode_sroles(val)
   return parts
 end
 
-M.SROLES = function(val) write_sroles(decode_sroles(val)) end
-
--- LEGACY 1850. Begin a NEW grid in a pending buffer; committed only on CPEND
--- once all rows arrived (double-buffer, like WMAP/WMEND's pattern).
-M.CPLAN = function(val)
-  local f = util.split(val, "|")
-  S.cp_pending = {
-    enabled = (tonumber(f[1]) or 0) == 1,
-    dim     = tonumber(f[2]) or 12,
-    placed  = tonumber(f[3]) or 0,
-    cap     = tonumber(f[4]) or 0,
-    coast   = tonumber(f[5]) or 0,
-    moat    = (tonumber(f[6]) or 0) == 1,
-    wall    = (tonumber(f[7]) or 0) == 1,
-    gate    = tonumber(f[8]) or 6,
-    mood    = tonumber(f[9]) or 0,
-    margin  = tonumber(f[10]) or 3,
-    rows    = {}, blds = {}, unplaced = {}, perks = "",
-  }
-end
-
--- LEGACY 1867
-M.CPP = function(val)
-  if S.cp_pending then S.cp_pending.perks = val or "" end
-end
-
--- LEGACY 1874
-M.CPB = function(val)
-  if S.cp_pending then
-    -- Accumulate (server sends CPB in bounded segments).
-    for entry in val:gmatch("[^;]+") do
-      local id,bx,by,bw,bh,pal,gl,nm =
-        entry:match("^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|?(.*)$")
-      if id and id ~= "" then
-        table.insert(S.cp_pending.blds, { id=id, x=tonumber(bx) or 0, y=tonumber(by) or 0,
-          w=tonumber(bw) or 1, h=tonumber(bh) or 1, pal=pal or "e",
-          glyph=gl or "?", name=(nm ~= "" and nm) or id })
-      end
-    end
-  end
-end
-
--- LEGACY 1887
-M.CPU = function(val)
-  if S.cp_pending then
-    -- Accumulate (server sends CPU in bounded segments).
-    for entry in val:gmatch("[^;]+") do
-      local id,pal,gl,nm = entry:match("^([^|]*)|([^|]*)|([^|]*)|?(.*)$")
-      if id and id ~= "" then
-        table.insert(S.cp_pending.unplaced, { id=id, pal=pal or "e", glyph=gl or "?",
-          name=(nm ~= "" and nm) or id })
-      end
-    end
-  end
-end
-
--- LEGACY 1898
-M.CPEND = function(val)
-  if S.cp_pending then
-    local expected = tonumber(val) or 0
-    local got = #S.cp_pending.rows
-    S.cp_pending.expected = expected
-    S.cp_pending.got = got
-    if expected > 0 and got == expected then
-      S.city_plan = S.cp_pending           -- complete: commit
-    else
-      -- Incomplete burst (dropped chunk): keep the last good grid,
-      -- record the mismatch for the on-screen debug line.
-      S.city_plan = S.city_plan or {}
-      S.city_plan.dbg = string.format("dropped: got %d/%d rows", got, expected)
-    end
-    S.cp_pending = nil
-  end
-end
-
 -- LEGACY 2037
 local function write_sproj(recs)
   S.settler_projects = {}
@@ -367,10 +192,6 @@ local function write_sproj(recs)
 end
 
 local SPROJ_ORDER = { "id", "kind", "from", "to", "secs", "mats", "done", "detail", "paid" }
-
-M.SPROJ = function(val)
-  write_sproj(gmcp_map.zip(SPROJ_ORDER, val))
-end
 
 -- LEGACY 2065. GMCP's record carries a 5th slot (`h5`) LEGACY's 4-field MIP
 -- string never had; it is decoded and kept in the tiers table alongside the
@@ -404,10 +225,6 @@ end
 
 local SHPLOTS_ORDER = { "h1", "h2", "h3", "h4", "h5" }
 
-M.SHPLOTS = function(val)
-  write_shplots(gmcp_map.zip(SHPLOTS_ORDER, val)[1])
-end
-
 -- LEGACY 2078. Bespoke serializer (_mip_scivics_value() in client.h): joins
 -- records with ";" and writes id .. ":" .. count -- a colon inside each
 -- record, not gmcp_map.zip's "|" wire form, so this needs its own decoder.
@@ -432,16 +249,10 @@ local function write_scivics(recs)
   end
 end
 
-M.SCIVICS = function(val) write_scivics(decode_scivics(val)) end
-
--- LEGACY 2086. Unlike the other six keys here, SCONSUME's MIP wire form
--- predates `_v_join`: it's an arbitrary, possibly-partial "good:amount" dict
--- (city_test.lua pins "fish:20;grain:15" -- two of the thirteen goods, not a
--- fixed-order record), not values joined positionally by a declared key
--- order. A GMCP payload for the same key is naturally the same dict shape
--- (good name -> amount), so there is no zip() step: the MIP decoder walks
--- its own wire form into a dict and both transports share the writer that
--- takes it from there.
+-- SCONSUME is a "good:amount" dictionary rather than a positional record: the
+-- guild sends whichever of the thirteen goods the settlers are actually
+-- consuming, so a fixed-order zip was never possible for it. The GMCP payload
+-- is the same dict shape, which is why this writer takes one directly.
 local function write_sconsume(dict)
   local out = {}
   for good, amt in pairs(dict or {}) do
@@ -450,195 +261,8 @@ local function write_sconsume(dict)
   S.settler_consumption = out
 end
 
-M.SCONSUME = function(val)
-  local dict = {}
-  for entry in val:gmatch("[^;]+") do
-    local good, amt = entry:match("^([^:]+):(%d+)$")
-    if good then dict[good] = amt end
-  end
-  write_sconsume(dict)
-end
 
--- LEGACY 2160
-M.BUILDINGS = function(val)
-  S.buildings = {}
-  if val and #val > 0 then
-    for entry in val:gmatch("[^,]+") do
-      local bid, bt = entry:match("^([^:]+):(%d+)$")
-      if bid then S.buildings[bid] = tonumber(bt) or 1 end
-    end
-  end
-end
 
--- LEGACY 2226. Fully replace each packet so a good that stops being produced
--- (e.g. mead -> honey after the Apiary refactor) doesn't linger.
-M.PRODUCTION = function(val)
-  S.production = {}
-  if val and #val > 0 then
-    for entry in val:gmatch("[^,]+") do
-      local good, amt = entry:match("^([^:]+):(-?%d+)$")
-      if good then S.production[good] = tonumber(amt) or 0 end
-    end
-  end
-end
-
--- LEGACY 2236
-M.MONUMENTS = function(val)
-  S.monuments = {}
-  local parts = {}
-  for p in val:gmatch("[^;]+") do
-    if #parts >= 51 then break end  -- Safety limit (1 cap + 50 names)
-    table.insert(parts, p)
-  end
-  S.monument_cap = tonumber(parts[1]) or 0
-  for i = 2, #parts do
-    local s = parts[i]:match("^%s*(.-)%s*$")
-    if s and #s > 0 then table.insert(S.monuments, s) end
-  end
-end
-
--- LEGACY 2248
-M.MISSIONS = function(val)
-  S.missions = {}
-  for entry in val:gmatch("[^;]+") do
-    if #S.missions >= 20 then break end  -- Safety limit
-    -- Try new 8-field format first: id|label|reward_rep|reward_daler|expires_in|origin_town|target_town|want_goods
-    local id, lbl, rep, rwd, exp, origin_town, target_town, goods_s =
-      entry:match("^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|(.*)$")
-    if id and origin_town and target_town then
-      -- New 8-field format detected
-      local want = {}
-      for g, q in goods_s:gmatch("([^,:|]+):(%d+)") do
-        want[g] = tonumber(q) or 0
-      end
-      table.insert(S.missions, {
-        id         = tonumber(id) or 0,
-        label      = lbl or "",
-        reward_rep = tonumber(rep) or 0,
-        reward     = tonumber(rwd) or 0,
-        expires_in = tonumber(exp) or 0,
-        origin_town = origin_town or "",
-        target_town = target_town or "",
-        want_goods = want })
-    else
-      -- Fallback to old 7-field format: id|label|reward_rep|reward_daler|expires_in|town|want_goods
-      local id2, lbl2, rep2, rwd2, exp2, town2, goods_s2 =
-        entry:match("^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|(.*)$")
-      if id2 then
-        local want = {}
-        for g, q in goods_s2:gmatch("([^,:|]+):(%d+)") do
-          want[g] = tonumber(q) or 0
-        end
-        table.insert(S.missions, {
-          id         = tonumber(id2) or 0,
-          label      = lbl2 or "",
-          reward_rep = tonumber(rep2) or 0,
-          reward     = tonumber(rwd2) or 0,
-          expires_in = tonumber(exp2) or 0,
-          origin_town = "",  -- Not available in old format
-          target_town = town2 or "",
-          want_goods = want })
-      end
-    end
-  end
-  -- Refresh UI after missions data is updated
-  -- (final update at end of viking_extra covers this)
-end
-
--- LEGACY 2297
-M.ERRAND = function(val)
-  -- Try new 8-field format first: id|label|reward|expires|origin_town|target_town|reward_good|reward_qty
-  local id, lbl, rwd, exp, origin_town, target_town, rgd, rqty =
-    val:match("^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|(.*)$")
-
-  if id and id ~= "" and target_town and rgd then
-    -- New 8-field format detected
-    S.errand = {
-      id          = tonumber(id) or 0,
-      label       = lbl or "",
-      reward      = tonumber(rwd) or 0,
-      expires_in  = tonumber(exp) or 0,
-      origin_town = origin_town or "",
-      target_town = target_town or "",
-      reward_good = rgd or "",
-      reward_qty  = tonumber(rqty) or 0 }
-  else
-    -- Fallback to old 7-field format: id|label|reward|expires|target_town|reward_good|reward_qty
-    local id2, lbl2, rwd2, exp2, target_town2, rgd2, rqty2 =
-      val:match("^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|(.*)$")
-    if id2 and id2 ~= "" then
-      S.errand = {
-        id          = tonumber(id2) or 0,
-        label       = lbl2 or "",
-        reward      = tonumber(rwd2) or 0,
-        expires_in  = tonumber(exp2) or 0,
-        origin_town = "",  -- Not available in old format
-        target_town = target_town2 or "",
-        reward_good = rgd2 or "",
-        reward_qty  = tonumber(rqty2) or 0 }
-    end
-  end
-  -- Refresh UI after errand data is updated
-  -- (final update at end of viking_extra covers this)
-end
-
--- LEGACY 2488
-M.NEXTTICK = function(val)
-  S.next_tick_in = tonumber(val) or 0
-end
-
--- LEGACY 2490
-M.CDTIME = function(val)
-  local cd = tonumber(val) or 0
-  if cd > 0 then
-    S.dispatch_cd_expires_at = os.time() + cd
-    S.dispatch_cd = cd
-  else
-    S.dispatch_cd_expires_at = nil
-    S.dispatch_cd = 0
-  end
-end
-
--- LEGACY 2499. LEGACY branches `key == "GOD_POWER" or key == "GOD_ACTIVE"`
--- with an identical body for either key -- registered as two exact keys
--- sharing this one fn (protocol.handler exact-tier handlers get only the
--- value, so no key-aware wrapper is needed here).
-M.GOD_POWER = function(val)
-  local gn = tostring(val or "")
-  local valid_gods = {
-    Odin=true, Thor=true, Freyja=true, Freyr=true, Tyr=true, Loki=true,
-    Frigg=true, Heimdall=true, Baldr=true, Hel=true, Njord=true,
-    Skadi=true, Forseti=true
-  }
-  S.god_power_name = valid_gods[gn] and gn or ""
-end
-M.GOD_ACTIVE = M.GOD_POWER
-
--- LEGACY 2507. Same dual-key pattern as GOD_POWER/GOD_ACTIVE above.
-M.GOD_POWER_NEXT = function(val)
-  local secs = tonumber(val) or 0
-  if secs < 0 then secs = 0 end
-  S.god_power_next = secs
-  S.god_power_next_at = os.time() + secs
-end
-M.GOD_NEXT = M.GOD_POWER_NEXT
-
--- LEGACY 2512
-M.GOD_POWER_FOCUS = function(val)
-  S.god_power_focus = tostring(val or "")
-end
-
--- LEGACY 2514
-M.DCYCLE = function(val)
-  local dname, dsecs = val:match("^([^|]+)|([^|]+)$")
-  if dname then
-    S.demand_cycle = dname
-    S.demand_cycle_in = tonumber(dsecs) or 0
-  else
-    S.demand_cycle = val or ""
-    S.demand_cycle_in = 0
-  end
-end
 
 -- LEGACY 2648. Unlike the other keys in this file, SEVENTS is hand-encoded
 -- (players/viking/obj/include/client.h: `out += r["ts"] + "|" + r["msg"]`),
@@ -655,33 +279,18 @@ local function write_sevents(recs)
   end
 end
 
-M.SEVENTS = function(val)
-  local recs = {}
-  for entry in val:gmatch("[^;]+") do
-    local ts, msg = entry:match("^([^|]+)|(.*)$")
-    if ts then
-      recs[#recs + 1] = { ts = ts, msg = msg }
-    end
-  end
-  write_sevents(recs)
-end
-
 -- Pattern-dispatched key (LEGACY matches this with key:match(...) rather
 -- than an exact elseif branch). Registered by init.lua via
 -- protocol.pattern_handler, not protocol.handler -- fn receives the key
 -- itself (to extract the embedded row index) as well as the value.
 
--- LEGACY 1869 (`^CPT%d%d$`)
-local function cpt_row(key, val)
-  if S.cp_pending then
-    local ridx = tonumber(key:sub(4)) or 0
-    S.cp_pending.rows[ridx + 1] = val
-  end
-end
+-- The city plan's terrain rows arrived as a numbered CPT%02d burst over MIP;
+-- Guild.City carries the whole plan in one frame. See M._retired_keys above
+-- for what declaring a retired key buys.
+M._retired_patterns = { "^CPT%d%d$" }
 
-M._patterns = {
-  { pattern = "^CPT%d%d$", fn = cpt_row },
-}
+M._retired_keys = { "CPLAN", "CPP", "CPB", "CPU", "CPEND", "GOD_ACTIVE",
+                    "GOD_NEXT", "GOD_POWER_FOCUS", "GOD_POWER_NEXT" }
 
 -- GMCP-side writers, keyed by MIP key. init.lua registers these into the GMCP
 -- registry; `_gmcp` joins the `_patterns` / `_market_seam` convention of keys

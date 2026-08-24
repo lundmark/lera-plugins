@@ -49,6 +49,9 @@ buffer = {
 }
 
 local protocol = require("protocol")
+-- init.lua's RESERVED set: the module-level convention fields, not MIP keys.
+local RESERVED_KEYS = { _market_seam = true, _patterns = true, _gmcp = true,
+                        _retired_keys = true, _retired_patterns = true }
 local S = require("state").S
 
 -- ---------------------------------------------------------------------------
@@ -191,7 +194,7 @@ end
 -- Mirrors init.lua's RESERVED set and its three registration tiers. The
 -- fixtures above reach Guild.Trade, Guild.City, Guild.Roster and Guild.State
 -- writers, which live across all four handler modules.
-local RESERVED = { _market_seam = true, _patterns = true, _gmcp = true }
+local RESERVED = RESERVED_KEYS
 local trade = require("handlers.trade")
 for _, name in ipairs({ "handlers.trade", "handlers.city", "handlers.voyage",
                         "handlers.kingdom" }) do
@@ -204,6 +207,12 @@ for _, name in ipairs({ "handlers.trade", "handlers.city", "handlers.voyage",
   end
   for key, fn in pairs(mod._gmcp or {}) do
     protocol.gmcp_handler(key, fn)
+  end
+  for _, k in ipairs(mod._retired_keys or {}) do
+    protocol.retired_key(k)
+  end
+  for _, pat in ipairs(mod._retired_patterns or {}) do
+    protocol.retired_pattern(pat)
   end
 end
 
