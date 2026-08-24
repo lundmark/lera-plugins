@@ -201,6 +201,26 @@ check("per-package paging state",
   got.SETTLERS and #got.SETTLERS == 2 and got.SETTLERS[1] == "s1",
   got.SETTLERS and got.SETTLERS[1])
 
+-- Kills: skipping the malformed counter, or dropping the whole run, when a
+-- key repeats across pages with mismatched shapes. Only arrays are ever
+-- sliced server-side; a repeated non-array is last-value-wins, not
+-- concatenated, and must not discard the rest of the run.
+protocol.gmcp_handler("SIBLING", recorder("SIBLING"))
+reset()
+local malformed_before = protocol.gmcp_stats().malformed or 0
+frame("Guild.Settlement", { guild = "viking", page = 1, pages = 2,
+                            settlers = { "a" } })
+frame("Guild.Settlement", { guild = "viking", page = 2, pages = 2,
+                            settlers = { x = 1 }, sibling = "ok" })
+check("type-mismatched repeat is last-value-wins, not concatenated",
+  got.SETTLERS ~= nil and got.SETTLERS.x == 1 and got.SETTLERS[1] == nil,
+  got.SETTLERS)
+check("type mismatch counted malformed exactly once",
+  (protocol.gmcp_stats().malformed or 0) == malformed_before + 1,
+  protocol.gmcp_stats().malformed)
+check("sibling key in the same run still applied",
+  got.SIBLING == "ok", got.SIBLING)
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
