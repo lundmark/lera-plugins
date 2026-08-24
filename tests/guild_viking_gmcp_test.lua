@@ -368,6 +368,71 @@ check("unmapped key counted by its gmcp name",
   protocol.gmcp_stats().unknown.crpr == 1,
   protocol.gmcp_stats().unknown.crpr)
 
+-- ---- composite plumbing (SROLES: two GMCP keys, one MIP key) ---------------
+-- Exercises apply_gmcp_frame/composite_of directly through protocol.on_gmcp,
+-- rather than through city._gmcp.SROLES (which the settlement suite calls
+-- directly, bypassing this plumbing entirely). Before this fix, both
+-- on_gmcp branches called protocol.apply_gmcp_key once per GMCP key, and
+-- apply_gmcp_key resolves "sroles" and "sroles_meta" to the SAME mip_key
+-- (SROLES) -- so the writer would have been invoked twice, once per raw
+-- half, never with a table carrying both `.sroles` and `.sroles_meta`.
+local sroles_calls = 0
+protocol.gmcp_handler("SROLES", function(rec)
+  sroles_calls = sroles_calls + 1
+  got.SROLES = rec
+end)
+
+-- Kills: calling the writer once per GMCP key instead of gathering both
+-- composite halves of one frame into a single call.
+reset()
+sroles_calls = 0
+frame("Guild.Settlement", { guild = "viking",
+  sroles = { { role = "smidir" } },
+  sroles_meta = { commoner = "5", identity = "X" } })
+check("composite frame with both halves reaches the writer exactly once",
+  sroles_calls == 1, sroles_calls)
+check("composite frame with both halves carries both keys in one call",
+  got.SROLES ~= nil and got.SROLES.sroles ~= nil and got.SROLES.sroles_meta ~= nil,
+  got.SROLES)
+
+-- Kills: composite gathering requiring both halves to be present, silently
+-- dropping (or erroring on) a delta frame that carries only one.
+reset()
+sroles_calls = 0
+frame("Guild.Settlement", { guild = "viking", sroles = { { role = "boendr" } } })
+check("delta frame with only sroles reaches the writer exactly once",
+  sroles_calls == 1, sroles_calls)
+check("delta frame with only sroles omits sroles_meta from the call",
+  got.SROLES ~= nil and got.SROLES.sroles ~= nil and got.SROLES.sroles_meta == nil,
+  got.SROLES)
+
+-- Kills: the de-paged branch (merge_page -> run.keys, applied once page ==
+-- pages) failing to gather composite halves the same way the unpaged branch
+-- does -- this call site is the one most likely to rot, since nothing else
+-- here exercises it.
+reset()
+sroles_calls = 0
+frame("Guild.Settlement", { guild = "viking", page = 1, pages = 2,
+                            sroles = { { role = "smidir" } } })
+check("paged run not applied before the final page", sroles_calls == 0, sroles_calls)
+frame("Guild.Settlement", { guild = "viking", page = 2, pages = 2,
+                            sroles_meta = { commoner = "9", identity = "Y" } })
+check("paged run gathers both halves into one call",
+  sroles_calls == 1, sroles_calls)
+check("paged run's single call carries both keys",
+  got.SROLES ~= nil and got.SROLES.sroles ~= nil and got.SROLES.sroles_meta ~= nil,
+  got.SROLES)
+
+-- Kills: a composite key with no registered writer (MONUMENTS, pending a
+-- later plan) raising instead of being counted like any other unknown key.
+reset()
+local ok, err = pcall(frame, "Guild.City", { guild = "viking",
+  monuments_cap = "3", monuments_list = { "a", "b" } })
+check("composite key with no writer does not raise", ok, err)
+check("composite key with no writer is counted unknown",
+  protocol.gmcp_stats().unknown.MONUMENTS == 1,
+  protocol.gmcp_stats().unknown.MONUMENTS)
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)

@@ -220,8 +220,7 @@ end
 -- S.settler_community_buildings is a { civic_id = tier } mapping, not an
 -- array (state.lua's own comment, and pages/people.lua's sorted_keys(cb)
 -- walk) -- confirmed while verifying this key's wire form against the
--- mudlib. "two entries" is therefore checked by counting keys, not by `#`
--- (which is 0 on a table with no positive-integer keys).
+-- mudlib.
 local function count_keys(t)
   local n = 0
   for _ in pairs(t) do n = n + 1 end
@@ -234,10 +233,26 @@ city.SCIVICS("longhouse:2;forge:1")
 local scivics_mip = snapshot(SCIVICS_FIELDS)
 clear(SCIVICS_FIELDS)
 city._gmcp.SCIVICS({ { id = "longhouse", count = "2" }, { id = "forge", count = "1" } })
+-- This only pins that the MIP and GMCP paths agree -- both go through the
+-- same write_scivics, so it cannot by itself tell a correct shape from a
+-- wrong one both transports would share. It is still worth having as a
+-- regression guard on the decoders themselves.
 check("scivics transport equivalence", same(scivics_mip, snapshot(SCIVICS_FIELDS)),
   "mip vs gmcp differ")
+-- pairs()-based counting is shape-blind: a 2-element ARRAY of {id,count}
+-- records also has 2 pairs() entries, so a count alone cannot reject the
+-- brief's flawed array-of-records sketch. `[1] == nil` is what actually
+-- discriminates: only a mapping keyed by id passes it -- a sequence would
+-- have [1] set to its first record.
 check("scivics decoded two entries", count_keys(S.settler_community_buildings) == 2,
   count_keys(S.settler_community_buildings))
+check("scivics keeps its mapping shape (not an array of records)",
+  S.settler_community_buildings.longhouse == 2
+    and S.settler_community_buildings.forge == 1
+    and S.settler_community_buildings[1] == nil,
+  "longhouse=" .. tostring(S.settler_community_buildings.longhouse) ..
+    " forge=" .. tostring(S.settler_community_buildings.forge) ..
+    " [1]=" .. tostring(S.settler_community_buildings[1]))
 
 -- ---- sroles: one MIP key, two GMCP keys ----------------------------------
 -- Kills: applying `sroles` without `sroles_meta`, which drops the commoner
@@ -284,6 +299,26 @@ check("sroles without meta leaves meta alone", S.settler_commoner == 99,
 check("COMPOSITE names sroles' halves",
   gmcp_map.COMPOSITE.SROLES and #gmcp_map.COMPOSITE.SROLES == 2,
   gmcp_map.COMPOSITE.SROLES and #gmcp_map.COMPOSITE.SROLES)
+
+-- Kills: dropping LEGACY's unconditional reset of settler_commoner/identity
+-- for malformed/degenerate MIP input. util.split(val, ";") always returns at
+-- least one (possibly empty) string as its first element -- never nil -- so
+-- the original "if segs[1] then" guard (and decode_sroles's equivalent) is
+-- entered for every string input, meaning parts.sroles_meta is always built
+-- and write_sroles always applies the commoner/identity reset. These two
+-- cases pin that against genuinely malformed strings, not just the
+-- well-formed one above.
+clear(SROLES_FIELDS)
+city.SROLES("")
+check("sroles on empty input still resets commoner/identity",
+  S.settler_commoner == 0 and S.settler_identity == "",
+  "commoner=" .. tostring(S.settler_commoner) .. " identity=" .. tostring(S.settler_identity))
+
+clear(SROLES_FIELDS)
+city.SROLES("garbage-with-no-separators")
+check("sroles on a header with no '|' still resets commoner/identity",
+  S.settler_commoner == 0 and S.settler_identity == "",
+  "commoner=" .. tostring(S.settler_commoner) .. " identity=" .. tostring(S.settler_identity))
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")
