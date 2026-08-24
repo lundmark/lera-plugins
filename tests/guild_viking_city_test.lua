@@ -476,6 +476,9 @@ local EXPECTED_GMCP_WRITERS = {
   "VOYAGE", "LONGSHIP", "VOYAGE_WAIT", "VOFFERS", "VRESOLVE", "VQPATH",
   "VSAGA", "VMEM", "VCURIOS", "VGOODS", "VAIDS", "VRUNES", "VBOONS",
   "VSAILED", "VSPOILS", "VREAGENT", "FLEET_RENOWN",
+  -- Guild.Kingdom (7; the campaign war-map cluster BATTLE/WM* has no writer
+  -- yet)
+  "GRUDGES", "STANDINGS", "VREP", "DIPLO", "ARMY", "DYNASTY", "WAR",
 }
 
 local function collect_gmcp_writers()

@@ -51,6 +51,15 @@ M.COMPOSITE = {
   VOYAGE    = { "voyage", "voyage_crew_traits", "voyage_ship_traits" },
   LONGSHIP  = { "longship", "longship_crew_traits", "longship_ship_traits" },
   VOFFERS   = { "voffers", "voffers_ship" },
+  -- Guild.Kingdom. army and dynasty each flatten a nested container out of
+  -- their records -- a unit's traits, and a child's schooling rows -- and
+  -- dynasty additionally splits its scalars into one key each. war is three
+  -- named sections MIP joined into a single value.
+  ARMY      = { "army", "army_units", "army_traits" },
+  DYNASTY   = { "dynasty_realm", "dynasty_house", "dynasty_heir",
+                "dynasty_living", "dynasty_cap", "dynasty_children",
+                "dynasty_schooling", "dynasty_spouse" },
+  WAR       = { "war_cb", "war_camp", "war_incoming" },
   -- Guild.Map is composite in full, not per key. Its planes cannot be read
   -- without `enc` (which encoding packed them) and `legend` (what each code
   -- means), and its rows cannot be sized without `w` -- so routing the keys
@@ -86,6 +95,15 @@ local MAP = {
   varang_out = "VARANG", varang_in = "VARANG",
   vfind_hall = "VFIND", vfind_posts = "VFIND",
   vfind_offers = "VFIND", vfind_auctions = "VFIND",
+
+  -- Guild.Kingdom
+  grudges = "GRUDGES", standings = "STANDINGS", vrep = "VREP", diplo = "DIPLO",
+  army = "ARMY", army_units = "ARMY", army_traits = "ARMY",
+  dynasty_realm = "DYNASTY", dynasty_house = "DYNASTY",
+  dynasty_heir = "DYNASTY", dynasty_living = "DYNASTY",
+  dynasty_cap = "DYNASTY", dynasty_children = "DYNASTY",
+  dynasty_schooling = "DYNASTY", dynasty_spouse = "DYNASTY",
+  war_cb = "WAR", war_camp = "WAR", war_incoming = "WAR",
 
   -- Guild.Voyage. vrelics is deliberately absent: GMCP carries relic IDs and
   -- the display-name lookup is server-side logic the mudlib keeps in the MIP

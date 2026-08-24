@@ -842,6 +842,212 @@ local function write_garrison(rec)
   S.garrison_defpower  = tonumber(rec.power) or 0
 end
 
+-- ---------------------------------------------------------------------------
+-- Guild.Kingdom writers
+-- ---------------------------------------------------------------------------
+
+-- grudges: towns that may send a reprisal raid.
+local function write_grudges(records)
+  if type(records) ~= "table" then return end
+  S.grudges = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" and r.town ~= nil then
+      S.grudges[#S.grudges + 1] = { town = tostring(r.town),
+                                    secs = tonumber(r.secs) or 0 }
+    end
+  end
+end
+
+-- standings / vrep: both keyed by lineage id, which the record calls `lin`.
+local function write_standings(records)
+  if type(records) ~= "table" then return end
+  S.standings = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" and r.lin ~= nil then
+      S.standings[tonumber(r.lin) or 0] = {
+        name   = tostring(r.name or ""),
+        score  = tonumber(r.score) or 0,
+        label  = tostring(r.label or ""),
+        -- `own` -> is_own, and it arrives as 0/1 where the client stores a
+        -- boolean.
+        is_own = (tonumber(r.own) or 0) ~= 0,
+      }
+    end
+  end
+end
+
+local function write_vrep(records)
+  if type(records) ~= "table" then return end
+  S.village_rep = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" and r.lin ~= nil then
+      S.village_rep[tonumber(r.lin) or 0] = {
+        name     = tostring(r.name or ""),
+        rep      = tonumber(r.rep) or 0,
+        rank     = tonumber(r.rank) or 0,
+        start_at = tonumber(r.start_at) or 0,
+        next_at  = tonumber(r.next_at) or 0,
+      }
+    end
+  end
+end
+
+-- diplo: one flat list where the client wants two, split on each row's `side`.
+-- "you" is the ally side (the mudlib's own diplomacy_mip does the same test);
+-- anything else is a foe. `name` is the house name.
+local function write_diplo(records)
+  if type(records) ~= "table" then return end
+  local d = { allies = {}, foes = {} }
+  for _, r in ipairs(records) do
+    if type(r) == "table" and r.name ~= nil then
+      local into = (tostring(r.side) == "you") and d.allies or d.foes
+      into[#into + 1] = { house = tostring(r.name),
+                          standing = tonumber(r.standing) or 0 }
+    end
+  end
+  -- nil rather than an empty pair of lists, matching the MIP handler: the
+  -- Court page tests S.diplomacy for presence to decide whether to draw the
+  -- section at all.
+  S.diplomacy = (#d.allies > 0 or #d.foes > 0) and d or nil
+end
+
+-- army + army_units + army_traits. Each unit's trait list is a container a
+-- record may not hold, so it is flattened out and foreign-keyed by `uid`.
+--
+-- `used` and `cap` are remapped, and this is a behaviour FIX rather than a
+-- transcription. pages/army.lua renders one header from them --
+-- "Units  (used / cap)" -- so they are the unit count and the unit cap. The
+-- MIP handler could not supply either: it parses three leading fields
+-- (conscripts|cap|used) from a value the server has since grown to six
+-- (conscripts|cap|levy_rate|unit_cap|unit_count|units...), so `used` has been
+-- holding the levy rate, `cap` the CONSCRIPT cap, and the trailing `.*`
+-- capture has been swallowing unit_cap and unit_count into the first unit
+-- record. That header has been wrong on the MIP path for as long as the server
+-- has sent six fields. Here `used` is unit_count and `cap` is unit_cap, which
+-- is what the header says it is showing. S.army.conscripts, the only other
+-- field with a reader, is unaffected.
+local function write_army(parts)
+  if type(parts) ~= "table" then return end
+  local rec = parts.army
+  if type(rec) ~= "table" then return end
+  local traits_by_uid = {}
+  for _, t in ipairs(parts.army_traits or {}) do
+    if type(t) == "table" and t.uid ~= nil then
+      local list = traits_by_uid[t.uid]
+      if not list then list = {}; traits_by_uid[t.uid] = list end
+      list[#list + 1] = tostring(t.trait or "")
+    end
+  end
+  local units = {}
+  for _, u in ipairs(parts.army_units or {}) do
+    if type(u) == "table" then
+      units[#units + 1] = {
+        uid    = tonumber(u.uid) or 0,
+        type   = tostring(u.type or ""),
+        size   = tonumber(u.size) or 0,
+        vet    = tonumber(u.vet) or 0,
+        ready  = (tonumber(u.ready) or 0) ~= 0,
+        leader = tostring(u.leader or "-"),
+        traits = traits_by_uid[u.uid] or {},
+      }
+    end
+  end
+  S.army = {
+    conscripts = tonumber(rec.conscripts) or 0,
+    cap        = tonumber(rec.unit_cap) or 0,
+    used       = tonumber(rec.unit_count) or 0,
+    units      = units,
+  }
+end
+
+-- dynasty_*: eight keys the server splits out of one structure, two of them
+-- because a record may not nest a container (children, and each child's
+-- schooling rows). The schooling list has no consumer here and is ignored.
+local function write_dynasty(parts)
+  if type(parts) ~= "table" then return end
+  -- The whole record is rebuilt from the frame's keys, so a delta carrying one
+  -- of them must not drop the rest: start from what is already stored.
+  local prev = S.dynasty or {}
+  local d = {
+    realm    = prev.realm or "",
+    house    = prev.house or "",
+    heir     = prev.heir,
+    spouse   = prev.spouse,
+    living   = prev.living or 0,
+    cap      = prev.cap or 0,
+    children = prev.children or {},
+  }
+  if parts.dynasty_realm ~= nil then d.realm = tostring(parts.dynasty_realm) end
+  if parts.dynasty_house ~= nil then d.house = tostring(parts.dynasty_house) end
+  if parts.dynasty_heir ~= nil then
+    local heir = tostring(parts.dynasty_heir)
+    -- An empty heir is "none", which the pages test for by presence.
+    d.heir = (heir ~= "") and heir or nil
+  end
+  if parts.dynasty_living ~= nil then d.living = tonumber(parts.dynasty_living) or 0 end
+  if parts.dynasty_cap ~= nil then d.cap = tonumber(parts.dynasty_cap) or 0 end
+  if type(parts.dynasty_spouse) == "table" then
+    d.spouse = {
+      name  = tostring(parts.dynasty_spouse.name or ""),
+      house = tostring(parts.dynasty_spouse.house or ""),
+      age   = tonumber(parts.dynasty_spouse.age) or 0,
+      rank  = tonumber(parts.dynasty_spouse.rank) or 1,
+    }
+  end
+  if type(parts.dynasty_children) == "table" then
+    local children = {}
+    for _, c in ipairs(parts.dynasty_children) do
+      if type(c) == "table" and c.name ~= nil then
+        local role = tostring(c.role or "")
+        children[#children + 1] = {
+          name   = tostring(c.name),
+          gender = tostring(c.gender or ""),
+          age    = tonumber(c.age) or 0,
+          adult  = (tonumber(c.adult) or 0) ~= 0,
+          trait  = tostring(c.trait or ""),
+          -- "-" is the server's "no role" placeholder, and so is "". Both
+          -- become nil, which is what the Court page tests for.
+          role   = (role ~= "-" and role ~= "") and role or nil,
+        }
+      end
+    end
+    d.children = children
+  end
+  S.dynasty = d
+end
+
+-- war_cb + war_camp + war_incoming. `cb` is the claims list and `camp` the
+-- campaign list; `war_incoming` is sent only when a war is actually inbound,
+-- so its absence from a frame carrying the other two means "none".
+local function write_war(parts)
+  if type(parts) ~= "table" then return end
+  if parts.war_cb == nil and parts.war_camp == nil and parts.war_incoming == nil then
+    return
+  end
+  local w = { claims = {}, incoming = nil, campaigns = {} }
+  for _, r in ipairs(parts.war_cb or {}) do
+    if type(r) == "table" and r.town ~= nil then
+      w.claims[#w.claims + 1] = { town = tostring(r.town),
+                                  days = tonumber(r.days) or 0 }
+    end
+  end
+  for _, r in ipairs(parts.war_camp or {}) do
+    if type(r) == "table" and r.town ~= nil then
+      w.campaigns[#w.campaigns + 1] = { town = tostring(r.town),
+                                        defense = tonumber(r.defense) or 0,
+                                        max = tonumber(r.max) or 100 }
+    end
+  end
+  if type(parts.war_incoming) == "table" and parts.war_incoming.town ~= nil then
+    w.incoming = { town = tostring(parts.war_incoming.town),
+                   days = tonumber(parts.war_incoming.days) or 0,
+                   strength = tonumber(parts.war_incoming.strength) or 100 }
+  end
+  -- nil when there is nothing at all, matching the MIP handler: the War page
+  -- tests S.war for presence.
+  S.war = (#w.claims > 0 or w.incoming or #w.campaigns > 0) and w or nil
+end
+
 M._gmcp = {
   RAIDLOG          = write_raidlog,
   RTARGETS         = write_rtargets,
@@ -853,6 +1059,13 @@ M._gmcp = {
   RAID             = write_raid,
   PATROL           = write_patrol,
   GARRISON         = write_garrison,
+  GRUDGES          = write_grudges,
+  STANDINGS        = write_standings,
+  VREP             = write_vrep,
+  DIPLO            = write_diplo,
+  ARMY             = write_army,
+  DYNASTY          = write_dynasty,
+  WAR              = write_war,
 }
 
 return M
