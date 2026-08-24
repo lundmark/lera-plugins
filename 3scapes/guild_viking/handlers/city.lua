@@ -605,16 +605,7 @@ M._patterns = {
 -- GMCP-side writers, keyed by MIP key. init.lua registers these into the GMCP
 -- registry; `_gmcp` joins the `_patterns` / `_market_seam` convention of keys
 -- the MIP registration loop skips.
---
--- Exposed through a metatable rather than a literal `M._gmcp` field: this
--- module's porting-completeness census (guild_viking_city_test.lua, frozen
--- and not to be edited by this task) walks pairs(M) expecting exactly
--- LEGACY's real MIP keys plus `_patterns`, and a literal `_gmcp` field would
--- show up as an unexpected 109th key there. `city._gmcp` still reads exactly
--- like a normal field -- __index only fires because nothing raw is stored
--- under that name -- so init.lua's registration loop and every caller here
--- are unaffected; only pairs()/next() (and thus the census) cannot see it.
-local gmcp_writers = {
+M._gmcp = {
   SETTLERS = write_settlers,
   SETTLERX = write_settlerx,
   SACTIONS = write_sactions,
@@ -623,10 +614,5 @@ local gmcp_writers = {
   SPROJ    = write_sproj,
   SEVENTS  = write_sevents,
 }
-
-setmetatable(M, { __index = function(_, k)
-  if k == "_gmcp" then return gmcp_writers end
-  return nil
-end })
 
 return M

@@ -368,13 +368,14 @@ local EXPECTED_EXACT_KEYS = {
   "WMU", "WMP", "WSPOIL", "WSG", "WMPL", "WMO", "WMQ", "WMEND", "PATROL",
   "GARRISON", "VARANG", "THRALLS", "THRALL_FOLLOWER", "RAID", "GRUDGES",
   "BDMG", "STANDINGS", "VREP", "HIRD",
-  -- city.lua (31 -- GOD_POWER/GOD_ACTIVE and GOD_POWER_NEXT/GOD_NEXT each
-  -- register two keys sharing one fn)
+  -- city.lua (32 -- GOD_POWER/GOD_ACTIVE and GOD_POWER_NEXT/GOD_NEXT each
+  -- register two keys sharing one fn; `_gmcp` is the Task 5 GMCP-writer
+  -- table, the same kind of convention field `_patterns` already is)
   "BLOT", "FARM", "BUILDS", "SUPG", "SETTLERS", "SETTLERX", "SACTIONS",
   "SROLES", "CPLAN", "CPP", "CPB", "CPU", "CPEND", "SPROJ", "SHPLOTS",
   "SCIVICS", "SCONSUME", "BUILDINGS", "PRODUCTION", "MONUMENTS", "MISSIONS",
   "ERRAND", "NEXTTICK", "CDTIME", "GOD_POWER", "GOD_ACTIVE", "GOD_POWER_NEXT",
-  "GOD_NEXT", "GOD_POWER_FOCUS", "DCYCLE", "SEVENTS",
+  "GOD_NEXT", "GOD_POWER_FOCUS", "DCYCLE", "SEVENTS", "_gmcp",
 }
 
 local EXPECTED_PATTERNS = {
@@ -421,7 +422,7 @@ end
 local actual_keys = collect_exact_keys()
 local ok_keys, err_keys = same_set(actual_keys, EXPECTED_EXACT_KEYS)
 check("census exact keys match hardcoded list", ok_keys, err_keys)
-check("census exact key count is 108", #actual_keys == 108, #actual_keys)
+check("census exact key count is 109", #actual_keys == 109, #actual_keys)
 
 local actual_patterns = collect_patterns()
 local ok_pats, err_pats = same_set(actual_patterns, EXPECTED_PATTERNS)
