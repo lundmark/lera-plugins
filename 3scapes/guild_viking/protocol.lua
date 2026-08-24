@@ -50,7 +50,8 @@ end
 -- every real frame into a dropped "foreign" one again.
 local GUILD_NAME = "viking"
 
-local gmcp_stats = { frames = 0, foreign = 0, unknown = {}, applied = {}, errors = {} }
+local gmcp_stats = { frames = 0, foreign = 0, malformed = 0, suppressed = 0,
+                     unknown = {}, applied = {}, errors = {} }
 local gmcp_reported_errors = {}
 
 -- GMCP writer outcomes record into gmcp_stats, mirroring the MIP-side
@@ -80,8 +81,22 @@ function protocol.gmcp_handler(key, fn)
   gmcp_handlers[key] = fn
 end
 
+-- A copy, like protocol.gmcp_keys() above: callers (init.lua's /vik source and
+-- /vik status) get a snapshot they cannot accidentally mutate into the live
+-- counters. Sub-tables are copied too, since the counts that matter live in
+-- them.
 function protocol.gmcp_stats()
-  return gmcp_stats
+  local out = {}
+  for k, v in pairs(gmcp_stats) do
+    if type(v) == "table" then
+      local sub = {}
+      for sk, sv in pairs(v) do sub[sk] = sv end
+      out[k] = sub
+    else
+      out[k] = v
+    end
+  end
+  return out
 end
 
 function protocol.handler(key, fn)
@@ -222,12 +237,15 @@ local function merge_page(run, data)
     if not ENVELOPE[key] then
       local prev = run.keys[key]
       if prev == nil then
+        -- Stored by reference, and an array key sliced across later pages is
+        -- appended to in place below -- so a future consumer must not retain
+        -- the decoded payload table expecting it to stay as delivered.
         run.keys[key] = value
       elseif is_array(prev) and is_array(value) then
         for i = 1, #value do prev[#prev + 1] = value[i] end
       else
         run.keys[key] = value
-        gmcp_stats.malformed = (gmcp_stats.malformed or 0) + 1
+        gmcp_stats.malformed = gmcp_stats.malformed + 1
       end
     end
   end
@@ -325,7 +343,11 @@ end
 function protocol.on_gmcp(package, data)
   if type(data) ~= "table" then return end
   if not gmcp_allowed() then
-    stats.suppressed = stats.suppressed + 1
+    -- Its own counter, not the MIP-scoped stats.suppressed: that one means
+    -- "MIP keys the per-key latch dropped", which /vik status reports as
+    -- such. Folding GMCP frames dropped by `source mip` into it makes the
+    -- number unreadable in exactly the mode you would set to debug the latch.
+    gmcp_stats.suppressed = gmcp_stats.suppressed + 1
     return
   end
   gmcp_stats.frames = gmcp_stats.frames + 1
@@ -360,7 +382,7 @@ function protocol.on_gmcp(package, data)
   if page ~= run.next_page or pages ~= run.pages then
     -- Out of order or a pages mismatch: the run cannot be trusted.
     page_runs[package] = nil
-    gmcp_stats.malformed = (gmcp_stats.malformed or 0) + 1
+    gmcp_stats.malformed = gmcp_stats.malformed + 1
     return
   end
 
@@ -376,7 +398,8 @@ end
 -- Cleared on disconnect: the next session may not negotiate GMCP at all, and
 -- stale GMCP state must not outlive the connection that produced it.
 function protocol.reset_connection()
-  gmcp_stats = { frames = 0, foreign = 0, unknown = {}, applied = {}, errors = {} }
+  gmcp_stats = { frames = 0, foreign = 0, malformed = 0, suppressed = 0,
+                 unknown = {}, applied = {}, errors = {} }
   page_runs = {}
   gmcp_keys = {}
 end
