@@ -462,6 +462,10 @@ local EXPECTED_GMCP_WRITERS = {
   -- Guild.Roster (10)
   "STAFF", "BONDS", "TRAIN", "COURIER", "SPY", "VFIND", "HIRD", "THRALLS",
   "THRALL_FOLLOWER", "VARANG",
+  -- Guild.Trade (10; TGOODS deliberately stays MIP-only until its GMCP source
+  -- lands -- see the gap note in gmcp_map.lua)
+  "CARTS", "TQUEUE", "CIDLE", "CUPG", "ROUTES", "BLOCKS", "REFINERY", "MARKET",
+  "INCOMING", "WSTOCK",
 }
 
 local function collect_gmcp_writers()

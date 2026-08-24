@@ -29,6 +29,16 @@ M.COMPOSITE = {
   SPY       = { "spy", "spy_scouts" },
   VARANG    = { "varang_out", "varang_in" },
   VFIND     = { "vfind_hall", "vfind_posts", "vfind_offers", "vfind_auctions" },
+  -- Guild.Trade. Three of these are the same depth-limit flattening raidlog
+  -- uses: a cart's legs, a queued job's legs and a refinery's grade breakdown
+  -- are containers, which a record used as a container element may not hold,
+  -- so each travels as its own top-level array foreign-keyed back to its
+  -- parent. MIP packed all three INSIDE their parent key, and the Trade pages
+  -- render them, so they are rejoined here rather than dropped.
+  CARTS     = { "carts", "cart_legs" },
+  TQUEUE    = { "queue", "queue_legs" },
+  REFINERY  = { "refinery", "refinery_grades" },
+  WSTOCK    = { "wstock", "wstock_cap" },
   -- Guild.Map is composite in full, not per key. Its planes cannot be read
   -- without `enc` (which encoding packed them) and `legend` (what each code
   -- means), and its rows cannot be sized without `w` -- so routing the keys
@@ -74,14 +84,24 @@ local MAP = {
   south = "VMAP", landmarks = "VMAP",
 
   -- Guild.Trade
-  carts = "CARTS", queue = "TQUEUE", cidle = "CIDLE", cupg = "CUPG",
-  routes = "ROUTES", blocks = "BLOCKS", refinery = "REFINERY",
+  carts = "CARTS", cart_legs = "CARTS",
+  queue = "TQUEUE", queue_legs = "TQUEUE",
+  refinery = "REFINERY", refinery_grades = "REFINERY",
+  wstock = "WSTOCK", wstock_cap = "WSTOCK",
+  cidle = "CIDLE", cupg = "CUPG",
+  routes = "ROUTES", blocks = "BLOCKS",
   market = "MARKET", incoming = "INCOMING", missions = "MISSIONS",
+  errand = "ERRAND",
 
   -- Deliberately absent, so they are counted rather than routed:
-  --   cart_legs, queue_legs, crpr, refinery_grades  (no MIP handler consumes
-  --   these; they carry data MIP either does not send or packs inside another
-  --   key, and nothing renders them)
+  --   crpr           (cart repairs -- no MIP key ever carried it and nothing
+  --                   renders it)
+  --   gneeds, rneeds (Guild.Roster; same reason)
+  --
+  -- cart_legs, queue_legs and refinery_grades used to be listed here on the
+  -- grounds that nothing renders them. That was wrong: MIP packed each one
+  -- inside its parent key, and the Trade pages read carts' `legs`, the trade
+  -- queue's `legs` and a refinery's `grades`. They are composites now.
 }
 
 function M.mip_key(gmcp_key)

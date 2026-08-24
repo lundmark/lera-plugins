@@ -711,13 +711,299 @@ local function write_vfind(parts)
   end
 end
 
+
+-- ---------------------------------------------------------------------------
+-- Guild.Trade writers
+-- ---------------------------------------------------------------------------
+
+-- Group a flattened child array by its foreign key, preserving each group's
+-- `seq` order. Three Guild.Trade keys need this and so does Guild.Fleet's
+-- raidlog: a record used as a container element may not hold a container, so
+-- the server sends legs and grade breakdowns as their own top-level arrays
+-- pointing back at their parent.
+local function group_by(rows, fk)
+  local out = {}
+  if type(rows) ~= "table" then return out end
+  for _, r in ipairs(rows) do
+    if type(r) == "table" and r[fk] ~= nil then
+      local key = r[fk]
+      local list = out[key]
+      if not list then list = {}; out[key] = list end
+      list[#list + 1] = r
+    end
+  end
+  -- Sorted by `seq` rather than trusted to arrive in order: a leg list drawn
+  -- out of sequence describes a different journey, and paging can split the
+  -- array. Rows with no seq keep their arrival order behind those that have
+  -- one.
+  for _, list in pairs(out) do
+    table.sort(list, function(a, b)
+      return (tonumber(a.seq) or 0) < (tonumber(b.seq) or 0)
+    end)
+  end
+  return out
+end
+
+local function leg_records(rows)
+  local legs = {}
+  for _, l in ipairs(rows or {}) do
+    legs[#legs + 1] = { mode = tostring(l.mode or ""), good = tostring(l.good or ""),
+                        amount = tonumber(l.amount) or 0,
+                        village = tostring(l.village or "") }
+  end
+  return legs
+end
+
+-- carts + cart_legs. `secs` -> return_in and `half_in` -> halfway_in are the
+-- renames; `horses` is carried by the record but has no consumer, so it is
+-- ignored rather than stored.
+local function write_carts(parts)
+  if type(parts) ~= "table" then return end
+  if type(parts.carts) ~= "table" then return end
+  local legs_by_cart = group_by(parts.cart_legs, "cart")
+  S.carts = {}
+  for _, r in ipairs(parts.carts) do
+    if #S.carts >= 30 then break end
+    if type(r) == "table" then
+      local refit = tostring(r.refit or "")
+      if refit == "" then refit = "standard" end
+      table.insert(S.carts, {
+        mode        = tostring(r.mode or ""),
+        good        = tostring(r.good or ""),
+        village     = tostring(r.village or ""),
+        return_in   = tonumber(r.secs) or 0,
+        amount      = tonumber(r.amount) or 0,
+        halfway_in  = tonumber(r.half_in) or 0,
+        quality_pct = tonumber(r.quality_pct) or 100,
+        cart_id     = tonumber(r.cart_id) or 0,
+        tier        = tonumber(r.tier) or 1,
+        durability  = tonumber(r.durability) or 100,
+        cap         = tonumber(r.cap) or 0,
+        escort      = tonumber(r.escort) or 0,
+        refit       = refit,
+        legs        = leg_records(legs_by_cart[r.cart_id]),
+      })
+    end
+  end
+end
+
+-- queue + queue_legs. A queued job's displayed mode/good/amount/village are
+-- its FIRST leg's -- MIP had no other way to express it and the pages read it
+-- that way -- so a job whose legs did not arrive has nothing to show and is
+-- skipped, exactly as the MIP handler skipped a job that parsed no legs.
+local function write_queue(parts)
+  if type(parts) ~= "table" then return end
+  if type(parts.queue) ~= "table" then return end
+  local legs_by_job = group_by(parts.queue_legs, "job")
+  S.trade_queue = {}
+  for _, r in ipairs(parts.queue) do
+    if type(r) == "table" then
+      local legs = leg_records(legs_by_job[r.job])
+      if #legs > 0 then
+        table.insert(S.trade_queue, {
+          mode = legs[1].mode, good = legs[1].good,
+          amount = legs[1].amount, village = legs[1].village,
+          escort = tonumber(r.escort) or 0,
+          legs = legs,
+        })
+      end
+    end
+  end
+end
+
+-- cidle. `slot` is the cart id; MIP called the same number `cid`. `horses` is
+-- again carried and unread.
+local function write_cidle(records)
+  if type(records) ~= "table" then return end
+  S.idle_carts = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" then
+      local refit = tostring(r.refit or "")
+      if refit == "" then refit = "standard" end
+      table.insert(S.idle_carts, {
+        cart_id    = tonumber(r.slot) or 0,
+        tier       = tonumber(r.tier) or 1,
+        durability = tonumber(r.durability) or 100,
+        cap        = tonumber(r.cap) or 0,
+        refit      = refit,
+      })
+    end
+  end
+end
+
+-- cupg. Five renames in one record: cart -> cart_id, tier -> target_tier,
+-- secs -> secs_left, mats -> mats_total, done -> mats_done. `detail` is the
+-- same comma-joined "good:done/need" string SUPG uses.
+local function write_cupg(records)
+  if type(records) ~= "table" then return end
+  S.cart_upgrades = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" then
+      local mats = {}
+      for piece in tostring(r.detail or ""):gmatch("[^,]+") do
+        local g, d, n = piece:match("^([^:]+):(%d+)/(%d+)$")
+        if g then
+          table.insert(mats, { good = g, done = tonumber(d) or 0, need = tonumber(n) or 0 })
+        end
+      end
+      local target_refit = tostring(r.refit or "")
+      local job_type = tostring(r.job_type or "")
+      -- MIP inferred the job type from whether a target refit was named, for
+      -- servers that predate the explicit field. Kept: the field can still be
+      -- empty on a record.
+      if job_type == "" then
+        job_type = (target_refit ~= "" and "refit" or "upgrade")
+      end
+      table.insert(S.cart_upgrades, {
+        cart_id      = tonumber(r.cart) or 0,
+        target_tier  = tonumber(r.tier) or 2,
+        secs_left    = tonumber(r.secs) or 0,
+        mats_total   = tonumber(r.mats) or 0,
+        mats_done    = tonumber(r.done) or 0,
+        target_refit = target_refit,
+        job_type     = job_type,
+        mats         = mats,
+      })
+    end
+  end
+end
+
+-- routes. Keyed by village id, which the record calls `village`; the id is the
+-- key rather than a field, as it was over MIP.
+local function write_routes(records)
+  if type(records) ~= "table" then return end
+  S.routes = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" and r.village ~= nil then
+      local vid = tostring(r.village)
+      S.routes[vid] = {
+        name       = tostring(r.name or vid),
+        road_tier  = tonumber(r.road_tier) or 0,
+        fort_tier  = tonumber(r.fort_tier) or 0,
+        road_maint = tonumber(r.road_maint) or 0,
+        fort_maint = tonumber(r.fort_maint) or 0,
+        road_name  = tostring(r.road_name or ""),
+        fort_name  = tostring(r.fort_name or ""),
+      }
+    end
+  end
+end
+
+-- blocks. An array of records over the wire, a good -> amount lookup in state.
+local function write_blocks(records)
+  if type(records) ~= "table" then return end
+  S.blocks = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" and r.good ~= nil then
+      S.blocks[tostring(r.good)] = tonumber(r.amount) or 0
+    end
+  end
+end
+
+-- refinery + refinery_grades, foreign-keyed by `bldg`. The building id is
+-- `bldg` on both halves and `id` in state.
+local function write_refinery(parts)
+  if type(parts) ~= "table" then return end
+  if type(parts.refinery) ~= "table" then return end
+  local grades_by_bldg = group_by(parts.refinery_grades, "bldg")
+  S.refineries = {}
+  for _, r in ipairs(parts.refinery) do
+    if type(r) == "table" then
+      local grades = {}
+      for _, g in ipairs(grades_by_bldg[r.bldg] or {}) do
+        grades[#grades + 1] = { name = tostring(g.grade or ""),
+                                qty = tonumber(g.qty) or 0,
+                                pct = tonumber(g.pct) or 100 }
+      end
+      S.refineries[#S.refineries + 1] = {
+        id    = tostring(r.bldg or ""),
+        tier  = tonumber(r.tier) or 0,
+        stock = tonumber(r.stock) or 0,
+        cap   = tonumber(r.cap) or 0,
+        grades = grades,
+      }
+    end
+  end
+end
+
+-- market. `remain` -> remaining, `age` -> age_secs. The seam call is what
+-- market.lua hangs price recording off, so it fires on this path too.
+local function write_market(records)
+  if type(records) ~= "table" then return end
+  S.market_orders = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" then
+      table.insert(S.market_orders, {
+        id        = tonumber(r.id) or 0,
+        buyer     = tostring(r.buyer or ""),
+        good      = tostring(r.good or ""),
+        remaining = tonumber(r.remain) or 0,
+        price     = tonumber(r.price) or 0,
+        age_secs  = tonumber(r.age) or 0,
+      })
+    end
+  end
+  if M._market_seam.on_market then M._market_seam.on_market(S.market_orders) end
+end
+
+-- incoming. `secs` -> arrives_in.
+local function write_incoming(records)
+  if type(records) ~= "table" then return end
+  S.incoming_fills = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" then
+      table.insert(S.incoming_fills, {
+        good       = tostring(r.good or ""),
+        amount     = tonumber(r.amount) or 0,
+        arrives_in = tonumber(r.secs) or 0,
+        seller     = tostring(r.seller or ""),
+      })
+    end
+  end
+end
+
+-- wstock + wstock_cap. The server splits its one mapping into the entry array
+-- and its cap; only the entries have a consumer here, so the cap is accepted
+-- and ignored rather than stored unread. `pct` -> freshness_pct, and an empty
+-- grade label stays nil so the pages can test it for presence.
+local function write_wstock(parts)
+  if type(parts) ~= "table" then return end
+  if type(parts.wstock) ~= "table" then return end
+  S.wstock = {}
+  S.wstock_by_good = {}
+  for _, r in ipairs(parts.wstock) do
+    if #S.wstock >= 50 then break end
+    if type(r) == "table" and r.good ~= nil then
+      local grade = r.grade ~= nil and tostring(r.grade) or ""
+      local rec = {
+        good          = tostring(r.good),
+        amount        = tonumber(r.amount) or 0,
+        freshness_pct = tonumber(r.pct) or 100,
+        grade         = (grade ~= "") and grade or nil,
+      }
+      table.insert(S.wstock, rec)
+      S.wstock_by_good[rec.good] = rec
+    end
+  end
+end
+
 M._gmcp = {
-  STAFF   = write_staff,
-  BONDS   = write_bonds,
-  TRAIN   = write_train,
-  COURIER = write_courier,
-  SPY     = write_spy,
-  VFIND   = write_vfind,
+  STAFF    = write_staff,
+  BONDS    = write_bonds,
+  TRAIN    = write_train,
+  COURIER  = write_courier,
+  SPY      = write_spy,
+  VFIND    = write_vfind,
+  CARTS    = write_carts,
+  TQUEUE   = write_queue,
+  CIDLE    = write_cidle,
+  CUPG     = write_cupg,
+  ROUTES   = write_routes,
+  BLOCKS   = write_blocks,
+  REFINERY = write_refinery,
+  MARKET   = write_market,
+  INCOMING = write_incoming,
+  WSTOCK   = write_wstock,
 }
 
 return M

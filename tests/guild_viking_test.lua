@@ -266,28 +266,28 @@ protocol.source("auto")
 -- untouched, for a key GMCP has not fed -- the two transports coexist with no
 -- source-selection gate between them.
 --
--- Uses RBUILD (Guild.City, trade.lua) rather than SETTLERS: Task 5 gave
--- SETTLERS a real city._gmcp writer, which init.lua's dofile above already
--- registered, so a second protocol.gmcp_handler("SETTLERS", ...) here would
--- now trip the duplicate-key guard. RBUILD has no _gmcp writer anywhere in
--- this plan, so it stays free for this generic dispatch/latch check; CARTS
--- (the other real, unwritten key already used below) is avoided only to
--- keep the two registrations from colliding with each other.
-local rbuild_seen
-protocol.gmcp_handler("RBUILD", function(v) rbuild_seen = v end)
-protocol.on_gmcp("Guild.City", { guild = "viking", rbuild = { a = 1 } })
-check("guild frame routes to its registered writer",
-      rbuild_seen ~= nil and rbuild_seen.a == 1)
-check("the fed key is latched", protocol.gmcp_keys().RBUILD == true)
+-- Observed through a REAL writer's effect on state rather than a probe
+-- registered here. Earlier revisions of this case each picked a key that had
+-- no _gmcp writer yet and registered their own; every one of them broke as
+-- soon as that key gained a real writer and the duplicate-key guard fired
+-- (SETTLERS, then RBUILD, then CARTS). Since the migration is converting every
+-- mapped key, "a key with no writer" is a shrinking set with no members at the
+-- end of it -- so this asks the production path for its own observable answer
+-- instead. BLOCKS is a plain good -> amount lookup, which makes the assertion
+-- a value comparison rather than a shape one.
+protocol.on_gmcp("Guild.Trade",
+  { guild = "viking", blocks = { { good = "gmcprouted", amount = 7 } } })
+check("guild frame routes to its registered writer", S.blocks.gmcprouted == 7)
+check("the fed key is latched", protocol.gmcp_keys().BLOCKS == true)
 seen = {}
 protocol.on_bbe("TESTKEY^^stillmip^^")
 check("mip still flows for a key gmcp has not fed", seen[1] == "stillmip")
 
 -- Kills: a global latch, or a latch that only exists at the frame level
--- rather than per key -- once RBUILD is fed, its own MIP twin must be
+-- rather than per key -- once BLOCKS is fed, its own MIP twin must be
 -- suppressed while TESTKEY (never fed by gmcp) keeps flowing above.
 local suppressed_before_latch = protocol.stats().suppressed
-protocol.ingest("RBUILD", "should-be-suppressed")
+protocol.ingest("BLOCKS", "should-be-suppressed")
 check("a latched key suppresses its own mip twin",
       protocol.stats().suppressed == suppressed_before_latch + 1)
 
@@ -313,14 +313,13 @@ mip.fire("BBE", "TESTKEY^^wired^^")
 check("mip BBE wiring feeds the payload, not the packet sequence number",
       seen[#seen] == "wired")
 
--- CARTS, not the "wiredkey" this case used to send: that name only routed
--- because of the uppercase derivation Task 4 removes, and is not in the
--- gmcp_map key map. carts/CARTS is a real mapped key, unused elsewhere in
--- this suite.
-local gmcp_wired_seen
-protocol.gmcp_handler("CARTS", function(v) gmcp_wired_seen = v end)
-gmcp.fire("Guild", { guild = "viking", carts = "gmcpwired" })
-check("gmcp Guild wiring feeds protocol.on_gmcp", gmcp_wired_seen == "gmcpwired")
+-- What is under test here is the gmcp.on("Guild", ...) subscription reaching
+-- protocol.on_gmcp at all, so it is asserted the same way as above: through a
+-- real writer's effect, not a probe this file registers. See that case's
+-- comment for why a probe is no longer a durable way to write this.
+gmcp.fire("Guild", { guild = "viking",
+                     blocks = { { good = "gmcpwired", amount = 3 } } })
+check("gmcp Guild wiring feeds protocol.on_gmcp", S.blocks.gmcpwired == 3)
 
 -- Fix 1 regression: init.lua's sweep timer must divide lera.time()'s
 -- milliseconds down to seconds before calling protocol.sweep, so a known-total

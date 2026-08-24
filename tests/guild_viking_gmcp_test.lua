@@ -318,9 +318,16 @@ check("sroles_meta maps to SROLES",
   gmcp_map.mip_key("sroles_meta") == "SROLES",
   gmcp_map.mip_key("sroles_meta"))
 
--- Kills: mapping a key the guild sends but nothing consumes. These four must
--- stay unmapped so they are counted rather than routed.
-for _, k in ipairs({ "cart_legs", "queue_legs", "crpr", "refinery_grades" }) do
+-- Kills: mapping a key the guild sends but nothing consumes. These must stay
+-- unmapped so they are counted rather than routed.
+--
+-- cart_legs, queue_legs and refinery_grades were on this list and are not any
+-- more. They were listed on the grounds that nothing renders them, which was
+-- wrong: MIP packed each one inside its parent key, and the Trade pages read a
+-- cart's `legs`, the trade queue's `legs` and a refinery's `grades`. They are
+-- composite halves now -- see gmcp_map.COMPOSITE -- and the cases further down
+-- assert they reach their parent's writer.
+for _, k in ipairs({ "crpr", "gneeds", "rneeds" }) do
   check("unmatched key " .. k .. " is unmapped", gmcp_map.mip_key(k) == nil,
     gmcp_map.mip_key(k))
 end
@@ -368,11 +375,18 @@ check("zip still keeps empty fields after the empty-record fix",
 
 -- ---- routing through the map -----------------------------------------------
 -- Kills: apply_gmcp_key still uppercasing rather than consulting the map.
+-- `queue` -> TQUEUE is the only key in the map whose MIP name is not simply its
+-- own uppercase, so it is the one that can catch a derivation. It is also a
+-- composite half now, so the writer receives the gathered table rather than the
+-- value on its own -- which is what the second assertion pins.
 reset()
 protocol.gmcp_handler("TQUEUE", recorder("TQUEUE"))
 frame("Guild.Trade", { guild = "viking", queue = { a = 1 } })
-check("renamed key routes to its writer",
-  got.TQUEUE ~= nil and got.TQUEUE.a == 1, got.TQUEUE and got.TQUEUE.a)
+check("renamed key routes to its writer", got.TQUEUE ~= nil,
+  got.TQUEUE)
+check("a composite half arrives keyed by its own gmcp name",
+  got.TQUEUE ~= nil and got.TQUEUE.queue ~= nil and got.TQUEUE.queue.a == 1,
+  got.TQUEUE and got.TQUEUE.queue)
 
 -- Kills: an unmapped key counted under its own name rather than being visible
 -- as the GMCP key the guild actually sent.
