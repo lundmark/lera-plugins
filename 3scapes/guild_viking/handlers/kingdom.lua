@@ -701,9 +701,114 @@ local function write_rtargets(parts)
   end
 end
 
+
+-- ---------------------------------------------------------------------------
+-- Guild.Roster writers
+-- ---------------------------------------------------------------------------
+
+-- hird. MIP tolerated five shorter field layouts from older servers; GMCP
+-- carries a record, so a field the server did not send is simply absent and
+-- takes its default. `hired` -> hired_at and `age` -> age_phase are the two
+-- renames; `id` keys the by-id lookup rather than being stored on the record,
+-- exactly as the MIP handler had it.
+--
+-- `mode` is normalised the same way MIP normalised it: anything that is not
+-- "offensive" or "defensive" is "neutral", so an unfamiliar mode reads as the
+-- harmless one rather than reaching the pages verbatim.
+local function write_hird(records)
+  if type(records) ~= "table" then return end
+  S.hird_list = {}
+  S.hird_by_id = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" and r.name ~= nil then
+      local mode = tostring(r.mode or "")
+      if mode ~= "offensive" and mode ~= "defensive" then mode = "neutral" end
+      local rec = {
+        name      = tostring(r.name),
+        status    = r.status ~= nil and tostring(r.status) or nil,
+        level     = tonumber(r.level) or 1,
+        atk       = tonumber(r.atk) or 1,
+        def       = tonumber(r.def) or 1,
+        loyalty   = tonumber(r.loyalty) or 3,
+        hired_at  = tonumber(r.hired) or 0,
+        age_phase = tostring(r.age or "young"),
+        mode      = mode,
+        champ     = tonumber(r.champ) or 0,
+        wpn       = tonumber(r.wpn) or 0,
+        arm       = tonumber(r.arm) or 0,
+      }
+      table.insert(S.hird_list, rec)
+      local hid = tonumber(r.id)
+      if hid then S.hird_by_id[hid] = rec end
+    end
+  end
+end
+
+-- thralls. A mapping of `total` plus one count per building, where MIP sent
+-- the same numbers positionally against a building order the client had to
+-- keep in step with the server's. Keyed by name, that whole class of
+-- off-by-one is gone: an unfamiliar building is simply a key nothing reads,
+-- and a building the server stops sending defaults to 0 rather than shifting
+-- every later count by one.
+local THRALL_BUILDINGS = {
+  "longhouse", "warehouse", "farm", "apiary", "tannery", "fishery",
+  "lumber_yard", "mine", "smithy", "watchtower", "palisade", "salting_house",
+  "bakehouse", "furriers_lodge", "smelter", "weaponry", "armoury", "goldsmith",
+  "skald_hall",
+}
+
+local function write_thralls(rec)
+  if type(rec) ~= "table" then return end
+  S.thralls = tonumber(rec.total) or 0
+  S.thrall_assignments = {}
+  for _, bid in ipairs(THRALL_BUILDINGS) do
+    S.thrall_assignments[bid] = tonumber(rec[bid]) or 0
+  end
+  S.thralls_longhouse = S.thrall_assignments.longhouse
+  S.thralls_warehouse = S.thrall_assignments.warehouse
+end
+
+-- thrall_follower. `state` -> thrall_follower_status is the one rename.
+local function write_thrall_follower(rec)
+  if type(rec) ~= "table" then return end
+  S.thrall_follower_level      = tonumber(rec.level) or 0
+  S.thrall_follower_name       = tostring(rec.name or "")
+  S.thrall_follower_xp         = tonumber(rec.xp) or 0
+  S.thrall_follower_xp_cap     = tonumber(rec.xp_cap) or 0
+  S.thrall_follower_carry_used = tonumber(rec.carry_used) or 0
+  S.thrall_follower_carry_cap  = tonumber(rec.carry_cap) or 0
+  S.thrall_follower_status     = tostring(rec.state or "none")
+end
+
+-- varang_out + varang_in, MIP's two '^'-separated sections. `secs` ->
+-- expires_in. Each half is replaced only when the frame carried it, since the
+-- two are independent keys over a delta transport.
+local function parse_varang(list, cap)
+  local out = {}
+  for _, r in ipairs(list or {}) do
+    if #out >= cap then break end
+    if type(r) == "table" then
+      out[#out + 1] = { name = tostring(r.name or ""),
+                        count = tonumber(r.count) or 0,
+                        expires_in = tonumber(r.secs) or 0 }
+    end
+  end
+  return out
+end
+
+local function write_varang(parts)
+  if type(parts) ~= "table" then return end
+  if parts.varang_out ~= nil then S.varang_out = parse_varang(parts.varang_out, 30) end
+  if parts.varang_in ~= nil then S.varang_in = parse_varang(parts.varang_in, 30) end
+end
+
 M._gmcp = {
-  RAIDLOG  = write_raidlog,
-  RTARGETS = write_rtargets,
+  RAIDLOG          = write_raidlog,
+  RTARGETS         = write_rtargets,
+  HIRD             = write_hird,
+  THRALLS          = write_thralls,
+  THRALL_FOLLOWER  = write_thrall_follower,
+  VARANG           = write_varang,
 }
 
 return M

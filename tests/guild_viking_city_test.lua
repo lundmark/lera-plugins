@@ -459,6 +459,9 @@ local EXPECTED_GMCP_WRITERS = {
   "VMAP",
   -- Guild.Fleet (4)
   "SHIPS", "SUPG", "RAIDLOG", "RTARGETS",
+  -- Guild.Roster (10)
+  "STAFF", "BONDS", "TRAIN", "COURIER", "SPY", "VFIND", "HIRD", "THRALLS",
+  "THRALL_FOLLOWER", "VARANG",
 }
 
 local function collect_gmcp_writers()

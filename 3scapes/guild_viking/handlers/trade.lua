@@ -518,4 +518,206 @@ M.VFIND = function(val)
   end
 end
 
+-- ---------------------------------------------------------------------------
+-- Guild.Roster writers
+-- ---------------------------------------------------------------------------
+-- The mudlib's _v_* builders (client.h) are the canonical record shape; MIP's
+-- rows are those same records joined, so the data is identical and only the
+-- field names differ. Each rename below is called out where it happens,
+-- because a rename is the one thing a transport-equivalence test cannot see.
+--
+-- `gneeds` and `rneeds` are deliberately left unmapped: they are Guild.Roster
+-- keys with no MIP counterpart and no consumer in this plugin, so mapping them
+-- would add state nothing reads. They stay counted under their GMCP names in
+-- /vik source, which is where a future consumer would go looking.
+
+-- staff. `stats` is a comma-joined string in a fixed stat order on both
+-- transports (the server builds one string for both -- see _v_staff), so it is
+-- parsed here exactly as the MIP handler parses it, against the same
+-- STAFF_STAT_ORDER. The record also carries `id` and `best_stat`, which MIP
+-- never sent and nothing reads; they are ignored rather than stored.
+local function write_staff(records)
+  if type(records) ~= "table" then return end
+  S.staff_list = {}
+  for _, r in ipairs(records) do
+    if #S.staff_list >= 50 then break end
+    if type(r) == "table" then
+      local stats = {}
+      local i = 0
+      for v in tostring(r.stats or ""):gmatch("[^,]+") do
+        i = i + 1
+        if STAFF_STAT_ORDER[i] then stats[STAFF_STAT_ORDER[i]] = tonumber(v) or 0 end
+      end
+      table.insert(S.staff_list, {
+        name        = tostring(r.name or ""),
+        -- `assigned` -> assigned_to, `stat` -> stat_key, `arrive` -> arrive_at.
+        assigned_to = tostring(r.assigned or "0"),
+        stat_key    = tostring(r.stat or ""),
+        stats       = stats,
+        trait       = tostring(r.trait or "0"),
+        loyalty     = tonumber(r.loyalty) or 3,
+        age         = tostring(r.age or "veteran"),
+        arrive_at   = tonumber(r.arrive) or 0,
+      })
+    end
+  end
+end
+
+-- bonds. `a`/`b` are the two staff ids the bond joins.
+local function write_bonds(records)
+  if type(records) ~= "table" then return end
+  S.bonds_list = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" then
+      table.insert(S.bonds_list, {
+        id_a  = tonumber(r.a) or 0,
+        id_b  = tonumber(r.b) or 0,
+        ticks = tonumber(r.ticks) or 0,
+        tier  = tonumber(r.tier) or 0,
+      })
+    end
+  end
+end
+
+-- train. A single record, not a list: one member drills at a time.
+local function write_train(rec)
+  if type(rec) ~= "table" then return end
+  S.train = {
+    tier    = tonumber(rec.tier) or 0,
+    name    = tostring(rec.name or ""),
+    stat    = tostring(rec.stat or ""),
+    trained = tonumber(rec.trained) or 0,
+    secs    = tonumber(rec.secs) or 0,
+  }
+end
+
+-- courier + courier_tier. MIP packed the tier and the run list into one value
+-- separated by '!'; GMCP sends the tier as its own top-level key, so the two
+-- are gathered back together here.
+local function write_courier(parts)
+  if type(parts) ~= "table" then return end
+  if parts.courier_tier ~= nil then
+    S.courier.tier = tonumber(parts.courier_tier) or 0
+  end
+  if type(parts.courier) == "table" then
+    local runs = {}
+    for _, r in ipairs(parts.courier) do
+      if type(r) == "table" then
+        table.insert(runs, {
+          good      = tostring(r.good or ""),
+          village   = tostring(r.village or ""),
+          -- `secs` -> return_in.
+          return_in = tonumber(r.secs) or 0,
+          amount    = tonumber(r.amount) or 0,
+          cost      = tonumber(r.cost) or 0,
+          fee       = tonumber(r.fee) or 0,
+        })
+      end
+    end
+    S.courier.runs = runs
+  end
+end
+
+-- spy + spy_scouts, likewise split out of MIP's one '!'-separated value. The
+-- record carries a `sablin` field MIP never sent and nothing reads.
+local function write_spy(parts)
+  if type(parts) ~= "table" then return end
+  local rec = parts.spy
+  if type(rec) == "table" then
+    S.spy.tier     = tonumber(rec.tier) or 0
+    S.spy.mode     = tostring(rec.mode or "")
+    S.spy.village  = tostring(rec.village or "")
+    S.spy.secs     = tonumber(rec.secs) or 0
+    -- sabpct/sabsecs/cdsecs -> sab_pct/sab_secs/cd_secs.
+    S.spy.sab_pct  = tonumber(rec.sabpct) or 0
+    S.spy.sab_secs = tonumber(rec.sabsecs) or 0
+    S.spy.cd_secs  = tonumber(rec.cdsecs) or 0
+  end
+  if type(parts.spy_scouts) == "table" then
+    local scouts = {}
+    for _, sc in ipairs(parts.spy_scouts) do
+      if type(sc) == "table" then
+        -- The scout record's `name` IS the city it is watching; the client has
+        -- always called that field `city`.
+        table.insert(scouts, { city = tostring(sc.name or ""),
+                               amb = tonumber(sc.amb) or 0,
+                               secs = tonumber(sc.secs) or 0 })
+      end
+    end
+    S.spy.scouts = scouts
+  end
+end
+
+-- vfind_hall + vfind_posts + vfind_offers + vfind_auctions, MIP's four
+-- '!'-separated sections. The server sends the three lists only when the hall
+-- exists, so a frame with no hall carries none of them.
+--
+-- The offer and auction records carry more than MIP did (stat, trait, age,
+-- post_id, upkeep / stat, skill, trait, age, part). Those are ignored here:
+-- nothing renders them, and inventing state for them would be state with no
+-- reader.
+local function write_vfind(parts)
+  if type(parts) ~= "table" then return end
+  if type(parts.vfind_hall) == "table" then
+    S.vfind.tier = tonumber(parts.vfind_hall.tier) or 0
+  end
+  if type(parts.vfind_posts) == "table" then
+    local posts = {}
+    for _, r in ipairs(parts.vfind_posts) do
+      if type(r) == "table" then
+        table.insert(posts, {
+          id        = tonumber(r.id) or 0,
+          stat      = tostring(r.stat or ""),
+          min_skill = tonumber(r.min_skill) or 0,
+          max_wage  = tonumber(r.max_wage) or 0,
+          trait     = tostring(r.trait or ""),
+          state     = tostring(r.state or ""),
+        })
+      end
+    end
+    S.vfind.postings = posts
+  end
+  if type(parts.vfind_offers) == "table" then
+    local offers = {}
+    for _, r in ipairs(parts.vfind_offers) do
+      if type(r) == "table" then
+        table.insert(offers, {
+          id         = tonumber(r.id) or 0,
+          name       = tostring(r.name or ""),
+          wage       = tonumber(r.wage) or 0,
+          haggles    = tonumber(r.haggles) or 0,
+          -- `secs` -> expires_in.
+          expires_in = tonumber(r.secs) or 0,
+        })
+      end
+    end
+    S.vfind.offers = offers
+  end
+  if type(parts.vfind_auctions) == "table" then
+    local auctions = {}
+    for _, r in ipairs(parts.vfind_auctions) do
+      if type(r) == "table" then
+        table.insert(auctions, {
+          id        = tonumber(r.id) or 0,
+          name      = tostring(r.name or ""),
+          reserve   = tonumber(r.reserve) or 0,
+          my_bid    = tonumber(r.my_bid) or 0,
+          -- `secs` -> closes_in on this one, not expires_in.
+          closes_in = tonumber(r.secs) or 0,
+        })
+      end
+    end
+    S.vfind.auctions = auctions
+  end
+end
+
+M._gmcp = {
+  STAFF   = write_staff,
+  BONDS   = write_bonds,
+  TRAIN   = write_train,
+  COURIER = write_courier,
+  SPY     = write_spy,
+  VFIND   = write_vfind,
+}
+
 return M

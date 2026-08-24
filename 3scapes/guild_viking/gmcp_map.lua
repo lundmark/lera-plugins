@@ -21,6 +21,14 @@ M.COMPOSITE = {
   -- order for the flat name list.
   RAIDLOG   = { "raidlog", "raidlog_goods" },
   RTARGETS  = { "rtargets_lineage", "rtargets_historical" },
+  -- Guild.Roster. Each of these four was one MIP value with an internal
+  -- separator ('!' for courier/spy/vfind, '^' for varang) packing what the
+  -- server holds as separate structures; GMCP sends the structures, so the
+  -- writer gathers them back into the one state table the pages read.
+  COURIER   = { "courier", "courier_tier" },
+  SPY       = { "spy", "spy_scouts" },
+  VARANG    = { "varang_out", "varang_in" },
+  VFIND     = { "vfind_hall", "vfind_posts", "vfind_offers", "vfind_auctions" },
   -- Guild.Map is composite in full, not per key. Its planes cannot be read
   -- without `enc` (which encoding packed them) and `legend` (what each code
   -- means), and its rows cannot be sized without `w` -- so routing the keys
@@ -44,6 +52,16 @@ local MAP = {
   cdtime = "CDTIME", raid = "RAID", heat = "HEAT", patrol = "PATROL",
   builds = "BUILDS", garrison = "GARRISON", buildings = "BUILDINGS",
   monuments_cap = "MONUMENTS", monuments_list = "MONUMENTS",
+
+  -- Guild.Roster. gneeds and rneeds are deliberately absent: they have no MIP
+  -- counterpart and no consumer, so they stay counted under their own names.
+  staff = "STAFF", hird = "HIRD", bonds = "BONDS", train = "TRAIN",
+  thralls = "THRALLS", thrall_follower = "THRALL_FOLLOWER",
+  courier = "COURIER", courier_tier = "COURIER",
+  spy = "SPY", spy_scouts = "SPY",
+  varang_out = "VARANG", varang_in = "VARANG",
+  vfind_hall = "VFIND", vfind_posts = "VFIND",
+  vfind_offers = "VFIND", vfind_auctions = "VFIND",
 
   -- Guild.Fleet
   ships = "SHIPS", supg = "SUPG",
