@@ -46,16 +46,25 @@ end
 -- ";", fields with "|". This mirrors the server's _v_join(records, order),
 -- which is what produces the string, so one decoder covers every key whose
 -- MIP encoder is _v_join. A flat key is a one-record list.
+--
+-- A trailing ";" or a doubled ";;" makes util.split(val, ";") yield an empty
+-- chunk -- unlike LEGACY's own val:gmatch("[^;]+"), which never produced one.
+-- An empty chunk is skipped so it doesn't become a phantom empty record
+-- (e.g. a trailing ";" on a SEVENTS/SPROJ value must not insert a blank
+-- card). This is a record-level check only: an empty *field* within a real
+-- chunk -- "1||" is one record with two empty fields -- is untouched.
 function M.zip(order, val)
   local out = {}
   if type(val) ~= "string" or val == "" then return out end
   for _, chunk in ipairs(util.split(val, ";")) do
-    local fields = util.split(chunk, "|")
-    local rec = {}
-    for i, name in ipairs(order) do
-      rec[name] = fields[i] or ""
+    if chunk ~= "" then
+      local fields = util.split(chunk, "|")
+      local rec = {}
+      for i, name in ipairs(order) do
+        rec[name] = fields[i] or ""
+      end
+      out[#out + 1] = rec
     end
-    out[#out + 1] = rec
   end
   return out
 end

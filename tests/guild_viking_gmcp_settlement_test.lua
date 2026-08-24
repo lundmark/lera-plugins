@@ -118,15 +118,82 @@ equivalent("settlerx", "SETTLERX",
     "settler_emp_score", "settler_sentiment", "settler_supply_next",
     "settler_pop_next" })
 
+-- Kills: a decoder that zips a short frame against the canonical 24-field
+-- order regardless of length, which would silently misread every field from
+-- LEGACY's retired 17-field layout onward (its position 17 is comm_upkeep,
+-- not tax_income, so everything shifts). A 17-field frame is well short of
+-- even the 23-field layout city_test.lua's own SETTLERX case sends (safe,
+-- since positions 1-23 mean the same thing in both layouts -- see
+-- write_settlerx's header comment), so the guard must reject this one.
+do
+  local fields = { "settler_edict", "settler_edict_left", "settler_edict_cd",
+    "settler_housing_cap", "settler_housing_plots", "settler_housing_avg",
+    "settler_housing_quality", "settler_housing_upkeep", "settler_jobs",
+    "settler_employed", "settler_market_staffed", "settler_mult_pct",
+    "settler_security", "settler_dignity", "settler_flourishing",
+    "settler_community_net", "settler_community_upkeep", "settler_sustenance",
+    "settler_emp_score", "settler_sentiment", "settler_supply_next",
+    "settler_pop_next" }
+  for _, f in ipairs(fields) do S[f] = "sentinel" end
+  -- 17 pipe fields -- LEGACY's shortest retired tier.
+  city.SETTLERX("feast|100|20|500|20|30|80|10|200|150|5|105|60|40|75|20|5")
+  local all_unchanged = true
+  for _, f in ipairs(fields) do
+    if S[f] ~= "sentinel" then all_unchanged = false end
+  end
+  check("settlerx short frame writes nothing", all_unchanged)
+end
+
 equivalent("sproj", "SPROJ",
   { "id", "kind", "from", "to", "secs", "mats", "done", "detail", "paid" },
   "p1|build|A1|B2|300|timber:5|0|detail one|1;p2|raze|C3|D4|120||1|detail two|0",
   { "settler_projects" }, true)
 
-equivalent("sevents", "SEVENTS",
-  { "ts", "msg" },
-  "1000|first event;1001|second event",
-  { "settler_events" }, true)
+-- sevents is also hand-encoded (players/viking/obj/include/client.h:
+-- `out += r["ts"] + "|" + r["msg"]"), not _v_join -- msg is inserted raw and
+-- may itself contain "|", so (like sconsume) it cannot go through
+-- gmcp_map.zip: zip would split every "|" and truncate msg at the first one.
+-- LEGACY's own decode (`entry:match("^([^|]+)|(.*)$")`) splits only the
+-- first pipe, capturing the remainder greedily; city.SEVENTS keeps doing
+-- exactly that. So, like sconsume, these cases construct the "GMCP form" as
+-- a literal records list rather than via zip.
+do
+  local fields = { "settler_events" }
+  clear(fields)
+  city.SEVENTS("1000|first event;1001|second event")
+  local via_mip = snapshot(fields)
+
+  clear(fields)
+  city._gmcp.SEVENTS({ { ts = "1000", msg = "first event" },
+                        { ts = "1001", msg = "second event" } })
+  local via_gmcp = snapshot(fields)
+
+  check("sevents transport equivalence", same(via_mip, via_gmcp), "mip vs gmcp differ")
+end
+
+-- Kills: a decoder that splits msg on every "|" (e.g. zip against a
+-- declared {ts, msg} order), which would truncate msg at the first embedded
+-- pipe instead of keeping LEGACY's "capture the remainder greedily"
+-- behavior. A real chat/event message can contain "|" (e.g. a copied
+-- command or a channel name), so this is not a hypothetical.
+do
+  local fields = { "settler_events" }
+  clear(fields)
+  city.SEVENTS("1000|msg|with|pipe")
+  local via_mip = snapshot(fields)
+
+  clear(fields)
+  city._gmcp.SEVENTS({ { ts = "1000", msg = "msg|with|pipe" } })
+  local via_gmcp = snapshot(fields)
+
+  check("sevents pipe-in-msg transport equivalence", same(via_mip, via_gmcp),
+    "mip vs gmcp differ")
+  check("sevents pipe-in-msg preserves the full message",
+    via_mip.settler_events and via_mip.settler_events[1]
+      and via_mip.settler_events[1].msg == "msg|with|pipe",
+    via_mip.settler_events and via_mip.settler_events[1]
+      and via_mip.settler_events[1].msg)
+end
 
 -- Kills: a writer that clears state it does not own, which would make a delta
 -- frame for one key wipe another key's fields.

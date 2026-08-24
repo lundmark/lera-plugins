@@ -164,7 +164,23 @@ local SETTLERX_ORDER = { "edict", "edict_left", "edict_cd", "housing_cap",
   "sustenance", "employment_score", "sentiment", "supply_next_secs",
   "pop_next_secs", "max_housing_plots" }
 
+-- Guard against a short frame silently mis-assigning fields: zipping fewer
+-- than this many raw "|" fields against the canonical order would read a
+-- retired shorter layout's fields at the wrong canonical position (e.g. its
+-- position 17 is comm_upkeep, not tax_income), producing a wrong-but-
+-- plausible number instead of visibly nothing. The threshold is 23, not the
+-- full 24: position 24 (max_housing_plots) is the one canonical field with
+-- no counterpart at all in LEGACY's old wire format (see write_settlerx's
+-- header comment above) -- every position up through 23 means the same
+-- thing in both layouts, so a 23-field frame is safe to decode. That is
+-- exactly what city_test.lua's own frozen SETTLERX case sends; anything
+-- shorter uses an incompatible position layout and is rejected outright.
+local SETTLERX_MIN_FIELDS = 23
+
 M.SETTLERX = function(val)
+  if type(val) ~= "string" or #util.split(val, "|") < SETTLERX_MIN_FIELDS then
+    return
+  end
   write_settlerx(gmcp_map.zip(SETTLERX_ORDER, val)[1])
 end
 
@@ -571,7 +587,14 @@ M.DCYCLE = function(val)
   end
 end
 
--- LEGACY 2648
+-- LEGACY 2648. Unlike the other keys in this file, SEVENTS is hand-encoded
+-- (players/viking/obj/include/client.h: `out += r["ts"] + "|" + r["msg"]`),
+-- not _v_join: msg is inserted raw and may itself contain "|" (a copied
+-- command, a channel name, ...), so it cannot be zipped against a declared
+-- {ts, msg} order -- that would split on every pipe and truncate msg at the
+-- first one. LEGACY's own decode captures the remainder greedily
+-- (`entry:match("^([^|]+)|(.*)$")`); this decoder does the same and hands
+-- write_sevents the identical {ts=, msg=} records it already took.
 local function write_sevents(recs)
   S.settler_events = {}
   for _, r in ipairs(recs or {}) do
@@ -579,10 +602,15 @@ local function write_sevents(recs)
   end
 end
 
-local SEVENTS_ORDER = { "ts", "msg" }
-
 M.SEVENTS = function(val)
-  write_sevents(gmcp_map.zip(SEVENTS_ORDER, val))
+  local recs = {}
+  for entry in val:gmatch("[^;]+") do
+    local ts, msg = entry:match("^([^|]+)|(.*)$")
+    if ts then
+      recs[#recs + 1] = { ts = ts, msg = msg }
+    end
+  end
+  write_sevents(recs)
 end
 
 -- Pattern-dispatched key (LEGACY matches this with key:match(...) rather

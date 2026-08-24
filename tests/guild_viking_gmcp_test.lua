@@ -332,6 +332,26 @@ check("zip keeps empty fields",
 -- Kills: an empty value producing a phantom record.
 check("zip of empty string is empty", #gmcp_map.zip({ "a" }, "") == 0)
 
+-- Kills: a trailing ";" producing a phantom empty-record, distinct from an
+-- entirely empty value above. util.split(";"-separated) preserves a trailing
+-- empty chunk; a record list decoder must drop it, the same way LEGACY's
+-- val:gmatch("[^;]+") never yielded one.
+recs = gmcp_map.zip({ "a", "b" }, "1|2;")
+check("zip drops a phantom record from a trailing ';'", #recs == 1 and recs[1].a == "1",
+  #recs)
+
+-- Kills: a doubled ";;" mid-string producing a phantom empty-record between
+-- two real ones.
+recs = gmcp_map.zip({ "a", "b" }, "1|2;;3|4")
+check("zip drops a phantom record from a doubled ';;' mid-string",
+  #recs == 2 and recs[1].a == "1" and recs[2].a == "3", #recs)
+
+-- Re-assertion: dropping empty *records* must not touch empty *fields* --
+-- "1||" is one record with two empty fields, not a record to drop.
+recs = gmcp_map.zip({ "a", "b", "c" }, "1||")
+check("zip still keeps empty fields after the empty-record fix",
+  #recs == 1 and recs[1].b == "" and recs[1].c == "", recs[1] and recs[1].c)
+
 -- ---- routing through the map -----------------------------------------------
 -- Kills: apply_gmcp_key still uppercasing rather than consulting the map.
 reset()
