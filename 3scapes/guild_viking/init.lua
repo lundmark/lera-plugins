@@ -352,7 +352,11 @@ end
 function M.on_load()
   mip_id = mip.on("BBE", function(key, code, data) protocol.on_bbe(data) end)
   fff_id = mip.on("FFF", function(key, code, data) combat.on_composite(data) end)
-  gmcp_id = gmcp.on("Viking", function(pkg, data) protocol.on_gmcp(pkg, data) end)
+  -- One registration covers every Guild.* sub-package: lera dispatches on
+  -- dot-boundary prefix, and advertising `Guild 1` subscribes them all through
+  -- the mudlib's root fallback. A panel added server-side later needs no change
+  -- here.
+  gmcp_id = gmcp.on("Guild", function(pkg, data) protocol.on_gmcp(pkg, data) end)
   -- protocol.sweep's grace period is measured in seconds (LEGACY parity, see
   -- protocol.lua's sweep comment); lera.time() is milliseconds, so it must be
   -- divided down here at the call site rather than changing sweep()'s contract.
@@ -509,6 +513,7 @@ end
 function M.on_disconnect()
   persist.save()
   state_mod.reset_connection()
+  protocol.reset_connection()
 end
 
 -- ---------------------------------------------------------------------------

@@ -13,6 +13,26 @@ local source_mode = "auto"   -- "mip" | "gmcp" | "auto"
 local gmcp_latched = false
 local trace_on = false   -- diagnostic: /vik trace -- off by default, silent otherwise
 
+-- GMCP-side writers, keyed by MIP key. Registered from a handler module's
+-- `_gmcp` table, so one key's two transports are declared next to each other.
+local gmcp_handlers = {}
+
+-- Reserved envelope members the protocol layer owns (gmcp_guild_key_reserved).
+local ENVELOPE = { guild = true, full = true, page = true, pages = true }
+
+local GUILD_NAME = "Vikings"
+
+local gmcp_stats = { frames = 0, foreign = 0, unknown = {}, applied = {} }
+
+function protocol.gmcp_handler(key, fn)
+  if gmcp_handlers[key] then error("duplicate gmcp handler: " .. key) end
+  gmcp_handlers[key] = fn
+end
+
+function protocol.gmcp_stats()
+  return gmcp_stats
+end
+
 function protocol.handler(key, fn)
   if handlers[key] then error("duplicate handler: " .. key) end
   handlers[key] = fn
@@ -117,20 +137,51 @@ function protocol.on_bbe(text)
   feed(text)
 end
 
+-- One Guild.* frame. Keys are applied individually: a key absent from a frame
+-- means unchanged, never empty, because ordinary frames are deltas.
 function protocol.on_gmcp(package, data)
-  if type(data) ~= "string" then return end
-  -- Latch only on a real message: a cheap pre-check for at least one
-  -- ^^-delimited pair, so an empty or garbage payload (no pairs at all)
-  -- cannot flip auto mode away from mip before genuine Viking GMCP traffic
-  -- has actually arrived.
-  if source_mode ~= "mip" and not gmcp_latched and data:find("^^", 1, true) then
-    gmcp_latched = true
-  end
-  if active_source() ~= "gmcp" then
-    stats.suppressed = stats.suppressed + 1
+  if type(data) ~= "table" then return end
+  gmcp_stats.frames = gmcp_stats.frames + 1
+
+  -- Whose guild sent this. A frame from another guild must never reach a
+  -- writer: the protocol layer stamps `guild` precisely so a client can tell.
+  if data.guild ~= GUILD_NAME then
+    gmcp_stats.foreign = gmcp_stats.foreign + 1
     return
   end
-  feed(data)
+
+  for key, value in pairs(data) do
+    if not ENVELOPE[key] then
+      protocol.apply_gmcp_key(key, value)
+    end
+  end
+end
+
+-- Route one payload key. Task 4 replaces the naive uppercase with the key map.
+function protocol.apply_gmcp_key(gmcp_key, value)
+  local mip_key = tostring(gmcp_key):upper()
+  local fn = gmcp_handlers[mip_key]
+  if not fn then
+    gmcp_stats.unknown[mip_key] = (gmcp_stats.unknown[mip_key] or 0) + 1
+    return
+  end
+  local ok, err = pcall(fn, value)
+  if not ok then
+    stats.errors[mip_key] = (stats.errors[mip_key] or 0) + 1
+    if not reported_errors[mip_key] then
+      reported_errors[mip_key] = true
+      print("[vik] gmcp writer error " .. mip_key .. ": " .. tostring(err))
+    end
+    return
+  end
+  gmcp_stats.applied[mip_key] = (gmcp_stats.applied[mip_key] or 0) + 1
+  ui.dirty()
+end
+
+-- Cleared on disconnect: the next session may not negotiate GMCP at all, and
+-- stale GMCP state must not outlive the connection that produced it.
+function protocol.reset_connection()
+  gmcp_stats = { frames = 0, foreign = 0, unknown = {}, applied = {} }
 end
 
 -- Legacy KEY_N (no total) batches complete only here. LEGACY
