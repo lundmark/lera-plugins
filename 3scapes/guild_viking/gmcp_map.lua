@@ -66,6 +66,13 @@ M.COMPOSITE = {
                 "dynasty_living", "dynasty_cap", "dynasty_children",
                 "dynasty_schooling", "dynasty_spouse" },
   WAR       = { "war_cb", "war_camp", "war_incoming" },
+  -- The campaign war map, folded into Guild.Kingdom. MIP spread it over
+  -- WMAP/WMR/WMO/WMQ/WMU/WMP/WMPL/WSG/WSPOIL with a burst-and-commit protocol;
+  -- WMEND, its row-count sentinel, is deliberately untranslated for the same
+  -- reason CPEND is.
+  WMAP      = { "campaign", "campaign_terrain", "campaign_units",
+                "campaign_queue", "campaign_prison", "campaign_prison_roster",
+                "campaign_siege" },
   -- Guild.Map is composite in full, not per key. Its planes cannot be read
   -- without `enc` (which encoding packed them) and `legend` (what each code
   -- means), and its rows cannot be sized without `w` -- so routing the keys
@@ -76,6 +83,31 @@ M.COMPOSITE = {
   VMAP      = { "w", "h", "active", "pos", "legend", "legend_edge", "enc",
                 "terrain", "east", "south", "landmarks" },
 }
+
+-- Packages whose ENTIRE payload is one MIP key's data, dispatched as a unit
+-- without consulting the key map below.
+--
+-- This is not a convenience. The key map is a single flat table keyed by GMCP
+-- key name, which works only while a name means the same thing in every
+-- package -- and Guild.War breaks that: its `w`, `h`, `active` and `terrain`
+-- are the battle board's, while Guild.Map's keys of exactly those names are
+-- the territory map's. Routed through the flat map, a battle's grid would
+-- overwrite the territory map. Guild.War is a whole package for one MIP key
+-- anyway, so dispatching it as a unit sidesteps the ambiguity rather than
+-- teaching every lookup about packages.
+--
+-- Keyed by the sub-package name -- the part after "Guild." -- compared
+-- case-insensitively, like the guild name in the envelope.
+M.PACKAGE_KEY = {
+  war = "BATTLE",
+}
+
+-- The sub-package a Guild.* package name names, lowercased, or nil.
+function M.package_key(package)
+  local sub = tostring(package or ""):match("^[Gg][Uu][Ii][Ll][Dd]%.(.+)$")
+  if not sub then return nil end
+  return M.PACKAGE_KEY[sub:lower()]
+end
 
 local MAP = {
   -- Guild.Settlement
@@ -122,6 +154,10 @@ local MAP = {
   dynasty_cap = "DYNASTY", dynasty_children = "DYNASTY",
   dynasty_schooling = "DYNASTY", dynasty_spouse = "DYNASTY",
   war_cb = "WAR", war_camp = "WAR", war_incoming = "WAR",
+  campaign = "WMAP", campaign_terrain = "WMAP", campaign_units = "WMAP",
+  campaign_queue = "WMAP", campaign_prison = "WMAP",
+  campaign_prison_roster = "WMAP", campaign_siege = "WMAP",
+
 
   -- Guild.Voyage. vrelics is deliberately absent: GMCP carries relic IDs and
   -- the display-name lookup is server-side logic the mudlib keeps in the MIP

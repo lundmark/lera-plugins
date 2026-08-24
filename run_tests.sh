@@ -76,6 +76,7 @@ LERA_ROOT=$lera_root "$luajit" tests/guild_viking_gmcp_trade_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_gmcp_city_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_gmcp_voyage_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_gmcp_kingdom_test.lua
+LERA_ROOT=$lera_root "$luajit" tests/guild_viking_gmcp_war_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_trade_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_voyage_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_kingdom_test.lua

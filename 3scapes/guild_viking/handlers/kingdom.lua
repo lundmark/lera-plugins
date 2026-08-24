@@ -1048,6 +1048,236 @@ local function write_war(parts)
   S.war = (#w.claims > 0 or w.incoming or #w.campaigns > 0) and w or nil
 end
 
+-- ---------------------------------------------------------------------------
+-- Guild.Kingdom: the campaign war map
+-- ---------------------------------------------------------------------------
+-- MIP spread this over WMAP/WMR/WMO/WMQ/WMU/WMP/WMPL/WSG/WSPOIL with the same
+-- burst-and-commit protocol the city plan used, and WMEND compared a promised
+-- row count before committing. GMCP sends the campaign whole, so the writer
+-- commits outright -- and, as with the city plan, the server declines to
+-- translate WMEND into a key at all.
+--
+-- Captives and the siege park persist independently of an active campaign,
+-- which the MIP path expressed by assigning them before the active check.
+-- Kept.
+--
+-- `campaign_units` is one merged overlay list where MIP sent three sentinel
+-- forms in WMO. Only the three MIP carried are consumed: kind "host" is your
+-- stack (id "A"), "objective" is the target (id "*"), and "foe" keeps its
+-- numeric id. The server also emits "work", "poi" and "ally" overlays, which
+-- MIP never sent and popups/war.lua has no cell rendering for; they are
+-- skipped rather than fed in under ids the renderer would not recognise.
+-- Rendering them is a feature, not part of a transport change.
+local CAMPAIGN_UNIT_ID = { host = "A", objective = "*" }
+
+-- "A1" -> column 0, row 0. The queue labels are 1-based letters-and-digits;
+-- MIP sent the same strings and the client did this conversion itself.
+local function square_to_cell(label)
+  local col = string.byte(label:sub(1, 1) or "") 
+  if not col then return nil end
+  col = col - 65
+  local row = (tonumber(label:sub(2)) or 0) - 1
+  if col < 0 or row < 0 then return nil end
+  return col, row
+end
+
+local function write_campaign(parts)
+  if type(parts) ~= "table" then return end
+  local rec = parts.campaign
+  if type(rec) ~= "table" then return end
+
+  -- Captives and the siege park first: they outlive a campaign.
+  if type(parts.campaign_prison) == "table" then
+    local pr = parts.campaign_prison
+    local roster = {}
+    for _, r in ipairs(parts.campaign_prison_roster or {}) do
+      if type(r) == "table" then
+        roster[#roster + 1] = {
+          id = tonumber(r.id) or 0, name = tostring(r.name or ""),
+          size = tonumber(r.size) or 0,
+          cmd = (tonumber(r.cmd) or 0) ~= 0,
+          val = tonumber(r.val) or 0,
+        }
+      end
+    end
+    S.prison = {
+      held = tonumber(pr.held) or 0,
+      -- `capacity` -> cap.
+      cap = tonumber(pr.capacity) or 0,
+      kin = tonumber(pr.kin) or 0,
+      pending = (tonumber(pr.pending) or 0) ~= 0,
+      pend_name = tostring(pr.pend_name or ""),
+      pend_size = tonumber(pr.pend_size) or 0,
+      pend_cmd = (tonumber(pr.pend_cmd) or 0) ~= 0,
+      roster = roster,
+    }
+  end
+  if type(parts.campaign_siege) == "table" then
+    S.siege = { engines = tonumber(parts.campaign_siege.engines) or 0,
+                cap = tonumber(parts.campaign_siege.capacity) or 0 }
+  end
+
+  if (tonumber(rec.active) or 0) ~= 1 then
+    -- No campaign: the map clears, but the two above stay.
+    S.war_map = nil
+    S.wm_pending = nil
+    return
+  end
+
+  local wm = {
+    active = true,
+    dim = tonumber(rec.dim) or 0,
+    turn = tonumber(rec.turn) or 0,
+    mode = tostring(rec.mode or "offense"),
+    pending = tonumber(rec.pending) or 0,
+    town = tostring(rec.town or ""),
+    works_budget = tonumber(rec.works_budget) or 0,
+    march_eta = tonumber(rec.march_eta) or 0,
+    rows = {}, units = {}, queue = {}, queues = {},
+    upkeep = {
+      food = tonumber(rec.upkeep_food) or 0,
+      mead = tonumber(rec.upkeep_mead) or 0,
+      tools = tonumber(rec.upkeep_tools) or 0,
+      iron = tonumber(rec.upkeep_iron) or 0,
+      daler = tonumber(rec.upkeep_daler) or 0,
+    },
+    -- MIP called the war-points field `renown` on this record; the server
+    -- calls it wpts. Same number.
+    spoils = {
+      daler = tonumber(rec.spoils_daler) or 0,
+      renown = tonumber(rec.spoils_wpts) or 0,
+      deeds = tonumber(rec.spoils_deeds) or 0,
+    },
+    prison = S.prison,
+    siege = S.siege,
+  }
+
+  for i, row in ipairs(parts.campaign_terrain or {}) do
+    wm.rows[i] = tostring(row)
+  end
+
+  for _, u in ipairs(parts.campaign_units or {}) do
+    if type(u) == "table" then
+      local kind = tostring(u.kind or "")
+      local id = CAMPAIGN_UNIT_ID[kind]
+      if kind == "foe" then id = tostring(u.id or "") end
+      if id and id ~= "" then
+        wm.units[#wm.units + 1] = {
+          id = id, c = tonumber(u.c) or 0, r = tonumber(u.r) or 0,
+          size = tonumber(u.size) or 0, f = tostring(u.flag or ""),
+        }
+      end
+    end
+  end
+
+  for _, q in ipairs(parts.campaign_queue or {}) do
+    if type(q) == "table" and q.id ~= nil and q.label ~= nil then
+      local id = tostring(q.id)
+      local label = tostring(q.label)
+      local c, r = square_to_cell(label)
+      if c then
+        local list = wm.queues[id]
+        if not list then list = {}; wm.queues[id] = list end
+        list[#list + 1] = { c = c, r = r, sq = label }
+      end
+    end
+  end
+  wm.queue = wm.queues.A or {}
+
+  S.war_map = wm
+  S.wm_pending = nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Guild.War: the tactical battle board
+-- ---------------------------------------------------------------------------
+-- S.war_points is set from every frame, active or not, exactly as the MIP
+-- handler set it from every BATTLE value: it is the running total, not a
+-- property of a battle in progress.
+--
+-- The grids arrive as arrays of row strings. MIP sent one flat string per grid
+-- and the client sliced it into rows itself, guarding on the string being long
+-- enough -- a guard that exists only because a truncated wire value was
+-- possible. Rows are rows here, so the slicing and its guard both go.
+--
+-- `wall_hp` and `wall_tier` are carried by the payload and have no reader in
+-- popups/war.lua, so they are not stored.
+local function write_battle(rec)
+  if type(rec) ~= "table" then return end
+  S.war_points = tonumber(rec.war_points) or 0
+  if (tonumber(rec.active) or 0) ~= 1 then
+    S.battle = nil
+    return
+  end
+
+  local b = {
+    phase = tostring(rec.phase or ""),
+    turn = tonumber(rec.turn) or 0,
+    mode = tostring(rec.mode or ""),
+    target = tostring(rec.target or ""),
+    budget = tonumber(rec.budget) or 0,
+    spent = tonumber(rec.spent) or 0,
+    width = tonumber(rec.w) or 8,
+    height = tonumber(rec.h) or 8,
+    dz = tonumber(rec.dz) or 2,
+    war_points = tonumber(rec.war_points) or 0,
+    units = {}, reserve = {},
+  }
+
+  if type(rec.terrain) == "table" and #rec.terrain > 0 then
+    b.terrain_rows = {}
+    for i, row in ipairs(rec.terrain) do b.terrain_rows[i] = tostring(row) end
+    -- popups/war.lua reads terrain_rows; `terrain` is kept as the same flat
+    -- concatenation MIP delivered, because the Battle Board's own tooltip path
+    -- indexes it directly.
+    b.terrain = table.concat(b.terrain_rows)
+  end
+  if type(rec.works) == "table" and #rec.works > 0 then
+    b.works_rows = {}
+    for i, row in ipairs(rec.works) do b.works_rows[i] = tostring(row) end
+  end
+
+  for _, u in ipairs(rec.units or {}) do
+    if type(u) == "table" then
+      -- `side` is "Y" for yours and anything else for the foe, as it was on
+      -- the wire.
+      local side = (tostring(u.side) == "Y") and "you" or "foe"
+      local utype = tostring(u.type or "")
+      -- Allied house levies ride under the hird type because the server reuses
+      -- foe_hird for allied aid; the client renames them so they load the
+      -- green-tinted art. Ported verbatim from the MIP handler.
+      if side == "you" and utype == "foe_hird" then utype = "ally_levy" end
+      local leader = tostring(u.leader or "")
+      b.units[#b.units + 1] = {
+        side = side,
+        label = tostring(u.label or ""),
+        size = tonumber(u.size) or 0,
+        coord = tostring(u.coord or ""),
+        morale = tonumber(u.morale) or 0,
+        utype = utype,
+        leader = (leader ~= "") and leader or nil,
+        bid = tonumber(u.bid) or 0,
+        ord = tonumber(u.ord) or 0,
+      }
+    end
+  end
+
+  for _, u in ipairs(rec.reserve or {}) do
+    if type(u) == "table" then
+      local leader = tostring(u.leader or "")
+      b.reserve[#b.reserve + 1] = {
+        label = tostring(u.label or ""),
+        size = tonumber(u.size) or 0,
+        uid = tonumber(u.uid) or 0,
+        cost = tonumber(u.cost) or 0,
+        leader = (leader ~= "") and leader or nil,
+      }
+    end
+  end
+
+  S.battle = b
+end
+
 M._gmcp = {
   RAIDLOG          = write_raidlog,
   RTARGETS         = write_rtargets,
@@ -1066,6 +1296,8 @@ M._gmcp = {
   ARMY             = write_army,
   DYNASTY          = write_dynasty,
   WAR              = write_war,
+  WMAP             = write_campaign,
+  BATTLE           = write_battle,
 }
 
 return M

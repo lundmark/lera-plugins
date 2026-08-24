@@ -476,9 +476,11 @@ local EXPECTED_GMCP_WRITERS = {
   "VOYAGE", "LONGSHIP", "VOYAGE_WAIT", "VOFFERS", "VRESOLVE", "VQPATH",
   "VSAGA", "VMEM", "VCURIOS", "VGOODS", "VAIDS", "VRUNES", "VBOONS",
   "VSAILED", "VSPOILS", "VREAGENT", "FLEET_RENOWN",
-  -- Guild.Kingdom (7; the campaign war-map cluster BATTLE/WM* has no writer
-  -- yet)
-  "GRUDGES", "STANDINGS", "VREP", "DIPLO", "ARMY", "DYNASTY", "WAR",
+  -- Guild.Kingdom (9, including the campaign war map -- one composite where
+  -- MIP spread it over WMAP/WMR/WMO/WMQ/WMU/WMP/WMPL/WSG/WSPOIL) and
+  -- Guild.War (BATTLE, routed as a whole package)
+  "GRUDGES", "STANDINGS", "VREP", "DIPLO", "ARMY", "DYNASTY", "WAR", "WMAP",
+  "BATTLE",
   -- Guild.State (4 -- its hp/points/gxp/ledung groups have no MIP twin and are
   -- owned by combat.lua's protocol-independent triggers)
   "DALER", "GOD_POWER", "VMREG", "VMNEW",

@@ -336,6 +336,27 @@ local function apply_gmcp_frame(data, skip_envelope)
   end
 end
 
+-- A package whose whole payload is one MIP key's data bypasses the key map
+-- entirely -- see gmcp_map.PACKAGE_KEY for why that has to exist rather than
+-- being a shortcut. Everything else is applied key by key.
+local function apply_gmcp_package(package, data, skip_envelope)
+  local whole = gmcp_map.package_key(package)
+  if not whole then
+    apply_gmcp_frame(data, skip_envelope)
+    return
+  end
+  -- The envelope is the protocol layer's, not the writer's, so it is stripped
+  -- here too. merge_page already excluded it from a de-paged run's keys.
+  local payload = data
+  if skip_envelope then
+    payload = {}
+    for key, value in pairs(data) do
+      if not ENVELOPE[key] then payload[key] = value end
+    end
+  end
+  dispatch_gmcp(whole, payload)
+end
+
 -- One Guild.* frame. Keys are applied individually: a key absent from a frame
 -- means unchanged, never empty, because ordinary frames are deltas. A frame
 -- may be split across pages, and an oversized array key sliced across those
@@ -368,7 +389,7 @@ function protocol.on_gmcp(package, data)
   -- this frame is complete on its own.
   if not page or not pages or pages <= 1 then
     page_runs[package] = nil
-    apply_gmcp_frame(data, true)
+    apply_gmcp_package(package, data, true)
     return
   end
 
@@ -391,7 +412,7 @@ function protocol.on_gmcp(package, data)
 
   if page == pages then
     page_runs[package] = nil
-    apply_gmcp_frame(run.keys, false)
+    apply_gmcp_package(package, run.keys, false)
   end
 end
 
