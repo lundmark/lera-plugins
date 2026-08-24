@@ -39,6 +39,11 @@ M.COMPOSITE = {
   TQUEUE    = { "queue", "queue_legs" },
   REFINERY  = { "refinery", "refinery_grades" },
   WSTOCK    = { "wstock", "wstock_cap" },
+  -- Guild.City. MONUMENTS was already declared composite (its cap and its name
+  -- list are separate keys) and now has a writer. FARM is the same shape: MIP
+  -- packed the meta into the plot list as a "meta|" pseudo-entry, GMCP gives it
+  -- its own key.
+  FARM      = { "farm_meta", "farm_plots" },
   -- Guild.Map is composite in full, not per key. Its planes cannot be read
   -- without `enc` (which encoding packed them) and `legend` (what each code
   -- means), and its rows cannot be sized without `w` -- so routing the keys
@@ -62,6 +67,8 @@ local MAP = {
   cdtime = "CDTIME", raid = "RAID", heat = "HEAT", patrol = "PATROL",
   builds = "BUILDS", garrison = "GARRISON", buildings = "BUILDINGS",
   monuments_cap = "MONUMENTS", monuments_list = "MONUMENTS",
+  blot = "BLOT", weather = "WEATHER", dcycle = "DCYCLE", nexttick = "NEXTTICK",
+  production = "PRODUCTION", farm_meta = "FARM", farm_plots = "FARM",
 
   -- Guild.Roster. gneeds and rneeds are deliberately absent: they have no MIP
   -- counterpart and no consumer, so they stay counted under their own names.

@@ -802,6 +802,46 @@ local function write_varang(parts)
   if parts.varang_in ~= nil then S.varang_in = parse_varang(parts.varang_in, 30) end
 end
 
+-- ---------------------------------------------------------------------------
+-- Guild.City writers that live here, beside their MIP twins
+-- ---------------------------------------------------------------------------
+
+-- bdmg. `id` -> bldg_id.
+local function write_bdmg(records)
+  if type(records) ~= "table" then return end
+  S.bdmg = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" and r.id ~= nil then
+      table.insert(S.bdmg, { bldg_id = tostring(r.id), pct = tonumber(r.pct) or 0 })
+    end
+  end
+end
+
+-- raid. `secs` -> raid_in, which is -1 when no raid is inbound rather than 0 --
+-- 0 means "now".
+local function write_raid(rec)
+  if type(rec) ~= "table" then return end
+  S.raid_in       = tonumber(rec.secs) or -1
+  S.raid_faction  = tostring(rec.faction or "")
+  S.raid_strength = tonumber(rec.strength) or 0
+end
+
+local function write_patrol(rec)
+  if type(rec) ~= "table" then return end
+  S.patrol = { count = tonumber(rec.count) or 0,
+               remaining = tonumber(rec.remaining) or 0 }
+end
+
+-- garrison. `pool` -> garrison_free and `power` -> garrison_defpower are the
+-- two renames.
+local function write_garrison(rec)
+  if type(rec) ~= "table" then return end
+  S.garrison_stationed = tonumber(rec.stationed) or 0
+  S.garrison_free      = tonumber(rec.pool) or 0
+  S.garrison_cap       = tonumber(rec.cap) or 0
+  S.garrison_defpower  = tonumber(rec.power) or 0
+end
+
 M._gmcp = {
   RAIDLOG          = write_raidlog,
   RTARGETS         = write_rtargets,
@@ -809,6 +849,10 @@ M._gmcp = {
   THRALLS          = write_thralls,
   THRALL_FOLLOWER  = write_thrall_follower,
   VARANG           = write_varang,
+  BDMG             = write_bdmg,
+  RAID             = write_raid,
+  PATROL           = write_patrol,
+  GARRISON         = write_garrison,
 }
 
 return M

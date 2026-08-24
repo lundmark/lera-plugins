@@ -987,6 +987,67 @@ local function write_wstock(parts)
   end
 end
 
+-- ---------------------------------------------------------------------------
+-- Guild.City writers that live here, beside their MIP twins
+-- ---------------------------------------------------------------------------
+
+-- rbuild. Roads and forts under construction, keyed "kind:vid" for the Trade
+-- Routes render -- the key is built here, as it was over MIP, rather than
+-- being a field. `vname` -> name, `mats`/`done` -> mats_total/mats_done,
+-- `secs` -> complete_at_secs (-1 awaiting materials, 0 finalizing), `total` ->
+-- total_build_secs.
+local function write_rbuild(records)
+  if type(records) ~= "table" then return end
+  S.route_builds = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" and r.vid ~= nil and r.kind ~= nil then
+      local mats = {}
+      for piece in tostring(r.detail or ""):gmatch("[^,]+") do
+        local good, done, need = piece:match("^([^:]+):(%d+)/(%d+)$")
+        if good then
+          table.insert(mats, { good = good, done = tonumber(done) or 0,
+                               need = tonumber(need) or 0 })
+        end
+      end
+      local vid = tostring(r.vid)
+      local kind = tostring(r.kind)
+      S.route_builds[kind .. ":" .. vid] = {
+        vid = vid, name = tostring(r.vname or vid), kind = kind,
+        tier = tonumber(r.tier) or 1,
+        mats_total = tonumber(r.mats) or 0,
+        mats_done = tonumber(r.done) or 0,
+        complete_at_secs = tonumber(r.secs) or -1,
+        total_build_secs = tonumber(r.total) or 0,
+        mats = mats,
+      }
+    end
+  end
+end
+
+-- upkeep. A per-tick daler breakdown; field names already match.
+local function write_upkeep(rec)
+  if type(rec) ~= "table" then return end
+  S.upkeep = {
+    roster    = tonumber(rec.roster) or 0,
+    community = tonumber(rec.community) or 0,
+    throne    = tonumber(rec.throne) or 0,
+    roads     = tonumber(rec.roads) or 0,
+    forts     = tonumber(rec.forts) or 0,
+    total     = tonumber(rec.total) or 0,
+  }
+end
+
+local function write_rupkeep(v)
+  S.route_upkeep = tonumber(v) or 0
+end
+
+-- heat. A bare array of numbers on both transports.
+local function write_heat(values)
+  if type(values) ~= "table" then return end
+  S.heat = {}
+  for _, v in ipairs(values) do S.heat[#S.heat + 1] = tonumber(v) or 0 end
+end
+
 M._gmcp = {
   STAFF    = write_staff,
   BONDS    = write_bonds,
@@ -1004,6 +1065,10 @@ M._gmcp = {
   MARKET   = write_market,
   INCOMING = write_incoming,
   WSTOCK   = write_wstock,
+  RBUILD   = write_rbuild,
+  UPKEEP   = write_upkeep,
+  RUPKEEP  = write_rupkeep,
+  HEAT     = write_heat,
 }
 
 return M

@@ -466,6 +466,11 @@ local EXPECTED_GMCP_WRITERS = {
   -- lands -- see the gap note in gmcp_map.lua)
   "CARTS", "TQUEUE", "CIDLE", "CUPG", "ROUTES", "BLOCKS", "REFINERY", "MARKET",
   "INCOMING", "WSTOCK",
+  -- Guild.City (19; the cityplan cluster CPLAN/CPP/CPB/CPU/CPT has no writer
+  -- yet)
+  "BUILDS", "BUILDINGS", "MONUMENTS", "BLOT", "FARM", "DCYCLE", "NEXTTICK",
+  "CDTIME", "PRODUCTION", "ERRAND", "MISSIONS", "RBUILD", "UPKEEP", "RUPKEEP",
+  "HEAT", "BDMG", "RAID", "PATROL", "GARRISON", "WEATHER",
 }
 
 local function collect_gmcp_writers()

@@ -571,7 +571,16 @@ local function write_ships(records)
   end
 end
 
-M._gmcp = { VMAP = write_map, SHIPS = write_ships }
+-- Guild.City: weather. `strength` -> weather_str. The MIP twin lives here
+-- rather than in the city module, so its writer does too.
+local function write_weather(rec)
+  if type(rec) ~= "table" then return end
+  S.season      = tostring(rec.season or "")
+  S.weather     = tostring(rec.weather or "")
+  S.weather_str = tonumber(rec.strength) or 1
+end
+
+M._gmcp = { VMAP = write_map, SHIPS = write_ships, WEATHER = write_weather }
 
 
 return M

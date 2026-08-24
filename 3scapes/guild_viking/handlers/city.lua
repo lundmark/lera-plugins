@@ -717,8 +717,199 @@ local function write_supg(records)
   end
 end
 
+
+-- ---------------------------------------------------------------------------
+-- Guild.City writers
+-- ---------------------------------------------------------------------------
+
+-- "good:done/need,..." -- the same detail string SUPG and CUPG carry, built
+-- once server-side for both transports.
+local function parse_mats(detail)
+  local mats = {}
+  for piece in tostring(detail or ""):gmatch("[^,]+") do
+    local good, done, need = piece:match("^([^:]+):(%d+)/(%d+)$")
+    if good then
+      table.insert(mats, { good = good, done = tonumber(done) or 0,
+                           need = tonumber(need) or 0 })
+    end
+  end
+  return mats
+end
+
+-- builds. `id` -> bldg_id, `mats`/`done` -> mats_total/mats_done, `secs` ->
+-- complete_at_secs (-1 means awaiting materials), `total` -> total_build_secs.
+local function write_builds(records)
+  if type(records) ~= "table" then return end
+  S.pending_builds = {}
+  for _, r in ipairs(records) do
+    if #S.pending_builds >= 30 then break end
+    if type(r) == "table" then
+      table.insert(S.pending_builds, {
+        bldg_id          = tostring(r.id or ""),
+        tier             = tonumber(r.tier) or 1,
+        mats_total       = tonumber(r.mats) or 0,
+        mats_done        = tonumber(r.done) or 0,
+        complete_at_secs = tonumber(r.secs) or -1,
+        total_build_secs = tonumber(r.total) or 0,
+        mats             = parse_mats(r.detail),
+      })
+    end
+  end
+end
+
+-- buildings. An array of {id, tier} over the wire, a bldg -> tier lookup in
+-- state.
+local function write_buildings(records)
+  if type(records) ~= "table" then return end
+  S.buildings = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" and r.id ~= nil then
+      S.buildings[tostring(r.id)] = tonumber(r.tier) or 1
+    end
+  end
+end
+
+-- monuments_cap + monuments_list. MIP sent the cap as the first ';'-separated
+-- field of one value and the names after it; GMCP sends the two separately.
+-- Each half is applied only when its own key arrived.
+local function write_monuments(parts)
+  if type(parts) ~= "table" then return end
+  if parts.monuments_cap ~= nil then
+    S.monument_cap = tonumber(parts.monuments_cap) or 0
+  end
+  if type(parts.monuments_list) == "table" then
+    S.monuments = {}
+    for _, name in ipairs(parts.monuments_list) do
+      -- MIP trimmed each name, because its own separator handling could leave
+      -- surrounding space; harmless and kept so the two agree exactly.
+      local trimmed = tostring(name):match("^%s*(.-)%s*$")
+      if trimmed ~= "" and #S.monuments < 50 then
+        table.insert(S.monuments, trimmed)
+      end
+    end
+  end
+end
+
+-- blot. `state` -> blot_status.
+local function write_blot(rec)
+  if type(rec) ~= "table" then return end
+  S.blot_status   = tostring(rec.state or "")
+  S.blot_reset_in = tonumber(rec.reset_in) or 0
+  S.blot_filled   = tonumber(rec.filled) or 0
+  S.blot_total    = tonumber(rec.total) or 9
+end
+
+-- farm_meta + farm_plots. MIP packed the meta into the plot list as a "meta|"
+-- pseudo-entry; GMCP gives it its own key. The meta record also carries
+-- water/water_cap/fert/fert_cap, which MIP never sent and nothing reads.
+-- `name` -> shroom is the plot rename.
+local function write_farm(parts)
+  if type(parts) ~= "table" then return end
+  if type(parts.farm_meta) == "table" then
+    S.farm_wmod = tonumber(parts.farm_meta.wmod) or 0
+  end
+  if type(parts.farm_plots) == "table" then
+    S.farm_plots = {}
+    for _, r in ipairs(parts.farm_plots) do
+      if #S.farm_plots >= 50 then break end
+      if type(r) == "table" then
+        table.insert(S.farm_plots, {
+          coord      = tostring(r.coord or ""),
+          shroom     = tostring(r.name or ""),
+          time_left  = tonumber(r.time_left) or 0,
+          fertilized = tonumber(r.fertilized) or 0,
+          wilt_left  = tonumber(r.wilt_left) or -1,
+        })
+      end
+    end
+  end
+end
+
+-- dcycle. `secs` -> demand_cycle_in.
+local function write_dcycle(rec)
+  if type(rec) ~= "table" then return end
+  S.demand_cycle = tostring(rec.name or "")
+  S.demand_cycle_in = tonumber(rec.secs) or 0
+end
+
+local function write_nexttick(v)
+  S.next_tick_in = tonumber(v) or 0
+end
+
+-- cdtime is a duration, and the MIP handler turned it into an absolute
+-- deadline at the moment it arrived. Kept exactly: the pages count down from
+-- dispatch_cd_expires_at, and a 0 means "no cooldown" rather than "expires
+-- now".
+local function write_cdtime(v)
+  local cd = tonumber(v) or 0
+  if cd > 0 then
+    S.dispatch_cd_expires_at = os.time() + cd
+    S.dispatch_cd = cd
+  else
+    S.dispatch_cd_expires_at = nil
+    S.dispatch_cd = 0
+  end
+end
+
+-- production. An array of {good, amount} over the wire, a good -> amount
+-- lookup in state. Amounts are signed: a negative is net consumption.
+local function write_production(records)
+  if type(records) ~= "table" then return end
+  S.production = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" and r.good ~= nil then
+      S.production[tostring(r.good)] = tonumber(r.amount) or 0
+    end
+  end
+end
+
+-- errand. `secs` -> expires_in, `origin`/`town` -> origin_town/target_town,
+-- `good`/`qty` -> reward_good/reward_qty. MIP had a 7-field fallback with no
+-- origin town; a GMCP record simply omits the field and it defaults.
+local function write_errand(rec)
+  if type(rec) ~= "table" then return end
+  S.errand = {
+    id          = tonumber(rec.id) or 0,
+    label       = tostring(rec.label or ""),
+    reward      = tonumber(rec.reward) or 0,
+    expires_in  = tonumber(rec.secs) or 0,
+    origin_town = tostring(rec.origin or ""),
+    target_town = tostring(rec.town or ""),
+    reward_good = tostring(rec.good or ""),
+    reward_qty  = tonumber(rec.qty) or 0,
+  }
+end
+
+-- missions. Same rename family as errand, plus `rep` -> reward_rep. `goods` is
+-- the wanted-goods mapping, which MIP flattened into a "good:qty," string.
+local function write_missions(records)
+  if type(records) ~= "table" then return end
+  S.missions = {}
+  for _, r in ipairs(records) do
+    if #S.missions >= 20 then break end
+    if type(r) == "table" then
+      local want = {}
+      if type(r.goods) == "table" then
+        for good, qty in pairs(r.goods) do
+          want[tostring(good)] = tonumber(qty) or 0
+        end
+      end
+      table.insert(S.missions, {
+        id          = tonumber(r.id) or 0,
+        label       = tostring(r.label or ""),
+        reward_rep  = tonumber(r.rep) or 0,
+        reward      = tonumber(r.reward) or 0,
+        expires_in  = tonumber(r.secs) or 0,
+        origin_town = tostring(r.origin or ""),
+        target_town = tostring(r.town or ""),
+        want_goods  = want,
+      })
+    end
+  end
+end
+
 M._gmcp = {
-  SUPG     = write_supg,
+  SUPG       = write_supg,
   SETTLERS = write_settlers,
   SETTLERX = write_settlerx,
   SACTIONS = write_sactions,
@@ -728,6 +919,17 @@ M._gmcp = {
   SEVENTS  = write_sevents,
   SCIVICS  = write_scivics,
   SROLES   = write_sroles,
+  BUILDS     = write_builds,
+  BUILDINGS  = write_buildings,
+  MONUMENTS  = write_monuments,
+  BLOT       = write_blot,
+  FARM       = write_farm,
+  DCYCLE     = write_dcycle,
+  NEXTTICK   = write_nexttick,
+  CDTIME     = write_cdtime,
+  PRODUCTION = write_production,
+  ERRAND     = write_errand,
+  MISSIONS   = write_missions,
 }
 
 return M
