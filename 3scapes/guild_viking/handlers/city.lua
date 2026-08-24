@@ -373,25 +373,33 @@ M.SPROJ = function(val)
 end
 
 -- LEGACY 2065. GMCP's record carries a 5th slot (`h5`) LEGACY's 4-field MIP
--- string never had. It's decoded and kept in the tiers table for
--- visibility -- like SETTLERX's unused `tax_income`/`max_housing_plots` --
--- but with no known per-plot capacity for a tier this plan doesn't name, it
--- is not folded into the plots/cap totals below, which stay exactly
--- LEGACY's t1-t4 arithmetic.
+-- string never had; it is decoded and kept in the tiers table alongside the
+-- others.
+--
+-- This key owns ONLY settler_housing_plot_tiers. LEGACY also recomputed
+-- settler_housing_plots/settler_housing_cap here, from a per-tier capacity
+-- table (18/30/45/65) that no longer exists server-side: housing capacity is
+-- flat per plot, not per tier. _community_housing_capacity()
+-- (players/viking/obj/include/settlers.h:302-314) is
+-- `(t1+t2+t3+t4+t5) * HEARTH_CAP_FLAT`, with HEARTH_CAP_FLAT == 11 -- summing
+-- every tier, at one rate. SETTLERX's housing_cap/housing_plots carry exactly
+-- that server-side computation, so they are authoritative and SETTLERX is the
+-- sole writer of both fields.
+--
+-- Removing the recompute is also what makes the two transports agree. Over
+-- MIP the server emits SETTLERX before SHPLOTS in one packet, so SHPLOTS'
+-- stale arithmetic deterministically won; over GMCP frames are deltas with no
+-- order, so either writer could have landed last and the housing line could
+-- change with no underlying state change.
 local function write_shplots(r)
   r = r or {}
-  local nt1 = tonumber(r.h1) or 0
-  local nt2 = tonumber(r.h2) or 0
-  local nt3 = tonumber(r.h3) or 0
-  local nt4 = tonumber(r.h4) or 0
-  local nt5 = tonumber(r.h5) or 0
   S.settler_housing_plot_tiers = {
-    t1 = nt1, t2 = nt2, t3 = nt3, t4 = nt4, t5 = nt5,
+    t1 = tonumber(r.h1) or 0,
+    t2 = tonumber(r.h2) or 0,
+    t3 = tonumber(r.h3) or 0,
+    t4 = tonumber(r.h4) or 0,
+    t5 = tonumber(r.h5) or 0,
   }
-  -- Recompute from live plot data (more accurate than snapshot)
-  S.settler_housing_plots = nt1 + nt2 + nt3 + nt4
-  S.settler_housing_cap   = nt1*18 + nt2*30 + nt3*45 + nt4*65
-  if S.settler_housing_cap == 0 then S.settler_housing_cap = S.settler_housing_plots > 0 and S.settler_housing_plots*18 or 0 end
 end
 
 local SHPLOTS_ORDER = { "h1", "h2", "h3", "h4", "h5" }

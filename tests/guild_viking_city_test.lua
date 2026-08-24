@@ -231,8 +231,18 @@ end
 -- SHPLOTS (LEGACY 2065): housing plot tier counts t1|t2|t3|t4
 protocol.ingest("SHPLOTS", "5|3|2|1")
 check("shplots tiers", S.settler_housing_plot_tiers.t1 == 5 and S.settler_housing_plot_tiers.t4 == 1)
-check("shplots recompute", S.settler_housing_plots == 11
-      and S.settler_housing_cap == 5*18 + 3*30 + 2*45 + 1*65)
+-- Replaces the old "shplots recompute" case, which pinned LEGACY's per-tier
+-- 18/30/45/65 arithmetic. That table does not exist server-side:
+-- _community_housing_capacity() (players/viking/obj/include/settlers.h:302-314)
+-- is (t1+t2+t3+t4+t5) * HEARTH_CAP_FLAT, flat at 11 per plot, and SETTLERX's
+-- housing_cap/housing_plots carry that computation. SHPLOTS now owns only the
+-- tier counts, so the SETTLERX values fed above (cap 500, plots 20) must
+-- survive it untouched -- which is also what stops the two writers colliding
+-- over GMCP, where frames are deltas and arrive in no fixed order.
+check("shplots leaves the SETTLERX housing totals alone",
+      S.settler_housing_plots == 20 and S.settler_housing_cap == 500,
+      "plots=" .. tostring(S.settler_housing_plots) ..
+        " cap=" .. tostring(S.settler_housing_cap))
 
 -- SCIVICS (LEGACY 2078): civic_id:tier,...
 protocol.ingest("SCIVICS", "shrine:2;hall:1")

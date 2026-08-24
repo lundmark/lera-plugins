@@ -258,29 +258,63 @@ function protocol.apply_gmcp_key(gmcp_key, value)
   dispatch_gmcp(mip_key, value)
 end
 
+-- Order two apply units. Mapped keys go first, sorted by the MIP key they
+-- resolve to; unmapped ones (which only bump a counter) follow, sorted by the
+-- GMCP name they were sent under. Two distinct GMCP keys resolving to the same
+-- MIP key without being declared COMPOSITE cannot happen today, but the
+-- secondary comparison on the GMCP name keeps even that case deterministic --
+-- a composite unit carries no single GMCP name and sorts as "".
+local function unit_lt(a, b)
+  if (a.mip ~= nil) ~= (b.mip ~= nil) then return a.mip ~= nil end
+  if a.mip == nil then return a.gmcp < b.gmcp end
+  if a.mip ~= b.mip then return a.mip < b.mip end
+  return (a.gmcp or "") < (b.gmcp or "")
+end
+
 -- Apply every key of one frame, gathering a composite's halves into a single
 -- writer call instead of one call per GMCP key. `skip_envelope` is needed
 -- only for the unpaged branch's raw `data`; merge_page already excludes
 -- envelope members from a de-paged run's `keys`.
+--
+-- Keys are applied in a declared, stable order (see unit_lt above) rather than
+-- in pairs() order. pairs() order is unspecified -- it follows the table's
+-- internal hashing, not the frame -- so two writers that touch a common state
+-- field would land in an arbitrary order, and since frames are deltas either
+-- key may also arrive alone. The visible symptom is a pane value flickering
+-- between two answers with no underlying state change, intermittently and
+-- with nothing in the frame to explain it. No such collision exists today
+-- (SETTLERX owns the housing totals outright -- see write_shplots in
+-- handlers/city.lua), but a later plan adds ~20 more keys, and this is the one
+-- class of bug that cannot be reconstructed from a bug report.
 local function apply_gmcp_frame(data, skip_envelope)
   local pending = {}  -- mip_key -> { [gmcp_key] = value }, composites only
+  local units = {}    -- { mip = <MIP key or nil>, gmcp = <name>, value = ... }
   for key, value in pairs(data) do
     if not skip_envelope or not ENVELOPE[key] then
-      local mip_key = composite_of[key]
-      if mip_key then
-        local parts = pending[mip_key]
+      local composite_key = composite_of[key]
+      if composite_key then
+        local parts = pending[composite_key]
         if not parts then
           parts = {}
-          pending[mip_key] = parts
+          pending[composite_key] = parts
+          units[#units + 1] =
+            { mip = composite_key, gmcp = "", value = parts, composite = true }
         end
         parts[key] = value
       else
-        protocol.apply_gmcp_key(key, value)
+        units[#units + 1] = { mip = gmcp_map.mip_key(key), gmcp = key, value = value }
       end
     end
   end
-  for mip_key, parts in pairs(pending) do
-    dispatch_gmcp(mip_key, parts)
+  table.sort(units, unit_lt)
+  for _, u in ipairs(units) do
+    if u.composite then
+      dispatch_gmcp(u.mip, u.value)
+    else
+      -- Single keys keep going through apply_gmcp_key, so the unmapped-key
+      -- accounting lives in exactly one place.
+      protocol.apply_gmcp_key(u.gmcp, u.value)
+    end
   end
 end
 
