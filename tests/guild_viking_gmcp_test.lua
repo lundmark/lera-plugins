@@ -221,6 +221,67 @@ check("type mismatch counted malformed exactly once",
 check("sibling key in the same run still applied",
   got.SIBLING == "ok", got.SIBLING)
 
+-- ---- per-key latch ---------------------------------------------------------
+-- SETTLERS already has a gmcp_handler registered above (line 37); reused here
+-- rather than re-registered, since protocol.gmcp_handler errors on a dup key.
+local ingested = {}
+protocol.handler("SETTLERS", function(val) ingested.SETTLERS = val end)
+protocol.handler("MIPONLY", function(val) ingested.MIPONLY = val end)
+
+-- Kills: suppressing MIP wholesale once any GMCP frame arrives. Keys GMCP does
+-- not push must keep flowing, or the voyage and war pages go dark.
+reset()
+ingested = {}
+protocol.source("auto")
+frame("Guild.Settlement", { guild = "viking", settlers = { a = 1 } })
+protocol.ingest("SETTLERS", "from-mip")
+protocol.ingest("MIPONLY", "from-mip")
+check("latched key ignores MIP", ingested.SETTLERS == nil)
+check("unlatched sibling still accepts MIP", ingested.MIPONLY == "from-mip",
+  tostring(ingested.MIPONLY))
+check("latched key listed", protocol.gmcp_keys().SETTLERS == true)
+check("unlatched key not listed", protocol.gmcp_keys().MIPONLY == nil)
+
+-- Kills: latching before a writer ran. A key counted unknown has not been fed
+-- by GMCP and must not suppress its MIP twin.
+reset()
+ingested = {}
+frame("Guild.Settlement", { guild = "viking", nosuchkey = { a = 1 } })
+protocol.ingest("MIPONLY", "from-mip")
+check("unknown gmcp key does not latch", protocol.gmcp_keys().NOSUCHKEY == nil)
+check("unknown gmcp key does not suppress MIP", ingested.MIPONLY == "from-mip")
+
+-- ---- source_mode overrides -------------------------------------------------
+-- Kills: honouring GMCP frames under `source mip`, which is the override you
+-- reach for precisely to rule GMCP out while debugging.
+reset()
+ingested = {}
+protocol.source("mip")
+frame("Guild.Settlement", { guild = "viking", settlers = { a = 1 } })
+check("source mip drops gmcp frames", got.SETTLERS == nil)
+protocol.ingest("SETTLERS", "from-mip")
+check("source mip keeps MIP flowing", ingested.SETTLERS == "from-mip",
+  tostring(ingested.SETTLERS))
+
+-- Kills: `source gmcp` still letting an unlatched MIP key through.
+reset()
+ingested = {}
+protocol.source("gmcp")
+protocol.ingest("MIPONLY", "from-mip")
+check("source gmcp suppresses every MIP key", ingested.MIPONLY == nil)
+protocol.source("auto")
+
+-- ---- reset -----------------------------------------------------------------
+-- Kills: a latch surviving a disconnect. The next session may not negotiate
+-- GMCP at all, and a stale latch would silence MIP forever.
+reset()
+ingested = {}
+frame("Guild.Settlement", { guild = "viking", settlers = { a = 1 } })
+protocol.reset_connection()
+protocol.ingest("SETTLERS", "from-mip")
+check("latch clears on disconnect", ingested.SETTLERS == "from-mip",
+  tostring(ingested.SETTLERS))
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)

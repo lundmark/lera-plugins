@@ -10,8 +10,17 @@ local batches, batch_totals, batch_ts = {}, {}, {}
 local stats = { ingested = 0, unknown = {}, errors = {}, suppressed = 0 }
 local reported_errors = {}
 local source_mode = "auto"   -- "mip" | "gmcp" | "auto"
-local gmcp_latched = false
 local trace_on = false   -- diagnostic: /vik trace -- off by default, silent otherwise
+
+-- Keys fed by GMCP this connection. Per key, not per transport: GMCP covers
+-- five panels, so a wholesale latch would take every MIP-only page dark.
+local gmcp_keys = {}
+
+function protocol.gmcp_keys()
+  local out = {}
+  for k in pairs(gmcp_keys) do out[k] = true end
+  return out
+end
 
 -- GMCP-side writers, keyed by MIP key. Registered from a handler module's
 -- `_gmcp` table, so one key's two transports are declared next to each other.
@@ -48,6 +57,7 @@ end
 
 local function gmcp_record_success(key)
   gmcp_stats.applied[key] = (gmcp_stats.applied[key] or 0) + 1
+  gmcp_keys[key] = true
   ui.dirty()
 end
 
@@ -110,7 +120,23 @@ local mip_dispatch_opts = {
   end,
 }
 
+-- With per-key latching there is no global "which source won": `auto` means
+-- each key answers for itself.
+local function gmcp_allowed()
+  return source_mode ~= "mip"
+end
+
+local function mip_allowed(key)
+  if source_mode == "mip" then return true end
+  if source_mode == "gmcp" then return false end
+  return not gmcp_keys[key]
+end
+
 function protocol.ingest(key, value)
+  if not mip_allowed(key) then
+    stats.suppressed = stats.suppressed + 1
+    return
+  end
   if trace_on then print("[vik] ingest " .. key) end
   local fn = handlers[key]
   if fn then
@@ -165,16 +191,7 @@ local function feed(text)
   end
 end
 
-local function active_source()
-  if source_mode ~= "auto" then return source_mode end
-  return gmcp_latched and "gmcp" or "mip"
-end
-
 function protocol.on_bbe(text)
-  if active_source() ~= "mip" then
-    stats.suppressed = stats.suppressed + 1
-    return
-  end
   feed(text)
 end
 
@@ -210,6 +227,10 @@ end
 -- pages (the key repeated with successive slices) -- see merge_page above.
 function protocol.on_gmcp(package, data)
   if type(data) ~= "table" then return end
+  if not gmcp_allowed() then
+    stats.suppressed = stats.suppressed + 1
+    return
+  end
   gmcp_stats.frames = gmcp_stats.frames + 1
 
   -- Whose guild sent this. A frame from another guild must never reach a
@@ -275,6 +296,7 @@ end
 function protocol.reset_connection()
   gmcp_stats = { frames = 0, foreign = 0, unknown = {}, applied = {}, errors = {} }
   page_runs = {}
+  gmcp_keys = {}
 end
 
 -- Legacy KEY_N (no total) batches complete only here. LEGACY
@@ -310,7 +332,6 @@ end
 function protocol.source(mode)
   if mode == "mip" or mode == "gmcp" or mode == "auto" then
     source_mode = mode
-    if mode ~= "auto" then gmcp_latched = (mode == "gmcp") end
   end
   return source_mode
 end
@@ -329,7 +350,7 @@ function protocol.stats()
   return {
     ingested = stats.ingested, unknown = stats.unknown, errors = stats.errors,
     suppressed = stats.suppressed, batches_pending = pending,
-    source = source_mode, latched = gmcp_latched,
+    source = source_mode,
   }
 end
 

@@ -270,9 +270,18 @@ protocol.gmcp_handler("SETTLERS", function(v) settlers_seen = v end)
 protocol.on_gmcp("Guild.Settlement", { guild = "viking", settlers = { a = 1 } })
 check("guild frame routes to its registered writer",
       settlers_seen ~= nil and settlers_seen.a == 1)
+check("the fed key is latched", protocol.gmcp_keys().SETTLERS == true)
 seen = {}
 protocol.on_bbe("TESTKEY^^stillmip^^")
 check("mip still flows for a key gmcp has not fed", seen[1] == "stillmip")
+
+-- Kills: a global latch, or a latch that only exists at the frame level
+-- rather than per key -- once SETTLERS is fed, its own MIP twin must be
+-- suppressed while TESTKEY (never fed by gmcp) keeps flowing above.
+local suppressed_before_latch = protocol.stats().suppressed
+protocol.ingest("SETTLERS", "should-be-suppressed")
+check("a latched key suppresses its own mip twin",
+      protocol.stats().suppressed == suppressed_before_latch + 1)
 
 -- LEGACY quirk, ported faithfully (guild_viking.lua:2932-2942, "dispatch
 -- whatever we have after the grace period, as before"): a lone non-contiguous

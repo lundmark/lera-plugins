@@ -196,9 +196,13 @@ end
 
 local function print_status()
   local st = protocol.stats()
+  -- The old boolean latch is gone; a count of keys GMCP has actually fed
+  -- reads true of the per-key design, where it's never all-or-nothing.
+  local gmcp_key_count = 0
+  for _ in pairs(protocol.gmcp_keys()) do gmcp_key_count = gmcp_key_count + 1 end
   buffer.color_print(nil, "DAA520", string.format(
-    "Viking: source=%s latch=%s ingested=%d suppressed=%d pending_batches=%d",
-    st.source, tostring(st.latched), st.ingested, st.suppressed, st.batches_pending))
+    "Viking: source=%s gmcp_keys=%d ingested=%d suppressed=%d pending_batches=%d",
+    st.source, gmcp_key_count, st.ingested, st.suppressed, st.batches_pending))
 
   local unknown = {}
   for k, n in pairs(st.unknown) do unknown[#unknown + 1] = { key = k, n = n } end
@@ -293,6 +297,30 @@ function M.vik_command(args)
     if rest == "mip" or rest == "gmcp" or rest == "auto" then
       protocol.source(rest)
       buffer.color_print(nil, "DAA520", "Viking transport source set to " .. rest .. ".")
+
+      -- A mixed system is unobservable without seeing which keys each
+      -- transport is actually feeding, so report the per-key breakdown too.
+      local latched = protocol.gmcp_keys()
+      local names = {}
+      for k in pairs(latched) do names[#names + 1] = k end
+      table.sort(names)
+      if #names == 0 then
+        buffer.color_print(nil, "DAA520", "  no keys fed by GMCP yet")
+      else
+        buffer.color_print(nil, "DAA520",
+          "  GMCP keys (" .. #names .. "): " .. table.concat(names, " "))
+      end
+      local gs = protocol.gmcp_stats()
+      local unknown = {}
+      for k in pairs(gs.unknown) do unknown[#unknown + 1] = k end
+      table.sort(unknown)
+      if #unknown > 0 then
+        buffer.color_print(nil, "DAA520",
+          "  received, not consumed: " .. table.concat(unknown, " "))
+      end
+      buffer.color_print(nil, "DAA520", string.format(
+        "  frames %d, foreign %d, malformed %d",
+        gs.frames, gs.foreign, gs.malformed or 0))
     else
       buffer.color_print(nil, "DAA520", "Usage: /vik source mip|gmcp|auto")
     end
