@@ -71,6 +71,9 @@ end
 for _, p in ipairs(kingdom._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
 end
+for key, fn in pairs(kingdom._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
+end
 
 -- RAIDLOG (LEGACY 1127): ship|target|daler|thralls|lost(0/1)|good:qty,...;...  cap 20
 protocol.ingest("RAIDLOG", "Ormen|Havn|300|2|1|fish:5,salt:2;Drage|Fjord|100|0|0|")

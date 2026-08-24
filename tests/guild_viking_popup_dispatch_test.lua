@@ -136,6 +136,9 @@ end
 for _, p in ipairs(kingdom._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
 end
+for key, fn in pairs(kingdom._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
+end
 
 -- Task 5 needs VMAP* too (map.lua's own popup test's seed_vmap uses the
 -- same registration).
@@ -160,51 +163,64 @@ local war_campaign = require("popups.war_campaign")
 local war_battle = require("popups.war_battle")
 local map = require("popups.map")
 
--- seed_wmap/seed_battle: copied verbatim from
--- guild_viking_popup_war_test.lua (same wire-format helpers, so a fixture
--- written here is directly comparable to that suite's own).
+-- seed_wmap/seed_battle: shared shape with guild_viking_popup_war_test.lua, so
+-- a fixture written here is directly comparable to that suite's own. Both seed
+-- through the production GMCP path -- the campaign map and the battle board
+-- have no other transport now.
+--
+-- Callers still describe a campaign overlay as {id, c, r, size, f}, the shape
+-- MIP's WMO used; the writer takes {kind, id, ...}, so the two sentinel ids are
+-- translated here. "A" is your host and "*" the objective; anything else is a
+-- numbered foe.
+local UNIT_KIND = { A = "host", ["*"] = "objective" }
+
 local function seed_wmap(t)
-  protocol.ingest("WMAP", table.concat({
-    (t.active ~= false) and 1 or 0, t.dim or 0, t.turn or 0, t.mode or "offense",
-    t.pending or 0, t.town or "", t.works_budget or 0, t.march_eta or 0,
-  }, "|"))
-  for wire_row, row in ipairs(t.rows or {}) do
-    protocol.ingest(string.format("WMR%02d", wire_row - 1), row)
+  local units = {}
+  for _, u in ipairs(t.units or {}) do
+    local kind = UNIT_KIND[u.id] or "foe"
+    units[#units + 1] = { kind = kind, id = (kind == "foe") and u.id or "",
+                          c = u.c or 0, r = u.r or 0, size = u.size or 0,
+                          flag = u.f or "" }
   end
-  if t.units and #t.units > 0 then
-    local parts = {}
-    for _, u in ipairs(t.units) do
-      local entry = u.id .. ":" .. (u.c or 0) .. "," .. (u.r or 0) .. "," .. (u.size or 0)
-      if u.f and u.f ~= "" then entry = entry .. "," .. u.f end
-      parts[#parts + 1] = entry
-    end
-    protocol.ingest("WMO", table.concat(parts, ";"))
-  end
-  protocol.ingest("WMEND", tostring(#(t.rows or {})))
+  protocol.on_gmcp("Guild.Kingdom", {
+    guild = "viking",
+    campaign = {
+      active = (t.active ~= false) and 1 or 0,
+      dim = t.dim or 0, turn = t.turn or 0, mode = t.mode or "offense",
+      pending = t.pending or 0, town = t.town or "",
+      works_budget = t.works_budget or 0, march_eta = t.march_eta or 0,
+    },
+    campaign_terrain = t.rows or {},
+    campaign_units = units,
+  })
 end
 
 local function seed_battle(t)
-  local units_parts = {}
+  local units, reserve = {}, {}
   for _, u in ipairs(t.units or {}) do
     if u.side == "R" then
-      units_parts[#units_parts + 1] = table.concat(
-        { "R", u.label or "", u.size or 0, u.uid or 0, u.cost or 0, u.leader or "" }, ",")
+      reserve[#reserve + 1] = { label = u.label or "", size = u.size or 0,
+                                uid = u.uid or 0, cost = u.cost or 0,
+                                leader = u.leader or "" }
     else
-      units_parts[#units_parts + 1] = table.concat({
-        u.side or "Y", u.label or "", u.size or 0, u.coord or "", u.morale or 0,
-        u.utype or "", u.leader or "", u.bid or 0, u.ord or 0,
-      }, ",")
+      units[#units + 1] = { side = u.side or "Y", label = u.label or "",
+                            size = u.size or 0, coord = u.coord or "",
+                            morale = u.morale or 0, type = u.utype or "",
+                            leader = u.leader or "", bid = u.bid or 0,
+                            ord = u.ord or 0 }
     end
   end
-  local wh = string.format("%d:%d:%d", t.width or 8, t.height or 8, t.dz or 2)
-  local budg = string.format("%d:%d", t.budget or 0, t.spent or 0)
-  local terrain = table.concat(t.terrain_rows or {}, "")
-  local works = table.concat(t.works_rows or {}, "")
-  protocol.ingest("BATTLE", table.concat({
-    (t.active ~= false) and 1 or 0,
-    t.phase or "deploy", t.turn or 0, t.war_points or 0, t.mode or "field", t.target or "",
-    budg, wh, terrain, works, table.concat(units_parts, ";"),
-  }, "|"))
+  protocol.on_gmcp("Guild.War", {
+    guild = "viking",
+    active = (t.active ~= false) and 1 or 0,
+    phase = t.phase or "deploy", turn = t.turn or 0,
+    war_points = t.war_points or 0, mode = t.mode or "field",
+    target = t.target or "",
+    budget = t.budget or 0, spent = t.spent or 0,
+    w = t.width or 8, h = t.height or 8, dz = t.dz or 2,
+    terrain = t.terrain_rows or {}, works = t.works_rows or {},
+    units = units, reserve = reserve,
+  })
 end
 
 -- Seeds the vmap through the real Guild.Map pipeline (protocol.on_gmcp ->
@@ -459,7 +475,7 @@ do
   -- Scenario C's own fixture left S.battle set (it never clears it) --
   -- clear it first via the real handler, so this scenario genuinely starts
   -- with no battle and the campaign as the only live mode.
-  protocol.ingest("BATTLE", table.concat({ 0, "", "", 0, "", "", "", "", "", "", "" }, "|"))
+  seed_battle({ active = false })
   check("no leftover battle from an earlier scenario", S.battle == nil)
 
   seed_wmap({
@@ -530,7 +546,7 @@ do
   -- protocol.ingest so kingdom.lua's own `S.battle = nil` clearing logic is
   -- what's actually exercised, matching guild_viking_popup_war_test.lua's
   -- own "BATTLE active=0" clear exactly.
-  protocol.ingest("BATTLE", table.concat({ 0, "", "", 0, "", "", "", "", "", "", "" }, "|"))
+  seed_battle({ active = false })
   check("S.battle is nil mid-drag", S.battle == nil)
   check("S.war_map is still active mid-drag (the mode active_module() would flip to)",
     S.war_map.active == true)

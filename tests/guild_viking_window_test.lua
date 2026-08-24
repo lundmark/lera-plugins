@@ -677,8 +677,12 @@ do
   -- so the send sequence below discriminates dirs-then-enter from the
   -- #path==0 branch's enter+fulfill (pages/people.lua's mission_run_click,
   -- MAIN 12080-12143).
-  protocol.ingest("WSTOCK", "grain|100|100")
-  protocol.ingest("MISSIONS", "7|Deliver grain to Holmgard|15|200|1800|Vestergotland|Holmgard|grain:30")
+  protocol.on_gmcp("Guild.Trade", { guild = "viking",
+    wstock = { { good = "grain", amount = 100, pct = 100 } } })
+  protocol.on_gmcp("Guild.City", { guild = "viking", missions = { {
+    id = 7, label = "Deliver grain to Holmgard", rep = 15, reward = 200,
+    secs = 1800, origin = "Vestergotland", town = "Holmgard",
+    goods = { grain = 30 } } } })
   protocol.on_gmcp("Guild.Map", {
     guild = "viking", w = 4, h = 1, active = 1, pos = { x = 0, y = 0 },
     enc = { terrain = "glyph", east = "glyph", south = "glyph" },

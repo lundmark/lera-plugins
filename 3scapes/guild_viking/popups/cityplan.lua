@@ -54,10 +54,10 @@
 -- line (9066-9080: framed grid size/row completeness plus "icons X/48"
 -- icon-load counters) is dropped as an icon-branch/debug artifact, not
 -- part of the four footer lines (status/perks/mood/coast) the brief scopes
--- this module to -- `cp.dbg`'s own "dropped: got N/M rows" text is folded
--- into this module's own no-data-adjacent handling instead (see
--- footer_lines below) so an incomplete CPEND burst is never silently
--- invisible.
+-- this module to. It once also carried `cp.dbg`'s "dropped: got N/M rows"
+-- text, so an incomplete CPEND burst could not be silently invisible; the
+-- plan arrives whole over Guild.City now, so that condition and its line are
+-- both gone (see footer_lines below).
 local pagelib = require("pagelib")
 local maplib = require("maplib")
 local state = require("state")
@@ -299,11 +299,15 @@ end
 -- ---------------------------------------------------------------------------
 -- Footer (guild_viking.lua:9032-9057): status (Unplanned, when
 -- `not cp.enabled`) or perks + mood (when enabled), then coast/placed --
--- always shown. `cp.dbg`'s "dropped: got N/M rows" text (set on an
--- incomplete CPEND burst, CPEND parser) is folded in here as a disclosed
--- lera addition rather than the pure icon-diagnostic line it rides along
--- with in LEGACY (see the module doc comment above) -- an incomplete grid
--- render should never look silently authoritative.
+-- always shown.
+--
+-- This used to end with `cp.dbg`'s "dropped: got N/M rows" warning, so an
+-- incomplete grid could not look silently authoritative. That was a MIP
+-- concern: the plan arrived as a CPT%02d burst and a dropped chunk was
+-- indistinguishable from a short grid, so CPEND compared a promised row count
+-- and stamped cp.dbg when it did not match. A Guild.City frame carries the
+-- plan whole, nothing sets cp.dbg any more, and the warning is gone with the
+-- burst that motivated it.
 -- ---------------------------------------------------------------------------
 local COAST_NAME = { "North", "East", "South", "West" }
 
@@ -324,9 +328,6 @@ local function footer_lines(width, cp)
   out[#out + 1] = pagelib.trunc(C.cyan .. string.format(
     "Coast: %s   Placed %d/%d (rank cap)",
     COAST_NAME[cp.coast] or "?", cp.placed or 0, cp.cap or 0) .. RESET, width)
-  if cp.dbg and cp.dbg ~= "" then
-    out[#out + 1] = pagelib.trunc(C.dim .. cp.dbg .. RESET, width)
-  end
   return out
 end
 

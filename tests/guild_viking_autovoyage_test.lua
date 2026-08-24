@@ -66,6 +66,9 @@ end
 for _, p in ipairs(voyage._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
 end
+for key, fn in pairs(voyage._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
+end
 
 local page_opts = require("page_opts")
 local av = require("autovoyage")

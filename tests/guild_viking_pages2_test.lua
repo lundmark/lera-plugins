@@ -36,14 +36,29 @@ for key, fn in pairs(city_handlers) do
     protocol.handler(key, fn)
   end
 end
+for key, fn in pairs(city_handlers._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
+end
 local voyage_handlers = require("handlers.voyage")
 for key, fn in pairs(voyage_handlers) do
   if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
     protocol.handler(key, fn)
   end
 end
+for key, fn in pairs(voyage_handlers._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
+end
 
 local S = state.S
+
+-- Fixtures are seeded through the production GMCP path -- protocol.on_gmcp ->
+-- the handler modules' _gmcp writers -- since that is the only transport these
+-- keys still have. The MIP wire strings these calls used to build are gone
+-- along with their decoders.
+local function gm(pkg, payload)
+  payload.guild = "viking"
+  protocol.on_gmcp(pkg, payload)
+end
 local WIDTH = 80
 
 local function joined(lines)
@@ -141,8 +156,14 @@ check("raid log row shows the seeded daler gain (+150d)",
 -- cap 6; two ships, one held (Wolf), leaves 1 non-held (Ravager2) -- 1 < 6,
 -- so the cap clamps down to 1. Configuring 5 ships must therefore display
 -- "1 Ships", not "5 Ships".
-protocol.ingest("BUILDINGS", "dock:3,warehouse:3")
-protocol.ingest("SHIPS", "Ravager2|2|docked||0||8|0|0|0|||0|100;Wolf|2|docked||0||8|0|0|0|||1|100")
+gm("Guild.City", { buildings = { { id = "dock", tier = 3 },
+                                 { id = "warehouse", tier = 3 } } })
+gm("Guild.Fleet", { ships = {
+  { name = "Ravager2", tier = 2, state = "docked", target = "", secs = 0,
+    crew = 8, held = 0, durability = 100 },
+  { name = "Wolf", tier = 2, state = "docked", target = "", secs = 0,
+    crew = 8, held = 1, durability = 100 },
+} })
 S.autoraid = { convoy = false, ships = 5, target = "", last = 0 }
 local capped_lines = city_page.lines(WIDTH)
 local capped_all = joined(capped_lines)
@@ -150,8 +171,11 @@ check("Raids: ship count is capped to the REAL ar_max_ships() (1), not the confi
       capped_all:find("1 Ships", 1, true) ~= nil and capped_all:find("5 Ships", 1, true) == nil,
       capped_all)
 -- Restore the shared CITY-mode fixture for every later check in this file.
-protocol.ingest("BUILDINGS", "dock:2,warehouse:3")
-protocol.ingest("SHIPS", "Ravager|2|raiding|Vestergotland|90||8|0|0|0|||0|100")
+gm("Guild.City", { buildings = { { id = "dock", tier = 2 },
+                                 { id = "warehouse", tier = 3 } } })
+gm("Guild.Fleet", { ships = { { name = "Ravager", tier = 2, state = "raiding",
+  target = "Vestergotland", secs = 90, crew = 8, held = 0,
+  durability = 100 } } })
 S.autoraid = nil
 
 -- "Warehouse  [" (not just "Warehouse") avoids matching the "Warehouse T3"

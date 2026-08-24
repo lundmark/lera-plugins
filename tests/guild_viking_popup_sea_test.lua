@@ -142,6 +142,9 @@ end
 for _, p in ipairs(voyage_h._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
 end
+for key, fn in pairs(voyage_h._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
+end
 
 local S = state.S
 local C, RESET = pagelib.C, pagelib.RESET

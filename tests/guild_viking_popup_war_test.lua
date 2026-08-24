@@ -140,87 +140,94 @@ end
 for _, p in ipairs(kingdom._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
 end
+for key, fn in pairs(kingdom._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
+end
 
 local S = state.S
 local C, RESET = pagelib.C, pagelib.RESET
 local REV_ON, REV_OFF = "\27[7m", "\27[27m"
 local WIDTH = 76
 
--- Seeds a full WMAP/WMR%02d/WMO/WMEND burst via the real handlers (WMU/
--- WSPOIL optional). `rows`/`units` are the natural fixture shapes; `units`
--- entries omit a trailing comma+facing when `f` is absent (WMO's own
--- pattern makes the facing group optional either way).
+-- Seeds a campaign war map through the production GMCP path. `rows`/`units`
+-- are the natural fixture shapes, unchanged from when this seeded a
+-- WMAP/WMR/WMO/WMEND burst; only what they are turned into has changed.
+--
+-- Callers describe an overlay as {id, c, r, size, f}, the shape MIP's WMO
+-- used; the writer takes {kind, id, ...}, so the two sentinel ids are
+-- translated here. "A" is your host and "*" the objective; anything else is a
+-- numbered foe.
+local UNIT_KIND = { A = "host", ["*"] = "objective" }
+
 local function seed_wmap(t)
-  protocol.ingest("WMAP", table.concat({
-    (t.active ~= false) and 1 or 0, t.dim or 0, t.turn or 0, t.mode or "offense",
-    t.pending or 0, t.town or "", t.works_budget or 0, t.march_eta or 0,
-  }, "|"))
-  if t.upkeep then
-    local u = t.upkeep
-    protocol.ingest("WMU", table.concat({ u.food or 0, u.mead or 0, u.tools or 0, u.iron or 0, u.daler or 0 }, "|"))
+  local units = {}
+  for _, u in ipairs(t.units or {}) do
+    local kind = UNIT_KIND[u.id] or "foe"
+    units[#units + 1] = { kind = kind, id = (kind == "foe") and u.id or "",
+                          c = u.c or 0, r = u.r or 0, size = u.size or 0,
+                          flag = u.f or "" }
   end
-  if t.spoils then
-    local s = t.spoils
-    protocol.ingest("WSPOIL", table.concat({ s.daler or 0, s.renown or 0, s.deeds or 0 }, "|"))
+  -- `t.queues` is `{ [id] = { "A1", "B2", ... } }`; the payload is a flat list
+  -- of {id, label} rows, and an id with no squares contributes none -- which
+  -- is what kept it out of the wire string before.
+  local queue = {}
+  for id, sqs in pairs(t.queues or {}) do
+    for _, sq in ipairs(sqs) do queue[#queue + 1] = { id = id, label = sq } end
   end
-  for wire_row, row in ipairs(t.rows or {}) do
-    protocol.ingest(string.format("WMR%02d", wire_row - 1), row)
-  end
-  if t.units and #t.units > 0 then
-    local parts = {}
-    for _, u in ipairs(t.units) do
-      local entry = u.id .. ":" .. (u.c or 0) .. "," .. (u.r or 0) .. "," .. (u.size or 0)
-      if u.f and u.f ~= "" then entry = entry .. "," .. u.f end
-      parts[#parts + 1] = entry
-    end
-    protocol.ingest("WMO", table.concat(parts, ";"))
-  end
-  -- WMQ (LEGACY 1994): "A:A1;B2|F:C3" -- queued paths per unit, 1-based
-  -- col-letter/row squares. `t.queues` is `{ [id] = { "A1", "B2", ... } }`;
-  -- an id with no entry (or an explicitly empty array) is simply omitted
-  -- from the wire string, matching the real WMQ parser's own
-  -- `if id and sqs and sqs ~= ""` gate (an id present with zero squares
-  -- never reaches S.wm_pending.queues at all).
-  if t.queues then
-    local parts = {}
-    for id, sqs in pairs(t.queues) do
-      if #sqs > 0 then
-        parts[#parts + 1] = id .. ":" .. table.concat(sqs, ";")
-      end
-    end
-    protocol.ingest("WMQ", table.concat(parts, "|"))
-  end
-  protocol.ingest("WMEND", tostring(#(t.rows or {})))
+  local u = t.upkeep or {}
+  local sp = t.spoils or {}
+  protocol.on_gmcp("Guild.Kingdom", {
+    guild = "viking",
+    campaign = {
+      active = (t.active ~= false) and 1 or 0,
+      dim = t.dim or 0, turn = t.turn or 0, mode = t.mode or "offense",
+      pending = t.pending or 0, town = t.town or "",
+      works_budget = t.works_budget or 0, march_eta = t.march_eta or 0,
+      upkeep_food = u.food or 0, upkeep_mead = u.mead or 0,
+      upkeep_tools = u.tools or 0, upkeep_iron = u.iron or 0,
+      upkeep_daler = u.daler or 0,
+      -- The server calls the war-points spoil `wpts`; the client record has
+      -- always called it renown.
+      spoils_daler = sp.daler or 0, spoils_wpts = sp.renown or 0,
+      spoils_deeds = sp.deeds or 0,
+    },
+    campaign_terrain = t.rows or {},
+    campaign_units = units,
+    campaign_queue = queue,
+  })
 end
 
--- Seeds a BATTLE burst via the real handler. `units` entries: side "R" for
--- a reserve unit (label/size/uid/cost/leader), any other side for a
--- fielded one ("Y" -> S.battle.units[].side == "you", ported as-is by
--- handlers/kingdom.lua). `terrain_rows`/`works_rows` are 1-indexed arrays
--- in WIRE row order (row 1 first), concatenated row-major exactly as the
--- wire format requires.
+-- Seeds a battle board. `units` entries: side "R" for a reserve unit
+-- (label/size/uid/cost/leader), any other side for a fielded one ("Y" ->
+-- S.battle.units[].side == "you"). `terrain_rows`/`works_rows` are 1-indexed
+-- arrays in wire row order and now travel as rows rather than being
+-- concatenated into one flat string.
 local function seed_battle(t)
-  local units_parts = {}
+  local units, reserve = {}, {}
   for _, u in ipairs(t.units or {}) do
     if u.side == "R" then
-      units_parts[#units_parts + 1] = table.concat(
-        { "R", u.label or "", u.size or 0, u.uid or 0, u.cost or 0, u.leader or "" }, ",")
+      reserve[#reserve + 1] = { label = u.label or "", size = u.size or 0,
+                                uid = u.uid or 0, cost = u.cost or 0,
+                                leader = u.leader or "" }
     else
-      units_parts[#units_parts + 1] = table.concat({
-        u.side or "Y", u.label or "", u.size or 0, u.coord or "", u.morale or 0,
-        u.utype or "", u.leader or "", u.bid or 0, u.ord or 0,
-      }, ",")
+      units[#units + 1] = { side = u.side or "Y", label = u.label or "",
+                            size = u.size or 0, coord = u.coord or "",
+                            morale = u.morale or 0, type = u.utype or "",
+                            leader = u.leader or "", bid = u.bid or 0,
+                            ord = u.ord or 0 }
     end
   end
-  local wh = string.format("%d:%d:%d", t.width or 8, t.height or 8, t.dz or 2)
-  local budg = string.format("%d:%d", t.budget or 0, t.spent or 0)
-  local terrain = table.concat(t.terrain_rows or {}, "")
-  local works = table.concat(t.works_rows or {}, "")
-  protocol.ingest("BATTLE", table.concat({
-    (t.active ~= false) and 1 or 0,
-    t.phase or "deploy", t.turn or 0, t.war_points or 0, t.mode or "field", t.target or "",
-    budg, wh, terrain, works, table.concat(units_parts, ";"),
-  }, "|"))
+  protocol.on_gmcp("Guild.War", {
+    guild = "viking",
+    active = (t.active ~= false) and 1 or 0,
+    phase = t.phase or "deploy", turn = t.turn or 0,
+    war_points = t.war_points or 0, mode = t.mode or "field",
+    target = t.target or "",
+    budget = t.budget or 0, spent = t.spent or 0,
+    w = t.width or 8, h = t.height or 8, dz = t.dz or 2,
+    terrain = t.terrain_rows or {}, works = t.works_rows or {},
+    units = units, reserve = reserve,
+  })
 end
 
 local function reset_all()
@@ -926,7 +933,7 @@ check("composite geometry delegates to war_battle",
 -- through protocol.ingest so the handler's own clearing logic (here,
 -- kingdom.lua's `M.BATTLE` setting `S.battle = nil` whenever `active ~=
 -- "1"`) is what's actually exercised.
-protocol.ingest("BATTLE", table.concat({ 0, "", "", 0, "", "", "", "", "", "", "" }, "|"))
+seed_battle({ active = false })
 check("BATTLE active=0 cleared S.battle via the real handler", S.battle == nil)
 check("battle cleared, war_map still active: composite delegates to war_campaign",
   table.concat(war.lines(WIDTH), "\n") == table.concat(war_campaign.lines(WIDTH), "\n"))

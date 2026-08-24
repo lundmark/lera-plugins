@@ -71,6 +71,9 @@ end
 for _, p in ipairs(city._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
 end
+for key, fn in pairs(city._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
+end
 
 -- BLOT (LEGACY 1683): blot_state|reset_in|filled|total
 protocol.ingest("BLOT", "open|300|4|9")

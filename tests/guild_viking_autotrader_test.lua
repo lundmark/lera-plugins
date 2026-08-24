@@ -60,6 +60,9 @@ for key, fn in pairs(city) do
     protocol.handler(key, fn)
   end
 end
+for key, fn in pairs(city._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
+end
 
 local at_core = require("autotrader.core")
 local page_opts = require("page_opts")

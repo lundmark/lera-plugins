@@ -63,17 +63,26 @@ for key, fn in pairs(voyage) do
     protocol.handler(key, fn)
   end
 end
+for key, fn in pairs(voyage._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
+end
 local kingdom = require("handlers.kingdom")
 for key, fn in pairs(kingdom) do
   if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
     protocol.handler(key, fn)
   end
 end
+for key, fn in pairs(kingdom._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
+end
 local city = require("handlers.city")
 for key, fn in pairs(city) do
   if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
     protocol.handler(key, fn)
   end
+end
+for key, fn in pairs(city._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
 end
 
 local page_opts = require("page_opts")
@@ -92,45 +101,81 @@ local ar = require("autoraid")
 -- ---------------------------------------------------------------------------
 
 -- handlers/voyage.lua's M.SHIPS field order (14 pipe-delimited fields):
--- name|tier|state|target|return|sid|crew|convoy|convoy_size|convoy_bonus|
--- saga_title|saga_raids|held|durability
-local function ship_entry(overrides)
-  local f = { name = "Ship1", tier = "2", state = "docked", target = "", ret = "0",
-              sid = "", crew = "8", convoy = "0", convoy_size = "0", convoy_bonus = "0",
-              saga_title = "", saga_raids = "0", held = "0", durability = "100" }
-  for k, v in pairs(overrides or {}) do f[k] = v end
-  return table.concat({ f.name, f.tier, f.state, f.target, f.ret, f.sid, f.crew,
-    f.convoy, f.convoy_size, f.convoy_bonus, f.saga_title, f.saga_raids, f.held,
-    f.durability }, "|")
-end
-local function set_ships(entries)
-  protocol.ingest("SHIPS", table.concat(entries, ";"))
+-- Fixtures are seeded through the production GMCP path. The builders below
+-- still take the same override keys the wire-string versions took, so no call
+-- site changes; only the shape they produce does.
+local function gm(pkg, payload)
+  payload.guild = "viking"
+  protocol.on_gmcp(pkg, payload)
 end
 
--- handlers/voyage.lua's M.LONGSHIP field order (15 pipe-delimited fields).
-local function longship_entry(overrides)
-  local f = { sid = "1", name = "Ship1", tier = "3", state = "docked", target = "",
-              ret = "0", crew = "0", hired = "0", safe = "0", identity = "",
-              captain = "", crew_traits = "", ship_traits = "", saga_title = "",
-              saga_raids = "0" }
+-- Guild.Fleet's ship record. `ret` -> secs and `sid` -> id are the two
+-- override names that differ from the payload's own.
+local function ship_entry(overrides)
+  local f = { name = "Ship1", tier = 2, state = "docked", target = "", ret = 0,
+              sid = nil, crew = 8, convoy = 0, convoy_size = 0, convoy_bonus = 0,
+              saga_title = "", saga_raids = 0, held = 0, durability = 100 }
   for k, v in pairs(overrides or {}) do f[k] = v end
-  return table.concat({ f.sid, f.name, f.tier, f.state, f.target, f.ret, f.crew,
-    f.hired, f.safe, f.identity, f.captain, f.crew_traits, f.ship_traits,
-    f.saga_title, f.saga_raids }, "|")
+  return { name = f.name, tier = tonumber(f.tier), state = f.state,
+           target = f.target, secs = tonumber(f.ret), id = tonumber(f.sid),
+           crew = tonumber(f.crew), convoy = tonumber(f.convoy),
+           convoy_size = tonumber(f.convoy_size),
+           convoy_bonus = tonumber(f.convoy_bonus),
+           saga_title = f.saga_title, saga_raids = tonumber(f.saga_raids),
+           held = tonumber(f.held), durability = tonumber(f.durability) }
+end
+local function set_ships(entries)
+  gm("Guild.Fleet", { ships = entries })
+end
+
+-- Guild.Voyage's longship record. Its crew/ship trait lists travel as their
+-- own keys, foreign-keyed by ship id, so the builder returns the record and
+-- the setter gathers the traits out of it.
+local function longship_entry(overrides)
+  local f = { sid = 1, name = "Ship1", tier = 3, state = "docked", target = "",
+              ret = 0, crew = 0, hired = 0, safe = 0, identity = "",
+              captain = "", crew_traits = "", ship_traits = "", saga_title = "",
+              saga_raids = 0 }
+  for k, v in pairs(overrides or {}) do f[k] = v end
+  return { id = tonumber(f.sid), name = f.name, tier = tonumber(f.tier),
+           state = f.state, target = f.target, secs = tonumber(f.ret),
+           crew = tonumber(f.crew), hired_crew = tonumber(f.hired),
+           safe = tonumber(f.safe), voyage_identity = f.identity,
+           captain_style = f.captain, saga_title = f.saga_title,
+           saga_raids = tonumber(f.saga_raids),
+           _crew_traits = f.crew_traits, _ship_traits = f.ship_traits }
 end
 local function set_longships(entries)
-  protocol.ingest("LONGSHIP", table.concat(entries, ";"))
+  local ships, crew, shiptr = {}, {}, {}
+  for _, e in ipairs(entries) do
+    local rec = {}
+    for k, v in pairs(e) do
+      if k ~= "_crew_traits" and k ~= "_ship_traits" then rec[k] = v end
+    end
+    ships[#ships + 1] = rec
+    for t in tostring(e._crew_traits or ""):gmatch("[^,]+") do
+      crew[#crew + 1] = { id = rec.id, trait = t }
+    end
+    for t in tostring(e._ship_traits or ""):gmatch("[^,]+") do
+      shiptr[#shiptr + 1] = { id = rec.id, trait = t }
+    end
+  end
+  gm("Guild.Voyage", { longship = ships, longship_crew_traits = crew,
+                       longship_ship_traits = shiptr })
 end
 
 local function set_dock(tier)
-  protocol.ingest("BUILDINGS", "dock:" .. tier)
+  gm("Guild.City", { buildings = { { id = "dock", tier = tonumber(tier) } } })
 end
 
+-- A raid target is still the "name:good1:good2" string it always was; the
+-- server sends the same strings in two arrays where MIP joined them with '|'.
 local function target_entry(name, g1, g2)
   return name .. ":" .. (g1 or "") .. ":" .. (g2 or "")
 end
 local function set_targets(lin, hist)
-  protocol.ingest("RTARGETS", table.concat(lin or {}, ";") .. "|" .. table.concat(hist or {}, ";"))
+  gm("Guild.Fleet", { rtargets_lineage = lin or {},
+                      rtargets_historical = hist or {} })
 end
 
 local function reset_all()

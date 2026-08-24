@@ -142,6 +142,9 @@ end
 for _, p in ipairs(city._patterns or {}) do
   protocol.pattern_handler(p.pattern, p.fn)
 end
+for key, fn in pairs(city._gmcp or {}) do
+  protocol.gmcp_handler(key, fn)
+end
 
 local S = state.S
 local C, RESET = pagelib.C, pagelib.RESET
@@ -172,37 +175,37 @@ local function reset_cityplan()
   menu_close_count = 0
 end
 
--- Seeds a full CPLAN/CPP/CPT%02d/CPB/CPU/CPEND burst via the real handlers.
--- `rows` is a plain 1-based Lua array in WIRE order (rows[1] is wire row 0,
--- i.e. CPT00) -- handlers/city.lua's cpt_row stores at
--- S.cp_pending.rows[wire_row + 1], so this is the natural way to write a
--- fixture without hand-computing the +1 offset.
+-- Seeds a city plan through the production GMCP path. `rows` is a plain
+-- 1-based Lua array in wire order, which is also the order the payload's own
+-- terrain array uses -- so, unlike the CPT%02d burst this replaces, there is
+-- no +1 offset to keep straight.
 local function seed_cplan(t)
-  protocol.ingest("CPLAN", table.concat({
-    (t.enabled ~= false) and 1 or 0, t.dim or 12, t.placed or 0, t.cap or 0,
-    t.coast or 0, t.moat and 1 or 0, t.wall and 1 or 0, t.gate or 6,
-    t.mood or 0, t.margin or 0,
-  }, "|"))
-  if t.perks then protocol.ingest("CPP", t.perks) end
-  for wire_row, row in ipairs(t.rows or {}) do
-    protocol.ingest(string.format("CPT%02d", wire_row - 1), row)
+  local blds, unplaced = {}, {}
+  for _, b in ipairs(t.blds or {}) do
+    blds[#blds + 1] = { id = b.id, x = b.x, y = b.y, w = b.w or 1, h = b.h or 1,
+                        pal = b.pal or "e", glyph = b.glyph or "?",
+                        name = b.name or "" }
   end
-  if t.blds and #t.blds > 0 then
-    local parts = {}
-    for _, b in ipairs(t.blds) do
-      parts[#parts + 1] = table.concat(
-        { b.id, b.x, b.y, b.w or 1, b.h or 1, b.pal or "e", b.glyph or "?", b.name or "" }, "|")
-    end
-    protocol.ingest("CPB", table.concat(parts, ";"))
+  for _, u in ipairs(t.unplaced or {}) do
+    unplaced[#unplaced + 1] = { id = u.id, pal = u.pal or "e",
+                                glyph = u.glyph or "?", name = u.name or "" }
   end
-  if t.unplaced and #t.unplaced > 0 then
-    local parts = {}
-    for _, u in ipairs(t.unplaced) do
-      parts[#parts + 1] = table.concat({ u.id, u.pal or "e", u.glyph or "?", u.name or "" }, "|")
-    end
-    protocol.ingest("CPU", table.concat(parts, ";"))
-  end
-  protocol.ingest("CPEND", tostring(#(t.rows or {})))
+  local payload = {
+    guild = "viking",
+    cityplan = {
+      enabled = (t.enabled ~= false) and 1 or 0,
+      dim = t.dim or 12, placed = t.placed or 0, cap = t.cap or 0,
+      coast_side = t.coast or 0, moat = t.moat and 1 or 0,
+      wall = t.wall and 1 or 0, gate = t.gate or 6,
+      mood_delta = t.mood or 0, margin = t.margin or 0,
+    },
+    cityplan_terrain = t.rows or {},
+    cityplan_buildings = blds,
+    cityplan_placeable = unplaced,
+  }
+  -- Perks are sent only when there are any, so their absence means none.
+  if t.perks then payload.cityplan_perks = t.perks end
+  protocol.on_gmcp("Guild.City", payload)
 end
 
 -- =============================================================================
@@ -351,19 +354,13 @@ lines = cityplan.lines(WIDTH)
 check("negative mood renders in red", find_plain(lines, C.red .. "Zoning/heart mood: -2" .. RESET))
 check("coast East with no perks/placed shows no Perks line", not find_plain(lines, "Perks:"))
 
--- CPEND row-count mismatch keeps the previous plan and stamps cp.dbg; this
--- module surfaces that as a footer line (a disclosed lera addition -- see
--- the module doc comment).
-reset_cityplan()
-seed_cplan({ dim = 2, margin = 0, rows = { "..", ".." } })
-protocol.ingest("CPLAN", "1|2|0|0|0|0|0|6|0|0")
-protocol.ingest("CPT00", "..")
-protocol.ingest("CPEND", "2")
-check("a mismatched CPEND burst keeps the previous grid",
-  S.city_plan.rows[1] == ".." and S.city_plan.rows[2] == "..")
-lines = cityplan.lines(WIDTH)
-check("the incomplete-burst warning surfaces as a footer line",
-  find_plain(lines, "dropped: got 1/2 rows"))
+-- The two cases that used to sit here covered the CPEND row-count mismatch:
+-- an incomplete CPT%02d burst kept the previous grid and stamped cp.dbg, which
+-- the footer surfaced as a "dropped: got N/M rows" warning. A Guild.City frame
+-- carries the plan whole, so there is no partial burst to detect, nothing sets
+-- cp.dbg, and the footer no longer has that line. Both the behaviour and its
+-- tests are gone rather than being reworded around a condition that can no
+-- longer arise.
 
 -- =============================================================================
 -- legend gated show_city_plan_legend
