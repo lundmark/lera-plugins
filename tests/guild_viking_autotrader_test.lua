@@ -50,18 +50,161 @@ buffer = {
 
 local protocol = require("protocol")
 local S = require("state").S
-local trade = require("handlers.trade")
-for key, fn in pairs(trade) do
-  if key ~= "_market_seam" then protocol.handler(key, fn) end
-end
-local city = require("handlers.city")
-for key, fn in pairs(city) do
-  if key ~= "_patterns" and key ~= "_gmcp" and key ~= "_market_seam" then
-    protocol.handler(key, fn)
+
+-- ---------------------------------------------------------------------------
+-- Fixture seeding
+-- ---------------------------------------------------------------------------
+-- These fixtures are written in the compact notation this suite has always
+-- used -- a good's stock as "good|amount|pct", a cart as its pipe-joined
+-- fields -- and are translated here into the Guild.Trade / Guild.City frames
+-- the production writers take. The notation is the fixture language, not a
+-- wire format: nothing decodes it but the seven functions below, each of which
+-- handles only the shapes this file actually writes.
+--
+-- Every case here asserts on autotrader behaviour, so a translation that
+-- produced different state fails loudly rather than quietly testing nothing.
+--
+-- TGOODS is the exception and still seeds over MIP: it has no GMCP source yet,
+-- so its handler and its fixtures stay until one lands.
+local function split(str, sep)
+  local out = {}
+  for piece in tostring(str or ""):gmatch("[^" .. sep .. "]+") do
+    out[#out + 1] = piece
   end
+  return out
 end
-for key, fn in pairs(city._gmcp or {}) do
-  protocol.gmcp_handler(key, fn)
+
+local function fields(entry)
+  local out = {}
+  for piece in (entry .. "|"):gmatch("([^|]*)|") do out[#out + 1] = piece end
+  return out
+end
+
+local function gmcp(pkg, payload)
+  payload.guild = "viking"
+  protocol.on_gmcp(pkg, payload)
+end
+
+-- "good|amount|pct" or "good|amount|pct|grade", entries joined by ";".
+local function seed_wstock(str)
+  local entries = {}
+  for _, e in ipairs(split(str, ";")) do
+    local f = fields(e)
+    entries[#entries + 1] = { good = f[1], amount = tonumber(f[2]) or 0,
+                              pct = tonumber(f[3]) or 100,
+                              grade = (f[4] ~= "" and f[4]) or nil }
+  end
+  gmcp("Guild.Trade", { wstock = entries })
+end
+
+-- "good:amount", entries joined by ";".
+local function seed_blocks(str)
+  local entries = {}
+  for _, e in ipairs(split(str, ";")) do
+    local good, amount = e:match("^([^:]+):(%d+)$")
+    if good then entries[#entries + 1] = { good = good, amount = tonumber(amount) } end
+  end
+  gmcp("Guild.Trade", { blocks = entries })
+end
+
+-- "cart_id|tier|durability|cap|refit", entries joined by ";". The payload
+-- calls the cart id `slot`.
+local function seed_cidle(str)
+  local entries = {}
+  for _, e in ipairs(split(str, ";")) do
+    local f = fields(e)
+    entries[#entries + 1] = { slot = tonumber(f[1]) or 0, tier = tonumber(f[2]) or 1,
+                              durability = tonumber(f[3]) or 100,
+                              cap = tonumber(f[4]) or 0, refit = f[5] or "" }
+  end
+  gmcp("Guild.Trade", { cidle = entries })
+end
+
+-- 14 pipe-joined fields, entries joined by ";". `ret` is `secs` and `half` is
+-- `half_in` on the payload. The final legs field is not used by any fixture in
+-- this file, so a cart's legs are always empty here.
+local function seed_carts(str)
+  local entries = {}
+  for _, e in ipairs(split(str, ";")) do
+    local f = fields(e)
+    entries[#entries + 1] = {
+      mode = f[1], good = f[2], village = f[3], secs = tonumber(f[4]) or 0,
+      amount = tonumber(f[5]) or 0, half_in = tonumber(f[6]) or 0,
+      quality_pct = tonumber(f[7]) or 100, cart_id = tonumber(f[8]) or 0,
+      tier = tonumber(f[9]) or 1, durability = tonumber(f[10]) or 100,
+      cap = tonumber(f[11]) or 0, escort = tonumber(f[12]) or 0,
+      refit = f[13] or "",
+    }
+  end
+  gmcp("Guild.Trade", { carts = entries, cart_legs = {} })
+end
+
+-- A queued job is its legs, "mode|good|amount|village" joined by "!", jobs
+-- joined by ";". The payload splits the job from its legs, keyed by job id.
+local function seed_tqueue(str)
+  local jobs, legs = {}, {}
+  for job_index, job in ipairs(split(str, ";")) do
+    local escort = 0
+    local leg_strings = split(job, "!")
+    for seq, ls in ipairs(leg_strings) do
+      local f = fields(ls)
+      if #f >= 4 then
+        legs[#legs + 1] = { job = job_index, seq = seq, mode = f[1], good = f[2],
+                            amount = tonumber(f[3]) or 0, village = f[4] }
+        if seq == #leg_strings and f[5] and f[5] ~= "" then
+          escort = tonumber(f[5]) or 0
+        end
+      end
+    end
+    jobs[#jobs + 1] = { job = job_index, escort = escort }
+  end
+  gmcp("Guild.Trade", { queue = jobs, queue_legs = legs })
+end
+
+-- "id:tier", entries joined by ",".
+local function seed_buildings(str)
+  local entries = {}
+  for _, e in ipairs(split(str, ",")) do
+    local id, tier = e:match("^([^:]+):(%d+)$")
+    if id then entries[#entries + 1] = { id = id, tier = tonumber(tier) } end
+  end
+  gmcp("Guild.City", { buildings = entries })
+end
+
+-- 8 pipe-joined fields, entries joined by ";". `assigned`/`stat`/`arrive` are
+-- the payload's names for assigned_to/stat_key/arrive_at.
+local function seed_staff(str)
+  local entries = {}
+  for _, e in ipairs(split(str, ";")) do
+    local f = fields(e)
+    entries[#entries + 1] = { name = f[1], assigned = f[2], stat = f[3],
+                              stats = f[4], trait = f[5],
+                              loyalty = tonumber(f[6]) or 3, age = f[7],
+                              arrive = tonumber(f[8]) or 0 }
+  end
+  gmcp("Guild.Roster", { staff = entries })
+end
+
+local function seed_daler(v)
+  gmcp("Guild.State", { daler = tonumber(v) or 0 })
+end
+-- Mirrors init.lua's RESERVED set and its three registration tiers. The
+-- fixtures above reach Guild.Trade, Guild.City, Guild.Roster and Guild.State
+-- writers, which live across all four handler modules.
+local RESERVED = { _market_seam = true, _patterns = true, _gmcp = true }
+local trade = require("handlers.trade")
+for _, name in ipairs({ "handlers.trade", "handlers.city", "handlers.voyage",
+                        "handlers.kingdom" }) do
+  local mod = require(name)
+  for key, fn in pairs(mod) do
+    if not RESERVED[key] then protocol.handler(key, fn) end
+  end
+  for _, pat in ipairs(mod._patterns or {}) do
+    protocol.pattern_handler(pat.pattern, pat.fn)
+  end
+  for key, fn in pairs(mod._gmcp or {}) do
+    protocol.gmcp_handler(key, fn)
+  end
 end
 
 local at_core = require("autotrader.core")
@@ -113,10 +256,10 @@ check("log: entry carries a t timestamp field", at3.log[1].t ~= nil)
 -- at_wh_amount (LEGACY:41-50): warehouse total minus vtrade-blocked amount,
 -- floored at 0.
 -- ---------------------------------------------------------------------------
-protocol.ingest("WSTOCK", "salt|100|100")
-protocol.ingest("BLOCKS", "salt:30")
+seed_wstock( "salt|100|100")
+seed_blocks( "salt:30")
 check("wh_amount: total 100 minus blocked 30 = 70", at_core.wh_amount("salt") == 70)
-protocol.ingest("BLOCKS", "salt:150")
+seed_blocks( "salt:150")
 check("wh_amount: blocked exceeding total floors at 0", at_core.wh_amount("salt") == 0)
 check("wh_amount: unknown good is 0", at_core.wh_amount("nosuchgood") == 0)
 
@@ -139,7 +282,7 @@ check("wh_amount: unknown good is 0", at_core.wh_amount("nosuchgood") == 0)
 -- fresh (97) and fifo (74) diverge sharply because the newest bracket is
 -- much larger (60 units) than the oldest (20 units).
 -- ---------------------------------------------------------------------------
-protocol.ingest("WSTOCK", "fish|60|100;fish|40|80;fish|20|50")
+seed_wstock( "fish|60|100;fish|40|80;fish|20|50")
 check("fresh_quality: fish amount 70 -> 97 (hand-computed above)",
       at_core.fresh_quality("fish", 70) == 97, at_core.fresh_quality("fish", 70))
 check("fifo_quality: fish amount 70 -> 74 (hand-computed above)",
@@ -164,7 +307,7 @@ check("fifo_quality: no stock at all returns 100", at_core.fifo_quality("nosuchf
 --       = 11.6   + 21.8   + 5.1          = 38.5
 --   premium = val / qty = 38.5 / 35      = 1.1
 -- ---------------------------------------------------------------------------
-protocol.ingest("WSTOCK", "mead|10|100;mead|20|90;mead|5|80;mead|100|50")
+seed_wstock( "mead|10|100;mead|20|90;mead|5|80;mead|100|50")
 check("is_graded: mead is graded", at_core.is_graded("mead") == true)
 check("is_graded: timber is not graded", at_core.is_graded("timber") == false)
 check("cured_amount: mead sums only >=78%-fresh brackets (10+20+5=35)",
@@ -174,7 +317,7 @@ check("cured_premium: mead weighted premium = 38.5/35 = 1.1 (hand-computed above
 check("cured_amount: non-graded good returns full wh_amount (no cure gate)",
       at_core.cured_amount("nosuchgraded") == at_core.wh_amount("nosuchgraded"))
 check("cured_premium: non-graded good is always 1.0", at_core.cured_premium("timber") == 1.0)
-protocol.ingest("WSTOCK", "mead|100|50")   -- nothing cured at all
+seed_wstock( "mead|100|50")   -- nothing cured at all
 check("cured_premium: no cured stock at all is 1.0", at_core.cured_premium("mead") == 1.0)
 
 -- ---------------------------------------------------------------------------
@@ -193,12 +336,12 @@ check("perishable: durable goods are not perishable", at_core.perishable("timber
 -- ports as zero-arg to mirror LEGACY's own signature exactly (see this
 -- task's report for the full discrepancy note).
 -- ---------------------------------------------------------------------------
-protocol.ingest("CIDLE", "1|1|100|40|standard;2|2|90|60|heavy")
+seed_cidle( "1|1|100|40|standard;2|2|90|60|heavy")
 check("cart_cap: biggest idle cart's capacity (60)", at_core.cart_cap() == 60)
-protocol.ingest("CIDLE", "")
-protocol.ingest("CARTS", "sell|fish|Havn|120|40|60|85|c1|2|90|35|1|armored|leg1,leg2")
+seed_cidle( "")
+seed_carts( "sell|fish|Havn|120|40|60|85|c1|2|90|35|1|armored|leg1,leg2")
 check("cart_cap: falls back to state.carts when no idle carts (35)", at_core.cart_cap() == 35)
-protocol.ingest("CARTS", "")
+seed_carts( "")
 check("cart_cap: LEGACY's 60 fallback when nothing at all is known", at_core.cart_cap() == 60)
 
 -- ---------------------------------------------------------------------------
@@ -216,12 +359,12 @@ local function cart_id(c) return c and c.cart_id end
 -- Low warehouse fullness (2%, well under the 85% "fullish" threshold) so an
 -- explicit wh_full=false argument is not accidentally overridden by a real
 -- warehouse_pct() that also happens to read >= 85.
-protocol.ingest("BUILDINGS", "warehouse:1")
-protocol.ingest("WSTOCK", "junk|10|100")
+seed_buildings( "warehouse:1")
+seed_wstock( "junk|10|100")
 check("warehouse_pct: sanity check, low fixture reads 2% (well under 85)",
       at_core.warehouse_pct() == 2, at_core.warehouse_pct())
 
-protocol.ingest("CIDLE",
+seed_cidle(
   "1|1|100|40|standard;2|2|90|60|heavy;3|1|80|30|speed;4|3|0|100|standard;5|2|100|60|standard")
 
 check("pick_cart: stock mode, warehouse full -> prefers heavy refit (id2)",
@@ -239,14 +382,14 @@ check("pick_cart: arb mode, no qty hint -> prefers speed refit (id3)",
 check("pick_cart: unrecognized mode falls back to best overall; cap60 tie (id2/id5) breaks to lowest id",
       cart_id(at_core.pick_cart("other", nil, nil)) == 2)
 
-protocol.ingest("CIDLE", "")
+seed_cidle( "")
 check("pick_cart: no idle carts at all returns nil", at_core.pick_cart("stock", 10, false) == nil)
 
 -- Fullish DERIVED from real warehouse_pct (no wh_full argument at all):
 -- grain 350 / cap 400 (tier 1) = floor(87.5) = 87% >= 85 -> heavy branch.
-protocol.ingest("WSTOCK", "grain|350|100")
-protocol.ingest("BUILDINGS", "warehouse:1")
-protocol.ingest("CIDLE", "1|1|100|40|standard;2|2|90|60|heavy;3|1|80|30|speed")
+seed_wstock( "grain|350|100")
+seed_buildings( "warehouse:1")
+seed_cidle( "1|1|100|40|standard;2|2|90|60|heavy;3|1|80|30|speed")
 check("warehouse_pct: 350/400 = 87 (hand-computed: floor(350/400*100))",
       at_core.warehouse_pct() == 87, at_core.warehouse_pct())
 check("pick_cart: derived fullish (87% >= 85) with no wh_full arg still prefers heavy (id2)",
@@ -256,14 +399,14 @@ check("pick_cart: derived fullish (87% >= 85) with no wh_full arg still prefers 
 -- at_max_stops (LEGACY:125-138): trading_post tier, +1 for an assigned
 -- silver_tongue staffer.
 -- ---------------------------------------------------------------------------
-protocol.ingest("BUILDINGS", "trading_post:3")
-protocol.ingest("STAFF", "")
+seed_buildings( "trading_post:3")
+seed_staff( "")
 check("max_stops: trading_post tier 3, no staff -> 3", at_core.max_stops() == 3)
-protocol.ingest("STAFF", "Bjorn|trading_post|trade|5,3,2,1,4,2,1|silver_tongue|4|veteran|1000")
+seed_staff( "Bjorn|trading_post|trade|5,3,2,1,4,2,1|silver_tongue|4|veteran|1000")
 check("max_stops: +1 for an assigned silver_tongue staffer -> 4", at_core.max_stops() == 4)
-protocol.ingest("STAFF", "Bjorn|trading_post|trade|5,3,2,1,4,2,1|0|4|veteran|1000")
+seed_staff( "Bjorn|trading_post|trade|5,3,2,1,4,2,1|0|4|veteran|1000")
 check("max_stops: staffer assigned but not silver_tongue -> back to 3", at_core.max_stops() == 3)
-protocol.ingest("BUILDINGS", "")
+seed_buildings( "")
 check("max_stops: no trading_post building at all -> LEGACY's default tier 1", at_core.max_stops() == 1)
 
 -- ---------------------------------------------------------------------------
@@ -271,7 +414,7 @@ check("max_stops: no trading_post building at all -> LEGACY's default tier 1", a
 -- (LEGACY:245-279). Re-seed the mead/fish brackets from above for the
 -- quality-multiplier assertions.
 -- ---------------------------------------------------------------------------
-protocol.ingest("WSTOCK",
+seed_wstock(
   "mead|10|100;mead|20|90;mead|5|80;mead|100|50;fish|60|100;fish|40|80;fish|20|50")
 
 check("route_sell_suffix: graded good sells ' best' first", at_core.route_sell_suffix("iron") == " best")
@@ -401,14 +544,14 @@ check("plan/waiting for city data: status set, no jobs/commands",
 -- ---------------------------------------------------------------------------
 S.autotrade = nil
 at_core.settings()
-protocol.ingest("BUILDINGS", "")
-protocol.ingest("WSTOCK", "timber|1000|100")
-protocol.ingest("STAFF", "")
-protocol.ingest("BLOCKS", "")
-protocol.ingest("CARTS", "")
-protocol.ingest("CIDLE", "11|1|100|200|standard")
-protocol.ingest("TQUEUE", "")
-protocol.ingest("DALER", "500")
+seed_buildings( "")
+seed_wstock( "timber|1000|100")
+seed_staff( "")
+seed_blocks( "")
+seed_carts( "")
+seed_cidle( "11|1|100|200|standard")
+seed_tqueue( "")
+seed_daler( "500")
 protocol.ingest("TGOODS", "0=t:-1:1000:0:10:0|1=t:2:0:1000:0:50")
 
 local p1 = plan.build()
@@ -451,14 +594,14 @@ check("plan/AT_INTERVAL: a second call inside the 30s window returns nil",
 fake_now = fake_now + 1000
 S.autotrade = nil
 at_core.settings()
-protocol.ingest("BUILDINGS", "")
-protocol.ingest("WSTOCK", "timber|1000|100")
-protocol.ingest("STAFF", "")
-protocol.ingest("BLOCKS", "")
-protocol.ingest("CARTS", "")
-protocol.ingest("CIDLE", "21|1|100|30|standard")
-protocol.ingest("TQUEUE", "")
-protocol.ingest("DALER", "100000")
+seed_buildings( "")
+seed_wstock( "timber|1000|100")
+seed_staff( "")
+seed_blocks( "")
+seed_carts( "")
+seed_cidle( "21|1|100|30|standard")
+seed_tqueue( "")
+seed_daler( "100000")
 protocol.ingest("TGOODS", "0=t:-1:2000:0:10:0|1=t:2:0:2000:0:50")
 
 local p2 = plan.build()
@@ -513,14 +656,14 @@ fake_now = fake_now + 1000
 S.autotrade = nil
 at_core.settings()
 S.autotrade.use_stock = true
-protocol.ingest("BUILDINGS", "")
-protocol.ingest("WSTOCK", "ore|200|100")
-protocol.ingest("STAFF", "")
-protocol.ingest("BLOCKS", "")
-protocol.ingest("CARTS", "")
-protocol.ingest("CIDLE", "71|1|100|300|standard")
-protocol.ingest("TQUEUE", "")
-protocol.ingest("DALER", "5000")
+seed_buildings( "")
+seed_wstock( "ore|200|100")
+seed_staff( "")
+seed_blocks( "")
+seed_carts( "")
+seed_cidle( "71|1|100|300|standard")
+seed_tqueue( "")
+seed_daler( "5000")
 protocol.ingest("TGOODS", "0=o:-1:1000:0:10:0|2=o:1:0:1000:0:100|3=o:3:0:1000:0:50")
 
 local pu = plan.build()
@@ -556,14 +699,14 @@ check("plan/use-stock arb leg: exactly ONE sell command, no buy leg at all",
 fake_now = fake_now + 1000
 S.autotrade = nil
 at_core.settings()
-protocol.ingest("BUILDINGS", "warehouse:1")
-protocol.ingest("WSTOCK", "ore|380|100")
-protocol.ingest("STAFF", "")
-protocol.ingest("BLOCKS", "")
-protocol.ingest("CARTS", "")
-protocol.ingest("CIDLE", "31|1|100|200|standard")
-protocol.ingest("TQUEUE", "")
-protocol.ingest("DALER", "1000")
+seed_buildings( "warehouse:1")
+seed_wstock( "ore|380|100")
+seed_staff( "")
+seed_blocks( "")
+seed_carts( "")
+seed_cidle( "31|1|100|200|standard")
+seed_tqueue( "")
+seed_daler( "1000")
 protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
 
 check("plan/warehouse-full sanity: 380/400 = 95% >= 85", at_core.warehouse_pct() == 95, at_core.warehouse_pct())
@@ -596,14 +739,14 @@ fake_now = fake_now + 1000
 S.autotrade = nil
 at_core.settings()
 S.autotrade.use_stock = true
-protocol.ingest("BUILDINGS", "")
-protocol.ingest("WSTOCK", "furs|50|100")
-protocol.ingest("STAFF", "")
-protocol.ingest("BLOCKS", "")
-protocol.ingest("CARTS", "")
-protocol.ingest("CIDLE", "41|1|100|60|standard")
-protocol.ingest("TQUEUE", "")
-protocol.ingest("DALER", "1000")
+seed_buildings( "")
+seed_wstock( "furs|50|100")
+seed_staff( "")
+seed_blocks( "")
+seed_carts( "")
+seed_cidle( "41|1|100|60|standard")
+seed_tqueue( "")
+seed_daler( "1000")
 protocol.ingest("TGOODS", "3=f:3:0:4:0:100")
 
 local p4 = plan.build()
@@ -642,14 +785,14 @@ at_core.settings()
 S.autotrade.use_stock = true
 S.autotrade.stock_route = true
 S.autotrade.pack = true
-protocol.ingest("BUILDINGS", "trading_post:2")
-protocol.ingest("WSTOCK", "furs|50|100;timber|60|100;ore|40|100")
-protocol.ingest("STAFF", "")
-protocol.ingest("BLOCKS", "")
-protocol.ingest("CARTS", "")
-protocol.ingest("CIDLE", "11|1|100|300|standard;12|1|100|300|standard")
-protocol.ingest("TQUEUE", "")
-protocol.ingest("DALER", "1000")
+seed_buildings( "trading_post:2")
+seed_wstock( "furs|50|100;timber|60|100;ore|40|100")
+seed_staff( "")
+seed_blocks( "")
+seed_carts( "")
+seed_cidle( "11|1|100|300|standard;12|1|100|300|standard")
+seed_tqueue( "")
+seed_daler( "1000")
 protocol.ingest("TGOODS", "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
 
 check("plan/stop-limit sanity: max_stops = 2 (trading_post tier 2, no staff)",
@@ -752,14 +895,14 @@ at_core.settings()
 S.autotrade.use_stock = true
 S.autotrade.stock_priority = false
 S.autotrade.max_carts = 3
-protocol.ingest("BUILDINGS", "")
-protocol.ingest("WSTOCK", "furs|5|100;ore|6|100;timber|1000|100")
-protocol.ingest("STAFF", "")
-protocol.ingest("BLOCKS", "")
-protocol.ingest("CARTS", "")
-protocol.ingest("CIDLE", "91|1|100|300|standard;92|1|100|300|standard;93|1|100|300|standard")
-protocol.ingest("TQUEUE", "")
-protocol.ingest("DALER", "100000")
+seed_buildings( "")
+seed_wstock( "furs|5|100;ore|6|100;timber|1000|100")
+seed_staff( "")
+seed_blocks( "")
+seed_carts( "")
+seed_cidle( "91|1|100|300|standard;92|1|100|300|standard;93|1|100|300|standard")
+seed_tqueue( "")
+seed_daler( "100000")
 protocol.ingest("TGOODS",
   "0=t:-1:50:0:40:0|1=t:2:0:100:0:50|2=f:3:0:1000:0:90|3=f:0:500:0:20:0"
   .. "|4=o:3:0:1000:0:70|5=o:0:500:0:20:0|6=t:1:0:1000:0:999")
@@ -798,14 +941,14 @@ check("plan/mixed mode: exact command sequence -- timber's route/queue block fir
 fake_now = fake_now + 1000
 S.autotrade = nil
 at_core.settings()
-protocol.ingest("BUILDINGS", "")
-protocol.ingest("WSTOCK", "")
-protocol.ingest("STAFF", "")
-protocol.ingest("BLOCKS", "")
-protocol.ingest("CARTS", "")
-protocol.ingest("CIDLE", "51|1|100|100|standard")
-protocol.ingest("TQUEUE", "")
-protocol.ingest("DALER", "500")
+seed_buildings( "")
+seed_wstock( "")
+seed_staff( "")
+seed_blocks( "")
+seed_carts( "")
+seed_cidle( "51|1|100|100|standard")
+seed_tqueue( "")
+seed_daler( "500")
 protocol.ingest("TGOODS", "")
 
 local p6 = plan.build()
@@ -834,14 +977,14 @@ check("plan/empty-plan case: status exact",
 local function setup_single_dispatch_fixture()
   S.autotrade = nil
   at_core.settings()
-  protocol.ingest("BUILDINGS", "warehouse:1")
-  protocol.ingest("WSTOCK", "ore|380|100")
-  protocol.ingest("STAFF", "")
-  protocol.ingest("BLOCKS", "")
-  protocol.ingest("CARTS", "")
-  protocol.ingest("CIDLE", "31|1|100|200|standard")
-  protocol.ingest("TQUEUE", "")
-  protocol.ingest("DALER", "1000")
+  seed_buildings( "warehouse:1")
+  seed_wstock( "ore|380|100")
+  seed_staff( "")
+  seed_blocks( "")
+  seed_carts( "")
+  seed_cidle( "31|1|100|200|standard")
+  seed_tqueue( "")
+  seed_daler( "1000")
   protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
 end
 
@@ -884,14 +1027,14 @@ at_core.settings()
 S.autotrade.use_stock = true
 S.autotrade.stock_route = true
 S.autotrade.pack = true
-protocol.ingest("BUILDINGS", "trading_post:2")
-protocol.ingest("WSTOCK", "furs|50|100;timber|60|100;ore|40|100")
-protocol.ingest("STAFF", "")
-protocol.ingest("BLOCKS", "")
-protocol.ingest("CARTS", "")
-protocol.ingest("CIDLE", "11|1|100|300|standard;12|1|100|300|standard")
-protocol.ingest("TQUEUE", "")
-protocol.ingest("DALER", "1000")
+seed_buildings( "trading_post:2")
+seed_wstock( "furs|50|100;timber|60|100;ore|40|100")
+seed_staff( "")
+seed_blocks( "")
+seed_carts( "")
+seed_cidle( "11|1|100|300|standard;12|1|100|300|standard")
+seed_tqueue( "")
+seed_daler( "1000")
 protocol.ingest("TGOODS", "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
 tick.reset()
 sent, printed = {}, {}
@@ -1006,14 +1149,14 @@ at_core.settings()
 S.autotrade.use_stock = true
 S.autotrade.stock_route = true
 S.autotrade.pack = true
-protocol.ingest("BUILDINGS", "trading_post:2")
-protocol.ingest("WSTOCK", "furs|50|100;timber|60|100;ore|40|100")
-protocol.ingest("STAFF", "")
-protocol.ingest("BLOCKS", "")
-protocol.ingest("CARTS", "")
-protocol.ingest("CIDLE", "11|1|100|300|standard;12|1|100|300|standard")
-protocol.ingest("TQUEUE", "")
-protocol.ingest("DALER", "1000")
+seed_buildings( "trading_post:2")
+seed_wstock( "furs|50|100;timber|60|100;ore|40|100")
+seed_staff( "")
+seed_blocks( "")
+seed_carts( "")
+seed_cidle( "11|1|100|300|standard;12|1|100|300|standard")
+seed_tqueue( "")
+seed_daler( "1000")
 protocol.ingest("TGOODS", "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
 
 local expect_commands = {
@@ -1056,7 +1199,7 @@ end
 -- second idle-cart row changes mip_sig() without zeroing idle_carts, which
 -- both plan.build()'s own "no idle carts" gate and this fixture's second
 -- transaction still need to be non-empty).
-protocol.ingest("CIDLE", "11|1|100|300|standard;12|1|100|300|standard;13|1|100|10|standard")
+seed_cidle( "11|1|100|300|standard;12|1|100|300|standard;13|1|100|10|standard")
 fake_now = at_time + 1
 tick.tick()
 do
@@ -1112,14 +1255,14 @@ at_core.settings()
 S.autotrade.use_stock = true
 S.autotrade.stock_route = true
 S.autotrade.pack = true
-protocol.ingest("BUILDINGS", "trading_post:2")
-protocol.ingest("WSTOCK", "furs|50|100;timber|60|100;ore|40|100")
-protocol.ingest("STAFF", "")
-protocol.ingest("BLOCKS", "")
-protocol.ingest("CARTS", "")
-protocol.ingest("CIDLE", "11|1|100|300|standard;12|1|100|300|standard")
-protocol.ingest("TQUEUE", "")
-protocol.ingest("DALER", "1000")
+seed_buildings( "trading_post:2")
+seed_wstock( "furs|50|100;timber|60|100;ore|40|100")
+seed_staff( "")
+seed_blocks( "")
+seed_carts( "")
+seed_cidle( "11|1|100|300|standard;12|1|100|300|standard")
+seed_tqueue( "")
+seed_daler( "1000")
 protocol.ingest("TGOODS", "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
 
 local bp_t0 = fake_now + 10000
@@ -1131,7 +1274,7 @@ check("tick/baseline placement setup: T1's first command sent",
 -- Mid-route mutation: an UNRELATED idle cart (13) appears while T1 (cart 11)
 -- is still being built -- changes mip_sig() well before T1's terminal
 -- command is even sent.
-protocol.ingest("CIDLE", "11|1|100|300|standard;12|1|100|300|standard;13|1|100|10|standard")
+seed_cidle( "11|1|100|300|standard;12|1|100|300|standard;13|1|100|10|standard")
 
 -- Send T1's remaining 4 commands normally, with NO further state changes.
 local bt = bp_t0
@@ -1161,7 +1304,7 @@ check("tick/baseline placement: no premature send of T2's commands", #sent == 5,
 
 -- A genuine change AFTER the terminal command (T1's real MIP confirmation
 -- -- cart 11 itself leaving the idle list) still correctly releases T2.
-protocol.ingest("CIDLE", "12|1|100|300|standard;13|1|100|10|standard")
+seed_cidle( "12|1|100|300|standard;13|1|100|10|standard")
 fake_now = bt + 2
 tick.tick()
 check("tick/baseline placement: a REAL post-terminal change confirms normally",
@@ -1241,14 +1384,14 @@ tick.reset()
 sent, printed = {}, {}
 S.autotrade = nil
 at_core.settings()
-protocol.ingest("BUILDINGS", "")
-protocol.ingest("WSTOCK", "")
-protocol.ingest("STAFF", "")
-protocol.ingest("BLOCKS", "")
-protocol.ingest("CARTS", "")
-protocol.ingest("CIDLE", "61|1|100|100|standard")
-protocol.ingest("TQUEUE", "")
-protocol.ingest("DALER", "500")
+seed_buildings( "")
+seed_wstock( "")
+seed_staff( "")
+seed_blocks( "")
+seed_carts( "")
+seed_cidle( "61|1|100|100|standard")
+seed_tqueue( "")
+seed_daler( "500")
 protocol.ingest("TGOODS", "")
 fake_now = fake_now + 10000
 tick.tick()
@@ -1277,7 +1420,7 @@ check("tick/AT_INTERVAL setup: first dispatch fires immediately",
 -- Confirm it (a second idle cart appears -- mip_sig changes -- without
 -- zeroing idle_carts, so plan.build()'s own idle-cart gate stays open and
 -- AT_INTERVAL, not that gate, is what the 29s/30s probe below exercises).
-protocol.ingest("CIDLE", "31|1|100|200|standard;32|1|100|50|standard")
+seed_cidle( "31|1|100|200|standard;32|1|100|50|standard")
 fake_now = ati_t0 + 1
 tick.tick()
 check("tick/AT_INTERVAL setup: confirmed back to idle", tick.status() == "idle")

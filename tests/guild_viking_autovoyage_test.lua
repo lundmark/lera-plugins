@@ -93,48 +93,98 @@ local VOYAGE_FIELDS = {
 }
 local function set_voyage(overrides)
   local f = {
-    state = "sailed", ship_id = "1", ship_name = "Ship1", contract_name = "c",
-    contract_type = "raid", danger = "0", x = "0", y = "0", width = "0",
-    height = "0", hull = "100", morale = "100", supplies = "100", stress = "0",
-    crew_alive = "1", crew_max = "1", steps = "0", next_move = "0",
-    threat_name = "", threat_level = "0", threat_pressure = "0", paused_type = "",
+    state = "sailed", ship_id = 1, ship_name = "Ship1", contract_name = "c",
+    contract_type = "raid", danger = 0, x = 0, y = 0, width = 0,
+    height = 0, hull = 100, morale = 100, supplies = 100, stress = 0,
+    crew_alive = 1, crew_max = 1, steps = 0, next_move = 0,
+    threat_name = "", threat_level = 0, threat_pressure = 0, paused_type = "",
     weather_key = "", captain = "", identity = "", crew_traits = "", ship_traits = "",
   }
   for k, v in pairs(overrides or {}) do f[k] = v end
-  local parts = {}
-  for _, k in ipairs(VOYAGE_FIELDS) do parts[#parts + 1] = tostring(f[k]) end
-  protocol.ingest("VOYAGE", table.concat(parts, "|"))
+  -- Guild.Voyage's record names five of these differently, and its trait
+  -- lists travel as their own keys.
+  local function split(str)
+    local out = {}
+    for t in tostring(str or ""):gmatch("[^,]+") do out[#out + 1] = t end
+    return out
+  end
+  protocol.on_gmcp("Guild.Voyage", {
+    guild = "viking",
+    voyage = {
+      state = f.state, ship_id = tonumber(f.ship_id), ship_name = f.ship_name,
+      contract_name = f.contract_name, contract_type = f.contract_type,
+      danger = tonumber(f.danger), x = tonumber(f.x), y = tonumber(f.y),
+      width = tonumber(f.width), height = tonumber(f.height),
+      hull = tonumber(f.hull), morale = tonumber(f.morale),
+      supplies = tonumber(f.supplies), hull_stress = tonumber(f.stress),
+      crew_alive = tonumber(f.crew_alive), crew_max = tonumber(f.crew_max),
+      steps_sailed = tonumber(f.steps), next_move_in = tonumber(f.next_move),
+      threat_name = f.threat_name, threat_level = tonumber(f.threat_level),
+      threat_pressure = tonumber(f.threat_pressure),
+      paused_type = f.paused_type, weather_key = f.weather_key,
+      captain_style = f.captain, ship_identity = f.identity,
+    },
+    voyage_crew_traits = split(f.crew_traits),
+    voyage_ship_traits = split(f.ship_traits),
+  })
 end
+-- An empty record is how the server says "no active voyage", the same thing
+-- MIP's empty VOYAGE value said.
 local function clear_voyage()
-  protocol.ingest("VOYAGE", "")
+  protocol.on_gmcp("Guild.Voyage", { guild = "viking", voyage = {} })
 end
 
--- handlers/voyage.lua's M.LONGSHIP field order (15 pipe-delimited fields per
--- ";"-separated entry).
+-- Guild.Voyage's longship record; its trait lists travel as their own keys,
+-- foreign-keyed by ship id.
 local function longship_entry(overrides)
-  local f = { sid = "1", name = "Ship1", tier = "3", state = "docked", target = "",
-              ret = "0", crew = "0", hired = "0", safe = "0", identity = "",
+  local f = { sid = 1, name = "Ship1", tier = 3, state = "docked", target = "",
+              ret = 0, crew = 0, hired = 0, safe = 0, identity = "",
               captain = "", crew_traits = "", ship_traits = "", saga_title = "",
-              saga_raids = "0" }
+              saga_raids = 0 }
   for k, v in pairs(overrides or {}) do f[k] = v end
-  return table.concat({ f.sid, f.name, f.tier, f.state, f.target, f.ret, f.crew,
-    f.hired, f.safe, f.identity, f.captain, f.crew_traits, f.ship_traits,
-    f.saga_title, f.saga_raids }, "|")
+  return { id = tonumber(f.sid), name = f.name, tier = tonumber(f.tier),
+           state = f.state, target = f.target, secs = tonumber(f.ret),
+           crew = tonumber(f.crew), hired_crew = tonumber(f.hired),
+           safe = tonumber(f.safe), voyage_identity = f.identity,
+           captain_style = f.captain, saga_title = f.saga_title,
+           saga_raids = tonumber(f.saga_raids),
+           _crew_traits = f.crew_traits, _ship_traits = f.ship_traits }
 end
 local function set_longships(entries)
-  protocol.ingest("LONGSHIP", table.concat(entries, ";"))
-end
-
-local function set_offers(ship, offers)
-  -- shipname|idx:type:name:danger:difficulty:fit;...
-  local parts = {}
-  for _, o in ipairs(offers) do
-    parts[#parts + 1] = string.format("%d:%s:%s:%d:%s:%d",
-      o.index, o.type or "", o.name or "", o.danger or 0, o.difficulty or "", o.fit or 3)
+  local ships, crew, shiptr = {}, {}, {}
+  for _, e in ipairs(entries) do
+    local rec = {}
+    for k, v in pairs(e) do
+      if k ~= "_crew_traits" and k ~= "_ship_traits" then rec[k] = v end
+    end
+    ships[#ships + 1] = rec
+    for t in tostring(e._crew_traits or ""):gmatch("[^,]+") do
+      crew[#crew + 1] = { id = rec.id, trait = t }
+    end
+    for t in tostring(e._ship_traits or ""):gmatch("[^,]+") do
+      shiptr[#shiptr + 1] = { id = rec.id, trait = t }
+    end
   end
-  protocol.ingest("VOFFERS", ship .. "|" .. table.concat(parts, ";"))
+  protocol.on_gmcp("Guild.Voyage", { guild = "viking", longship = ships,
+    longship_crew_traits = crew, longship_ship_traits = shiptr })
 end
 
+-- MIP packed the ship name and the offer list into one value; they are
+-- separate keys here. `fit` is `fit_code` on the wire.
+local function set_offers(ship, offers)
+  local list = {}
+  for _, o in ipairs(offers) do
+    list[#list + 1] = { index = o.index, type = o.type or "",
+                        name = o.name or "", danger = o.danger or 0,
+                        difficulty = o.difficulty or "", fit_code = o.fit or 3 }
+  end
+  protocol.on_gmcp("Guild.Voyage", { guild = "viking", voffers_ship = ship,
+                                     voffers = list })
+end
+
+-- The Sea Chart is the one voyage fixture still seeded over MIP: VCHART/VCHH/
+-- VCR have no GMCP source yet (see gmcp_map.lua's note), so their handlers and
+-- this seeding stay until one lands.
 local function set_chart(width, height, mode, rows)
   protocol.ingest("VCHH", width .. "|" .. height .. "|" .. (mode or "explore"))
   for i, row in ipairs(rows) do
@@ -143,16 +193,16 @@ local function set_chart(width, height, mode, rows)
   end
 end
 
+-- Each element is the same "x,y" key MIP joined with ';'.
 local function set_sailed(pairs_xy)
-  -- "x,y;x,y;..."
-  local parts = {}
-  for _, xy in ipairs(pairs_xy) do parts[#parts + 1] = xy[1] .. "," .. xy[2] end
-  protocol.ingest("VSAILED", table.concat(parts, ";"))
+  local coords = {}
+  for _, xy in ipairs(pairs_xy) do coords[#coords + 1] = xy[1] .. "," .. xy[2] end
+  protocol.on_gmcp("Guild.Voyage", { guild = "viking", vsailed = coords })
 end
 
 local function set_wait(paused_type, options)
-  protocol.ingest("VOYAGE_WAIT", paused_type)
-  protocol.ingest("VRESOLVE", table.concat(options, ","))
+  protocol.on_gmcp("Guild.Voyage", { guild = "viking",
+    voyage_wait = paused_type, vresolve = options })
 end
 
 local function reset_all()
@@ -582,7 +632,10 @@ S.autovoyage = nil
 S.voyage_longships = {}
 S.ships = {}
 set_longships({ longship_entry({ sid = "1", name = "Njord" }), longship_entry({ sid = "2", name = "Ran" }) })
-protocol.ingest("SHIPS", "Ran|3|docked||0;Skidbladnir|3|docked||0")
+protocol.on_gmcp("Guild.Fleet", { guild = "viking", ships = {
+  { name = "Ran", tier = 3, state = "docked", target = "", secs = 0 },
+  { name = "Skidbladnir", tier = 3, state = "docked", target = "", secs = 0 },
+} })
 check("all_ships: merges LONGSHIP + SHIPS, deduped, in order",
       (function()
         local names = av.all_ships()
@@ -807,7 +860,7 @@ reset_all()
 page_opts.set("auto_voyage", true)
 set_chart(3, 1, "explore", { "H.X" })
 set_voyage({ state = "idle", x = 1, y = 0, hull = 100, morale = 100, supplies = 100, danger = 0 })
-protocol.ingest("VQPATH", "A2")
+protocol.on_gmcp("Guild.Voyage", { guild = "viking", vqpath = { "A2" } })
 open_interval()
 av.tick()
 check("tick/gate 6 (queue non-empty): blocks alone", #sent == 0)

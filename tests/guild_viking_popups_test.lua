@@ -449,19 +449,29 @@ check("(fixture) the Guild.Map frame reached the writer",
 -- chart + voyage status (sea + voyage popups):
 -- guild_viking_popup_sea_test.lua's VOYAGE/VCHH/VCR/VSAILED/VQPATH/VSAGA/
 -- VMEM seed.
-protocol.ingest("VOYAGE",
-  "sailing|1|Ormen|Raid Fjordholm|raid|3|5|6|20|20|80|70|60|10|4|5|12|30|Kraken|2|40||" ..
-  "storm|Erik|proud|brave,loyal|swift,sturdy")
-protocol.ingest("FLEET_RENOWN", "1500")
+protocol.on_gmcp("Guild.Voyage", { guild = "viking",
+  voyage = { state = "sailing", ship_id = 1, ship_name = "Ormen",
+    contract_name = "Raid Fjordholm", contract_type = "raid", danger = 3,
+    x = 5, y = 6, width = 20, height = 20, hull = 80, morale = 70,
+    supplies = 60, hull_stress = 10, crew_alive = 4, crew_max = 5,
+    steps_sailed = 12, next_move_in = 30, threat_name = "Kraken",
+    threat_level = 2, threat_pressure = 40, paused_type = "",
+    weather_key = "storm", captain_style = "Erik", ship_identity = "proud" },
+  voyage_crew_traits = { "brave", "loyal" },
+  voyage_ship_traits = { "swift", "sturdy" },
+  fleet_renown = 1500,
+  vsailed = { "1,0" },
+  vqpath = { "N", "N", "E", "SE" },
+  vsaga = { "Captain style: bold", "The fleet set sail." },
+  vmem = { "Remembered the reefs of Fjordholm." },
+})
+-- The Sea Chart is the one fixture here still seeded over MIP: VCHH/VCR have
+-- no GMCP source yet, so their handlers and this seeding stay until one lands.
 protocol.ingest("VCHH", "4|4|test")
 protocol.ingest("VCR00", "S#H?")
 protocol.ingest("VCR01", "OMBD")
 protocol.ingest("VCR02", "++XY")
 protocol.ingest("VCR03", "VCA*")
-protocol.ingest("VSAILED", "1,0")
-protocol.ingest("VQPATH", "N,N,E,SE")
-protocol.ingest("VSAGA", "Captain style: bold;The fleet set sail.")
-protocol.ingest("VMEM", "Remembered the reefs of Fjordholm.")
 page_opts.set("show_sea_voyage", true)
 page_opts.set("show_sea_chart", true)
 page_opts.set("show_sea_queue", true)
@@ -471,12 +481,13 @@ page_opts.set("show_sea_memory", true)
 -- city plan (cityplan popup): guild_viking_popup_cityplan_test.lua's
 -- seed_cplan shape (margin defaults to 0 here, same as that helper, so
 -- the grid's interior origin (0,0) is directly hit-testable).
-protocol.ingest("CPLAN", "1|3|1|20|1|0|0|6|0|0")
-protocol.ingest("CPT00", "...")
-protocol.ingest("CPT01", ".H.")
-protocol.ingest("CPT02", "...")
-protocol.ingest("CPB", "hall|1|1|1|1|e|H|Great Hall")
-protocol.ingest("CPEND", "3")
+protocol.on_gmcp("Guild.City", { guild = "viking",
+  cityplan = { enabled = 1, dim = 3, placed = 1, cap = 20, coast_side = 1,
+               moat = 0, wall = 0, gate = 6, mood_delta = 0, margin = 0 },
+  cityplan_terrain = { "...", ".H.", "..." },
+  cityplan_buildings = { { id = "hall", x = 1, y = 1, w = 1, h = 1, pal = "e",
+                           glyph = "H", name = "Great Hall" } },
+})
 page_opts.set("show_city_plan", true)
 page_opts.set("show_city_plan_legend", true)
 
@@ -484,17 +495,22 @@ page_opts.set("show_city_plan_legend", true)
 -- seed_wmap/seed_battle shape. Battle takes priority over the campaign map
 -- once S.battle is present (popups/war.lua's active_module()), so seeding
 -- both exercises that composite's real precedence, not just one branch.
-protocol.ingest("WMAP", "1|3|7|offense|0|Jorvik|0|0")
-protocol.ingest("WMR00", "f.w")
-protocol.ingest("WMR01", "H..")
-protocol.ingest("WMR02", "...")
-protocol.ingest("WMO", "A:0,2,10,N")
-protocol.ingest("WMEND", "3")
-protocol.ingest("BATTLE", table.concat({
-  1, "deploy", 1, 15, "field", "Fjordvik", "100:20", "3:2:1",
-  "..#^*w", "v.u...",
-  "Y,Huscarl Guard,8,A2,80,huscarls,,101,0",
-}, "|"))
+protocol.on_gmcp("Guild.Kingdom", { guild = "viking",
+  campaign = { active = 1, dim = 3, turn = 7, mode = "offense", pending = 0,
+               town = "Jorvik", works_budget = 0, march_eta = 0 },
+  campaign_terrain = { "f.w", "H..", "..." },
+  campaign_units = { { kind = "host", id = "", c = 0, r = 2, size = 10,
+                       flag = "N" } },
+})
+protocol.on_gmcp("Guild.War", { guild = "viking",
+  active = 1, phase = "deploy", turn = 1, war_points = 15, mode = "field",
+  target = "Fjordvik", budget = 100, spent = 20, w = 3, h = 2, dz = 1,
+  terrain = { "..#", "^*w" }, works = { "v.u", "..." },
+  units = { { side = "Y", label = "Huscarl Guard", size = 8, coord = "A2",
+              morale = 80, type = "huscarls", leader = "", bid = 101,
+              ord = 0 } },
+  reserve = {},
+})
 page_opts.set("show_war_battle", true)
 
 -- ---- five named popups: toggle open, render at both sizes, width

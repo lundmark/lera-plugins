@@ -147,6 +147,35 @@ for key, fn in pairs(voyage_h._gmcp or {}) do
 end
 
 local S = state.S
+
+-- Fixtures seed through the production GMCP path. The Sea Chart (VCHH/VCR) is
+-- the exception and still arrives over MIP: it has no GMCP source yet, so its
+-- handlers and this seeding stay until one lands. VRELICS is the same case.
+local function gv(payload)
+  payload.guild = "viking"
+  protocol.on_gmcp("Guild.Voyage", payload)
+end
+
+-- Guild.Voyage's voyage record; five names differ from the client's fields and
+-- the trait lists travel as their own keys.
+local function seed_voyage(t)
+  gv({
+    voyage = {
+      state = t.state, ship_id = t.ship_id, ship_name = t.ship_name,
+      contract_name = t.contract_name, contract_type = t.contract_type,
+      danger = t.danger, x = t.x, y = t.y, width = t.width, height = t.height,
+      hull = t.hull, morale = t.morale, supplies = t.supplies,
+      hull_stress = t.stress, crew_alive = t.crew_alive, crew_max = t.crew_max,
+      steps_sailed = t.steps, next_move_in = t.next_move,
+      threat_name = t.threat_name, threat_level = t.threat_level,
+      threat_pressure = t.threat_pressure, paused_type = t.paused_type or "",
+      weather_key = t.weather_key, captain_style = t.captain,
+      ship_identity = t.identity,
+    },
+    voyage_crew_traits = t.crew_traits or {},
+    voyage_ship_traits = t.ship_traits or {},
+  })
+end
 local C, RESET = pagelib.C, pagelib.RESET
 
 local WIDTH = 76
@@ -205,7 +234,7 @@ check("voyage popup shows the no-data gate",
 -- show_sea_voyage master gate: whole-body hidden, header only, in both popups
 -- =============================================================================
 reset_voyage()
-protocol.ingest("VOYAGE_WAIT", "") -- flips mip_voyage_seen true without a voyage
+gv({ voyage_wait = "" }) -- flips the voyage-seen flag without a voyage
 page_opts.set("show_sea_voyage", false)
 sea_lines = sea.lines(WIDTH)
 voyage_lines = voyage.lines(WIDTH)
@@ -221,13 +250,17 @@ page_opts.set("show_sea_voyage", true)
 -- direction).
 -- =============================================================================
 reset_voyage()
-protocol.ingest("VOYAGE_WAIT", "")
+gv({ voyage_wait = "" })
 sea_lines = sea.lines(WIDTH)
 check("sea: no docked ships -> no [Actions] line at all", not find_plain(sea_lines, "[Actions]"))
 check("sea: no docked ships -> actions_line_index is nil", sea.actions_line_index(WIDTH) == nil)
 
-protocol.ingest("LONGSHIP",
-  "7|Ormen|2|docked|Havn|0|4|1|1|proud|Erik|brave|swift|Saga of Ormen|3")
+gv({ longship = { { id = 7, name = "Ormen", tier = 2, state = "docked",
+                    target = "Havn", secs = 0, crew = 4, hired_crew = 1,
+                    safe = 1, voyage_identity = "proud", captain_style = "Erik",
+                    saga_title = "Saga of Ormen", saga_raids = 3 } },
+      longship_crew_traits = { { id = 7, trait = "brave" } },
+      longship_ship_traits = { { id = 7, trait = "swift" } } })
 sea_lines = sea.lines(WIDTH)
 voyage_lines = voyage.lines(WIDTH)
 check("sea: no-active-voyage fallback text", find_plain(sea_lines, "No active voyage"))
@@ -280,10 +313,14 @@ check("voyage: selecting the reroll item from the voyage popup sends the same co
 -- Voyage Status fields (shared by both popups)
 -- =============================================================================
 reset_voyage()
-protocol.ingest("VOYAGE",
-  "sailing|1|Ormen|Raid Fjordholm|raid|3|5|6|20|20|80|70|60|10|4|5|12|30|Kraken|2|40||" ..
-  "storm|Erik|proud|brave,loyal|swift,sturdy")
-protocol.ingest("FLEET_RENOWN", "1500")
+seed_voyage({ state = "sailing", ship_id = 1, ship_name = "Ormen",
+  contract_name = "Raid Fjordholm", contract_type = "raid", danger = 3,
+  x = 5, y = 6, width = 20, height = 20, hull = 80, morale = 70, supplies = 60,
+  stress = 10, crew_alive = 4, crew_max = 5, steps = 12, next_move = 30,
+  threat_name = "Kraken", threat_level = 2, threat_pressure = 40,
+  weather_key = "storm", captain = "Erik", identity = "proud",
+  crew_traits = { "brave", "loyal" }, ship_traits = { "swift", "sturdy" } })
+gv({ fleet_renown = 1500 })
 
 sea_lines = sea.lines(WIDTH)
 voyage_lines = voyage.lines(WIDTH)
@@ -350,8 +387,7 @@ end
 -- comment) and "on" direction (awaiting harbor resolution -> both a Resolve
 -- item per option AND an End Voyage item).
 -- =============================================================================
-protocol.ingest("VOYAGE_WAIT", "harbor")
-protocol.ingest("VRESOLVE", "trade,explore")
+gv({ voyage_wait = "harbor", vresolve = { "trade", "explore" } })
 sea_lines = sea.lines(WIDTH)
 voyage_lines = voyage.lines(WIDTH)
 for _, name in ipairs({ "sea", "voyage" }) do
@@ -394,14 +430,14 @@ check("selecting 'Resolve: explore' sends the exact command",
 -- and end-voyage items disappear (Clear Queue, gated separately, may still
 -- be present -- isolate by turning the queue gate off here too).
 page_opts.set("show_sea_queue", false)
-protocol.ingest("VOYAGE_WAIT", "")
+gv({ voyage_wait = "" })
 do
   local items = sea_common.actions()
   check("actions(): resolve-gated 'off' (no wait, queue gate off) -- no items at all",
     #items == 0, #items)
 end
 page_opts.set("show_sea_queue", true)
-protocol.ingest("VOYAGE_WAIT", "") -- back to no-wait for later cases
+gv({ voyage_wait = "" }) -- back to no-wait for later cases
 
 -- =============================================================================
 -- Queue / Saga / Crew Memory (shared by both popups) + gates
@@ -417,9 +453,9 @@ protocol.ingest("VOYAGE_WAIT", "") -- back to no-wait for later cases
 -- (an "N,3,4,SE" fixture would just split into four raw tokens "N"/"3"/
 -- "4"/"SE", never a single "3,4" step) -- only the always-reachable raw-step
 -- fallback is tested.
-protocol.ingest("VQPATH", "N,N,E,SE")
-protocol.ingest("VSAGA", "Captain style: bold;The fleet set sail.")
-protocol.ingest("VMEM", "Remembered the reefs of Fjordholm.")
+gv({ vqpath = { "N", "N", "E", "SE" },
+     vsaga = { "Captain style: bold", "The fleet set sail." },
+     vmem = { "Remembered the reefs of Fjordholm." } })
 
 sea_lines = sea.lines(WIDTH)
 voyage_lines = voyage.lines(WIDTH)
@@ -462,19 +498,20 @@ page_opts.set("show_sea_memory", true)
 -- Loot sections: sea-only (NOT part of the /vik voyage subset per the
 -- binding split ruling) + their gates
 -- =============================================================================
-protocol.ingest("VBOONS", "favor of Njord")
-protocol.ingest("VSPOILS", "450")
-protocol.ingest("VGOODS", "furs:5")
-protocol.ingest("VAIDS", "storm_charm:1")
-protocol.ingest("VRUNES", "ansuz:2")
+-- vboons arrives as FLAGS over GMCP where MIP sent the finished sentence, so
+-- a fixture sets the flags and the writer produces the wording (transcribed
+-- from the mudlib's own serializer -- see handlers/voyage.lua's write_vboons).
+gv({ vboons = { storm_charm_ready = 1, favorable_current_steps = 2 } })
+gv({ vspoils = 450, vgoods = { furs = 5 }, vaids = { storm_charm = 1 },
+     vrunes = { ansuz = 2 } })
 protocol.ingest("VRELICS", "Horn of Heimdall")
-protocol.ingest("VCURIOS", "Sea Glass Bead")
-protocol.ingest("VREAGENT", "2")
+gv({ vcurios = { "Sea Glass Bead" } })
+gv({ vreagent = 2 })
 
 sea_lines = sea.lines(WIDTH)
 voyage_lines = voyage.lines(WIDTH)
 local loot_markers = {
-  { "Active Boons", "favor of Njord" },
+  { "Active Boons", "Storm Charm ready" },
   { "Secured Spoils", "450" },
   { "Secured Reagents", "Nikr's Bile" },
   { "Secured Goods", "Furs" },
@@ -498,14 +535,18 @@ page_opts.set("show_sea_boons", true)
 -- sailed overlay, headers -- gated show_sea_chart / show_sea_chart_legend
 -- =============================================================================
 reset_voyage()
-protocol.ingest("VOYAGE",
-  "sailing|1|Ormen|Raid|raid|0|0|0|4|4|80|70|60|10|4|5|12|30|Kraken|2|40||storm|Erik|proud||")
+seed_voyage({ state = "sailing", ship_id = 1, ship_name = "Ormen",
+  contract_name = "Raid", contract_type = "raid", danger = 0, x = 0, y = 0,
+  width = 4, height = 4, hull = 80, morale = 70, supplies = 60, stress = 10,
+  crew_alive = 4, crew_max = 5, steps = 12, next_move = 30,
+  threat_name = "Kraken", threat_level = 2, threat_pressure = 40,
+  weather_key = "storm", captain = "Erik", identity = "proud" })
 protocol.ingest("VCHH", "4|4|test")
 protocol.ingest("VCR00", "S#H?")
 protocol.ingest("VCR01", "OMBD")
 protocol.ingest("VCR02", "++XY")
 protocol.ingest("VCR03", "VCA*")
-protocol.ingest("VSAILED", "1,0") -- x=1,y=0 -> chart cell (c=1,r=0), NOT the ship glyph
+gv({ vsailed = { "1,0" } }) -- x=1,y=0 -> chart cell (c=1,r=0), NOT the ship glyph
 
 check("VCR rows landed at the real 1-indexed storage position",
   S.voyage_chart_rows[1] == "S#H?" and S.voyage_chart_rows[2] == "OMBD",
@@ -683,9 +724,14 @@ check("on_pointer with no ctx.cell_from_xy is a safe no-op",
 -- =============================================================================
 -- width discipline at popup-inner 76 cols, broad seeded state
 -- =============================================================================
-protocol.ingest("VSAGA", "A very long saga line describing a dreadful storm off the coast of Fjordholm and beyond.")
-protocol.ingest("VMEM", "An extremely long crew memory about the reefs, the storms, and the endless grey seas.")
-protocol.ingest("VBOONS", "the extended favor of Njord, lord of the sea, granted after the sacrifice at the shore")
+gv({ vsaga = { "A very long saga line describing a dreadful storm off the coast of Fjordholm and beyond." },
+     vmem = { "An extremely long crew memory about the reefs, the storms, and the endless grey seas." } })
+-- Every boon set at once, which is the longest string the writer can produce
+-- -- the point of this case being that the widest realistic content still fits
+-- the popup's inner width.
+gv({ vboons = { chart_fragment_used = 1, revealed_safe_cove = 1,
+                storm_charm_ready = 1, rigging_bonus = 1,
+                favorable_current_steps = 12 } })
 
 for _, l in ipairs(sea.lines(WIDTH)) do
   check("sea line within 76 visible columns: " .. l:sub(1, 20),
