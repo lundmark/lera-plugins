@@ -73,6 +73,61 @@ be spelled as a slash token: `speedwalk`'s `.`, `..`, `.,`, `.place` and
 `.from-to`, and `autostepper`'s `-`, `-.`, `->` and `-!`. Those are movement
 syntax; everything word-shaped lives under `/speedwalk` and `/step`.
 
+## Image surfaces
+
+Directory plugins can load PNG assets relative to their own root and place
+them over cell-aligned rectangles:
+
+```lua
+local M = {}
+local icon, err = ui.image_load("assets/icon.png")
+assert(icon, err)
+local tile, tile_err = ui.image_load("assets/tile.png")
+assert(tile, tile_err)
+
+function M.on_render()
+  local icon_rect = ui.rect(4, 2, 2, 1)
+  ui.text(icon_rect, "[]") -- always draw useful fallback cells first
+  ui.image(icon_rect, icon) -- defaults: contain + nearest
+
+  local tile_rect = ui.rect(8, 2, 6, 3)
+  ui.text(tile_rect, "######")
+  ui.image(tile_rect, tile, { fit = "stretch", filter = "linear" })
+end
+
+return M
+```
+
+`contain` preserves aspect ratio; `stretch` fills the rectangle. `nearest`
+preserves pixel art; `linear` smooths scaling. Loaded handles are immutable
+snapshots owned by the exact plugin load and become stale when it unloads.
+Profile code and single-file plugins have no asset root and cannot load images.
+
+The load path must be a non-empty plugin-relative `/`-separated path ending in
+`.png`. Absolute paths, `.`/`..` components, backslashes, symlink escapes,
+non-PNG data, corrupt PNG structure, oversized dimensions/files, and exhausted
+asset quota return `nil, error`. Repeating the same canonical path during one
+plugin load returns the same handle and immutable byte snapshot; a changed file
+is observed only after unload and reload.
+
+Image rectangles use the same cell coordinates as `ui.text`, panes, pointer
+routing, selection, and the cursor. Visible portions are clipped at the screen
+edge after contain/stretch geometry is computed. A zero-area or completely
+off-screen rectangle is a no-op, but handles and the strict options table are
+still validated first. Unknown option fields and values are errors.
+
+Placements draw in `ui.image` call order. Later images alpha-composite over
+earlier ones. Selection and cursor overlays remain above images, while pointer
+events and hit testing remain cell-based. If decoding or upload fails, the
+ordinary fallback cells stay visible.
+
+There is deliberately no `images_supported()` branch. TTY and other cell-only
+frontends keep the fallback cells, while image-capable frontends composite the
+optional surface over the same layout.
+
+This is the reusable plugin API only. Packaging or converting the existing
+`guild_viking` image corpus remains separate consumer work.
+
 ## Generic Plugins
 
 | Plugin | Commands | Description |
