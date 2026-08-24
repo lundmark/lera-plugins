@@ -65,7 +65,7 @@ S.settler_edict_cd = 0
 S.settler_housing_cap = 300
 S.settler_housing_plots = 12
 S.settler_housing_avg = 250   -- -> "2.50"
-S.settler_housing_plot_tiers = { t1 = 4, t2 = 3, t3 = 2, t4 = 0 }
+S.settler_housing_plot_tiers = { t1 = 4, t2 = 3, t3 = 2, t4 = 0, t5 = 1 }
 S.settler_housing_upkeep = 15
 S.settler_community_upkeep = 8
 S.settler_jobs = 30
@@ -134,11 +134,31 @@ check("people: housing cap (300) present", settlers_all:find("300", 1, true) ~= 
 check("people: avg tier (2.50) present", settlers_all:find("2.50", 1, true) ~= nil)
 
 local tiers_idx = find_line(settlers_lines, "Plot Tiers:")
-check("people: Plot Tiers row present with T1:4  T2:3  T3:2 (T4 omitted since 0)",
+-- Kills: a tier line that stops at T4. write_shplots owns t1..t5 (GMCP's
+-- record carries h5), and Plots: above comes from SETTLERX, which counts all
+-- five tiers -- so omitting T5 renders a plot count the tier row cannot
+-- account for.
+check("people: Plot Tiers row present with T1:4  T2:3  T3:2  T5:1 (T4 omitted since 0)",
       tiers_idx ~= nil and settlers_lines[tiers_idx]:find("T1:4", 1, true) ~= nil
       and settlers_lines[tiers_idx]:find("T2:3", 1, true) ~= nil
       and settlers_lines[tiers_idx]:find("T3:2", 1, true) ~= nil
+      and settlers_lines[tiers_idx]:find("T5:1", 1, true) ~= nil
       and settlers_lines[tiers_idx]:find("T4:", 1, true) == nil, settlers_all)
+
+-- Kills: summing only t1..t4 to decide whether to draw the row at all. A city
+-- whose plots are all tier 5 has a nonzero Plots: count while the tier row
+-- vanishes entirely -- the worse half of the same omission.
+do
+  local saved = S.settler_housing_plot_tiers
+  S.settler_housing_plot_tiers = { t1 = 0, t2 = 0, t3 = 0, t4 = 0, t5 = 6 }
+  local only5_lines = people_page.lines(WIDTH)
+  local only5_idx = find_line(only5_lines, "Plot Tiers:")
+  check("people: Plot Tiers row survives a tier-5-only city",
+        only5_idx ~= nil
+        and only5_lines[only5_idx]:find("T5:6", 1, true) ~= nil,
+        table.concat(only5_lines, "\n"))
+  S.settler_housing_plot_tiers = saved
+end
 
 check("people: housing upkeep (15) and community upkeep (8) present",
       settlers_all:find("Housing Upkeep: 15", 1, true) ~= nil

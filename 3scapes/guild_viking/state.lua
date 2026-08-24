@@ -84,7 +84,7 @@ local state = {
   settler_actions = {}, -- { { name, secs } }
   settler_events = {},  -- { { ts, msg } }
   settler_projects = {}, -- { id, kind, from_tier, to_tier, secs_left, mats_total, mats_done, mat_detail }
-  settler_housing_plot_tiers = {}, -- { t1=count, t2=count, t3=count, t4=count }
+  settler_housing_plot_tiers = {}, -- { t1=count .. t5=count }
   settler_supply_next = 0,
   settler_pop_next = 0,
   dispatch_cd = 0,

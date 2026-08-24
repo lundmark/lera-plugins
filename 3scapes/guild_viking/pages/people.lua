@@ -290,13 +290,19 @@ local function settlers_lines(add, width)
 
   do
     local hpt = S.settler_housing_plot_tiers or {}
+    -- Tier 5 counts here for the same reason it counts in Plots: above:
+    -- write_shplots owns t1..t5 (GMCP's record carries h5), and SETTLERX's
+    -- housing_plots sums every tier. Stopping at t4 both under-reports the row
+    -- and, for a city whose plots are all tier 5, suppresses it entirely.
     local total = (hpt.t1 or 0) + (hpt.t2 or 0) + (hpt.t3 or 0) + (hpt.t4 or 0)
+                  + (hpt.t5 or 0)
     if total > 0 then
       local parts = {}
       if (hpt.t1 or 0) > 0 then parts[#parts + 1] = "T1:" .. hpt.t1 end
       if (hpt.t2 or 0) > 0 then parts[#parts + 1] = "T2:" .. hpt.t2 end
       if (hpt.t3 or 0) > 0 then parts[#parts + 1] = "T3:" .. hpt.t3 end
       if (hpt.t4 or 0) > 0 then parts[#parts + 1] = "T4:" .. hpt.t4 end
+      if (hpt.t5 or 0) > 0 then parts[#parts + 1] = "T5:" .. hpt.t5 end
       add(pagelib.kv(width, "Plot Tiers:", table.concat(parts, "  ")))
     end
   end
