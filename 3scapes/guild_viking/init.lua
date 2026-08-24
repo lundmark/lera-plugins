@@ -4,10 +4,32 @@ local state_mod = require("state")
 local protocol = require("protocol")
 local command = require("command")
 
-local trade = require("handlers.trade")
-for key, fn in pairs(trade) do
-  if key ~= "_market_seam" then protocol.handler(key, fn) end
+-- One registration path for every handler module, so a module gaining a
+-- `_gmcp` table cannot silently go unregistered. Before this, only the `city`
+-- loop forwarded `_gmcp`; the other three would have counted a new GMCP
+-- writer's keys `unknown` forever, MIP would have kept working, and nothing
+-- would have failed loudly.
+--
+-- The reserved keys are the module-level conventions, not MIP keys:
+-- `_market_seam` (trade's injection point for market.lua), `_patterns` (the
+-- pattern-handler tier) and `_gmcp` (the GMCP writer table). Everything else
+-- in a module table is an exact MIP key.
+local RESERVED = { _market_seam = true, _patterns = true, _gmcp = true }
+
+local function register_handlers(mod)
+  for key, fn in pairs(mod) do
+    if not RESERVED[key] then protocol.handler(key, fn) end
+  end
+  for _, p in ipairs(mod._patterns or {}) do
+    protocol.pattern_handler(p.pattern, p.fn)
+  end
+  for key, fn in pairs(mod._gmcp or {}) do
+    protocol.gmcp_handler(key, fn)
+  end
 end
+
+local trade = require("handlers.trade")
+register_handlers(trade)
 
 -- Task 7: price history / demand metrics. LEGACY's MARKET branch never
 -- calls record_price_history (only TGOODS does -- see market.lua's header
@@ -16,31 +38,13 @@ local market = require("market")
 trade._market_seam.on_tgoods = market.on_tgoods
 
 local voyage = require("handlers.voyage")
-for key, fn in pairs(voyage) do
-  if key ~= "_patterns" then protocol.handler(key, fn) end
-end
-for _, p in ipairs(voyage._patterns or {}) do
-  protocol.pattern_handler(p.pattern, p.fn)
-end
+register_handlers(voyage)
 
 local kingdom = require("handlers.kingdom")
-for key, fn in pairs(kingdom) do
-  if key ~= "_patterns" then protocol.handler(key, fn) end
-end
-for _, p in ipairs(kingdom._patterns or {}) do
-  protocol.pattern_handler(p.pattern, p.fn)
-end
+register_handlers(kingdom)
 
 local city = require("handlers.city")
-for key, fn in pairs(city) do
-  if key ~= "_patterns" and key ~= "_gmcp" then protocol.handler(key, fn) end
-end
-for _, p in ipairs(city._patterns or {}) do
-  protocol.pattern_handler(p.pattern, p.fn)
-end
-for key, fn in pairs(city._gmcp or {}) do
-  protocol.gmcp_handler(key, fn)
-end
+register_handlers(city)
 
 -- Stage 2: page options + the tab bar / page shell (window.lua). Required
 -- after the handlers so the state they populate is available to the pages
@@ -197,15 +201,51 @@ local function print_automation_status()
     fmt_next((av.last or 0) + autovoyage.AV_INTERVAL)))
 end
 
+-- The keys GMCP has fed this connection, sorted. The single extraction both
+-- /vik status (which wants the count) and /vik source (which wants the list)
+-- read, so the two can never disagree about what is latched.
+local function gmcp_key_names()
+  local names = {}
+  for k in pairs(protocol.gmcp_keys()) do names[#names + 1] = k end
+  table.sort(names)
+  return names
+end
+
+-- The per-key transport breakdown. A mixed system is unobservable without
+-- seeing which keys each transport is actually feeding, so this is a plain
+-- read: `/vik source` with no argument prints it. It used to live inside the
+-- mode-setting branch, which meant the only way to read the breakdown was to
+-- re-assert a mode -- a state mutation performed to perform a read.
+local function print_sources()
+  local names = gmcp_key_names()
+  if #names == 0 then
+    buffer.color_print(nil, "DAA520", "  no keys fed by GMCP yet")
+  else
+    buffer.color_print(nil, "DAA520",
+      "  GMCP keys (" .. #names .. "): " .. table.concat(names, " "))
+  end
+
+  local gs = protocol.gmcp_stats()
+  local unknown = {}
+  for k in pairs(gs.unknown) do unknown[#unknown + 1] = k end
+  table.sort(unknown)
+  if #unknown > 0 then
+    buffer.color_print(nil, "DAA520",
+      "  received, not consumed: " .. table.concat(unknown, " "))
+  end
+  buffer.color_print(nil, "DAA520", string.format(
+    "  frames %d, foreign %d, malformed %d, dropped by source mip %d",
+    gs.frames, gs.foreign, gs.malformed, gs.suppressed))
+end
+
 local function print_status()
   local st = protocol.stats()
   -- The old boolean latch is gone; a count of keys GMCP has actually fed
   -- reads true of the per-key design, where it's never all-or-nothing.
-  local gmcp_key_count = 0
-  for _ in pairs(protocol.gmcp_keys()) do gmcp_key_count = gmcp_key_count + 1 end
+  -- `/vik source` names them; this stays a one-line summary.
   buffer.color_print(nil, "DAA520", string.format(
     "Viking: source=%s gmcp_keys=%d ingested=%d suppressed=%d pending_batches=%d",
-    st.source, gmcp_key_count, st.ingested, st.suppressed, st.batches_pending))
+    st.source, #gmcp_key_names(), st.ingested, st.suppressed, st.batches_pending))
 
   local unknown = {}
   for k, n in pairs(st.unknown) do unknown[#unknown + 1] = { key = k, n = n } end
@@ -297,35 +337,17 @@ function M.vik_command(args)
     persist.save()
     buffer.color_print(nil, "DAA520", "Viking guild data saved.")
   elseif sub == "source" then
-    if rest == "mip" or rest == "gmcp" or rest == "auto" then
+    if rest == "" then
+      -- The read. Reporting the breakdown must not require asserting a mode.
+      buffer.color_print(nil, "DAA520",
+        "Viking transport source: " .. protocol.source())
+      print_sources()
+    elseif rest == "mip" or rest == "gmcp" or rest == "auto" then
       protocol.source(rest)
       buffer.color_print(nil, "DAA520", "Viking transport source set to " .. rest .. ".")
-
-      -- A mixed system is unobservable without seeing which keys each
-      -- transport is actually feeding, so report the per-key breakdown too.
-      local latched = protocol.gmcp_keys()
-      local names = {}
-      for k in pairs(latched) do names[#names + 1] = k end
-      table.sort(names)
-      if #names == 0 then
-        buffer.color_print(nil, "DAA520", "  no keys fed by GMCP yet")
-      else
-        buffer.color_print(nil, "DAA520",
-          "  GMCP keys (" .. #names .. "): " .. table.concat(names, " "))
-      end
-      local gs = protocol.gmcp_stats()
-      local unknown = {}
-      for k in pairs(gs.unknown) do unknown[#unknown + 1] = k end
-      table.sort(unknown)
-      if #unknown > 0 then
-        buffer.color_print(nil, "DAA520",
-          "  received, not consumed: " .. table.concat(unknown, " "))
-      end
-      buffer.color_print(nil, "DAA520", string.format(
-        "  frames %d, foreign %d, malformed %d",
-        gs.frames, gs.foreign, gs.malformed or 0))
+      print_sources()
     else
-      buffer.color_print(nil, "DAA520", "Usage: /vik source mip|gmcp|auto")
+      buffer.color_print(nil, "DAA520", "Usage: /vik source [mip|gmcp|auto]")
     end
   elseif sub == "resetxp" then
     do_resetxp()
@@ -364,7 +386,7 @@ function M.vik_command(args)
     buffer.color_print(nil, "DAA520", "Viking page: " .. sub_lower)
   else
     buffer.color_print(nil, "DAA520",
-      "Usage: /vik [status | trace | save | source mip|gmcp|auto | resetxp | "
+      "Usage: /vik [status | trace | save | source [mip|gmcp|auto] | resetxp | "
       .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
       .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | raid [<sub>] | "
       .. "voyage auto [<sub>]]")
@@ -412,7 +434,7 @@ function M.on_load()
 
   local id, err = command.register({
     name = "/vik",
-    usage = "/vik [status | trace | save | source mip|gmcp|auto | resetxp | "
+    usage = "/vik [status | trace | save | source [mip|gmcp|auto] | resetxp | "
       .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
       .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | raid [<sub>] | "
       .. "voyage auto [<sub>]]",
