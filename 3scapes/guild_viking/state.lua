@@ -196,6 +196,10 @@ local state = {
   -- frame after connect is a full one and always carries it -- the value only
   -- ever matters once a real frame has set it.
   vmap_active = 1,
+  -- True once any Guild.Map frame has reached the writer, regardless of what
+  -- it carried. popups/map.lua uses it to distinguish a missing frame from an
+  -- empty map.
+  vmap_seen = false,
   -- Guild.Map decoding context, cached across delta frames: `enc` names each
   -- plane's encoding, `legend`/`legend_edge` explain its codes, and
   -- vmap_terrain_glyphs is the code -> glyph table derived from `legend`.

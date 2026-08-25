@@ -241,6 +241,31 @@ check("vreagent", S.voyage_reagents == 6)
 voy({ fleet_renown = 1500 })
 check("fleet_renown", S.fleet_renown == 1500)
 
+-- ---- the Sea Chart ---------------------------------------------------------
+-- MIP spread this over VCHH (dimensions and mode), VCHART (an older combined
+-- form) and a numbered VCR%02d row burst. GMCP splits it in two: a record, and
+-- the rows as their own key, because a record may not nest a list.
+voy({ voyage_chart = { width = 4, height = 3, chart_mode = "explore" },
+      voyage_chart_rows = { "S#H?", "OMBD", "++XY" } })
+check("chart_mode lands on voyage_chart_mode",
+      S.voyage_chart_mode == "explore", S.voyage_chart_mode)
+check("chart dimensions", S.voyage_chart_width == 4 and S.voyage_chart_height == 3)
+check("chart rows land in wire order", #S.voyage_chart_rows == 3
+      and S.voyage_chart_rows[1] == "S#H?" and S.voyage_chart_rows[3] == "++XY")
+check("the chart sets the voyage-seen flag", S.mip_voyage_seen == true)
+-- Two independent keys over a delta transport: the server pushes the chart
+-- every fast tick and lets the delta cache suppress an unchanged one, so a
+-- frame carrying only the rows must not blank the dimensions.
+voy({ voyage_chart_rows = { "AAAA", "BBBB", "CCCC" } })
+check("a rows-only delta leaves the dimensions standing",
+      S.voyage_chart_width == 4 and S.voyage_chart_height == 3
+      and S.voyage_chart_rows[1] == "AAAA")
+voy({ voyage_chart = { width = 6, height = 6, chart_mode = "raid" } })
+check("a record-only delta leaves the rows standing",
+      S.voyage_chart_width == 6 and S.voyage_chart_mode == "raid"
+      and #S.voyage_chart_rows == 3)
+
+
 -- ---- vrelics stays on MIP --------------------------------------------------
 -- Not mapped, so it is counted rather than routed. Converting it would render
 -- raw relic ids where MIP resolved display names.

@@ -57,6 +57,14 @@ M.COMPOSITE = {
   VOYAGE    = { "voyage", "voyage_crew_traits", "voyage_ship_traits" },
   LONGSHIP  = { "longship", "longship_crew_traits", "longship_ship_traits" },
   VOFFERS   = { "voffers", "voffers_ship" },
+  -- The Sea Chart: a width/height/mode record plus its rows, which a record
+  -- may not nest. MIP spread the same data over VCHH, VCHART and a numbered
+  -- VCR%02d row burst.
+  VCHART    = { "voyage_chart", "voyage_chart_rows" },
+  TGOODS    = { "tgoods_0", "tgoods_1", "tgoods_2", "tgoods_3", "tgoods_4",
+                "tgoods_5", "tgoods_6", "tgoods_7", "tgoods_8", "tgoods_9",
+                "tgoods_10", "tgoods_11", "tgoods_12", "tgoods_13",
+                "tgoods_14" },
   -- Guild.Kingdom. army and dynasty each flatten a nested container out of
   -- their records -- a unit's traits, and a child's schooling rows -- and
   -- dynasty additionally splits its scalars into one key each. war is three
@@ -159,6 +167,17 @@ local MAP = {
   campaign_prison_roster = "WMAP", campaign_siege = "WMAP",
 
 
+  -- Guild.TradeGoods. One key per lineage rather than one array: the flat list
+  -- runs to about 420 records, and a container over PROTOCOL_GUILD_NEST_MAX
+  -- (128) is refused whole during validation and the key dropped silently.
+  -- Declared explicitly for all fifteen lineage ids rather than matched by
+  -- pattern, so an id outside the range is counted rather than routed.
+  tgoods_0 = "TGOODS", tgoods_1 = "TGOODS", tgoods_2 = "TGOODS",
+  tgoods_3 = "TGOODS", tgoods_4 = "TGOODS", tgoods_5 = "TGOODS",
+  tgoods_6 = "TGOODS", tgoods_7 = "TGOODS", tgoods_8 = "TGOODS",
+  tgoods_9 = "TGOODS", tgoods_10 = "TGOODS", tgoods_11 = "TGOODS",
+  tgoods_12 = "TGOODS", tgoods_13 = "TGOODS", tgoods_14 = "TGOODS",
+
   -- Guild.Voyage. vrelics is deliberately absent: GMCP carries relic IDs and
   -- the display-name lookup is server-side logic the mudlib keeps in the MIP
   -- serializer alone, so consuming it here would render raw ids. It stays on
@@ -167,6 +186,7 @@ local MAP = {
   longship = "LONGSHIP", longship_crew_traits = "LONGSHIP",
   longship_ship_traits = "LONGSHIP",
   voffers = "VOFFERS", voffers_ship = "VOFFERS",
+  voyage_chart = "VCHART", voyage_chart_rows = "VCHART",
   voyage_wait = "VOYAGE_WAIT", vresolve = "VRESOLVE", vqpath = "VQPATH",
   vsaga = "VSAGA", vmem = "VMEM", vcurios = "VCURIOS", vgoods = "VGOODS",
   vaids = "VAIDS", vrunes = "VRUNES", vboons = "VBOONS", vsailed = "VSAILED",

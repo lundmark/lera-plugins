@@ -191,15 +191,13 @@ local function set_offers(ship, offers)
                                      voffers = list })
 end
 
--- The Sea Chart is the one voyage fixture still seeded over MIP: VCHART/VCHH/
--- VCR have no GMCP source yet (see gmcp_map.lua's note), so their handlers and
--- this seeding stay until one lands.
+-- Guild.Voyage's Sea Chart: a width/height/mode record plus its rows, where
+-- MIP sent VCHH and a numbered VCR%02d burst.
 local function set_chart(width, height, mode, rows)
-  protocol.ingest("VCHH", width .. "|" .. height .. "|" .. (mode or "explore"))
-  for i, row in ipairs(rows) do
-    local key = string.format("VCR%02d", i - 1)
-    protocol.ingest(key, row)
-  end
+  protocol.on_gmcp("Guild.Voyage", { guild = "viking",
+    voyage_chart = { width = width, height = height,
+                     chart_mode = mode or "explore" },
+    voyage_chart_rows = rows or {} })
 end
 
 -- Each element is the same "x,y" key MIP joined with ';'.

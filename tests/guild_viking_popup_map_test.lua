@@ -196,15 +196,35 @@ end
 -- =============================================================================
 reset_vmap()
 page_opts.set("show_map_towns", true)
-local nodata_lines = map.lines(76)
-local nodata_found = false
-for _, l in ipairs(nodata_lines) do
-  if l:find("No data %- enable with: vtoggle mip_map", 1, false) or
-     l:find("No data - enable with: vtoggle mip_map", 1, true) then
-    nodata_found = true
+-- The two ways this pane can be empty are reported separately, because they
+-- have different causes and only one of them is the client's. The text used to
+-- read "enable with: vtoggle mip_map" in both cases, which the mudlib says
+-- outright cannot help: Guild.Map is "NOT gated on any MIP vtoggle -- GMCP
+-- gating is subscription only".
+local function nodata_text()
+  for _, l in ipairs(map.lines(76)) do
+    if l:find("No data", 1, true) or l:find("No territory map", 1, true) then
+      return l
+    end
   end
+  return nil
 end
-check("no-data fallback prints the vtoggle mip_map hint", nodata_found)
+
+S.vmap_seen = false
+check("with no frame received, the pane says so and points at /vik source",
+  (nodata_text() or ""):find("no Guild.Map frame received", 1, true) ~= nil,
+  nodata_text())
+
+-- A frame that arrived carrying w = 0 is the guild having no biome grid --
+-- _v_map()'s empty structure -- not a missing frame.
+S.vmap_seen = true
+check("with a frame received but no grid, the pane blames world state",
+  (nodata_text() or ""):find("no biome grid", 1, true) ~= nil,
+  nodata_text())
+check("neither message advises the MIP toggle any more",
+  (nodata_text() or ""):find("vtoggle", 1, true) == nil, nodata_text())
+S.vmap_seen = false
+local nodata_lines = map.lines(76)
 check("no-data fallback has a Territory Map header",
   nodata_lines[1]:find("Territory Map", 1, true) ~= nil, nodata_lines[1])
 

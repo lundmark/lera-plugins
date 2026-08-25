@@ -102,30 +102,27 @@ local kingdom = require("handlers.kingdom")
 -- MIP is either fed by a GMCP writer instead or declared retired, and
 -- protocol.ingest counts both as `retired` rather than `unknown`.
 --
--- These five are the whole of what is left, and each is here for a reason
--- named in gmcp_map.lua: TGOODS (the per-good price matrix behind the
--- persisted price history), VCHART/VCHH plus the VCR row pattern (the Sea
--- Chart, read by the /vik sea popup AND by autovoyage's router), and VRELICS
--- (whose GMCP key carries relic ids where MIP carried resolved display names).
--- The first three have no GMCP source at all yet; the fourth has a lossy one.
--- CELLAR is a sixth of a different kind: no emitter exists anywhere in the
--- mudlib, so it is simply dead, and it is kept only because "don't touch the
--- keys without GMCP" was the instruction and deleting dead code is a separate
--- errand.
+-- Two are left. VRELICS has a GMCP key but a lossy one -- it carries relic ids
+-- where MIP carried resolved display names, and the mudlib keeps that lookup
+-- in the MIP serializer deliberately. CELLAR has no emitter anywhere in the
+-- mudlib and is simply dead.
+--
+-- TGOODS and the Sea Chart (VCHART/VCHH plus the VCR row pattern) used to be
+-- here too. Their GMCP sources landed -- Guild.TradeGoods, and Guild.Voyage's
+-- voyage_chart/voyage_chart_rows -- so they moved to writers like everything
+-- else.
 local EXPECTED_EXACT_KEYS = {
   -- trade.lua
-  "CELLAR", "TGOODS",
+  "CELLAR",
   -- voyage.lua
-  "VCHART", "VCHH", "VRELICS",
+  "VRELICS",
 }
 
--- Only the Sea Chart's row pattern still has a handler. The territory map's
--- rows and edges, the city plan's terrain and the campaign map's terrain are
--- all carried whole by their Guild.* packages now, and their patterns are
--- declared retired instead.
-local EXPECTED_PATTERNS = {
-  "^VCR%d%d$",
-}
+-- No pattern-dispatched MIP key has a handler any more. The territory map's
+-- rows and edges, the city plan's terrain, the campaign map's terrain and the
+-- Sea Chart's rows are all carried whole by their Guild.* packages, and their
+-- patterns are declared retired instead.
+local EXPECTED_PATTERNS = {}
 
 local function collect_exact_keys()
   local keys = {}
@@ -173,7 +170,7 @@ end
 local actual_keys = collect_exact_keys()
 local ok_keys, err_keys = same_set(actual_keys, EXPECTED_EXACT_KEYS)
 check("census exact keys match hardcoded list", ok_keys, err_keys)
-check("census exact key count is 5", #actual_keys == 5, #actual_keys)
+check("census exact key count is 2", #actual_keys == 2, #actual_keys)
 
 -- ---- Census: which MIP keys have a GMCP writer ----------------------------
 -- The migration's own progress bar. A key listed here is fed by GMCP when the
@@ -195,20 +192,20 @@ local EXPECTED_GMCP_WRITERS = {
   -- Guild.Roster (10)
   "STAFF", "BONDS", "TRAIN", "COURIER", "SPY", "VFIND", "HIRD", "THRALLS",
   "THRALL_FOLLOWER", "VARANG",
-  -- Guild.Trade (10; TGOODS deliberately stays MIP-only until its GMCP source
-  -- lands -- see the gap note in gmcp_map.lua)
+  -- Guild.Trade (10) and Guild.TradeGoods (1, split per lineage server-side)
   "CARTS", "TQUEUE", "CIDLE", "CUPG", "ROUTES", "BLOCKS", "REFINERY", "MARKET",
-  "INCOMING", "WSTOCK",
+  "INCOMING", "WSTOCK", "TGOODS",
   -- Guild.City (21, including the city plan -- one composite where MIP spread
   -- it over CPLAN/CPT/CPB/CPU/CPP with a commit protocol)
   "BUILDS", "BUILDINGS", "MONUMENTS", "BLOT", "FARM", "DCYCLE", "NEXTTICK",
   "CDTIME", "PRODUCTION", "ERRAND", "MISSIONS", "RBUILD", "UPKEEP", "RUPKEEP",
   "HEAT", "BDMG", "RAID", "PATROL", "GARRISON", "WEATHER", "CPLAN",
-  -- Guild.Voyage (17; VRELICS deliberately stays MIP-only -- GMCP carries
-  -- relic ids and the display-name lookup is server-side)
+  -- Guild.Voyage (18, the Sea Chart included; VRELICS deliberately stays
+  -- MIP-only -- GMCP carries relic ids and the display-name lookup is
+  -- server-side)
   "VOYAGE", "LONGSHIP", "VOYAGE_WAIT", "VOFFERS", "VRESOLVE", "VQPATH",
   "VSAGA", "VMEM", "VCURIOS", "VGOODS", "VAIDS", "VRUNES", "VBOONS",
-  "VSAILED", "VSPOILS", "VREAGENT", "FLEET_RENOWN",
+  "VSAILED", "VSPOILS", "VREAGENT", "FLEET_RENOWN", "VCHART",
   -- Guild.Kingdom (9, including the campaign war map -- one composite where
   -- MIP spread it over WMAP/WMR/WMO/WMQ/WMU/WMP/WMPL/WSG/WSPOIL) and
   -- Guild.War (BATTLE, routed as a whole package)
@@ -235,7 +232,7 @@ check("census GMCP writers match hardcoded list", ok_w, err_w)
 local actual_patterns = collect_patterns()
 local ok_pats, err_pats = same_set(actual_patterns, EXPECTED_PATTERNS)
 check("census patterns match hardcoded list", ok_pats, err_pats)
-check("census pattern count is 1", #actual_patterns == 1, #actual_patterns)
+check("census pattern count is 0", #actual_patterns == 0, #actual_patterns)
 
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING CENSUS TESTS PASSED")

@@ -180,6 +180,48 @@ check("hooks exist", type(M.on_load) == "function" and type(M.on_unload) == "fun
 -- ---- protocol: dispatch, batching, latch ------------------------------------
 local protocol = require("protocol")
 
+-- Guild.TradeGoods seeding. Fixtures keep MIP's compact notation --
+-- "<lin>=<abbr>:<score>:<sup>:<dem>:<buy>:<sell>;..." with lineages joined by
+-- "|" -- and this turns it into the per-lineage keys the payload uses. The
+-- split is the server's: the flat list runs to ~420 records and a container
+-- over 128 elements is refused whole.
+local function seed_tgoods(str)
+  -- Each fixture means "the world now holds exactly this", which MIP expressed
+  -- by resetting trade_goods at the start of a burst. A GMCP frame is a delta
+  -- -- an unchanged lineage is simply not resent, so the writer deliberately
+  -- leaves lineages a frame does not carry standing -- so the reset belongs
+  -- here, in the fixture, rather than in the writer.
+  S.trade_goods = {}
+  local payload = { guild = "viking" }
+  for part in tostring(str or ""):gmatch("[^|]+") do
+    local lin, goods = part:match("^(%d+)=(.*)$")
+    if lin then
+      local records = {}
+      for entry in goods:gmatch("[^;]+") do
+        local f = {}
+        for piece in (entry .. ":"):gmatch("([^:]*):") do f[#f + 1] = piece end
+        if f[1] and f[1] ~= "" then
+          records[#records + 1] = { lin = tonumber(lin), good = f[1],
+            score = tonumber(f[2]) or 0, sup = tonumber(f[3]) or 0,
+            dem = tonumber(f[4]) or 0, buy = tonumber(f[5]) or 0,
+            sell = tonumber(f[6]) or 0 }
+        end
+      end
+      payload["tgoods_" .. lin] = records
+    end
+  end
+  protocol.on_gmcp("Guild.TradeGoods", payload)
+end
+
+-- Guild.Voyage's Sea Chart: a width/height/mode record plus its rows, where
+-- MIP sent VCHH and a numbered VCR%02d burst.
+local function seed_chart(width, height, mode, rows)
+  protocol.on_gmcp("Guild.Voyage", { guild = "viking",
+    voyage_chart = { width = width, height = height,
+                     chart_mode = mode or "explore" },
+    voyage_chart_rows = rows or {} })
+end
+
 -- ---------------------------------------------------------------------------
 -- Fixture seeding
 -- ---------------------------------------------------------------------------
@@ -924,7 +966,7 @@ seed_blocks( "")
 seed_cidle( "31|1|100|200|standard")
 seed_tqueue( "")
 seed_daler( "1000")
-protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
+seed_tgoods( "2=o:-3:0:1000:0:20")
 local held = plan_for_connect.build()
 check("on_connect: the hold window blocks dispatch (plan.build reports settling, sends nothing)",
       held and held.status and held.status:find("^settling after reconnect") ~= nil
@@ -958,7 +1000,7 @@ do
   seed_cidle( "31|1|100|200|standard")
   seed_tqueue( "")
   seed_daler( "1000")
-  protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
+  seed_tgoods( "2=o:-3:0:1000:0:20")
   tick_for_hold.reset()
 
   conn_now = conn_now + 59   -- 500059, still < 500060
@@ -1392,15 +1434,14 @@ local function build_safety_fixture()
   seed_cidle( "31|1|100|200|standard")
   seed_tqueue( "")
   seed_daler( "1000")
-  protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
+  seed_tgoods( "2=o:-3:0:1000:0:20")
 
   -- Raid.
   seed_ships( safety_ship_entry("Drakkar1"))
   raid2.settings().target = "Uppsala"
 
   -- Voyage: chart with a non-harbor node paused for resolution.
-  protocol.ingest("VCHH", "3|1|explore")
-  protocol.ingest("VCR00", "H.X")
+  seed_chart(3, 1, "explore", { "H.X" })
   safety_set_voyage({ x = "1", y = "0" })
   fixture_gmcp("Guild.Voyage", { voyage_wait = "island",
                                 vresolve = { "scout", "plunder" } })

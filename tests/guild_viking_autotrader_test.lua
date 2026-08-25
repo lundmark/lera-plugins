@@ -54,6 +54,39 @@ local RESERVED_KEYS = { _market_seam = true, _patterns = true, _gmcp = true,
                         _retired_keys = true, _retired_patterns = true }
 local S = require("state").S
 
+-- Guild.TradeGoods seeding. Fixtures keep MIP's compact notation --
+-- "<lin>=<abbr>:<score>:<sup>:<dem>:<buy>:<sell>;..." with lineages joined by
+-- "|" -- and this turns it into the per-lineage keys the payload uses. The
+-- split is the server's: the flat list runs to ~420 records and a container
+-- over 128 elements is refused whole.
+local function seed_tgoods(str)
+  -- Each fixture means "the world now holds exactly this", which MIP expressed
+  -- by resetting trade_goods at the start of a burst. A GMCP frame is a delta
+  -- -- an unchanged lineage is simply not resent, so the writer deliberately
+  -- leaves lineages a frame does not carry standing -- so the reset belongs
+  -- here, in the fixture, rather than in the writer.
+  S.trade_goods = {}
+  local payload = { guild = "viking" }
+  for part in tostring(str or ""):gmatch("[^|]+") do
+    local lin, goods = part:match("^(%d+)=(.*)$")
+    if lin then
+      local records = {}
+      for entry in goods:gmatch("[^;]+") do
+        local f = {}
+        for piece in (entry .. ":"):gmatch("([^:]*):") do f[#f + 1] = piece end
+        if f[1] and f[1] ~= "" then
+          records[#records + 1] = { lin = tonumber(lin), good = f[1],
+            score = tonumber(f[2]) or 0, sup = tonumber(f[3]) or 0,
+            dem = tonumber(f[4]) or 0, buy = tonumber(f[5]) or 0,
+            sell = tonumber(f[6]) or 0 }
+        end
+      end
+      payload["tgoods_" .. lin] = records
+    end
+  end
+  protocol.on_gmcp("Guild.TradeGoods", payload)
+end
+
 -- ---------------------------------------------------------------------------
 -- Fixture seeding
 -- ---------------------------------------------------------------------------
@@ -561,7 +594,7 @@ seed_carts( "")
 seed_cidle( "11|1|100|200|standard")
 seed_tqueue( "")
 seed_daler( "500")
-protocol.ingest("TGOODS", "0=t:-1:1000:0:10:0|1=t:2:0:1000:0:50")
+seed_tgoods( "0=t:-1:1000:0:10:0|1=t:2:0:1000:0:50")
 
 local p1 = plan.build()
 check("plan/budget clamp: returns a table", type(p1) == "table")
@@ -611,7 +644,7 @@ seed_carts( "")
 seed_cidle( "21|1|100|30|standard")
 seed_tqueue( "")
 seed_daler( "100000")
-protocol.ingest("TGOODS", "0=t:-1:2000:0:10:0|1=t:2:0:2000:0:50")
+seed_tgoods( "0=t:-1:2000:0:10:0|1=t:2:0:2000:0:50")
 
 local p2 = plan.build()
 check("plan/cap_left exhaustion: exactly one job", p2 and #p2.jobs == 1, p2 and #p2.jobs)
@@ -673,7 +706,7 @@ seed_carts( "")
 seed_cidle( "71|1|100|300|standard")
 seed_tqueue( "")
 seed_daler( "5000")
-protocol.ingest("TGOODS", "0=o:-1:1000:0:10:0|2=o:1:0:1000:0:100|3=o:3:0:1000:0:50")
+seed_tgoods( "0=o:-1:1000:0:10:0|2=o:1:0:1000:0:100|3=o:3:0:1000:0:50")
 
 local pu = plan.build()
 check("plan/use-stock arb leg: exactly one job", pu and #pu.jobs == 1, pu and #pu.jobs)
@@ -716,7 +749,7 @@ seed_carts( "")
 seed_cidle( "31|1|100|200|standard")
 seed_tqueue( "")
 seed_daler( "1000")
-protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
+seed_tgoods( "2=o:-3:0:1000:0:20")
 
 check("plan/warehouse-full sanity: 380/400 = 95% >= 85", at_core.warehouse_pct() == 95, at_core.warehouse_pct())
 
@@ -756,7 +789,7 @@ seed_carts( "")
 seed_cidle( "41|1|100|60|standard")
 seed_tqueue( "")
 seed_daler( "1000")
-protocol.ingest("TGOODS", "3=f:3:0:4:0:100")
+seed_tgoods( "3=f:3:0:4:0:100")
 
 local p4 = plan.build()
 check("plan/demand-safety refusal: no jobs (leg fell under AT_MIN_LEG_QTY)",
@@ -802,7 +835,7 @@ seed_carts( "")
 seed_cidle( "11|1|100|300|standard;12|1|100|300|standard")
 seed_tqueue( "")
 seed_daler( "1000")
-protocol.ingest("TGOODS", "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
+seed_tgoods( "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
 
 check("plan/stop-limit sanity: max_stops = 2 (trading_post tier 2, no staff)",
       at_core.max_stops() == 2, at_core.max_stops())
@@ -912,7 +945,7 @@ seed_carts( "")
 seed_cidle( "91|1|100|300|standard;92|1|100|300|standard;93|1|100|300|standard")
 seed_tqueue( "")
 seed_daler( "100000")
-protocol.ingest("TGOODS",
+seed_tgoods(
   "0=t:-1:50:0:40:0|1=t:2:0:100:0:50|2=f:3:0:1000:0:90|3=f:0:500:0:20:0"
   .. "|4=o:3:0:1000:0:70|5=o:0:500:0:20:0|6=t:1:0:1000:0:999")
 
@@ -958,7 +991,7 @@ seed_carts( "")
 seed_cidle( "51|1|100|100|standard")
 seed_tqueue( "")
 seed_daler( "500")
-protocol.ingest("TGOODS", "")
+seed_tgoods( "")
 
 local p6 = plan.build()
 check("plan/empty-plan case: no jobs, no commands",
@@ -994,7 +1027,7 @@ local function setup_single_dispatch_fixture()
   seed_cidle( "31|1|100|200|standard")
   seed_tqueue( "")
   seed_daler( "1000")
-  protocol.ingest("TGOODS", "2=o:-3:0:1000:0:20")
+  seed_tgoods( "2=o:-3:0:1000:0:20")
 end
 
 -- ---------------------------------------------------------------------------
@@ -1044,7 +1077,7 @@ seed_carts( "")
 seed_cidle( "11|1|100|300|standard;12|1|100|300|standard")
 seed_tqueue( "")
 seed_daler( "1000")
-protocol.ingest("TGOODS", "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
+seed_tgoods( "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
 tick.reset()
 sent, printed = {}, {}
 local g1_t0 = fake_now + 10000
@@ -1166,7 +1199,7 @@ seed_carts( "")
 seed_cidle( "11|1|100|300|standard;12|1|100|300|standard")
 seed_tqueue( "")
 seed_daler( "1000")
-protocol.ingest("TGOODS", "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
+seed_tgoods( "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
 
 local expect_commands = {
   "vtrade route clear quiet", "vtrade route cart 11",
@@ -1272,7 +1305,7 @@ seed_carts( "")
 seed_cidle( "11|1|100|300|standard;12|1|100|300|standard")
 seed_tqueue( "")
 seed_daler( "1000")
-protocol.ingest("TGOODS", "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
+seed_tgoods( "3=f:3:0:1000:0:20|4=t:3:0:1000:0:15|5=o:3:0:1000:0:24")
 
 local bp_t0 = fake_now + 10000
 fake_now = bp_t0
@@ -1401,7 +1434,7 @@ seed_carts( "")
 seed_cidle( "61|1|100|100|standard")
 seed_tqueue( "")
 seed_daler( "500")
-protocol.ingest("TGOODS", "")
+seed_tgoods( "")
 fake_now = fake_now + 10000
 tick.tick()
 check("tick/gate (no candidates): nothing sent", #sent == 0)

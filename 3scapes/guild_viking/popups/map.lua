@@ -478,8 +478,26 @@ end
 function M.lines(width)
   local out = pre_grid_lines(width)
 
+  -- The old text here read "enable with: vtoggle mip_map". That advice is not
+  -- merely stale but misleading: the territory map comes from Guild.Map, and
+  -- the mudlib states outright that the panel is "NOT gated on any MIP
+  -- vtoggle -- GMCP gating is subscription only", so the toggle it named
+  -- cannot affect this pane at all.
+  --
+  -- The two ways this pane can be empty have different causes and only one of
+  -- them is the client's, so they are reported separately.
   if (S.vmap_w or 0) == 0 then
-    out[#out + 1] = pagelib.trunc(C.dim .. "No data - enable with: vtoggle mip_map" .. RESET, width)
+    local msg
+    if S.vmap_seen then
+      -- A frame arrived and said the grid is 0 wide. _v_map() returns its
+      -- empty structure when the biome daemon is missing, the world is
+      -- regenerating, the guild has no settlements yet, or the grid is
+      -- unconfigured -- all world state, none of it fixable here.
+      msg = "No territory map yet - the guild has no biome grid"
+    else
+      msg = "No data - no Guild.Map frame received (check /vik source)"
+    end
+    out[#out + 1] = pagelib.trunc(C.dim .. msg .. RESET, width)
     return out
   end
 

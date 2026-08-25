@@ -243,6 +243,66 @@ for i = 1, 60 do wmany[i] = { good = "g" .. i, amount = i } end
 trade({ wstock = wmany })
 check("wstock cap at 50", #S.wstock == 50, #S.wstock)
 
+-- ---- Guild.TradeGoods -------------------------------------------------------
+-- The price/demand matrix arrives as one key per lineage rather than one
+-- array. That split is the server's and it is not cosmetic: the flat list runs
+-- to about 420 records, and a container over PROTOCOL_GUILD_NEST_MAX (128) is
+-- refused whole during validation and the key dropped with no error and no
+-- partial data.
+local seam_goods = {}
+trade_mod._market_seam.on_tgoods = function(lin, good, buy, sell)
+  seam_goods[#seam_goods + 1] = { lin = lin, good = good, buy = buy, sell = sell }
+end
+
+local function tradegoods(payload)
+  payload.guild = "viking"
+  protocol.on_gmcp("Guild.TradeGoods", payload)
+end
+
+S.trade_goods = {}
+tradegoods({
+  tgoods_2 = { { lin = 2, good = "o", score = 1, sup = 0, dem = 1000,
+                 buy = 0, sell = 100 },
+               { lin = 2, good = "t", score = -1, sup = 500, dem = 0,
+                 buy = 12, sell = 0 } },
+  tgoods_5 = { { lin = 5, good = "zz", score = 0, sup = 1, dem = 2,
+                 buy = 3, sell = 4 } },
+})
+-- The one-character abbreviation resolves to the name the pages index by.
+check("tgoods abbreviations resolve to good names",
+      S.trade_goods[2] ~= nil and S.trade_goods[2].ore ~= nil
+      and S.trade_goods[2].timber ~= nil, "ore/timber missing")
+check("tgoods sup/dem land on supply/demand",
+      S.trade_goods[2].ore.supply == 0 and S.trade_goods[2].ore.demand == 1000
+      and S.trade_goods[2].timber.supply == 500)
+check("tgoods scalar fields", S.trade_goods[2].ore.score == 1
+      and S.trade_goods[2].ore.sell == 100 and S.trade_goods[2].ore.buy == 0
+      and S.trade_goods[2].timber.buy == 12)
+check("a lineage key becomes its own numeric index",
+      S.trade_goods[5] ~= nil and S.trade_goods[5].zz ~= nil)
+-- An abbreviation with no entry in the table stays as itself rather than
+-- becoming nil and dropping the good.
+check("an unknown abbreviation is kept verbatim",
+      S.trade_goods[5].zz.sell == 4)
+-- market.lua records price history off this seam, only when either side is
+-- priced.
+check("the market seam fires for priced goods only", #seam_goods == 3,
+      #seam_goods)
+check("the seam carries the lineage it came from",
+      seam_goods[1].lin == 2 and seam_goods[3].lin == 5)
+
+-- Frames are deltas and each lineage is its own key, so a frame replaces
+-- exactly the lineages it carries. MIP had to guess at this with a
+-- two-second burst window; the split removes the guess.
+tradegoods({ tgoods_2 = { { lin = 2, good = "o", score = 3, sup = 0,
+                            dem = 1, buy = 0, sell = 7 } } })
+check("a lineage key replaces that lineage outright",
+      S.trade_goods[2].ore.sell == 7 and S.trade_goods[2].timber == nil)
+check("a lineage the frame did not carry is left standing",
+      S.trade_goods[5] ~= nil and S.trade_goods[5].zz.sell == 4)
+trade_mod._market_seam.on_tgoods = nil
+
+
 -- ---- unmapped and foreign --------------------------------------------------
 -- crpr (cart repairs) has no MIP key and no consumer, so it stays counted.
 local before = protocol.gmcp_stats().unknown["crpr"] or 0

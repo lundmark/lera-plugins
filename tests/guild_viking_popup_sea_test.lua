@@ -550,11 +550,8 @@ seed_voyage({ state = "sailing", ship_id = 1, ship_name = "Ormen",
   crew_alive = 4, crew_max = 5, steps = 12, next_move = 30,
   threat_name = "Kraken", threat_level = 2, threat_pressure = 40,
   weather_key = "storm", captain = "Erik", identity = "proud" })
-protocol.ingest("VCHH", "4|4|test")
-protocol.ingest("VCR00", "S#H?")
-protocol.ingest("VCR01", "OMBD")
-protocol.ingest("VCR02", "++XY")
-protocol.ingest("VCR03", "VCA*")
+gv({ voyage_chart = { width = 4, height = 4, chart_mode = "test" },
+     voyage_chart_rows = { "S#H?", "OMBD", "++XY", "VCA*" } })
 gv({ vsailed = { "1,0" } }) -- x=1,y=0 -> chart cell (c=1,r=0), NOT the ship glyph
 
 check("VCR rows landed at the real 1-indexed storage position",

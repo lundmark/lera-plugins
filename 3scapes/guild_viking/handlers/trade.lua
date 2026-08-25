@@ -46,66 +46,64 @@ M.CELLAR = function(val)
   end
 end
 
--- LEGACY 2581. record_price_history(lin, good, buy, sell) (LEGACY:360) is
--- Task 7's territory; the seam is invoked with exactly the arguments that
--- call consumed, gated by the same "buyv > 0 or sellv > 0" condition.
-M.TGOODS = function(val)
-  -- val: "0=t:3:0:181;h:2:4:109|1=i:-2:102:26;f:2:1:120..."
-  -- compact: 1-char good abbrev, numeric score (-3..3), supply, demand
-  -- neutral entries omitted from packet
-  -- Server now sends TGOODS in batched packets (6 lineages each).
-  -- Reset trade_goods on first TGOODS of a burst, then accumulate.
-  local now = os.time()
-  if not S._tgoods_last or (now - S._tgoods_last) > 2 then
-    S.trade_goods = {}
+-- ---------------------------------------------------------------------------
+-- Guild.TradeGoods
+-- ---------------------------------------------------------------------------
+-- The per-good, per-lineage price and demand matrix. It arrives as one key per
+-- lineage -- tgoods_0, tgoods_1, ... -- rather than as one array, and that
+-- split is not cosmetic: a container over PROTOCOL_GUILD_NEST_MAX (128
+-- elements) is refused whole during validation and the key dropped with no
+-- error and no partial data, and the flat list runs to about 420 records. The
+-- same hazard is why Guild.Livestock splits `lmarket`.
+--
+-- MIP batched six lineages per packet and the client accumulated them behind a
+-- two-second window, resetting `trade_goods` when a burst looked new. That
+-- guesswork is gone: each lineage is its own key, so a frame replaces exactly
+-- the lineages it carries and leaves the rest standing -- which is also the
+-- correct reading of a delta transport, where an unchanged lineage simply is
+-- not resent.
+--
+-- `good` is the one-character abbreviation on the wire; GOOD_SHORT resolves it
+-- to the name the pages index by. `sup`/`dem` are supply/demand.
+local function write_tgoods(parts)
+  if type(parts) ~= "table" then return end
+  -- Sorted so the market seam's price-history writes land in a stable order
+  -- across lineages; pairs() order is unspecified.
+  local keys = {}
+  for key in pairs(parts) do
+    if key:match("^tgoods_%d+$") then keys[#keys + 1] = key end
   end
-  S._tgoods_last = now
-  for lin_part in val:gmatch("[^|]+") do
-    local lin_id_s, goods_s = lin_part:match("^(%d+)=(.*)$")
-    if lin_id_s then
-      local lin_id = tonumber(lin_id_s)
-      S.trade_goods[lin_id] = {}
-      for ge in goods_s:gmatch("[^;]+") do
-        -- New 6-field format: abbr:score:sup:dem:buy:sell
-        local abbr, score, sup, dem, buy, sell =
-          ge:match("^([^:]+):([^:]+):([^:]+):([^:]+):([^:]+):([^:]+)$")
-        if not abbr then
-          -- Legacy 4-field format (older server)
-          abbr, score, sup, dem =
-            ge:match("^([^:]+):([^:]+):([^:]+):([^:]+)$")
-        end
-        if abbr then
+  table.sort(keys)
+
+  for _, key in ipairs(keys) do
+    local records = parts[key]
+    local lin = tonumber(key:match("^tgoods_(%d+)$"))
+    if lin and type(records) == "table" then
+      local goods = {}
+      for _, r in ipairs(records) do
+        if type(r) == "table" and r.good ~= nil then
+          local abbr = tostring(r.good)
           local good = GOOD_SHORT[abbr] or abbr
-          local buyv  = tonumber(buy)  or 0
-          local sellv = tonumber(sell) or 0
-          S.trade_goods[lin_id][good] = {
-            score  = tonumber(score) or 0,
-            supply = tonumber(sup)   or 0,
-            demand = tonumber(dem)   or 0,
-            buy    = buyv,
-            sell   = sellv,
+          local buy = tonumber(r.buy) or 0
+          local sell = tonumber(r.sell) or 0
+          goods[good] = {
+            score  = tonumber(r.score) or 0,
+            supply = tonumber(r.sup) or 0,
+            demand = tonumber(r.dem) or 0,
+            buy    = buy,
+            sell   = sell,
           }
-          if buyv > 0 or sellv > 0 then
-            if M._market_seam.on_tgoods then M._market_seam.on_tgoods(lin_id, good, buyv, sellv) end
+          -- market.lua records price history off this seam, on the same
+          -- "either side is priced" condition the MIP path used.
+          if (buy > 0 or sell > 0) and M._market_seam.on_tgoods then
+            M._market_seam.on_tgoods(lin, good, buy, sell)
           end
         end
       end
+      S.trade_goods[lin] = goods
     end
   end
 end
-
--- ---------------------------------------------------------------------------
--- Guild.Roster writers
--- ---------------------------------------------------------------------------
--- The mudlib's _v_* builders (client.h) are the canonical record shape; MIP's
--- rows are those same records joined, so the data is identical and only the
--- field names differ. Each rename below is called out where it happens,
--- because a rename is the one thing a transport-equivalence test cannot see.
---
--- `gneeds` and `rneeds` are deliberately left unmapped: they are Guild.Roster
--- keys with no MIP counterpart and no consumer in this plugin, so mapping them
--- would add state nothing reads. They stay counted under their GMCP names in
--- /vik source, which is where a future consumer would go looking.
 
 -- staff. `stats` is a comma-joined string in a fixed stat order on both
 -- transports (the server builds one string for both -- see _v_staff), so it is
@@ -649,6 +647,7 @@ M._gmcp = {
   RUPKEEP  = write_rupkeep,
   HEAT     = write_heat,
   DALER    = write_daler,
+  TGOODS   = write_tgoods,
 }
 
 return M

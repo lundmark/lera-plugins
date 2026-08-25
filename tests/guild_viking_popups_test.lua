@@ -465,13 +465,9 @@ protocol.on_gmcp("Guild.Voyage", { guild = "viking",
   vsaga = { "Captain style: bold", "The fleet set sail." },
   vmem = { "Remembered the reefs of Fjordholm." },
 })
--- The Sea Chart is the one fixture here still seeded over MIP: VCHH/VCR have
--- no GMCP source yet, so their handlers and this seeding stay until one lands.
-protocol.ingest("VCHH", "4|4|test")
-protocol.ingest("VCR00", "S#H?")
-protocol.ingest("VCR01", "OMBD")
-protocol.ingest("VCR02", "++XY")
-protocol.ingest("VCR03", "VCA*")
+protocol.on_gmcp("Guild.Voyage", { guild = "viking",
+  voyage_chart = { width = 4, height = 4, chart_mode = "test" },
+  voyage_chart_rows = { "S#H?", "OMBD", "++XY", "VCA*" } })
 page_opts.set("show_sea_voyage", true)
 page_opts.set("show_sea_chart", true)
 page_opts.set("show_sea_queue", true)

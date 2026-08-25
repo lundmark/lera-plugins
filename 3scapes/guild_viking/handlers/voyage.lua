@@ -9,48 +9,6 @@ local util = require("util")
 local gmcp_grid = require("gmcp_grid")
 
 local M = {}
-
--- LEGACY 1288
-M.VCHART = function(val)
-  S.mip_voyage_seen = true
-  S.voyage_chart_width = 0
-  S.voyage_chart_height = 0
-  S.voyage_chart_mode = ""
-  S.voyage_chart_rows = {}
-  if val ~= "" then
-    local size, mode, rows = val:match("^([^|]*)|([^|]*)|(.*)$")
-    if size then
-      local parsed_size = tonumber(size) or 0
-      S.voyage_chart_width = parsed_size
-      S.voyage_chart_height = parsed_size
-      S.voyage_chart_mode = mode or ""
-      for entry in (rows or ""):gmatch("[^,]+") do
-        S.voyage_chart_rows[#S.voyage_chart_rows + 1] = entry
-      end
-    end
-  end
-end
-
--- LEGACY 1306
-M.VCHH = function(val)
-  S.mip_voyage_seen = true
-  local width, height, mode = val:match("^([^|]*)|([^|]*)|([^|]*)$")
-  if width then
-    local new_w = tonumber(width) or 0
-    local new_h = tonumber(height) or 0
-    S.voyage_chart_width = new_w
-    S.voyage_chart_height = new_h
-    S.voyage_chart_mode = mode or ""
-    S.voyage_chart_rows = {}
-    if new_h > 0 then
-      for i = 1, new_h do
-        S.voyage_chart_rows[i] = ""
-      end
-    end
-  end
-end
-
--- LEGACY 1380
 M.VRELICS = function(val)
   S.mip_voyage_seen = true
   S.voyage_relics = {}
@@ -66,27 +24,17 @@ end
 -- this client about yet". A key with a GMCP writer is recognised by name and
 -- needs no entry here; these are the ones a composite absorbed, or whose data
 -- moved wholesale, so no writer carries their name.
-M._retired_keys = { "VMAPH", "VMAPL", "VMAPL_END" }
+M._retired_keys = { "VMAPH", "VMAPL", "VMAPL_END", "VCHART", "VCHH" }
 
 -- Pattern-dispatched keys (LEGACY matches these with key:match(...) rather
 -- than an exact elseif branch). Registered by init.lua via
 -- protocol.pattern_handler, not protocol.handler -- these fn's receive the
 -- key itself (to extract the embedded row index) as well as the value.
 
--- LEGACY 1322-1325 (`^VCR%d%d$`)
-local function vcr_row(key, val)
-  local ridx = tonumber(key:sub(4)) or 0
-  S.mip_voyage_seen = true
-  S.voyage_chart_rows[ridx + 1] = val or ""
-end
+-- The Sea Chart's rows arrived as a numbered VCR%02d burst over MIP;
+-- Guild.Voyage carries the whole chart in one frame.
+M._retired_patterns = { "^VMR%d%d$", "^MEE%d%d$", "^MES%d%d$", "^VCR%d%d$" }
 
--- VCR is the Sea Chart's terrain rows, which have no GMCP source yet and so
--- keep a real handler. The territory map's rows and edges are Guild.Map's now.
-M._patterns = {
-  { pattern = "^VCR%d%d$", fn = vcr_row },
-}
-
-M._retired_patterns = { "^VMR%d%d$", "^MEE%d%d$", "^MES%d%d$" }
 
 -- ---------------------------------------------------------------------------
 -- Guild.Map -- the territory map, GMCP only.
@@ -179,6 +127,10 @@ end
 
 local function write_map(parts)
   if type(parts) ~= "table" then return end
+  -- Recorded whether or not the frame carries a grid, so the popup can tell
+  -- "no frame has arrived" from "a frame arrived saying the guild has no map".
+  -- The two have completely different causes and only one of them is ours.
+  S.vmap_seen = true
 
   -- Decoding context first, and cached in state: `enc`, `legend` and
   -- `legend_edge` change only when the server's tables do, so a delta
@@ -528,6 +480,36 @@ end
 local function write_mission_reg(v) S.mission_reg_left = tonumber(v) or -1 end
 local function write_mission_new(v) S.mission_new_left = tonumber(v) or -1 end
 
+-- ---------------------------------------------------------------------------
+-- Guild.Voyage: the Sea Chart
+-- ---------------------------------------------------------------------------
+-- MIP spread this over VCHH (dimensions and mode), VCHART (an older combined
+-- form) and a numbered VCR%02d row burst. GMCP splits it in two instead: a
+-- record of width/height/chart_mode, and the rows as their own sibling key,
+-- because a record may not nest a list. There is only one active voyage, so
+-- neither half needs a foreign key.
+--
+-- The server pushes it unconditionally every fast tick and lets the protocol
+-- layer's delta cache suppress an unchanged chart, replacing the hand-rolled
+-- cache MIP needed. Each half is applied only when it arrived: a frame
+-- carrying just the rows must not blank the dimensions, and vice versa.
+local function write_vchart(parts)
+  if type(parts) ~= "table" then return end
+  S.mip_voyage_seen = true
+  local rec = parts.voyage_chart
+  if type(rec) == "table" then
+    S.voyage_chart_width = tonumber(rec.width) or 0
+    S.voyage_chart_height = tonumber(rec.height) or 0
+    -- `chart_mode` -> voyage_chart_mode is the one rename.
+    S.voyage_chart_mode = tostring(rec.chart_mode or "")
+  end
+  if type(parts.voyage_chart_rows) == "table" then
+    local rows = {}
+    for i, row in ipairs(parts.voyage_chart_rows) do rows[i] = tostring(row) end
+    S.voyage_chart_rows = rows
+  end
+end
+
 M._gmcp = {
   VMAP         = write_map,
   SHIPS        = write_ships,
@@ -551,6 +533,7 @@ M._gmcp = {
   FLEET_RENOWN = write_fleet_renown,
   VMREG        = write_mission_reg,
   VMNEW        = write_mission_new,
+  VCHART       = write_vchart,
 }
 
 
