@@ -27,6 +27,27 @@ lera = { render_pass = function() return "local" end }
 local send_calls = {}
 mud = { send = function(s) send_calls[#send_calls + 1] = s end }
 
+-- The People page's "Run There" buttons dispatch through popups/map.lua's
+-- travel_to, which reports its outcome ("Traveling to X (n steps)" / "No
+-- passable route to X" / "Already at X") the way LEGACY's ColourNote did.
+-- Captured so those messages can be asserted, and so the page's own tests do
+-- not fail on an unstubbed global.
+local printed = {}
+buffer = {
+  color_print = function(...)
+    local args = { ... }
+    local parts = {}
+    for i = 3, #args, 3 do parts[#parts + 1] = tostring(args[i]) end
+    printed[#printed + 1] = table.concat(parts)
+  end,
+}
+local function printed_has(text)
+  for _, line in ipairs(printed) do
+    if line:find(text, 1, true) then return true end
+  end
+  return false
+end
+
 local pagelib = require("pagelib")
 local state = require("state")
 local page_opts = require("page_opts")
@@ -711,7 +732,12 @@ do
         lines_er[btn_row_er]:find(C.bright_green, 1, true) ~= nil, lines_er[btn_row_er])
   local target_er = find_target(targets_er, btn_row_er)
   check("people: errand button has a recorded target (always travelable)", target_er ~= nil)
+  printed = {}
   target_er.action()
+  check("people: errand click reports the travel it dispatched (LEGACY's ColourNote, "
+        .. "restored -- a Run There that silently does nothing is indistinguishable "
+        .. "from a dead button)",
+        printed_has("[vmap] Traveling to Vestergotland (1 steps)"), table.concat(printed, " | "))
   check("people: errand click reaches errand_return_and_submit at the CORRECT origin index "
         .. "(Vestergotland, 1 step) -- not the decoy (Uppsala) or the target (Holmgard)",
         #send_calls == 9

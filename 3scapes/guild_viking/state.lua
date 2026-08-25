@@ -3,20 +3,36 @@ local state = {
   hp = 0, mhp = 0, hp_prev = 0, hp_delta = 0,
   -- Threk (damage absorption pool)
   threk = 0, mthrek = 0, threk_prev = 0, threk_delta = 0,
-  -- Guild points
+  -- Guild points. The `_prev` fields belong to the trigger path only: it
+  -- computes each delta as new-minus-prev, while Guild.State reports the
+  -- server's own last-round delta and leaves `_prev` untouched.
   seid = 0, mseid = 0, seid_prev = 0, seid_delta = 0,
   vig  = 0, mvig  = 0, vig_prev  = 0, vig_delta  = 0,
   rad  = 0, mrad  = 0, rad_prev  = 0, rad_delta  = 0,
-  -- Fury visual bar (raw string from $FURY$ token, e.g. "[----------]")
-  fury = "",
+  -- The fourth point pool (SAGA_BUANDI). GMCP-only: no field of the rendered
+  -- prompt carries it, so the trigger path leaves these at zero.
+  buandi = 0, mbuandi = 0,
+  -- Fury. Two representations, because the two transports disagree on shape:
+  -- the prompt's $FURY$ token is a rendered bar string ("[--***---]") and
+  -- Guild.State's points.fury/mfury are integers. pages/stats.lua wants the
+  -- integers -- with only the string it recovers them by counting asterisks --
+  -- so it prefers fury_cur/fury_max and falls back to decoding `fury`.
+  fury = "", fury_cur = nil, fury_max = nil,
   -- Chain / Body-strike depth
   chain = 0, bsdepth = 0,
-  -- Saga XP with per-round gains and session totals
-  vis = 0, vis_gain = 0, vis_session = 0,
-  kap = 0, kap_gain = 0, kap_session = 0,
-  soe = 0, soe_gain = 0, soe_session = 0,
-  aud = 0, aud_gain = 0, aud_session = 0,
+  -- Saga XP with per-round gains and session totals. The maxima are GMCP-only:
+  -- the prompt's G[] field carries a current value and a last-round gain, with
+  -- no maximum anywhere in it.
+  vis = 0, vis_gain = 0, vis_session = 0, mvis = 0,
+  kap = 0, kap_gain = 0, kap_session = 0, mkap = 0,
+  soe = 0, soe_gain = 0, soe_session = 0, msoe = 0,
+  aud = 0, aud_gain = 0, aud_session = 0, maud = 0,
   xp_session_start = nil,
+  -- Generic spell points and shroom toxicity. Stored, not displayed: mapping
+  -- them is what keeps /vik source from reporting them as keys nobody has
+  -- taught this client about, and they cost two fields each to keep honest.
+  sp = 0, msp = 0,
+  tox = 0, mtox = 0,
   -- Ledung
   ldng = 0, mldng = 0, lrst = 0,
   -- Enemy from hpbar E field
@@ -29,8 +45,18 @@ local state = {
   combat_rounds = 0,
   -- Combat state
   combat = false,
-  -- Active spell effects from $STFX$ line 3, e.g. {"ein",54},{"bvorn",91}
+  -- Active spell effects, e.g. {"ein",54},{"bvorn",91}. Parsed by
+  -- combat.apply_stfx from either transport's bar string -- the $STFX$ line the
+  -- triggers scrape, or Guild.State's fx.stfx, which the mudlib pre-renders in
+  -- the same format.
   stfx = {},
+  -- True once a Guild.State frame has written the vitals block. While set,
+  -- combat.lua's eight hp-bar triggers stop writing state (they stay
+  -- REGISTERED -- they are also what gags the prompt lines from the main
+  -- buffer). Per-connection, like the MIP per-key latch: cleared by
+  -- reset_connection so a reconnect that never negotiates GMCP falls back to
+  -- the triggers instead of freezing on the last connection's numbers.
+  vitals_gmcp = false,
   -- City / trade / farm / blot (from mip.viking_extra / send_mip_city)
   carts      = {},   -- { mode, good, village, return_in, amount, halfway_in, quality_pct, cart_id, tier, durability, cap, refit }
   courier    = { tier = 0, runs = {} },  -- Courier Post: tier + { good, village, return_in, amount, cost, fee }
@@ -216,6 +242,7 @@ function M.reset_connection()
   state.combat = false
   state.chain = 0
   state.bsdepth = 0
+  state.vitals_gmcp = false
   state.en5 = "None"
   state.ens = ""
   state.rndz = 0

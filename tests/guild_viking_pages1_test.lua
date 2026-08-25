@@ -84,6 +84,32 @@ local all = joined(lines)
 check("daler line present with fmt_num'd value",
       all:find(pagelib.fmt_num(S.daler), 1, true) ~= nil, pagelib.fmt_num(S.daler))
 
+-- ---- fury: prefers Guild.State's integers, falls back to the bar string ----
+-- The fixture above sets only S.fury ("[***-------]"), the trigger path's
+-- rendered token, so this first case is the fallback: three filled of ten.
+check("fury row derives 3/10 from the trigger's bar string",
+      find_line(lines, "3/10") ~= nil, all)
+
+-- Guild.State sends points.fury/mfury as integers. Preferring them is the
+-- point: with only the string, the page recovers the numbers by stripping the
+-- brackets and counting asterisks, which cannot represent a maximum the bar
+-- does not have room to draw.
+S.fury_cur, S.fury_max = 7, 12
+local fury_lines = stats_page.lines(WIDTH)
+check("fury row uses the GMCP integers when present",
+      find_line(fury_lines, "7/12") ~= nil, joined(fury_lines))
+check("fury row ignores the stale bar string once the integers are present",
+      find_line(fury_lines, "3/10") == nil, joined(fury_lines))
+
+-- A zero maximum is a real state (no fury capacity yet) and must not be
+-- mistaken for "no GMCP value", which would silently fall back to the string.
+S.fury_cur, S.fury_max = 0, 0
+local fury_zero = stats_page.lines(WIDTH)
+check("a zero fury maximum still uses the GMCP path, not the bar string",
+      find_line(fury_zero, "0/") ~= nil and find_line(fury_zero, "3/10") == nil,
+      joined(fury_zero))
+S.fury_cur, S.fury_max = nil, nil
+
 -- ---- an hp row: bar glyphs AND "350/500" -----------------------------------
 local hp_idx = find_line(lines, "350/500")
 check("an hp row contains \"350/500\"", hp_idx ~= nil, all)

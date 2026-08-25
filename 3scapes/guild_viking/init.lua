@@ -55,6 +55,14 @@ register_handlers(kingdom)
 local city = require("handlers.city")
 register_handlers(city)
 
+-- Guild.State's vitals block. Registered like any other handler module, but
+-- note the ordering constraint it does NOT have: the hp-bar triggers below are
+-- registered later and stand down at runtime via S.vitals_gmcp, not by being
+-- skipped here -- they are also what gags the prompt lines out of the main
+-- buffer, so they must be registered either way.
+local vitals = require("handlers.vitals")
+register_handlers(vitals)
+
 -- Stage 2: page options + the tab bar / page shell (window.lua). Required
 -- after the handlers so the state they populate is available to the pages
 -- window.lua registers, even though no page reads it until Task 3+.
@@ -467,7 +475,9 @@ function M.on_load()
       .. "on/off state and last-action/next-eligible summary (status), message tracing "
       .. "(trace), explicit save (save), transport selection (source; note "
       .. "that 'source mip' blanks the Territory Map, which is fed by "
-      .. "Guild.Map and has no MIP path any more), the "
+      .. "Guild.Map and has no MIP path any more, and hands the vitals bars "
+      .. "back to the hp-bar prompt triggers, which need the prompt to be "
+      .. "on), the "
       .. "saga-XP session reset (resetxp; the bare 'resetvikxp' alias does "
       .. "the same), toggling a named popup open or closed -- map (Territory "
       .. "Map), sea (Sea Chart), voyage (Voyage Status), cityplan (City "

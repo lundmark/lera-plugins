@@ -65,6 +65,14 @@ M.COMPOSITE = {
                 "tgoods_5", "tgoods_6", "tgoods_7", "tgoods_8", "tgoods_9",
                 "tgoods_10", "tgoods_11", "tgoods_12", "tgoods_13",
                 "tgoods_14" },
+  -- Guild.State's player vitals. Unlike every other entry here, VITALS is not
+  -- the name of a MIP key -- see handlers/vitals.lua's header for why this
+  -- block gets a label of its own instead of being split across the three or
+  -- four MIP keys its data used to arrive on. It is declared composite for the
+  -- ordinary reason: eleven GMCP keys, one writer, and a delta frame that may
+  -- carry any subset of them.
+  VITALS    = { "hp", "sp", "points", "chain", "gxp", "tox", "fx",
+                "encounter", "target", "ledung", "bars" },
   -- Guild.Kingdom. army and dynasty each flatten a nested container out of
   -- their records -- a unit's traits, and a child's schooling rows -- and
   -- dynasty additionally splits its scalars into one key each. war is three
@@ -145,12 +153,14 @@ local MAP = {
   vfind_hall = "VFIND", vfind_posts = "VFIND",
   vfind_offers = "VFIND", vfind_auctions = "VFIND",
 
-  -- Guild.State. Only the keys with a MIP twin are mapped: hp, sp, points,
-  -- chain, gxp, tox, fx, encounter, target and ledung are all written by
-  -- combat.lua's output-line triggers (or, for the attacker block, by
-  -- Char.Combat), which are protocol-independent and already the single source
-  -- of truth for those fields. Mapping them here would create a second writer
-  -- for values that already have one.
+  -- Guild.State. The vitals block routes to the one VITALS writer declared
+  -- above; combat.lua's output-line triggers are the fallback for it now,
+  -- latched off once a frame arrives, rather than the sole source they were.
+  -- The attacker block stays with Char.Combat -- a purpose-built package that
+  -- carries the enemy hp percent Guild.State's target group does not.
+  hp = "VITALS", sp = "VITALS", points = "VITALS", chain = "VITALS",
+  gxp = "VITALS", tox = "VITALS", fx = "VITALS", encounter = "VITALS",
+  target = "VITALS", ledung = "VITALS", bars = "VITALS",
   daler = "DALER", god = "GOD_POWER",
   missions_reg = "VMREG", missions_newbie = "VMNEW",
 

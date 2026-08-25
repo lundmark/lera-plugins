@@ -5,32 +5,53 @@
 --
 -- GEOMETRY (the one thing every consumer must agree on):
 --
--- Horizontal: each grid column occupies a fixed 3-char pitch:
---   [glyph field: 2 chars][east-edge slot: 1 char]
--- The glyph field holds `cell.glyph` (1 or 2 chars) left-justified and
--- space-padded to exactly 2 visible chars -- a 1-char glyph like "A" widens
--- to "A ", a 2-char glyph like "DD" fills it exactly. The east-edge slot is
--- always reserved (even for the grid's last column) so the pitch never
--- depends on whether `opts.east_edge` was supplied; it renders "|" when
--- `opts.east_edge(c, r)` is truthy for that cell, otherwise a space. This
--- deviates from the plan's "2-char pitch" suggestion deliberately: with
--- glyphs allowed up to 2 chars, a fixed 2-char glyph FIELD (not 1) is what
--- keeps the pitch constant regardless of glyph content, so cell_at's column
--- arithmetic (`floor(x / 3)`) never has to special-case glyph width.
+-- Horizontal: each grid column occupies a fixed pitch, `L.pitch` wide,
+-- made of a glyph field followed (in wide mode only) by an east-edge slot.
+-- The glyph field holds `cell.glyph` left-justified and space-padded, or
+-- truncated, to exactly `L.glyph_width` visible chars.
 --
--- Vertical: each grid row is one rendered line. When `opts.south_edge` is
--- supplied (as a function -- presence alone opts in, independent of what it
--- returns for any given cell), an extra "edge row" is interleaved directly
--- below every cell row: each column renders "__" when
--- `opts.south_edge(c, r)` is truthy, else "  ", with the east-edge slot
--- always blank (south and east walls are drawn as independent slots, never
--- merged into a corner glyph). Without `opts.south_edge`, no edge rows
--- exist at all -- vertical space is expensive in a popup, so it is opt-in,
--- unlike the always-reserved horizontal east slot.
+-- WIDE mode (the default) uses a 3-char pitch:
+--   [glyph field: 2 chars][east-edge slot: 1 char]
+-- so a 1-char glyph like "A" widens to "A " and a 2-char glyph like "DD"
+-- fills the field exactly. The east-edge slot is always reserved (even for
+-- the grid's last column) so the pitch never depends on whether
+-- `opts.east_edge` was supplied; it renders "|" when `opts.east_edge(c, r)`
+-- is truthy for that cell, otherwise a space. This deviates from the plan's
+-- "2-char pitch" suggestion deliberately: with glyphs allowed up to 2
+-- chars, a fixed 2-char glyph FIELD (not 1) is what keeps the pitch
+-- constant regardless of glyph content, so cell_at's column arithmetic
+-- never has to special-case glyph width.
+--
+-- COMPACT mode (`opts.compact = true`) uses a 1-char pitch: the glyph field
+-- alone, no east-edge slot and no edge rows, so the board renders exactly
+-- one character per cell and `w` characters per row. `opts.east_edge` and
+-- `opts.south_edge` are IGNORED entirely under `compact` -- there is no
+-- between-cells column or row left to draw a wall in, and a compact caller
+-- is asking for the raw glyph grid, not for wall overlays. A glyph longer
+-- than one char truncates to its first char, which is a real (if unlikely)
+-- data loss: `popups/cityplan.lua`'s building glyphs come straight off the
+-- wire (`tostring(b.glyph or "?")`) and `popups/war_battle.lua`'s
+-- duplicate-unit ordinal is `tostring(u.ord)`, so a two-character value
+-- from either would lose its second char. Both are single characters in
+-- practice; the two boards that can genuinely carry a 2-char glyph
+-- (`popups/war_campaign.lua`'s enemy army ids) or need a 2-char header
+-- label (`popups/sea.lua`'s A01..P16 chart) stay in wide mode for exactly
+-- that reason.
+--
+-- Vertical: each grid row is one rendered line. In wide mode, when
+-- `opts.south_edge` is supplied (as a function -- presence alone opts in,
+-- independent of what it returns for any given cell), an extra "edge row"
+-- is interleaved directly below every cell row: each column renders "__"
+-- when `opts.south_edge(c, r)` is truthy, else "  ", with the east-edge
+-- slot always blank (south and east walls are drawn as independent slots,
+-- never merged into a corner glyph). Without `opts.south_edge`, no edge
+-- rows exist at all -- vertical space is expensive in a popup, so it is
+-- opt-in, unlike the always-reserved horizontal east slot.
 --
 -- Headers: `opts.col_headers` prepends one header line with 0-based column
--- numbers (each left-justified/truncated into the same 2-char glyph-field
--- width, followed by a blank east-slot -- headers never show edges).
+-- numbers (each left-justified/truncated into the same `glyph_width`
+-- glyph-field width, followed in wide mode by a blank east-slot -- headers
+-- never show edges).
 -- `opts.row_headers` prepends, to every line the grid body occupies (cell
 -- rows AND edge rows), a row-header field `row_header_width` chars wide
 -- (sized to fit the largest row index, minimum 1) plus one separator space;
@@ -85,7 +106,8 @@
 -- `col_headers` is set, otherwise the first cell row) and returns the
 -- (c, r) grid cell whose glyph field that position falls inside, or nil for
 -- a header line/row, a row-header/separator column, an east-edge slot, an
--- edge row, or anything out of bounds.
+-- edge row, or anything out of bounds. (Under `compact` there are no
+-- east-edge slots and no edge rows, so those two nil cases cannot arise.)
 local pagelib = require("pagelib")
 
 local RESET = pagelib.RESET
@@ -108,12 +130,18 @@ local function layout(grid, opts)
     if row_header_width < 1 then row_header_width = 1 end
   end
 
-  local edge_rows = opts.south_edge ~= nil
+  -- Compact drops the east slot and the edge rows together: both are
+  -- between-cells space, and a 1-char pitch has none to give them.
+  local compact = opts.compact and true or false
+  local glyph_width = compact and 1 or 2
+  local pitch = compact and 1 or 3
+
+  local edge_rows = (not compact) and opts.south_edge ~= nil
   local body_lines_per_row = edge_rows and 2 or 1
   local col_header_lines = col_headers and 1 or 0
 
   local prefix_width = row_headers and (row_header_width + 1) or 0
-  local body_width = w * 3
+  local body_width = w * pitch
   local total_width = prefix_width + body_width
   local total_height = col_header_lines + h * body_lines_per_row
 
@@ -124,11 +152,17 @@ local function layout(grid, opts)
     col_headers = col_headers,
     row_header_width = row_header_width,
     prefix_width = prefix_width,
+    compact = compact,
+    glyph_width = glyph_width,
+    pitch = pitch,
     edge_rows = edge_rows,
     body_lines_per_row = body_lines_per_row,
     col_header_lines = col_header_lines,
     total_width = total_width,
     total_height = total_height,
+    -- Carried verbatim; under `compact` nothing calls them, because the
+    -- slots they would draw into do not exist (see build_cell_line's and
+    -- edge_rows' own compact gates).
     east_edge = opts.east_edge,
     south_edge = opts.south_edge,
     origin_label = opts.origin_label,
@@ -137,21 +171,21 @@ local function layout(grid, opts)
   }
 end
 
--- A cell's 2-char glyph field, with color/selection escapes wrapped around
--- it. `cell` may be nil (empty space).
-local function glyph_field(cell)
-  if not cell then return "  " end
-  -- A present-but-empty glyph ("") would otherwise fall through the #g >= 2
-  -- branch below into "" .. " " == " " -- a single visible char, breaking
-  -- the fixed 2-char pitch every other cell relies on. Normalize it to a
-  -- single space first so it pads out to "  " exactly like a nil cell.
-  local g = cell.glyph
-  if g == nil or g == "" then g = " " end
+-- A cell's glyph field, `gw` visible chars wide, with color/selection
+-- escapes wrapped around it. `cell` may be nil (empty space).
+local function glyph_field(cell, gw)
+  if not cell then return string.rep(" ", gw) end
+  -- A present-but-empty glyph ("") needs no special case: it takes the
+  -- padding branch below and pads out to a full blank field, exactly like a
+  -- nil cell. That is load-bearing -- a zero-width field would shorten the
+  -- row and desynchronize every column to its right from cell_at -- so the
+  -- padding must stay width-derived rather than a hardcoded single space.
+  local g = cell.glyph or " "
   local text
-  if #g >= 2 then
-    text = g:sub(1, 2)
+  if #g >= gw then
+    text = g:sub(1, gw)
   else
-    text = g .. " "
+    text = g .. string.rep(" ", gw - #g)
   end
 
   local pre, post = "", ""
@@ -177,8 +211,8 @@ local function build_header_line(L)
     parts[#parts + 1] = " "
   end
   for c = 0, L.w - 1 do
-    parts[#parts + 1] = pagelib.trunc(L.col_label(c), 2)
-    parts[#parts + 1] = " "
+    parts[#parts + 1] = pagelib.trunc(L.col_label(c), L.glyph_width)
+    if not L.compact then parts[#parts + 1] = " " end
   end
   return table.concat(parts)
 end
@@ -191,9 +225,11 @@ local function build_cell_line(L, r)
   end
   local grid = L.grid
   for c = 0, L.w - 1 do
-    parts[#parts + 1] = glyph_field(grid.cell(c, r))
-    local has_edge = L.east_edge and L.east_edge(c, r)
-    parts[#parts + 1] = has_edge and "|" or " "
+    parts[#parts + 1] = glyph_field(grid.cell(c, r), L.glyph_width)
+    if not L.compact then
+      local has_edge = L.east_edge and L.east_edge(c, r)
+      parts[#parts + 1] = has_edge and "|" or " "
+    end
   end
   return table.concat(parts)
 end
@@ -234,10 +270,11 @@ local function cell_at(L, x, y)
   end
   if bx < 0 then return nil end
 
-  local c = math.floor(bx / 3)
+  local c = math.floor(bx / L.pitch)
   if c >= L.w then return nil end
-  local slot = bx % 3
-  if slot == 2 then return nil end -- east-edge slot: no cell
+  -- The east-edge slot is the pitch's last column, and only wide mode has
+  -- one (compact's pitch is 1, so this can never fire there).
+  if bx % L.pitch == L.pitch - 1 and L.pitch > L.glyph_width then return nil end
 
   return c, r
 end

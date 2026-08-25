@@ -251,14 +251,17 @@ check("CPT00 landed at the real 1-indexed storage position",
 local offset = cityplan.grid_line_offset(WIDTH)
 local lines = cityplan.lines(WIDTH)
 
+-- Compact rendering (maplib `compact`): one visible char per cell, so a grid
+-- row is exactly the grid's width in chars -- no inter-cell padding, no
+-- reserved east-edge slot.
 local function field(ch)
   local t = EXPECT_TILE[ch]
-  return t.color .. t.glyph .. " " .. RESET
+  return t.color .. t.glyph .. RESET
 end
 
-local row0 = field("W") .. " " .. field("c") .. " " .. field("#") .. " "
-local row1 = field("w") .. " " .. field("f") .. " " .. field(".") .. " "
-local row2 = field("G") .. " " .. field("B") .. " " .. field("^") .. " "
+local row0 = field("W") .. field("c") .. field("#")
+local row1 = field("w") .. field("f") .. field(".")
+local row2 = field("G") .. field("B") .. field("^")
 
 check("grid row0 (W/c/#) renders exact glyph+color fields, wire row 0 (CPT00)",
   lines[offset + 1] == row0, lines[offset + 1])
@@ -281,8 +284,8 @@ seed_cplan({
 })
 offset = cityplan.grid_line_offset(WIDTH)
 lines = cityplan.lines(WIDTH)
-local occ_row0 = EXPECT_PAL.p .. "L " .. RESET .. " " .. EXPECT_TILE["."].color .. ". " .. RESET .. " "
-local occ_row1 = EXPECT_TILE["."].color .. ". " .. RESET .. " " .. EXPECT_PAL.e .. "Q " .. RESET .. " "
+local occ_row0 = EXPECT_PAL.p .. "L" .. RESET .. field(".")
+local occ_row1 = field(".") .. EXPECT_PAL.e .. "Q" .. RESET
 check("building at (0,0) renders its own glyph/pal colour, not terrain",
   lines[offset + 1] == occ_row0, lines[offset + 1])
 check("building with an unknown pal falls back to PAL.e (cyan)",
@@ -314,27 +317,30 @@ check("geometry() is non-nil once a plan is committed", geom ~= nil)
 
 lines = cityplan.lines(WIDTH)
 offset = cityplan.grid_line_offset(WIDTH)
--- full-grid (1,1): castle border (perimeter of the 5x5 keep at offset 1,1).
-local border_field = C.dim .. "# " .. RESET .. " "
--- full-grid (2,2): open courtyard, not overwritten -- blank.
-local blank_field = "   "
--- full-grid (3,3): overwritten by throne_room -- renders as itself.
-local throne_field = EXPECT_PAL.T .. "K " .. RESET .. " "
+-- These three used to be substring searches on the row, because at the wide
+-- 3-char pitch a 7-column row was 21 chars of interleaved escapes and the
+-- per-cell offsets were painful to compute (`nth_field` was a stub that gave
+-- up and returned the whole line). Compact rendering makes each row exactly
+-- 7 visible chars, so every cell in the row is asserted at once -- which is
+-- also strictly stronger: a courtyard blank is a single space, and searching
+-- a row for " " would match almost anything.
+--
+-- The 7x7 grid is a 5x5 castle at margin (1,1) on terrain "W" border /
+-- "." fill. Castle border cells are c==1, c==5, r==1 or r==5; interior cells
+-- are the open courtyard (glyph "", so an uncolored blank); throne_room at
+-- plan (2,2) lands on grid (3,3) and renders as itself.
+local wall = C.dim .. "#" .. RESET   -- terrain "W" AND castle border, same spec
+local courtyard = " "                 -- glyph "" -> plain blank, no color escapes
+local throne = EXPECT_PAL.T .. "K" .. RESET
 
-local function nth_field(line, n)
-  -- Each field is exactly 3 visible/escaped chars wide per maplib's fixed
-  -- pitch; slice by finding the n-th "glyph-field + edge-slot" group via
-  -- plain string search on the known field text instead of counting bytes
-  -- (escape codes make raw byte slicing fragile).
-  return line
-end
-
-check("castle border cell (1,1) renders '#' dim (row 1 = CPT01)",
-  lines[offset + 2]:find(border_field, 1, true) ~= nil, lines[offset + 2])
-check("castle open courtyard cell (2,2) renders blank (row 2 = CPT02)",
-  lines[offset + 3]:find(blank_field, 1, true) ~= nil, lines[offset + 3])
-check("throne_room overwrites the courtyard cell at (3,3) and renders itself (row 3 = CPT03)",
-  lines[offset + 4]:find(throne_field, 1, true) ~= nil, lines[offset + 4])
+check("grid row 1 (CPT01) is all wall: terrain W, then the keep's top border",
+  lines[offset + 2] == string.rep(wall, 7), lines[offset + 2])
+check("grid row 2 (CPT02): terrain + border, three blank courtyard cells, border + terrain",
+  lines[offset + 3] == wall .. wall .. string.rep(courtyard, 3) .. wall .. wall,
+  lines[offset + 3])
+check("grid row 3 (CPT03): throne_room overwrites the courtyard cell at (3,3)",
+  lines[offset + 4] == wall .. wall .. courtyard .. throne .. courtyard .. wall .. wall,
+  lines[offset + 4])
 
 -- =============================================================================
 -- footer: unplanned status, perks, mood, coast/placed -- all four lines the

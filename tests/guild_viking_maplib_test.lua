@@ -272,6 +272,117 @@ for i, l in ipairs(lines16) do
     pagelib.visible_width(l) == w0, pagelib.visible_width(l))
 end
 
+-- ---- compact mode: 1-char pitch, no east slot, no edge rows -------------
+-- Each check below is written to fail if `compact` degrades to wide mode in
+-- one specific way, so a regression names itself instead of just moving a
+-- column.
+
+local lines3c = maplib.render(grid3, { compact = true })
+check("compact 3x3 renders 3 lines", #lines3c == 3, #lines3c)
+
+-- Mutant: the east-edge slot is still appended (pitch 3, or 2) -> the
+-- visible width would be 6 or 9, not 3.
+for i, l in ipairs(lines3c) do
+  check("compact line " .. i .. " is exactly w visible chars (1-char pitch, no east slot)",
+    pagelib.visible_width(l) == 3, pagelib.visible_width(l))
+end
+
+-- Mutant: the glyph field is still 2 wide -> "A " instead of "A", and the
+-- 2-char glyph "DD" would survive whole instead of truncating to "D".
+local c_row0 = C.green .. "A" .. RESET .. "B" .. " "
+check("compact row0: 1-char colored field + plain field + nil-cell blank",
+  lines3c[1] == c_row0, lines3c[1])
+
+local c_row1 = (C.red .. REV_ON .. "C" .. REV_OFF .. RESET) ..
+  "D" ..
+  (C.yellow .. "E" .. RESET)
+check("compact row1: reverse-video field, 2-char glyph 'DD' truncated to 'D', colored field",
+  lines3c[2] == c_row1, lines3c[2])
+
+local c_row2 = "F" .. "G" .. (C.cyan .. "H" .. RESET)
+check("compact row2: plain fields + trailing colored field", lines3c[3] == c_row2, lines3c[3])
+
+-- Mutant: glyph_field's empty-glyph normalization is skipped under compact
+-- -> `("" ):sub(1, 1)` is "", a zero-width field that silently shortens the
+-- row and desynchronizes every column to its right from cell_at.
+check("compact empty-string glyph renders as exactly one blank char (pitch preserved)",
+  maplib.render(grid_empty_glyph, { compact = true })[1] == " ",
+  "'" .. maplib.render(grid_empty_glyph, { compact = true })[1] .. "'")
+
+-- Mutant: east_edge is still consulted -> a "|" appears between cells.
+local lines_east_c = maplib.render(grid2, {
+  compact = true,
+  east_edge = function(c, r) return east_edges[c .. "," .. r] end,
+})
+check("compact ignores east_edge: line0 is the two glyphs alone, no wall",
+  lines_east_c[1] == "ab", lines_east_c[1])
+check("compact ignores east_edge: line1 is the two glyphs alone, no wall",
+  lines_east_c[2] == "cd", lines_east_c[2])
+
+-- Mutant: south_edge still opts into interleaved edge rows -> 4 lines with
+-- "__" rows between them, doubling the board's height.
+local lines_south_c = maplib.render(grid2, {
+  compact = true,
+  south_edge = function(c, r) return true end,
+})
+check("compact ignores south_edge: exactly h lines, no interleaved edge rows",
+  #lines_south_c == 2, #lines_south_c)
+check("compact ignores south_edge: no '__' anywhere in the output",
+  not (lines_south_c[1] .. lines_south_c[2]):find("_", 1, true))
+
+-- Mutant: col labels are still truncated to 2 and followed by a blank east
+-- slot -> the header line would be "# 0 1 2 " rather than "# 012".
+local lines3ch = maplib.render(grid3,
+  { compact = true, col_headers = true, row_headers = true, origin_label = "XY" })
+check("compact with headers renders 4 lines", #lines3ch == 4, #lines3ch)
+check("compact header line: 1-char origin_label + separator + 1-char col labels",
+  lines3ch[1] == "X" .. " " .. "012", lines3ch[1])
+check("compact headered row0 has the row-number prefix then the compact body",
+  lines3ch[2] == "0" .. " " .. c_row0, lines3ch[2])
+for _, l in ipairs(lines3ch) do
+  check("every compact headered line has equal visible width",
+    pagelib.visible_width(l) == pagelib.visible_width(lines3ch[1]), l)
+end
+
+-- cell_at under compact: x maps straight to c, and -- unlike wide mode --
+-- there is no in-pitch column that reports nil.
+local copts = { compact = true, col_headers = true, row_headers = true }
+local clines = maplib.render(grid3, copts)
+local cgeom = maplib.geometry(grid3, copts)
+check("compact geometry.height matches render() line count",
+  cgeom.height == #clines, cgeom.height .. " vs " .. #clines)
+-- Mutant: total_width still multiplies by 3 -> 11 instead of 5.
+check("compact geometry.width is prefix(2) + w(3)", cgeom.width == 5, cgeom.width)
+for _, l in ipairs(clines) do
+  check("compact geometry.width matches every rendered line's visible width",
+    pagelib.visible_width(l) == cgeom.width, l)
+end
+for r = 0, 2 do
+  for c = 0, 2 do
+    local x, y = 2 + c, 1 + r
+    local gc, gr = cgeom.cell_at(x, y)
+    check(string.format("compact cell_at(%d,%d) -> (%d,%d)", x, y, c, r),
+      gc == c and gr == r, tostring(gc) .. "," .. tostring(gr))
+    -- Content check, not just index arithmetic: the glyph actually drawn at
+    -- that column is the cell's own first char.
+    local want = grid3.cell(c, r)
+    want = (want and want.glyph ~= "" and want.glyph:sub(1, 1)) or " "
+    check(string.format("compact rendered content at (%d,%d) is '%s'", x, y, want),
+      visible_slice(clines[y + 1], x, 1) == want,
+      "got '" .. visible_slice(clines[y + 1], x, 1) .. "'")
+  end
+end
+check("compact: x past the last column is never a cell",
+  cgeom.cell_at(2 + 3, 1) == nil)
+check("compact: the row-header separator column is never a cell",
+  cgeom.cell_at(1, 1) == nil)
+check("compact: the header line is never a cell", cgeom.cell_at(2, 0) == nil)
+
+-- Wide mode is unchanged by all of the above: the same grid still renders at
+-- the 3-char pitch. (Mutant: `compact` leaking into the default.)
+check("wide mode still renders the 3-char pitch after compact was added",
+  maplib.render(grid3, {})[1] == row0, maplib.render(grid3, {})[1])
+
 -- ---- legend: flow + wrap + no color bleed ---------------------------------
 local entries = {
   { glyph = "A", color = C.green,  label = "Ax" },

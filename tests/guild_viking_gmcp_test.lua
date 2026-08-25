@@ -119,15 +119,19 @@ check("nil payload is a no-op", got.SETTLERS == nil)
 frame("Guild.Settlement", "a string")
 check("non-table payload is a no-op", got.SETTLERS == nil)
 
--- ---- Guild.Info / Guild.State are counted, never consumed ------------------
--- Kills: consuming Guild.State's hp. combat.on_composite owns S.hp off the MIP
--- FFF channel; two transports writing the vitals through different code paths
--- is the regression this pins.
+-- ---- Guild.State's vitals route to the VITALS writer ----------------------
+-- This file registers no handler modules, so VITALS has no writer here and the
+-- key is counted unknown under its COMPOSITE name -- which is the point worth
+-- pinning at this layer: `hp` must no longer be counted under its own GMCP
+-- name, because that is what "no writer is mapped for it" looks like.
+--
+-- The writer's behaviour is guild_viking_gmcp_vitals_test.lua's subject.
 reset()
 frame("Guild.State", { guild = "viking", hp = { cur = 5, max = 10 } })
-check("Guild.State hp not applied", protocol.gmcp_stats().applied.HP == nil)
-check("Guild.State hp counted unknown", protocol.gmcp_stats().unknown.hp == 1,
-  protocol.gmcp_stats().unknown.hp)
+check("Guild.State hp is no longer counted under its own name",
+  protocol.gmcp_stats().unknown.hp == nil, protocol.gmcp_stats().unknown.hp)
+check("Guild.State hp is gathered into the VITALS composite",
+  protocol.gmcp_stats().unknown.VITALS == 1, protocol.gmcp_stats().unknown.VITALS)
 
 -- ---- a raising gmcp writer is countable and does not block its siblings --
 -- Kills: routing a writer error into the MIP-scoped stats/print path instead
@@ -501,24 +505,41 @@ check("composite key with no writer is counted unknown",
   protocol.gmcp_stats().unknown.MONUMENTS == 1,
   protocol.gmcp_stats().unknown.MONUMENTS)
 
--- ---- Guild.State stays unconsumed -----------------------------------------
--- Kills: mapping a Guild.State group. Char.Combat owns the attacker fields --
--- it carries the hp percent Guild.State's target group omits -- and hp/chain
--- are owned by the hp-bar triggers. Two GMCP sources on one field is the
--- collision this map exists to prevent.
-for _, k in ipairs({ "hp", "chain", "target", "encounter", "points", "gxp" }) do
-  check("Guild.State " .. k .. " stays unmapped", gmcp_map.mip_key(k) == nil,
-    gmcp_map.mip_key(k))
+-- ---- Guild.State's vitals all resolve to one writer -----------------------
+-- Kills: routing a vitals group anywhere but VITALS -- to its own writer, or
+-- to a second one. The whole block has to reach ONE writer: they share the
+-- S.vitals_gmcp latch and the "absent means unchanged" handling, and a delta
+-- frame can carry any subset of them.
+for _, k in ipairs({ "hp", "sp", "points", "chain", "gxp", "tox", "fx",
+                     "encounter", "target", "ledung", "bars" }) do
+  check("Guild.State " .. k .. " routes to VITALS", gmcp_map.mip_key(k) == "VITALS",
+    tostring(gmcp_map.mip_key(k)))
 end
 
-reset()
-frame("Guild.State", { guild = "viking", hp = { cur = 5, max = 10 },
-                       target = { name = "Ice Troll" } })
-check("Guild.State hp counted, not applied",
-  protocol.gmcp_stats().unknown.hp == 1, protocol.gmcp_stats().unknown.hp)
-check("Guild.State target counted, not applied",
-  protocol.gmcp_stats().unknown.target == 1,
-  protocol.gmcp_stats().unknown.target)
+-- Char.Combat keeps the attacker fields. It carries the enemy hp percent that
+-- Guild.State's target group omits, so it stays the source for those three --
+-- and the two writers must not land on a shared field. `target`/`encounter`
+-- write en5/ens/rndz/combat; Char.Combat writes mob_name_full/estatus_pct/
+-- combat_rounds. Disjoint, and this is the check that keeps them so.
+do
+  local combat = require("combat")
+  local S2 = require("state").S
+  S2.mob_name_full, S2.estatus_pct, S2.combat_rounds = "SENTINEL", 4242, 4242
+  frame("Guild.State", { guild = "viking",
+                         target = { name = "Ice Troll", name5 = "Ice T",
+                                    hp_status = "low" },
+                         encounter = { active = 1, rounds = 3 } })
+  check("a Guild.State frame does not touch Char.Combat's attacker fields",
+    S2.mob_name_full == "SENTINEL" and S2.estatus_pct == 4242
+      and S2.combat_rounds == 4242,
+    S2.mob_name_full .. "/" .. S2.estatus_pct .. "/" .. S2.combat_rounds)
+
+  S2.en5, S2.ens, S2.rndz = "SENTINEL", "SENTINEL", 4242
+  combat.on_gmcp_combat({ attacker = "Ice Troll", attacker_hp = 40, rounds = 9 })
+  check("a Char.Combat frame does not touch the vitals writer's target fields",
+    S2.en5 == "SENTINEL" and S2.ens == "SENTINEL" and S2.rndz == 4242,
+    S2.en5 .. "/" .. S2.ens .. "/" .. S2.rndz)
+end
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")

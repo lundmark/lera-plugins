@@ -300,15 +300,20 @@ local function to_screen(root_w, root_h, lx, ly)
   return x + 1 + lx, y + 1 + ly
 end
 
--- maplib.lua's own fixed pitch (maplib.lua's cell_at: `c = math.floor(bx /
--- 3)`) -- each grid cell occupies a 3-column field (a 2-char glyph slot
--- plus one east-edge slot), and neither war_campaign.lua nor war_battle.lua
--- passes col_headers/row_headers (both call maplib.render/geometry with
--- `{}`), so the grid's own body starts at wrapper-local column 0 with no
--- header offset to add. Converts a grid column `gc` to the wrapper-local x
--- to hand to to_screen -- clicking anywhere in the glyph's own 2 columns
--- (this uses the first) hits the cell; the 3rd column is the edge slot.
-local function cell_lx(gc) return gc * 3 end
+-- Grid column -> wrapper-local x, for to_screen. None of the three boards
+-- exercised here passes col_headers/row_headers, so each grid's body starts
+-- at wrapper-local column 0 with no header offset to add -- only the pitch
+-- differs, and the two boards' pitches are NOT interchangeable:
+--
+--   wide_lx    -- war_campaign, maplib's default 3-column pitch (2-char
+--                 glyph slot + one east-edge slot). Clicking anywhere in the
+--                 glyph's own 2 columns hits the cell (this uses the first);
+--                 the 3rd column is the edge slot and hit-tests to nil.
+--   compact_lx -- war_battle and the territory map, which render with
+--                 maplib's `compact`: a 1-column pitch, so the grid column
+--                 IS the x. Every column is a cell; there is no edge slot.
+local function wide_lx(gc) return gc * 3 end
+local function compact_lx(gc) return gc end
 
 -- =============================================================================
 -- Scenario A (Critical #1 RED before the fix): campaign select-own-stack,
@@ -338,7 +343,7 @@ do
   local off = war_campaign.grid_line_offset(inner_w)
 
   -- Down+up on (0,0) -- the host's own cell -- selects it.
-  local dcol, drow = to_screen(root_w, root_h, cell_lx(0), off + 0)
+  local dcol, drow = to_screen(root_w, root_h, wide_lx(0), off + 0)
   send_calls = {}
   check("a REAL down on the host's own cell consumes",
     real_popup.handle_pointer({ kind = "down", button = "left", x = dcol, y = drow }) == true)
@@ -349,7 +354,7 @@ do
     find_plain(war_campaign.lines(inner_w), "Selected A"))
 
   -- Queue a waypoint at grid (1,1) ("B2") via a second real down+up pair.
-  local qcol, qrow = to_screen(root_w, root_h, cell_lx(1), off + 1)
+  local qcol, qrow = to_screen(root_w, root_h, wide_lx(1), off + 1)
   send_calls = {}
   real_popup.handle_pointer({ kind = "down", button = "left", x = qcol, y = qrow })
   real_popup.handle_pointer({ kind = "up", button = "left", x = qcol, y = qrow })
@@ -435,7 +440,7 @@ do
   local off = war_battle.grid_line_offset(inner_w)
 
   -- Select the own unit at A1 (gc=0, gr=1) via a real matched down+up pair.
-  local scol, srow = to_screen(root_w, root_h, cell_lx(0), off + 1)
+  local scol, srow = to_screen(root_w, root_h, compact_lx(0), off + 1)
   send_calls = {}
   real_popup.handle_pointer({ kind = "down", button = "left", x = scol, y = srow })
   real_popup.handle_pointer({ kind = "up", button = "left", x = scol, y = srow })
@@ -450,7 +455,7 @@ do
   check("down on the real [Actions] row opens the turn-phase menu",
     last_menu_open ~= nil and menu_has_label(last_menu_open, "Advance Turn"))
 
-  local ecol, erow = to_screen(root_w, root_h, cell_lx(1), off + 0)
+  local ecol, erow = to_screen(root_w, root_h, compact_lx(1), off + 0)
   send_calls = {}
   real_popup.handle_pointer({ kind = "up", button = "left", x = ecol, y = erow })
   check("releasing over the enemy cell after an [Actions] down sends NOTHING",
@@ -507,7 +512,7 @@ do
   local _, _, bw = box_geometry(root_w, root_h)
   local inner_w = bw - 2
   local off_c = war_campaign.grid_line_offset(inner_w)
-  local scol, srow = to_screen(root_w, root_h, cell_lx(0), off_c + 0)
+  local scol, srow = to_screen(root_w, root_h, wide_lx(0), off_c + 0)
 
   -- war_campaign.selected/queue are module-local singletons that persist
   -- across scenarios by design (see war_campaign.lua's own M.reset() doc
@@ -549,7 +554,7 @@ do
 
   -- Real down on the battle's own unit (gc=0, gr=1, "A1") -- consumed by
   -- war_battle, pinning this gesture to it.
-  local dcol, drow = to_screen(root_w, root_h, cell_lx(0), off_b + 1)
+  local dcol, drow = to_screen(root_w, root_h, compact_lx(0), off_b + 1)
   send_calls = {}
   check("a REAL down on the battle unit consumes (war_battle, battle takes priority)",
     real_popup.handle_pointer({ kind = "down", button = "left", x = dcol, y = drow }) == true)
@@ -611,13 +616,13 @@ do
 
   -- Select the own unit, then order it to the enemy cell -- both as real
   -- matched down+up pairs, with S.battle untouched throughout.
-  local scol, srow = to_screen(root_w, root_h, cell_lx(0), off + 1)
+  local scol, srow = to_screen(root_w, root_h, compact_lx(0), off + 1)
   send_calls = {}
   real_popup.handle_pointer({ kind = "down", button = "left", x = scol, y = srow })
   real_popup.handle_pointer({ kind = "up", button = "left", x = scol, y = srow })
   check("positive control: selecting the own unit never sends", #send_calls == 0)
 
-  local ecol, erow = to_screen(root_w, root_h, cell_lx(1), off + 0)
+  local ecol, erow = to_screen(root_w, root_h, compact_lx(1), off + 0)
   real_popup.handle_pointer({ kind = "down", button = "left", x = ecol, y = erow })
   real_popup.handle_pointer({ kind = "up", button = "left", x = ecol, y = erow })
   check("positive control: ordering the unit sends the exact command with no mode flip in play",
@@ -657,7 +662,7 @@ do
   local inner_w = bw - 2
 
   local off = map.grid_line_offset(inner_w)
-  local pcol, prow = to_screen(root_w, root_h, cell_lx(2), off + 0)
+  local pcol, prow = to_screen(root_w, root_h, compact_lx(2), off + 0)
 
   -- Review round 1, Minor 3: popup.lua's own handle_pointer (line ~220)
   -- returns true for EVERY down inside the popup rect regardless of
@@ -700,7 +705,7 @@ do
 
   -- Fail-closed (the brief's own case): down on the POI cell, release over
   -- a DIFFERENT, non-POI cell (0,0) -- must not open the menu or send.
-  local ocol, orow = to_screen(root_w, root_h, cell_lx(0), off + 0)
+  local ocol, orow = to_screen(root_w, root_h, compact_lx(0), off + 0)
   send_calls, last_menu_open = {}, nil
   real_popup.handle_pointer({ kind = "down", button = "left", x = pcol, y = prow })
   real_popup.handle_pointer({ kind = "up", button = "left", x = ocol, y = orow })
@@ -733,7 +738,7 @@ do
   })
   check("two-POI fixture replaced the live list (scenario E)", #S.vmap_pois == 2, #S.vmap_pois)
 
-  local bcol, brow = to_screen(root_w, root_h, cell_lx(1), off + 0)
+  local bcol, brow = to_screen(root_w, root_h, compact_lx(1), off + 0)
   send_calls, last_menu_open = {}, nil
   real_popup.handle_pointer({ kind = "down", button = "left", x = pcol, y = prow }) -- down on A (2,0)
   real_popup.handle_pointer({ kind = "up", button = "left", x = bcol, y = brow })   -- up on B (1,0)
@@ -768,7 +773,7 @@ do
   local _, _, bw = box_geometry(root_w, root_h)
   local inner_w = bw - 2
   local off = map.grid_line_offset(inner_w)
-  local pcol, prow = to_screen(root_w, root_h, cell_lx(1), off + 0)
+  local pcol, prow = to_screen(root_w, root_h, compact_lx(1), off + 0)
 
   -- A right down inside the popup, then the matching right up: the menu must
   -- open. If the module had NOT consumed the down, popup.lua would never have
@@ -807,7 +812,7 @@ do
   last_menu_open = nil
   real_popup.handle_pointer({ kind = "down", button = "right", x = pcol, y = prow })
   real_popup.handle_pointer({ kind = "up", button = "right", x = pcol, y = prow })
-  local pcol2, prow2 = to_screen(root_w, root_h, cell_lx(2), off + 0)
+  local pcol2, prow2 = to_screen(root_w, root_h, compact_lx(2), off + 0)
   last_menu_open = nil
   real_popup.handle_pointer({ kind = "down", button = "left", x = pcol2, y = prow2 })
   real_popup.handle_pointer({ kind = "up", button = "left", x = pcol2, y = prow2 })

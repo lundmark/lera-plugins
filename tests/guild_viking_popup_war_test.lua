@@ -155,7 +155,6 @@ end
 
 local S = state.S
 local C, RESET = pagelib.C, pagelib.RESET
-local REV_ON, REV_OFF = "\27[7m", "\27[27m"
 local WIDTH = 76
 
 -- Seeds a campaign war map through the production GMCP path. `rows`/`units`
@@ -244,13 +243,25 @@ local function reset_all()
   send_calls, last_menu_open, menu_close_count = {}, nil, 0
 end
 
--- Exact-field helper for grid assertions, same idiom as
--- guild_viking_popup_cityplan_test.lua's `field()`.
+-- Exact-field helpers for grid assertions, same idiom as
+-- guild_viking_popup_cityplan_test.lua's `field()`. The two boards in this
+-- suite render at DIFFERENT maplib pitches and each needs its own helper:
+--
+--   field()  -- war_campaign, wide 3-char pitch (2-char glyph field + the
+--              reserved east-edge slot). It stays wide because an enemy
+--              army's marker is its own id string, which can be 2 chars.
+--   bfield() -- war_battle, compact 1-char pitch. Its glyphs are all single
+--              characters and it draws no headers, so the wide pitch spent
+--              two of every three columns on padding.
+--
+-- There is deliberately no reverse-video variant here: `cell.sel` is
+-- maplib's own rendering, covered exactly in
+-- tests/guild_viking_maplib_test.lua for both pitches.
 local function field(color, glyph)
   return color .. glyph .. " " .. RESET
 end
-local function field_sel(color, glyph)
-  return color .. REV_ON .. glyph .. " " .. REV_OFF .. RESET
+local function bfield(color, glyph)
+  return color .. glyph .. RESET
 end
 
 -- =============================================================================
@@ -614,14 +625,14 @@ local function bgrid_line(gr) return blines[boffset + gr + 1] end
 -- gr=0 (top, row_game=2): A2 = you-unit override (huscarls "H", bright_green);
 -- B2 = forest '*' green; C2 = enemy ordinal-2 override ("2", bright_red).
 check("top row: A2 unit override, B2 forest, C2 ordinal-2 enemy override",
-  bgrid_line(0) == field(C.bright_green, "H") .. " " .. field(C.green, "*") .. " " ..
-    field(C.bright_red, "2") .. " ", bgrid_line(0))
+  bgrid_line(0) == bfield(C.bright_green, "H") .. bfield(C.green, "*") ..
+    bfield(C.bright_red, "2"), bgrid_line(0))
 
 -- gr=1 (bottom, row_game=1, in deploy zone): A1 = stakes 'v' yellow;
 -- B1 = empty in-dz cell '+' bright_cyan; C1 = dugout 'u' white.
 check("bottom row: A1 stakes, B1 deploy-zone '+', C1 dugout",
-  bgrid_line(1) == field(C.yellow, "v") .. " " .. field(C.bright_cyan, "+") .. " " ..
-    field(C.white, "u") .. " ", bgrid_line(1))
+  bgrid_line(1) == bfield(C.yellow, "v") .. bfield(C.bright_cyan, "+") ..
+    bfield(C.white, "u"), bgrid_line(1))
 
 check("legend: side colours + deploy hint present",
   find_plain(blines, "green = you") and find_plain(blines, "red = foe") and find_plain(blines, "+ deploy"))

@@ -22,7 +22,8 @@
 -- the ctx.cell_from_xy contract, see popups.lua's header comment) is
 -- therefore a LERA ADDITION as far as "vmp_*" goes, not a port of a live
 -- LEGACY interaction -- exactly the same category as the edge-wall overlay
--- disclosed further down. It gives the text view a hover affordance
+-- this module used to draw and no longer does (see the compact-rendering
+-- note further down). It gives the text view a hover affordance
 -- analogous to what the icon view's tooltip WOULD have shown had this task
 -- ported that branch, using the tooltip's own text format/vocabulary
 -- (still ported verbatim: VMAP_TIP_TERR/VMAP_TIP_SYM below, and the
@@ -87,12 +88,21 @@
 --
 -- ColourNote status messages ("you are not on the map" / "No locations
 -- available to travel to" / "No passable route to X" / "Already at X" /
--- "Traveling to X (n steps)") are display-only and dropped, per the SAME
--- convention every pointer handler in this plugin already follows
--- (popups/war_campaign.lua's "Click a host first" note). The guard/branch
--- LOGIC each message rode along with -- no-op on an unknown player
--- position, no send on "no route" or "already there" -- is ported and
--- tested, just silently.
+-- "Traveling to X (n steps)") ARE ported, through `status()` below. They
+-- were originally dropped as "display-only", per the convention every other
+-- pointer handler in this plugin follows (popups/war_campaign.lua's "Click a
+-- host first" note). That was wrong here, and reverting it is a deliberate
+-- deviation from that convention rather than an oversight:
+--
+-- Every other dropped note in this plugin annotates a gesture whose outcome
+-- is visible anyway -- war_campaign's "Click a host first" accompanies a
+-- click that plainly did not select anything. These five annotate a MENU
+-- that does not appear, or a picked destination that sends nothing. With the
+-- note dropped, "Travel to..." is indistinguishable from a broken menu item:
+-- the two guards in open_poi_menu below are the ONLY reason it can no-op,
+-- and neither is discoverable from the screen. Reported as a real bug from
+-- live play; the guard LOGIC was correct and tested all along, and only the
+-- silence was the defect.
 --
 -- No pacing to port (review round 1 correction -- the original version of
 -- this note claimed LEGACY paced sends and disclosed dropping that; the
@@ -307,6 +317,52 @@ local TOWN_SHORT = {
 local M = {}
 M.title = "Territory Map"
 
+-- LEGACY's ColourNote("white", "", ...), in this plugin's own goldenrod
+-- convention (the colour popups.lua and init.lua already use for every
+-- "Viking: ..." line -- LEGACY's literal white is its note colour for
+-- everything, not a choice about these messages).
+--
+-- The "[vmap] " prefix is part of each message rather than added here,
+-- because LEGACY is not consistent about it: "Already at X" carries no
+-- prefix while its three siblings do (11792, 11813, 12347, 12353, 12355,
+-- 12357). Ported verbatim, quirk included -- see the call sites.
+local function status(fmt, ...)
+  buffer.color_print(nil, "DAA520",
+    select("#", ...) > 0 and string.format(fmt, ...) or fmt)
+end
+
+-- What state the territory-map data is actually in. Two places explain
+-- themselves from this -- the no-data pane in M.lines and the travel guards'
+-- reason line below -- so the predicate lives here once. `vmap_seen` and
+-- `vmap_w` mean subtly different things (a frame that ARRIVED saying the
+-- grid is empty is not a frame that never came) and getting the two
+-- explanations to disagree about that would be worse than giving neither.
+local function map_data_state()
+  if not S.vmap_seen then return "no_frame" end
+  if (S.vmap_w or 0) == 0 then return "no_grid" end
+  return "have_grid"
+end
+
+-- Why the player has no position on the map. LEGACY said only that travel
+-- was unavailable, which is the least useful half: "you are not on the map"
+-- reads as a statement about the player when two of its three causes are not
+-- about them at all. Reported as a real question from live play -- the guard
+-- had fired and there was no way to tell which cause it was.
+--
+-- Only ever consulted when vmap_px < 0. Stepping OFF the grid mid-session
+-- does not land here: the server keeps sending the last known coordinates
+-- with `active = 0`, so px stays >= 0 and the header line says "(last
+-- known)" instead (see pre_grid_lines).
+local function position_unknown_reason()
+  local st = map_data_state()
+  if st == "no_frame" then
+    return "no Guild.Map frame received (check /vik source)"
+  elseif st == "no_grid" then
+    return "the guild has no biome grid"
+  end
+  return "the map has arrived, but with no position for you on it"
+end
+
 -- Module-local hover/info line (a lera addition, not a port of a live
 -- LEGACY interaction -- see the module doc comment above). Declared here,
 -- ahead of every function that reads or writes it, so it is a proper
@@ -364,35 +420,25 @@ local function make_grid(poi_at)
   }
 end
 
--- Edge passability strings are "0" (blocked) / "1" (passable) per-column
--- characters, one string per row. Both vmap_east_edges and vmap_south_edges
--- share vmap_rows' 1-INDEXED-for-a-0-based-wire-row storage (handlers/
--- voyage.lua's mee_row/mes_row, LEGACY 2574-2579), so `r + 1` here too. Only
--- an EXPLICIT "0" draws a wall; a missing row/char (no data for that edge)
--- draws nothing, rather than defaulting to "blocked" or "open" for data
--- that was simply never sent.
-local function edge_blocked(edge_rows, r, c)
-  local s = edge_rows[r + 1]
-  if not s then return false end
-  return s:sub(c + 1, c + 1) == "0"
-end
-
-local function east_edge(c, r) return edge_blocked(S.vmap_east_edges or {}, r, c) end
-local function south_edge(c, r) return edge_blocked(S.vmap_south_edges or {}, r, c) end
-
--- south_edge is passed to maplib only when there is at least one south-edge
--- row of data -- maplib's own doc calls vertical space "expensive," and
--- unconditionally doubling every grid's height for a field that is empty
--- for most of the game would waste it for nothing. east_edge has no such
--- cost (maplib always reserves the east slot's width regardless), so it is
--- always passed.
-local function grid_opts()
-  local opts = { east_edge = east_edge }
-  if next(S.vmap_south_edges or {}) ~= nil then
-    opts.south_edge = south_edge
-  end
-  return opts
-end
+-- Compact rendering: one character per cell, no wall overlays.
+--
+-- This board used to render at maplib's wide 3-char pitch with the edge-wall
+-- overlay on top: `S.vmap_east_edges`/`S.vmap_south_edges` (passability
+-- strings, "0" = blocked) drove maplib's `east_edge`/`south_edge` hooks, so
+-- a blocked east edge drew "|" in the pitch's third column and a blocked
+-- south edge drew "__" on an interleaved row below every cell row. That
+-- overlay was never part of the map LEGACY draws -- it was a lera addition,
+-- the same category as the hover line (see the module doc comment above) --
+-- and between the padding it needed and the blank edge row under every cell
+-- row it cost the terrain grid roughly three times its width and twice its
+-- height while the terrain itself is what the board is for. Both are gone:
+-- the grid renders exactly `vmap_w` characters per row and `vmap_h` rows.
+--
+-- The edge data itself is untouched and still functionally live: handlers/
+-- voyage.lua decodes and stores it, and pathfinding.lua's BFS reads both
+-- planes, so this module's own POI travel menu still routes around walls.
+-- They simply are not drawn any more -- nothing in this file reads them.
+local GRID_OPTS = { compact = true }
 
 -- ---------------------------------------------------------------------------
 -- Pre-grid lines (header + position + legend) -- shared by lines(),
@@ -487,8 +533,10 @@ function M.lines(width)
   -- The two ways this pane can be empty have different causes and only one of
   -- them is the client's, so they are reported separately.
   if (S.vmap_w or 0) == 0 then
+    -- map_data_state() cannot answer "have_grid" here (this branch IS
+    -- vmap_w == 0), so the two cases below are exhaustive.
     local msg
-    if S.vmap_seen then
+    if map_data_state() == "no_grid" then
       -- A frame arrived and said the grid is 0 wide. _v_map() returns its
       -- empty structure when the biome daemon is missing, the world is
       -- regenerating, the guild has no settlements yet, or the grid is
@@ -503,7 +551,7 @@ function M.lines(width)
 
   local poi_at = poi_lookup()
   local grid = make_grid(poi_at)
-  for _, l in ipairs(maplib.render(grid, grid_opts())) do
+  for _, l in ipairs(maplib.render(grid, GRID_OPTS)) do
     out[#out + 1] = l
   end
 
@@ -521,7 +569,7 @@ end
 function M.geometry(width)
   if (S.vmap_w or 0) == 0 then return nil end
   local grid = make_grid(poi_lookup())
-  return maplib.geometry(grid, grid_opts())
+  return maplib.geometry(grid, GRID_OPTS)
 end
 
 function M.grid_line_offset(width)
@@ -614,11 +662,30 @@ end
 -- every command in the path silently swallowed by its on_send governance,
 -- not just the first (see plugins/README.md's automation section).
 local function travel_to(poi)
-  if (S.vmap_px or -1) < 0 then return end -- "[vmap] Player position unknown"
+  -- viking_poi_menu_travel's four ColourNotes (12347-12357), verbatim. Two
+  -- LEGACY quirks are reproduced rather than tidied: the name is the RAW
+  -- wire name (`vmap_poi_selected.name`, so lowercase -- the display-cased
+  -- form appears only in the menu LABEL, which goes through
+  -- vmap_display_name), and "Already at" is the one line with no "[vmap] "
+  -- prefix. Also verbatim: "(1 steps)" -- the count is interpolated with no
+  -- plural handling.
+  local name = poi.name
+  if (S.vmap_px or -1) < 0 then
+    status("[vmap] Player position unknown")
+    status("[vmap]   %s", position_unknown_reason())
+    return
+  end
   local path = pathfinding.bfs(S.vmap_px, S.vmap_py, poi.x, poi.y)
-  if not path then return end               -- "[vmap] No passable route to X"
-  if #path == 0 then return end             -- "Already at X"
-  for _, dir in ipairs(path) do              -- "[vmap] Traveling to X (n steps)"
+  if not path then
+    status("[vmap] No passable route to %s", name)
+    return
+  end
+  if #path == 0 then
+    status("Already at %s", name)
+    return
+  end
+  status("[vmap] Traveling to %s (%d steps)", name, #path)
+  for _, dir in ipairs(path) do
     mud.send(dir)
   end
 end
@@ -633,15 +700,27 @@ M.travel_to = travel_to
 -- viking_show_poi_menu (guild_viking.lua:11789-11814), retargeted onto
 -- this port's own trigger -- see the module doc comment's "Retargeted
 -- trigger" section above. The `state.vmap_px < 0` guard (11791-11794) and
--- the empty-list guard (11809-11812) are both ported; in practice the
--- empty-list guard is unreachable via THIS trigger (a POI cell was just
--- clicked, so poi_menu_items() can never come back empty), but it stays
--- for the same reason pathfinding.lua kept LEGACY's dead `explored`
--- counter -- porting the function, not "cleaning it up".
+-- the empty-list guard (11809-11812) are both ported, and BOTH are live.
+-- (An earlier version of this note called the empty-list guard unreachable
+-- because a POI cell had just been clicked. That is true of the POI-cell
+-- click alone, but this function is exported -- page_menu.lua's "Travel
+-- to..." row and pages/people.lua's errand button both call it with no
+-- click behind them, so either guard can fire with nothing on screen to
+-- explain it. Hence the messages.)
 local function open_poi_menu()
-  if (S.vmap_px or -1) < 0 then return end
+  -- These two guards are the only way "Travel to..." can open nothing, so
+  -- each says which one it was -- see the module doc comment's note on why
+  -- this module reports its no-ops where its siblings stay quiet.
+  if (S.vmap_px or -1) < 0 then
+    status("[vmap] Travel unavailable: you are not on the map.")
+    status("[vmap]   %s", position_unknown_reason())
+    return
+  end
   local pois = poi_menu_items()
-  if #pois == 0 then return end
+  if #pois == 0 then
+    status("[vmap] No locations available to travel to.")
+    return
+  end
   local items = {}
   for _, poi in ipairs(pois) do
     items[#items + 1] = { label = poi_menu_label(poi), value = poi }

@@ -64,6 +64,19 @@ local state = require("state")
 local page_opts = require("page_opts")
 local track = require("popups.pointer_track").tracker()
 
+-- One character per cell. This board draws no column/row headers and never
+-- populates maplib's east/south edge hooks, so at maplib's wide 3-char pitch
+-- two of every three columns were padding and a reserved wall slot -- on a
+-- plan whose grid is the plan's own dimension plus a margin on each side,
+-- that is most of the popup's width spent on nothing. `compact` drops both.
+--
+-- The one cost (see maplib's COMPACT note): a glyph longer than one char
+-- truncates to its first. A building's glyph is wire data --
+-- `tostring(b.glyph or "?")` in handlers/city.lua -- so a two-character
+-- glyph from the mudlib would lose its second char. Every glyph it sends
+-- today is a single character.
+local GRID_OPTS = { compact = true }
+
 local S = state.S
 local C = pagelib.C
 local RESET = pagelib.RESET
@@ -369,7 +382,7 @@ function M.lines(width)
   if not has_grid then return out end
 
   local cp = S.city_plan
-  for _, l in ipairs(maplib.render(make_grid(cp), {})) do out[#out + 1] = l end
+  for _, l in ipairs(maplib.render(make_grid(cp), GRID_OPTS)) do out[#out + 1] = l end
   out[#out + 1] = hover ~= "" and pagelib.trunc(hover, width) or ""
   for _, l in ipairs(footer_lines(width, cp)) do out[#out + 1] = l end
   if page_opts.get("show_city_plan_legend") then
@@ -384,7 +397,7 @@ end
 function M.geometry(width)
   local _, has_grid = pre_grid_lines(width)
   if not has_grid then return nil end
-  return maplib.geometry(make_grid(S.city_plan), {})
+  return maplib.geometry(make_grid(S.city_plan), GRID_OPTS)
 end
 
 function M.grid_line_offset(width)

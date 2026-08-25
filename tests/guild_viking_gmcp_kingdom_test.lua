@@ -232,13 +232,17 @@ st({ missions_reg = "x" })
 check("an unreadable counter falls back to -1, not 0",
       S.mission_reg_left == -1, S.mission_reg_left)
 
--- The trigger-owned groups must stay unmapped, so they are counted under their
--- own names rather than routed to a second writer.
-local before = protocol.gmcp_stats().unknown["hp"] or 0
+-- The vitals groups are gathered into the VITALS composite rather than being
+-- counted under their own names. This file registers no vitals handler, so
+-- VITALS itself has no writer and is counted -- which is exactly what proves
+-- the gathering happened: an ungathered `hp` would be counted as `hp`.
 st({ hp = { cur = 100, max = 120 }, points = { vitka = 5 }, ledung = { charges = 2 } })
 local unk = protocol.gmcp_stats().unknown
-check("trigger-owned State groups are counted, not applied",
-      (unk["hp"] or 0) > before and unk["points"] ~= nil and unk["ledung"] ~= nil)
+check("vitals groups are gathered into VITALS, not counted individually",
+      unk["VITALS"] ~= nil and unk["hp"] == nil and unk["points"] == nil
+        and unk["ledung"] == nil,
+      table.concat({ tostring(unk["VITALS"]), tostring(unk["hp"]),
+                     tostring(unk["points"]), tostring(unk["ledung"]) }, "/"))
 
 -- ---- envelope --------------------------------------------------------------
 protocol.on_gmcp("Guild.Kingdom", { guild = "berserker",

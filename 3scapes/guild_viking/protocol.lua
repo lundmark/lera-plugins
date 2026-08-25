@@ -2,6 +2,9 @@
 -- their wire format to ingest(key, value); the parsers never know the source.
 local util = require("util")
 local gmcp_map = require("gmcp_map")
+-- Only for the vitals latch in protocol.source below -- this layer otherwise
+-- owns no state. state.lua requires nothing, so there is no cycle.
+local S = require("state").S
 
 local protocol = {}
 
@@ -494,6 +497,20 @@ end
 function protocol.source(mode)
   if mode == "mip" or mode == "gmcp" or mode == "auto" then
     source_mode = mode
+    -- The vitals latch has to be released when GMCP is switched off, and it is
+    -- the one latch this function has to touch by hand. Every other GMCP-fed
+    -- key simply blanks under `source mip` -- there is no MIP handler left to
+    -- take over, which the command's own help says. The vitals block is
+    -- different: its legacy transport is combat.lua's hp-bar triggers, which
+    -- still work, and they stand down on S.vitals_gmcp. Leaving it set would
+    -- stand them down with nothing replacing them, so the bars would hold the
+    -- last GMCP frame's numbers indefinitely -- the worst of the three
+    -- outcomes, because a frozen bar looks live.
+    --
+    -- Only cleared, never set: the latch means "a vitals frame has arrived",
+    -- so switching back to gmcp/auto re-earns it on the next frame rather than
+    -- asserting it here for a frame that may never come.
+    if mode == "mip" then S.vitals_gmcp = false end
   end
   return source_mode
 end

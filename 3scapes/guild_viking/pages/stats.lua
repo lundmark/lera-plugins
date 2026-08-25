@@ -156,13 +156,28 @@ function M.lines(width)
   add(bar_row(width, "Rad:", S.rad, math.max(S.mrad, 1), S.rad_delta,
     pagelib.pct_color(S.rad, S.mrad)))
 
-  -- Fury: derived from the raw "[***-------]" token (7223-7231) -- count of
-  -- '*' vs total inner chars, no delta.
+  -- Fury. Two sources, and they disagree on shape.
+  --
+  -- Guild.State sends points.fury/mfury as integers, which is what this row
+  -- actually wants, so they win when present. Otherwise fall back to LEGACY's
+  -- own derivation (7223-7231) from the rendered "[***-------]" token the
+  -- hp-bar trigger scrapes: count '*' against the total inner width. That
+  -- fallback is lossy by construction -- it can only ever report a maximum
+  -- equal to however many cells the bar was drawn with -- which is why the
+  -- integers are preferred rather than merely accepted.
+  --
+  -- The test is `fury_max ~= nil`, not truthiness: a maximum of 0 is a real
+  -- state (no fury capacity yet) and must not fall through to the string.
   do
-    local fury_raw = (S.fury and S.fury ~= "") and S.fury or "[----------]"
-    local fury_inner = fury_raw:match("^%[(.-)%]$") or fury_raw
-    local fury_filled = select(2, fury_inner:gsub("%*", ""))
-    local fury_total = #fury_inner
+    local fury_filled, fury_total
+    if S.fury_max ~= nil then
+      fury_filled, fury_total = S.fury_cur or 0, S.fury_max
+    else
+      local fury_raw = (S.fury and S.fury ~= "") and S.fury or "[----------]"
+      local fury_inner = fury_raw:match("^%[(.-)%]$") or fury_raw
+      fury_filled = select(2, fury_inner:gsub("%*", ""))
+      fury_total = #fury_inner
+    end
     add(bar_row(width, "Fury:", fury_filled, fury_total > 0 and fury_total or 1, nil, C.red))
   end
 

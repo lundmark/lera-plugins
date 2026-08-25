@@ -49,6 +49,12 @@ buffer = {
     printed[#printed + 1] = table.concat(parts)
   end,
 }
+local function printed_has(text)
+  for _, line in ipairs(printed) do
+    if line:find(text, 1, true) then return true end
+  end
+  return false
+end
 
 -- ---- wm.popup facade stub (identical to guild_viking_popups_test.lua's) ----
 local is_open_flag = false
@@ -241,12 +247,15 @@ local width = 76
 local offset = map.grid_line_offset(width)
 local lines = map.lines(width)
 
-local row0 = EXPECT_COLOR.p .. "p " .. RESET .. " " ..
-             EXPECT_COLOR.h .. "h " .. RESET .. " " ..
-             EXPECT_COLOR["."] .. ". " .. RESET .. " "
-local row1 = EXPECT_COLOR.A .. "A " .. RESET .. " " ..
-             EXPECT_COLOR.f .. "f " .. RESET .. " " ..
-             EXPECT_COLOR.W .. "W " .. RESET .. " "
+-- Compact rendering (maplib `compact`): one visible char per cell, so a row
+-- is exactly vmap_w chars wide with no inter-cell padding and no east-edge
+-- slot. Each field is just its colored glyph.
+local function field(sym)
+  return EXPECT_COLOR[sym] .. sym .. RESET
+end
+
+local row0 = field("p") .. field("h") .. field(".")
+local row1 = field("A") .. field("f") .. field("W")
 
 check("grid row0 (p/h/.) renders exact glyph+color fields, wire row 0 (VMR00)",
   lines[offset + 1] == row0, lines[offset + 1])
@@ -264,9 +273,7 @@ seed_vmap({
 
 offset = map.grid_line_offset(width)
 lines = map.lines(width)
-local row0_poi = EXPECT_COLOR.p .. "p " .. RESET .. " " ..
-                  EXPECT_COLOR.M .. "M " .. RESET .. " " ..
-                  EXPECT_COLOR["."] .. ". " .. RESET .. " "
+local row0_poi = field("p") .. field("M") .. field(".")
 check("POI at (1,0) overrides the terrain glyph/color with its symbol",
   lines[offset + 1] == row0_poi, lines[offset + 1])
 
@@ -281,9 +288,7 @@ seed_vmap({
 
 offset = map.grid_line_offset(width)
 lines = map.lines(width)
-local row1_player = EXPECT_COLOR.A .. "A " .. RESET .. " " ..
-                     EXPECT_COLOR.f .. "f " .. RESET .. " " ..
-                     EXPECT_COLOR.X .. "X " .. RESET .. " "
+local row1_player = field("A") .. field("f") .. field("X")
 check("player position (2,1) wins over a co-located POI and terrain",
   lines[offset + 2] == row1_player, lines[offset + 2])
 
@@ -294,7 +299,15 @@ end
 check("header shows the player's position", pos_line_found)
 
 -- =============================================================================
--- east/south edge overlays
+-- east/south edge data is stored but NOT drawn
+--
+-- This board renders compact (one char per cell). The edge-wall overlay it
+-- used to draw -- "|" in a third pitch column for a blocked east edge, "__"
+-- on an interleaved row below every cell row for a blocked south edge -- is
+-- gone, so the grid is exactly vmap_w chars by vmap_h lines regardless of
+-- what edge data arrived. The state fields are still decoded and stored
+-- (handlers/voyage.lua's job, locked by its own tests); this asserts nothing
+-- here consumes them into the rendered grid.
 -- =============================================================================
 reset_vmap()
 seed_vmap({
@@ -307,26 +320,28 @@ check("MEE00/MES00 landed at the real 1-indexed storage position",
 
 offset = map.grid_line_offset(width)
 lines = map.lines(width)
-local field = EXPECT_COLOR.p .. "p " .. RESET
-check("east edge: wall right of (0,0)",
-  lines[offset + 1] == field .. "|" .. field .. " ", lines[offset + 1])
-check("south edge row (interleaved): wall under (1,0), none under (0,0)",
-  lines[offset + 2] == "  " .. " " .. "__" .. " ", lines[offset + 2])
+local plain_row = field("p") .. field("p")
+check("east-edge data present: row0 is the two glyphs alone, no '|' wall",
+  lines[offset + 1] == plain_row, lines[offset + 1])
+check("south-edge data present: row1 is the next CELL row, not an interleaved "
+  .. "'__' edge row",
+  lines[offset + 2] == plain_row, lines[offset + 2])
+-- The height check is what a resurrected south-edge overlay would break
+-- first: it doubles the grid section from h lines to 2h.
+check("south-edge data present: the grid section is still exactly h lines",
+  #lines == offset + S.vmap_h + 1, #lines)
 
--- no south-edge data at all -> no interleaved edge rows (grid stays h lines,
--- not 2h): total = pre-grid lines + h grid rows + 1 hover line (no towns
--- seeded).
+-- ...and identically with no edge data at all, so the two cases are
+-- indistinguishable in the output.
 reset_vmap()
 seed_vmap({ w = 2, h = 2, rows = { "pp", "pp" } })
 offset = map.grid_line_offset(width)
 lines = map.lines(width)
-check("with no south-edge data at all, the grid section is exactly h lines "
-  .. "(no interleaved edge rows)",
+check("with no edge data at all, the grid section is exactly h lines",
   #lines == offset + S.vmap_h + 1, #lines)
-local plain_row = EXPECT_COLOR.p .. "p " .. RESET .. " " .. EXPECT_COLOR.p .. "p " .. RESET .. " "
-check("grid row0 with no edge data has no wall marks",
+check("grid row0 with no edge data is identical to the with-edge-data render",
   lines[offset + 1] == plain_row, lines[offset + 1])
-check("grid row1 with no edge data has no wall marks",
+check("grid row1 with no edge data is identical to the with-edge-data render",
   lines[offset + 2] == plain_row, lines[offset + 2])
 
 -- =============================================================================
@@ -565,6 +580,164 @@ check("already-at-target: exactly one item (asgard)", #already_items == 1)
 send_calls = {}
 last_menu_open.on_select(already_items[1].value)
 check("already at target: #path == 0 -> nothing sent", #send_calls == 0)
+
+-- =============================================================================
+-- Status messages: every silent early return in the travel flow says why
+--
+-- These five were LEGACY ColourNotes the port originally dropped as
+-- "display-only". They are not: "Travel to..." opening no menu, or a picked
+-- destination sending nothing, is indistinguishable from a broken menu
+-- without them. The guard LOGIC is already covered above; these check that
+-- each guard is also REPORTED.
+-- =============================================================================
+
+-- open_poi_menu, guard 1: player position unknown (px < 0) -> no menu, and
+-- a message saying so. Mutant it kills: a silent `return`, which is exactly
+-- what this looked like from the outside.
+reset_vmap()
+seed_vmap({
+  w = 3, h = 1, rows = { "ppp" }, east_edges = { "111" },
+  pois = { { type = "capital", name = "asgard", x = 2, y = 0, owner = "" } },
+})
+check("fixture premise: player position is unknown", (S.vmap_px or -1) < 0, S.vmap_px)
+printed, last_menu_open = {}, nil
+map.open_poi_menu()
+check("unknown player position: no travel menu opens", last_menu_open == nil)
+check("unknown player position: says you are not on the map",
+  printed_has("[vmap] Travel unavailable: you are not on the map."), table.concat(printed, " | "))
+
+-- The position guard says WHY, not just that travel is unavailable. Three
+-- causes are distinguishable from state alone, and they are the same three
+-- the no-data pane above already separates -- deliberately worded to agree
+-- with it, since a player who reads one will read the other.
+--
+-- Cause 1: no Guild.Map frame has arrived at all, which is the only one the
+-- player can act on (subscription/negotiation, via /vik source).
+reset_vmap()
+S.vmap_seen = false
+printed, last_menu_open = {}, nil
+map.open_poi_menu()
+check("no frame: no menu", last_menu_open == nil)
+check("no frame: still says travel is unavailable (LEGACY's own line)",
+  printed_has("[vmap] Travel unavailable: you are not on the map."),
+  table.concat(printed, " | "))
+check("no frame: explains that no Guild.Map frame arrived, and points at /vik source",
+  printed_has("no Guild.Map frame received") and printed_has("/vik source"),
+  table.concat(printed, " | "))
+
+-- Cause 2: a frame arrived and reported no grid -- world state, not the
+-- client's and not the player's.
+reset_vmap()
+S.vmap_seen = true
+printed, last_menu_open = {}, nil
+map.open_poi_menu()
+check("frame but no grid: no menu", last_menu_open == nil)
+check("frame but no grid: blames the missing biome grid",
+  printed_has("no biome grid"), table.concat(printed, " | "))
+check("frame but no grid: does NOT blame a missing frame",
+  not printed_has("no Guild.Map frame received"), table.concat(printed, " | "))
+
+-- Cause 3: the grid exists, but no position was ever reported for this
+-- player -- they are genuinely off the biome grid. This is the case the bug
+-- report came from, and the one the other two must not be confused with.
+reset_vmap()
+seed_vmap({
+  w = 3, h = 1, rows = { "ppp" }, east_edges = { "111" },
+  pois = { { type = "capital", name = "asgard", x = 2, y = 0, owner = "" } },
+})
+check("fixture premise: grid present, frame seen, position still unknown",
+  (S.vmap_w or 0) > 0 and S.vmap_seen and (S.vmap_px or -1) < 0,
+  string.format("w=%s seen=%s px=%s", S.vmap_w, tostring(S.vmap_seen), S.vmap_px))
+printed, last_menu_open = {}, nil
+map.open_poi_menu()
+check("off the grid: no menu", last_menu_open == nil)
+check("off the grid: says the map has no position for you",
+  printed_has("no position for you on it"), table.concat(printed, " | "))
+check("off the grid: blames neither a missing frame nor a missing grid",
+  not printed_has("no Guild.Map frame received") and not printed_has("no biome grid"),
+  table.concat(printed, " | "))
+
+-- travel_to's own position guard explains too -- pages/people.lua's "Run
+-- There" buttons reach it with no menu in the picture at all.
+reset_vmap()
+S.vmap_seen = false
+printed, send_calls = {}, {}
+map.travel_to({ name = "asgard", x = 2, y = 0 })
+check("travel_to with no frame: sends nothing", #send_calls == 0)
+check("travel_to with no frame: explains why, not just that the position is unknown",
+  printed_has("[vmap] Player position unknown")
+    and printed_has("no Guild.Map frame received"),
+  table.concat(printed, " | "))
+
+-- open_poi_menu, guard 2: position known, but no POI has a valid coordinate
+-- -> no menu, and a different message. The POI below is deliberately at
+-- (-1,-1), so this exercises the empty-LIST guard rather than an empty
+-- vmap_pois: the list is filtered, not absent.
+reset_vmap()
+seed_vmap({
+  w = 3, h = 1, rows = { "ppp" }, east_edges = { "111" },
+  px = 0, py = 0,
+  pois = { { type = "ruins", name = "lost cave", x = -1, y = -1, owner = "" } },
+})
+printed, last_menu_open = {}, nil
+map.open_poi_menu()
+check("no travellable locations: no travel menu opens", last_menu_open == nil)
+check("no travellable locations: says there are none",
+  printed_has("[vmap] No locations available to travel to."), table.concat(printed, " | "))
+check("no travellable locations: does NOT claim the position is unknown "
+  .. "(the two guards must be distinguishable)",
+  not printed_has("[vmap] Travel unavailable: you are not on the map."), table.concat(printed, " | "))
+
+-- travel_to's three outcomes, driven through the exported function so the
+-- message is checked at its source rather than through a menu pick.
+reset_vmap()
+seed_vmap({
+  w = 3, h = 1, rows = { "pWp" }, east_edges = { "111" },
+  px = 0, py = 0,
+  pois = { { type = "ruins", name = "helheim", x = 2, y = 0, owner = "" } },
+})
+printed, send_calls = {}, {}
+map.travel_to(S.vmap_pois[1])
+check("no route: still sends nothing", #send_calls == 0)
+check("no route: names the unreachable destination",
+  printed_has("[vmap] No passable route to helheim"), table.concat(printed, " | "))
+
+reset_vmap()
+seed_vmap({
+  w = 3, h = 1, rows = { "ppp" }, east_edges = { "111" },
+  px = 2, py = 0,
+  pois = { { type = "capital", name = "asgard", x = 2, y = 0, owner = "" } },
+})
+printed, send_calls = {}, {}
+map.travel_to(S.vmap_pois[1])
+check("already there: still sends nothing", #send_calls == 0)
+check("already there: says so, naming the destination",
+  printed_has("Already at asgard"), table.concat(printed, " | "))
+
+reset_vmap()
+seed_vmap({
+  w = 3, h = 1, rows = { "ppp" }, east_edges = { "111" },
+  px = 0, py = 0,
+  pois = { { type = "capital", name = "asgard", x = 2, y = 0, owner = "" } },
+})
+printed, send_calls = {}, {}
+map.travel_to(S.vmap_pois[1])
+check("reachable: sends the path", #send_calls == 2, #send_calls)
+check("reachable: reports the destination and the step count",
+  printed_has("[vmap] Traveling to asgard (2 steps)"), table.concat(printed, " | "))
+
+-- travel_to's own position guard, reachable only by calling it directly
+-- (pages/people.lua's errand button does exactly that).
+reset_vmap()
+seed_vmap({
+  w = 3, h = 1, rows = { "ppp" }, east_edges = { "111" },
+  pois = { { type = "capital", name = "asgard", x = 2, y = 0, owner = "" } },
+})
+printed, send_calls = {}, {}
+map.travel_to(S.vmap_pois[1])
+check("travel_to with an unknown position: sends nothing", #send_calls == 0)
+check("travel_to with an unknown position: says the position is unknown",
+  printed_has("[vmap] Player position unknown"), table.concat(printed, " | "))
 
 -- =============================================================================
 -- Task 5: a click on a non-POI cell sends nothing and never opens the menu
