@@ -256,9 +256,12 @@ check("a capped mercenary draws no level line",
 
 -- Kills: reading the caps but inverting the test, which would hide the line
 -- for every mercenary still levelling.
+-- capped_stats is mutated in place rather than replaced: the double
+-- stats_window cached at the M.on_load() above closes over this very table, so
+-- the mutation is what the next render sees. Re-assigning live_plugins.mercenary
+-- here would do nothing -- render.render only refetches on M.on_load().
 capped_stats.pl_max_level = 150
 capped_stats.il_max_level = 30
-live_plugins.mercenary = merc_double(capped_stats)
 joined = table.concat(render_capture(40, 20), "\n")
 check("a levelling mercenary still draws the level line",
   joined:find("PL", 1, true) ~= nil, joined)

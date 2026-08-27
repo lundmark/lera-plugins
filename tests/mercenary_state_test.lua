@@ -77,11 +77,18 @@ check("gender exposes the raw int and its name",
   s.gender == 1 and s.gender_name == "male")
 
 -- Kills: mapping an unknown status to nil, which forces every renderer to
--- nil-check a field that should always read.
+-- nil-check a field that should always read. Paired with a KNOWN status in the
+-- same case on purpose: "unknown" is also M.reset()'s default for status_name,
+-- so the unrecognized half alone is satisfied by deleting the assignment in
+-- apply_info entirely. The status = 1 half is what makes that mutant visible.
 reset()
 state.apply("Info", { status = 99 }, "kaziar", false)
-check("an unrecognized status reads as unknown",
-  state.get().status_name == "unknown")
+local unknown_name = state.get().status_name
+reset()
+state.apply("Info", { status = 1 }, "kaziar", false)
+check("a known status reads by name and an unrecognized one reads as unknown",
+  unknown_name == "unknown" and state.get().status_name == "active",
+  "unknown=" .. tostring(unknown_name) .. " known=" .. tostring(state.get().status_name))
 
 -- Kills: deriving dormancy from the countdown instead of the status. The
 -- countdown reaches 0 on the tick recovery completes, and `status` is the
@@ -139,9 +146,13 @@ s = state.get()
 check("Skills splits records from scalars by value type",
   s.skills.max_stamina.raw == 3 and s.skills.max_stamina.eff == 5
     and s.skills.bury.eff == 2
-    and s.skills.newfangled.eff == 4
+    -- Nil-guarded: under the mutant `newfangled` is filed as a scalar and
+    -- s.skills.newfangled is nil, so a bare index would abort the run on a nil
+    -- index and hide every case below instead of printing one FAIL line.
+    and s.skills.newfangled ~= nil and s.skills.newfangled.eff == 4
     and s.skills.points == nil
-    and s.skills_meta.points == 4 and s.skills_meta.next_cost == 900)
+    and s.skills_meta.points == 4 and s.skills_meta.next_cost == 900,
+  "newfangled=" .. tostring(s.skills.newfangled))
 
 -- ---- Talents --------------------------------------------------------------
 -- Kills: assuming a fixed ability list. register_class_abilities() fills the
@@ -237,9 +248,12 @@ check("the next Stats frame rebaselines on the new xp",
   s.pl_xp_start == 10 and s.pl_xp_per_hour == 0
     and s.xp_baseline_dirty == false)
 
--- ---- delta across an absent key -------------------------------------------
--- Kills: computing deltas from the frame instead of from the mirror. A delta
--- frame omitting hp means unchanged, so the delta must be 0, not -current.
+-- ---- delta across an unchanged value --------------------------------------
+-- state.apply never sees a raw frame -- protocol.lua merges into the mirror
+-- first, and that merge is covered in mercenary_gmcp_test.lua. What this pins
+-- is the projection's own arithmetic: a value the mirror carries unchanged
+-- yields a zero delta, and a changed one computes against the previous value
+-- rather than against zero.
 reset()
 state.apply("Vitals", { hp = 412, hp_max = 500, ap = 40 }, "kaziar", false)
 state.apply("Vitals", { hp = 412, hp_max = 500, ap = 35 }, "kaziar", false)

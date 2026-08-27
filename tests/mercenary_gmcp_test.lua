@@ -175,13 +175,15 @@ protocol.on_gmcp("Merc.Skills", { merc = "kaziar", page = 2, pages = 2 })
 check("a fresh page 1 abandons a partial run",
   #protocol.mirror("Skills").bury == 1 and protocol.mirror("Skills").bury[1] == 9)
 
--- Boundary characterization, NOT a mutant kill: page/pages appear only when a
--- frame is actually split, so pages==1 must take the unpaged path. No single
--- mutation of the current code can fail this case -- routing pages==1 into the
--- paged branch creates a one-page run that passes the ordering check and
--- applies an identical mirror, so the two branches converge by construction.
--- It is kept to pin the boundary against a future refactor that changes the
--- paged branch such that they no longer converge.
+-- Boundary characterization, NOT a mutant kill for the `pages <= 1` comparator
+-- itself: page/pages appear only when a frame is actually split, so pages==1
+-- must take the unpaged path -- but weakening that comparator so pages==1 falls
+-- into the paged branch creates a one-page run that passes the ordering check
+-- and applies an identical mirror, so those two branches converge by
+-- construction and no mutation of THAT comparator can fail this case. Other
+-- mutations elsewhere in the paged branch do fail it (page == pages + 1, say),
+-- which is why it is kept: it pins the boundary against a future refactor that
+-- makes the branches diverge.
 reset()
 protocol.on_gmcp("Merc.Vitals", { merc = "kaziar", page = 1, pages = 1, hp = 7 })
 check("pages<=1 applies immediately", protocol.mirror("Vitals").hp == 7)
