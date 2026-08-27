@@ -123,20 +123,23 @@ check("Stats projects xp, economy and both counter sets",
     and s.rounds == 12 and s.life_dmg_out == 40000)
 
 -- ---- Skills ---------------------------------------------------------------
--- Kills: iterating the payload as if every value were a record. Skills mixes
--- 13 per-skill records with three scalars (points, allocs, next_cost) at the
--- SAME level, so the split must be on value type, not on a name list -- a name
--- list would silently drop a skill the mudlib adds later.
+-- Kills: keying the split off a hardcoded name list instead of type(v). Skills
+-- mixes 13 per-skill records with three scalars (points, allocs, next_cost) at
+-- the SAME level. `newfangled` is in the fixture precisely because it is in no
+-- such list: a record/name-list split files it as a scalar and drops it, which
+-- is how a skill the mudlib adds later would silently vanish.
 reset()
 state.apply("Skills", {
   max_stamina = { raw = 3, eff = 5 },
   bury = { raw = 0, eff = 2 },
+  newfangled = { raw = 1, eff = 4 },
   points = 4, allocs = 6, next_cost = 900,
 }, "kaziar", false)
 s = state.get()
 check("Skills splits records from scalars by value type",
   s.skills.max_stamina.raw == 3 and s.skills.max_stamina.eff == 5
     and s.skills.bury.eff == 2
+    and s.skills.newfangled.eff == 4
     and s.skills.points == nil
     and s.skills_meta.points == 4 and s.skills_meta.next_cost == 900)
 
@@ -163,6 +166,22 @@ state.apply("Talents", { bandage = { points = 2, eff = 3, min_level = 5 } }, "ka
 state.apply("Talents", { frenzy = { points = 1, eff = 1, min_level = 20 } }, "kaziar", false)
 check("a later Talents frame replaces the ability set",
   state.get().talents.bandage == nil and state.get().talents.frenzy ~= nil)
+
+-- Kills: keying the split off the scalar names (points/allocs/next_cost). An
+-- ability literally named "points" is expressible only as a table-valued
+-- `points` key -- the ability and the scalar cannot coexist in one flat payload
+-- -- and that is exactly what the server sends in that case. A name-list split
+-- files it as a scalar, num()s the table to 0, and the ability disappears.
+reset()
+state.apply("Talents", {
+  points = { points = 2, eff = 7, min_level = 5 },
+  allocs = 3,
+}, "kaziar", false)
+s = state.get()
+check("an ability named points is a record, not the scalar",
+  s.talents.points ~= nil and s.talents.points.eff == 7
+    and s.talents_meta.points == 0 and s.talents_meta.allocs == 3,
+  "talents.points=" .. tostring(s.talents.points))
 
 -- Kills: snapshot() handing out the live nested tables, letting a caller
 -- mutate plugin state through a value it was told is a copy.
