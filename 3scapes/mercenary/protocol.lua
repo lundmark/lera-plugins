@@ -66,6 +66,24 @@ local function accepted(data)
   return out
 end
 
+-- Merge one page's keys into a run. A key repeated across pages is a sliced
+-- array and its slices concatenate in page order; anything else is a plain
+-- overwrite. Envelope members are excluded here too, so a completed run's keys
+-- never carry them.
+local function merge_page(run, data)
+  for k, v in pairs(data) do
+    if not ENVELOPE[k] then
+      local prev = run.keys[k]
+      if type(prev) == "table" and type(v) == "table"
+         and #prev > 0 and #v > 0 then
+        for i = 1, #v do prev[#prev + 1] = v[i] end
+      else
+        run.keys[k] = v
+      end
+    end
+  end
+end
+
 local function apply(sub, keys, full, merc)
   local switched = (current_merc ~= nil) and (current_merc ~= merc)
   current_merc = merc
@@ -104,7 +122,35 @@ function M.on_gmcp(pkg, data)
     return false
   end
 
-  apply(sub, accepted(data), data.full == 1, merc)
+  -- page/pages appear only when a frame is split, so their absence -- or a
+  -- pages of 1 -- means an ordinary unpaged frame.
+  local page = tonumber(data.page)
+  local pages = tonumber(data.pages)
+  if not page or not pages or pages <= 1 then
+    page_runs[sub] = nil
+    apply(sub, accepted(data), data.full == 1, merc)
+    return true
+  end
+
+  local run = page_runs[sub]
+  -- A fresh page 1 abandons whatever was accumulating: it is a new snapshot.
+  if page == 1 or not run then
+    run = { pages = pages, next_page = 1, full = (data.full == 1), keys = {} }
+    page_runs[sub] = run
+  end
+  if page ~= run.next_page or pages ~= run.pages then
+    -- Out of order or a pages mismatch: the run cannot be trusted.
+    page_runs[sub] = nil
+    counters.bad_page = counters.bad_page + 1
+    return false
+  end
+
+  merge_page(run, data)
+  run.next_page = page + 1
+  if page == pages then
+    page_runs[sub] = nil
+    apply(sub, run.keys, run.full, merc)
+  end
   return true
 end
 

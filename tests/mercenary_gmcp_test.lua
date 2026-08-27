@@ -143,6 +143,67 @@ check("the switch is reported to the apply callback",
 -- no previous mercenary to have switched away from.
 check("the first frame is not a switch", applied[1].switched == false)
 
+-- ---- paging ---------------------------------------------------------------
+-- Kills: applying each page independently. An oversized key is sliced across
+-- pages with the key repeated, so a client that applies pages independently
+-- silently truncates a long list to its final slice.
+reset()
+protocol.on_gmcp("Merc.Skills", { merc = "kaziar", page = 1, pages = 2, bury = { 1, 2 } })
+check("an incomplete run does not apply", protocol.mirror("Skills") == nil)
+protocol.on_gmcp("Merc.Skills", { merc = "kaziar", page = 2, pages = 2, bury = { 3 }, points = 4 })
+m = protocol.mirror("Skills")
+check("pages accumulate and slices concatenate in page order",
+  m ~= nil and #m.bury == 3 and m.bury[3] == 3 and m.points == 4,
+  m and ("#bury=" .. tostring(#m.bury)) or "no mirror")
+
+-- Kills: continuing a run across an out-of-order page. The run cannot be
+-- trusted once a page is missing, and applying it would present a partial
+-- snapshot as a complete one.
+reset()
+protocol.on_gmcp("Merc.Talents", { merc = "kaziar", page = 1, pages = 3, a = 1 })
+local ok4 = protocol.on_gmcp("Merc.Talents", { merc = "kaziar", page = 3, pages = 3, c = 3 })
+check("an out-of-order page aborts the run",
+  ok4 == false and protocol.mirror("Talents") == nil
+    and protocol.counters().bad_page == 1)
+
+-- Kills: keeping a stale partial run when a new snapshot starts. A fresh
+-- page 1 is a new snapshot and must abandon whatever was accumulating.
+reset()
+protocol.on_gmcp("Merc.Skills", { merc = "kaziar", page = 1, pages = 2, bury = { 1 } })
+protocol.on_gmcp("Merc.Skills", { merc = "kaziar", page = 1, pages = 2, bury = { 9 } })
+protocol.on_gmcp("Merc.Skills", { merc = "kaziar", page = 2, pages = 2 })
+check("a fresh page 1 abandons a partial run",
+  #protocol.mirror("Skills").bury == 1 and protocol.mirror("Skills").bury[1] == 9)
+
+-- Kills: treating pages=1 as a paged frame. page/pages appear only when a
+-- frame is actually split, so pages<=1 must take the unpaged path.
+reset()
+protocol.on_gmcp("Merc.Vitals", { merc = "kaziar", page = 1, pages = 1, hp = 7 })
+check("pages<=1 applies immediately", protocol.mirror("Vitals").hp == 7)
+
+-- ---- connection reset -----------------------------------------------------
+-- Kills: keeping mirrors across a disconnect. The server clears its whole
+-- namespace cache on disconnect (gmcp_clear_core_state), so retained mirrors
+-- would no longer be congruent with it, and a stale merc would render against
+-- a session that has none.
+reset()
+protocol.on_gmcp("Merc.Vitals", { merc = "kaziar", hp = 412 })
+protocol.on_gmcp("Merc.Info", { merc = "kaziar", cost = 12 })
+protocol.reset_connection()
+check("disconnect clears every mirror",
+  protocol.mirror("Vitals") == nil and protocol.mirror("Info") == nil
+    and protocol.merc_name() == nil and protocol.counters().applied == 0)
+
+-- Kills: not recording arrival, which /merc status reports. Skills and Talents
+-- push only on registration, allocation and level-up, so "has this connection
+-- seen them at all" is the difference between real zeroes and no data.
+reset()
+clock = 4242
+protocol.on_gmcp("Merc.Vitals", { merc = "kaziar", hp = 1 })
+check("arrival time is recorded per sub-package",
+  protocol.seen("Vitals") == 4242 and protocol.seen("Skills") == nil)
+clock = 1000
+
 -- ---- summary --------------------------------------------------------------
 if failures > 0 then
   print("FAILURES: " .. failures)
