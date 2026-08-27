@@ -18,6 +18,16 @@ local function fmt_seconds(secs)
   return string.format("%d:%02d", m, secs - m * 60)
 end
 
+-- Arrival times are recorded as lera.time() epochs. An epoch is not something a
+-- reader can do anything with; "42s ago" answers the question /merc status is
+-- being asked, which is whether a package is still arriving.
+local function ago(at)
+  local delta = lera.time() - at
+  if delta < 0 then delta = 0 end
+  if delta < 60 then return string.format("%ds ago", delta) end
+  return fmt_seconds(delta) .. " ago"
+end
+
 local function show_summary()
   if not state.has_data() then
     warn("[merc] no mercenary data this connection")
@@ -85,12 +95,13 @@ local function show_status()
   line("  attributed to: " .. tostring(st.merc or "(nothing received)"))
   local c = st.counters
   line(string.format("  frames %d, applied %d", c.frames, c.applied))
-  line(string.format("  dropped: %d bad package, %d bad attribution, %d bad page",
-    c.bad_package, c.bad_attribution, c.bad_page))
+  line(string.format(
+    "  dropped: %d bad package, %d bad payload, %d bad attribution, %d bad page",
+    c.bad_package, c.bad_payload, c.bad_attribution, c.bad_page))
   for _, sub in ipairs({ "Vitals", "Info", "Stats", "Skills", "Talents" }) do
     local at = st.seen[sub]
     line(string.format("  %-8s %s", sub,
-      at and ("last at " .. at) or "not received this connection"))
+      at and ago(at) or "not received this connection"))
   end
 end
 

@@ -156,6 +156,34 @@ check("pages accumulate and slices concatenate in page order",
   m ~= nil and #m.bury == 3 and m.bury[3] == 3 and m.points == 4,
   m and ("#bury=" .. tostring(#m.bury)) or "no mirror")
 
+-- Kills: gating the slice concatenation on the LATER page being non-empty as
+-- well. The server slices by byte budget, not by element count, so a later page
+-- can legitimately carry an empty slice of a key alongside other keys -- and a
+-- `#v > 0` guard sends that down the overwrite branch and discards the two
+-- entries page 1 accumulated. The fixture's page 2 carries exactly that: an
+-- empty `bury` slice plus a scalar, so the run still has a reason to exist.
+reset()
+protocol.on_gmcp("Merc.Skills", { merc = "kaziar", page = 1, pages = 2, bury = { 1, 2 } })
+protocol.on_gmcp("Merc.Skills", { merc = "kaziar", page = 2, pages = 2, bury = {}, points = 4 })
+m = protocol.mirror("Skills")
+check("an empty later slice leaves the accumulated array intact",
+  m ~= nil and #m.bury == 2 and m.bury[1] == 1 and m.bury[2] == 2 and m.points == 4,
+  m and ("#bury=" .. tostring(#m.bury)) or "no mirror")
+
+-- Kills: counting an undecodable payload as a bad attribution. The C layer
+-- delivers absent or undecodable JSON as nil; that is a decode failure, not a
+-- frame that failed to name its mercenary, and /merc status reports the two
+-- apart. A fold shows up as 1 here and 0 in the column asserted zero.
+reset()
+local ok_nil = protocol.on_gmcp("Merc.Vitals", nil)
+local ok_str = protocol.on_gmcp("Merc.Vitals", "not a table")
+check("a non-table payload is counted apart from a bad attribution",
+  ok_nil == false and ok_str == false
+    and protocol.counters().bad_payload == 2
+    and protocol.counters().bad_attribution == 0,
+  "payload=" .. protocol.counters().bad_payload
+    .. " attribution=" .. protocol.counters().bad_attribution)
+
 -- Kills: continuing a run across an out-of-order page. The run cannot be
 -- trusted once a page is missing, and applying it would present a partial
 -- snapshot as a complete one.
@@ -210,6 +238,30 @@ protocol.on_gmcp("Merc.Vitals", { merc = "kaziar", hp = 1 })
 check("arrival time is recorded per sub-package",
   protocol.seen("Vitals") == 4242 and protocol.seen("Skills") == nil)
 clock = 1000
+
+-- ---- a failed subscription ------------------------------------------------
+-- Kills: ignoring a nil return from gmcp.on. A failed registration leaves the
+-- plugin deaf for the whole session, and every symptom of that is also a
+-- symptom of a server that simply never pushes: /merc status reports `frames 0`
+-- either way. The diagnostic is the only thing that separates them.
+reset()
+protocol.unsubscribe()
+local diagnostics = {}
+local real_print, real_on = print, gmcp.on
+gmcp.on = function() return nil end
+print = function(...)
+  local parts = {}
+  for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+  diagnostics[#diagnostics + 1] = table.concat(parts, " ")
+end
+local sub_id = protocol.subscribe()
+print, gmcp.on = real_print, real_on
+local diag = table.concat(diagnostics, "\n")
+check("a failed subscription is diagnosed rather than silent",
+  sub_id == nil and diag:find("mercenary", 1, true) ~= nil
+    and diag:find("Merc", 1, true) ~= nil,
+  "id=" .. tostring(sub_id) .. " diag=" .. diag)
+protocol.subscribe()
 
 -- ---- summary --------------------------------------------------------------
 if failures > 0 then

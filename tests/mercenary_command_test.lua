@@ -111,11 +111,33 @@ check("the summary formats the dormancy countdown as m:ss",
 
 -- Kills: reporting arrival for packages that never came.
 reset()
+clock = 1000
 protocol.on_gmcp("Merc.Vitals", { merc = "kaziar", hp = 1 })
+clock = 1042
 out = run("status")
 check("status distinguishes received from absent packages",
-  out:find("Vitals", 1, true) ~= nil and out:find("last at", 1, true) ~= nil
+  out:find("Vitals", 1, true) ~= nil and out:find("ago", 1, true) ~= nil
     and out:find("not received this connection", 1, true) ~= nil, out)
+
+-- Kills: printing lera.time()'s raw epoch. The frame arrived at 1000 and it is
+-- now 1042, so an epoch renders "1000" and the elapsed form renders "42s ago" --
+-- the fixture's two numbers are deliberately unequal so the mutant is visible.
+check("an arrival renders as elapsed time, not as an epoch",
+  out:find("42s ago", 1, true) ~= nil and out:find("1000", 1, true) == nil, out)
+clock = 1000
+
+-- Kills: folding an undecodable payload into bad_attribution. The C layer
+-- delivers absent or undecodable JSON as nil, which says nothing about the
+-- frame's contents; a reader needs to tell a decode failure from a mudlib that
+-- stopped stamping `merc`. One of each here, so a fold reports 2 in one column
+-- and 0 in the other.
+reset()
+protocol.on_gmcp("Merc.Vitals", nil)
+protocol.on_gmcp("Merc.Vitals", { hp = 1 })
+out = run("status")
+check("status reports bad payloads and bad attribution separately",
+  out:find("1 bad payload", 1, true) ~= nil
+    and out:find("1 bad attribution", 1, true) ~= nil, out)
 
 require = real_require
 

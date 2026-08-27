@@ -26,7 +26,7 @@ local mirrors, page_runs, seen, counters, current_merc
 local apply_cb, handler_id
 
 local function blank_counters()
-  return { frames = 0, applied = 0, bad_package = 0,
+  return { frames = 0, applied = 0, bad_package = 0, bad_payload = 0,
            bad_attribution = 0, bad_page = 0 }
 end
 
@@ -74,8 +74,14 @@ local function merge_page(run, data)
   for k, v in pairs(data) do
     if not ENVELOPE[k] then
       local prev = run.keys[k]
-      if type(prev) == "table" and type(v) == "table"
-         and #prev > 0 and #v > 0 then
+      -- Only `prev` is tested for array-ness. A later slice may legitimately be
+      -- empty -- the server slices by byte budget, not by element count -- and
+      -- concatenating an empty slice is a no-op, whereas requiring #v > 0 sends
+      -- it down the overwrite branch and discards everything accumulated so
+      -- far. guild_viking/protocol.lua, which this file follows, gets the same
+      -- result from an is_array() helper that deliberately calls an empty table
+      -- an array.
+      if type(prev) == "table" and type(v) == "table" and #prev > 0 then
         for i = 1, #v do prev[#prev + 1] = v[i] end
       else
         run.keys[k] = v
@@ -108,8 +114,12 @@ function M.on_gmcp(pkg, data)
     counters.bad_package = counters.bad_package + 1
     return false
   end
+  -- Counted apart from bad attribution: a non-table `data` is undecodable or
+  -- absent JSON, which the C layer delivers as nil, and says nothing about the
+  -- frame's contents. Folding the two together makes /merc status unable to
+  -- distinguish a decode failure from a mudlib that stopped stamping `merc`.
   if type(data) ~= "table" then
-    counters.bad_attribution = counters.bad_attribution + 1
+    counters.bad_payload = counters.bad_payload + 1
     return false
   end
 
@@ -160,6 +170,13 @@ function M.subscribe()
   -- sub-package (gmcp_codec.c:402-405), so a sub-package added server-side
   -- later arrives with no client change.
   handler_id = gmcp.on("Merc", function(pkg, data) M.on_gmcp(pkg, data) end)
+  if not handler_id then
+    -- Silence here is indistinguishable from a server that never pushes:
+    -- /merc status would report `frames 0` either way, and every pane would
+    -- render an empty mercenary for the rest of the session.
+    print("[mercenary] GMCP subscription to Merc failed; no mercenary data "
+      .. "will arrive this session")
+  end
   return handler_id
 end
 
