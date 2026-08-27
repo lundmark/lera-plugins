@@ -192,6 +192,61 @@ snap.skills.bury.raw = 999
 check("snapshot deep-copies the nested records",
   state.get().skills.bury.raw == 1)
 
+-- ---- mercenary switch -----------------------------------------------------
+-- Kills: computing a delta across a switch. The bars would show a several
+-- hundred point jump that no damage caused.
+reset()
+state.apply("Vitals", { hp = 412, hp_max = 500 }, "kaziar", false)
+state.apply("Vitals", { hp = 120, hp_max = 500 }, "brenna", true)
+s = state.get()
+check("a switch zeroes the vitals deltas",
+  s.hp_delta == 0 and s.hp_current == 120,
+  "hp_delta=" .. s.hp_delta)
+
+-- Kills: resetting the FIELD values on a switch instead of only the derived
+-- tracking. The server suppresses every field the two mercenaries share, so a
+-- field reset here is permanent.
+check("a switch keeps the projected field values", s.hp_max == 500)
+
+-- Kills: carrying the previous mercenary's xp baseline forward, which
+-- measures B's xp against A's start and produces a nonsense rate.
+reset()
+state.apply("Stats", { perm_xp = 900, inst_xp = 40 }, "kaziar", false)
+clock = 1360   -- six minutes later
+state.apply("Stats", { perm_xp = 1500, inst_xp = 90 }, "kaziar", false)
+local rate_before = state.get().pl_xp_per_hour
+state.apply("Stats", { perm_xp = 100, inst_xp = 5 }, "brenna", true)
+s = state.get()
+check("a switch rebaselines the xp tracking",
+  rate_before > 0 and s.pl_xp_per_hour == 0 and s.pl_xp_start == 100,
+  "before=" .. rate_before .. " after=" .. s.pl_xp_per_hour)
+
+-- ---- xp rate on level-up --------------------------------------------------
+-- Kills: rebaselining inside apply_info. Info and Stats ride different ticks,
+-- so the new xp has not arrived yet; measuring it against a stale start over a
+-- near-zero interval spikes the rate.
+reset()
+state.apply("Stats", { perm_xp = 1400 }, "kaziar", false)
+clock = 1300
+state.apply("Info", { perm_level = 13 }, "kaziar", false)
+check("a level-up does not rebaseline before the new xp arrives",
+  state.get().pl_xp_start == 1400 and state.get().xp_baseline_dirty == true)
+state.apply("Stats", { perm_xp = 10 }, "kaziar", false)
+s = state.get()
+check("the next Stats frame rebaselines on the new xp",
+  s.pl_xp_start == 10 and s.pl_xp_per_hour == 0
+    and s.xp_baseline_dirty == false)
+
+-- ---- delta across an absent key -------------------------------------------
+-- Kills: computing deltas from the frame instead of from the mirror. A delta
+-- frame omitting hp means unchanged, so the delta must be 0, not -current.
+reset()
+state.apply("Vitals", { hp = 412, hp_max = 500, ap = 40 }, "kaziar", false)
+state.apply("Vitals", { hp = 412, hp_max = 500, ap = 35 }, "kaziar", false)
+s = state.get()
+check("an unchanged hp yields a zero delta",
+  s.hp_delta == 0 and s.ap_delta == -5)
+
 -- ---- summary --------------------------------------------------------------
 if failures > 0 then
   print("FAILURES: " .. failures)

@@ -241,6 +241,27 @@ function M.apply(sub, mirror, merc_name, switched)
   rec.merc_name = str(merc_name)
   rec.name = capitalize(rec.merc_name)
   fn(mirror)
+
+  if switched then
+    -- Derived tracking only. The FIELD values are deliberately kept: the
+    -- server's delta cache is keyed by (namespace, sub-package) and not by
+    -- mercenary, so every field the two share is suppressed as unchanged and
+    -- would never be resent. Clearing them here would zero them permanently.
+    --
+    -- Done after the projection, not before: the deltas are computed inside
+    -- fn(), so zeroing them first would just let it recompute the spike.
+    rec.hp_delta, rec.stamina_delta, rec.ap_delta = 0, 0, 0
+    rec.prev_hp = rec.hp_current
+    rec.prev_stamina = rec.stamina_current
+    rec.prev_ap = rec.ap_current
+    rec.pl_xp_start = rec.pl_xp
+    rec.il_xp_start = rec.il_xp
+    rec.tracking_start_time = lera.time()
+    rec.pl_xp_per_hour = 0
+    rec.il_xp_per_hour = 0
+    rec.xp_baseline_dirty = false
+  end
+
   rec.last_update = lera.time()
   return true
 end
