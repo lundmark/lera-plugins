@@ -187,10 +187,51 @@ local function apply_stats(m)
   end
 end
 
+-- Skills and Talents mix per-name records with scalar keys at the same level.
+-- Split on value type rather than on a known-name list: a table value is a
+-- record, a number is one of the three scalars. This stays correct if the
+-- mudlib adds a skill, and is robust against an ability literally named
+-- "points".
+local function split_records(m)
+  local records, scalars = {}, {}
+  for k, v in pairs(m) do
+    if type(v) == "table" then
+      local copy = {}
+      for ik, iv in pairs(v) do copy[ik] = iv end
+      records[k] = copy
+    else
+      scalars[k] = v
+    end
+  end
+  return records, scalars
+end
+
+local function apply_skills(m)
+  local records, scalars = split_records(m)
+  rec.skills = records
+  rec.skills_meta = {
+    points = num(scalars.points),
+    allocs = num(scalars.allocs),
+    next_cost = num(scalars.next_cost),
+  }
+end
+
+local function apply_talents(m)
+  local records, scalars = split_records(m)
+  rec.talents = records
+  rec.talents_meta = {
+    points = num(scalars.points),
+    allocs = num(scalars.allocs),
+    next_cost = num(scalars.next_cost),
+  }
+end
+
 local APPLY = {
   Vitals = apply_vitals,
   Info = apply_info,
   Stats = apply_stats,
+  Skills = apply_skills,
+  Talents = apply_talents,
 }
 
 function M.apply(sub, mirror, merc_name, switched)

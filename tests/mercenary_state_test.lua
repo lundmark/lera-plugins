@@ -122,6 +122,57 @@ check("Stats projects xp, economy and both counter sets",
     and s.fund == 5000 and s.spent == 800 and s.spent_skills == 400
     and s.rounds == 12 and s.life_dmg_out == 40000)
 
+-- ---- Skills ---------------------------------------------------------------
+-- Kills: iterating the payload as if every value were a record. Skills mixes
+-- 13 per-skill records with three scalars (points, allocs, next_cost) at the
+-- SAME level, so the split must be on value type, not on a name list -- a name
+-- list would silently drop a skill the mudlib adds later.
+reset()
+state.apply("Skills", {
+  max_stamina = { raw = 3, eff = 5 },
+  bury = { raw = 0, eff = 2 },
+  points = 4, allocs = 6, next_cost = 900,
+}, "kaziar", false)
+s = state.get()
+check("Skills splits records from scalars by value type",
+  s.skills.max_stamina.raw == 3 and s.skills.max_stamina.eff == 5
+    and s.skills.bury.eff == 2
+    and s.skills.points == nil
+    and s.skills_meta.points == 4 and s.skills_meta.next_cost == 900)
+
+-- ---- Talents --------------------------------------------------------------
+-- Kills: assuming a fixed ability list. register_class_abilities() fills the
+-- payload with whichever five the class actually has, so the projection must
+-- take what arrives.
+reset()
+state.apply("Talents", {
+  bandage = { points = 2, eff = 3, min_level = 5 },
+  frenzy = { points = 0, eff = 0, min_level = 20 },
+  points = 1, allocs = 2, next_cost = 450,
+}, "kaziar", false)
+s = state.get()
+check("Talents projects per-ability records and its own scalars",
+  s.talents.bandage.points == 2 and s.talents.bandage.min_level == 5
+    and s.talents.frenzy.eff == 0
+    and s.talents_meta.points == 1 and s.talents_meta.allocs == 2)
+
+-- Kills: a stale-merge that keeps an ability from a previous class. A slow
+-- package always carries the complete set, so the projection replaces.
+reset()
+state.apply("Talents", { bandage = { points = 2, eff = 3, min_level = 5 } }, "kaziar", false)
+state.apply("Talents", { frenzy = { points = 1, eff = 1, min_level = 20 } }, "kaziar", false)
+check("a later Talents frame replaces the ability set",
+  state.get().talents.bandage == nil and state.get().talents.frenzy ~= nil)
+
+-- Kills: snapshot() handing out the live nested tables, letting a caller
+-- mutate plugin state through a value it was told is a copy.
+reset()
+state.apply("Skills", { bury = { raw = 1, eff = 2 } }, "kaziar", false)
+local snap = state.snapshot()
+snap.skills.bury.raw = 999
+check("snapshot deep-copies the nested records",
+  state.get().skills.bury.raw == 1)
+
 -- ---- summary --------------------------------------------------------------
 if failures > 0 then
   print("FAILURES: " .. failures)
