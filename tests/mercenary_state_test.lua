@@ -219,8 +219,11 @@ check("a switch zeroes the vitals deltas",
 -- field reset here is permanent.
 check("a switch keeps the projected field values", s.hp_max == 500)
 
--- Kills: carrying the previous mercenary's xp baseline forward, which
--- measures B's xp against A's start and produces a nonsense rate.
+-- Kills: carrying the previous mercenary's xp baseline forward, which measures
+-- B's xp against A's start and produces a nonsense rate. This is the Stats
+-- ordering: apply_stats has already computed a rate off the OUTGOING
+-- mercenary's baseline (-8000/h here) by the time the switch block runs, so
+-- deleting the switch block's xp lines leaves that garbage rate on the record.
 reset()
 state.apply("Stats", { perm_xp = 900, inst_xp = 40 }, "kaziar", false)
 clock = 1360   -- six minutes later
@@ -228,9 +231,35 @@ state.apply("Stats", { perm_xp = 1500, inst_xp = 90 }, "kaziar", false)
 local rate_before = state.get().pl_xp_per_hour
 state.apply("Stats", { perm_xp = 100, inst_xp = 5 }, "brenna", true)
 s = state.get()
-check("a switch rebaselines the xp tracking",
-  rate_before > 0 and s.pl_xp_per_hour == 0 and s.pl_xp_start == 100,
-  "before=" .. rate_before .. " after=" .. s.pl_xp_per_hour)
+check("a switch on a Stats frame drops the outgoing baseline and defers",
+  rate_before > 0 and s.pl_xp_per_hour == 0 and s.xp_baseline_dirty == true
+    and s.tracking_start_time == 0,
+  "before=" .. rate_before .. " after=" .. s.pl_xp_per_hour
+    .. " dirty=" .. tostring(s.xp_baseline_dirty))
+
+-- Kills: capturing an xp baseline inside the switch block. The switching frame
+-- on the wire is almost always Vitals (per-tick) or Info (on a status change),
+-- and neither writes rec.pl_xp -- so a capture there stamps the OUTGOING
+-- mercenary's xp with the incoming one's start time and skews every rate that
+-- follows. The case above uses a Stats switching frame, the one ordering in
+-- which a capture happens to be correct, so it cannot see this.
+reset()
+state.apply("Stats", { perm_xp = 900, inst_xp = 40 }, "kaziar", false)
+clock = 1360
+state.apply("Stats", { perm_xp = 1500, inst_xp = 90 }, "kaziar", false)
+local rate_v = state.get().pl_xp_per_hour
+state.apply("Vitals", { hp = 100, hp_max = 200 }, "brenna", true)
+s = state.get()
+check("a switch on a Vitals frame defers the baseline rather than capturing a stale one",
+  rate_v > 0 and s.pl_xp_per_hour == 0 and s.xp_baseline_dirty == true
+    and s.tracking_start_time == 0 and s.pl_xp_start ~= 1500,
+  "dirty=" .. tostring(s.xp_baseline_dirty) .. " start=" .. tostring(s.pl_xp_start))
+
+state.apply("Stats", { perm_xp = 100, inst_xp = 5 }, "brenna", false)
+s = state.get()
+check("the next Stats frame baselines on the new mercenary's real xp",
+  s.pl_xp_start == 100 and s.il_xp_start == 5 and s.pl_xp_per_hour == 0,
+  "start=" .. tostring(s.pl_xp_start))
 
 -- ---- xp rate on level-up --------------------------------------------------
 -- Kills: rebaselining inside apply_info. Info and Stats ride different ticks,

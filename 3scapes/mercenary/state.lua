@@ -254,12 +254,17 @@ function M.apply(sub, mirror, merc_name, switched)
     rec.prev_hp = rec.hp_current
     rec.prev_stamina = rec.stamina_current
     rec.prev_ap = rec.ap_current
-    rec.pl_xp_start = rec.pl_xp
-    rec.il_xp_start = rec.il_xp
-    rec.tracking_start_time = lera.time()
+    -- Do NOT capture an xp baseline here. rec.pl_xp/rec.il_xp are written only
+    -- by apply_stats, and the frame that first carries the new mercenary's name
+    -- is almost always Vitals (every tick) or Info (immediately on a status
+    -- change) -- so at this point they still hold the OUTGOING mercenary's xp.
+    -- Capturing it stamps A's xp with B's start time and skews every rate that
+    -- follows, permanently. Defer to the next Stats frame, the only place real
+    -- xp arrives.
+    rec.tracking_start_time = 0
     rec.pl_xp_per_hour = 0
     rec.il_xp_per_hour = 0
-    rec.xp_baseline_dirty = false
+    rec.xp_baseline_dirty = true
   end
 
   rec.last_update = lera.time()
