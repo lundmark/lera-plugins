@@ -50,18 +50,21 @@ check("the display name is capitalized, the identity is not",
   s.name == "Kaziar" and s.merc_name == "kaziar")
 
 -- ---- Info -----------------------------------------------------------------
--- Kills: hardcoding the caps at 150/30 the way the old MIP plugin did. They
--- are server-sent now and stats_window's level line keys off them.
+-- Kills: hardcoding the caps at 150/30 the way the old MIP plugin did. They are
+-- server-sent now (Info.perm_cap / Info.inst_cap) and stats_window's level line
+-- keys off them. The fixture deliberately uses 200/40 rather than 150/30: those
+-- are state.lua's own fallback defaults, so a fixture at the defaults would be
+-- satisfied by a hardcode and would pin nothing.
 reset()
 state.apply("Info", {
   class = "offensive", theme = "wolf", gender = 1, status = 1, dtype = "Edged",
-  cost = 12, follow = 1, perm_level = 12, perm_cap = 150,
-  inst_level = 4, inst_cap = 30, eff_level = 16,
+  cost = 12, follow = 1, perm_level = 12, perm_cap = 200,
+  inst_level = 4, inst_cap = 40, eff_level = 16,
 }, "kaziar", false)
 s = state.get()
 check("Info projects identity, caps and effective level",
-  s.class == "offensive" and s.pl_level == 12 and s.pl_max_level == 150
-    and s.il_max_level == 30 and s.eff_level == 16 and s.cost == 12)
+  s.class == "offensive" and s.pl_level == 12 and s.pl_max_level == 200
+    and s.il_max_level == 40 and s.eff_level == 16 and s.cost == 12)
 
 -- Kills: leaving `follow` as the wire's 0/1 int. The public field is a boolean
 -- and callers branch on it directly.
