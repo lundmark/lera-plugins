@@ -133,14 +133,16 @@ local function draw_bar(current, max, width)
 end
 
 -- Draw a mini bar for tight spaces: [###]
-local function draw_mini_bar(current, max, width)
+local function draw_mini_bar(current, max, width, dim)
   if max <= 0 then max = 1 end
   local pct = math.floor((current / max) * 100)
   local filled = math.floor((current / max) * width + 0.5)
   if filled > width then filled = width end
   if filled < 0 then filled = 0 end
 
-  local bar_color = pct_color(pct)
+  -- A dormant mercenary's pools are frozen for the whole recovery. Drawing
+  -- them in their percentage colour makes a stalled bar look live.
+  local bar_color = dim and colors.dim or pct_color(pct)
   local empty_color = colors.dim
 
   return bar_color .. string.rep("|", filled) ..
@@ -247,12 +249,14 @@ local function mercenary_stat_lines(w)
   local stats = mercenary.get_stats()
   local lines = {}
 
+  local dim = stats.is_dormant == true
+
   -- Merc name header
   local name = trunc(stats.name or "Mercenary", w - 2)
   table.insert(lines, colors.bright_cyan .. name .. colors.reset)
 
   -- HP line
-  local hp_bar = draw_mini_bar(stats.hp_current, stats.hp_max, 6)
+  local hp_bar = draw_mini_bar(stats.hp_current, stats.hp_max, 6, dim)
   local hp_text = string.format("%s %s %s/%s",
     colors.cyan .. "HP" .. colors.reset,
     hp_bar,
@@ -265,7 +269,7 @@ local function mercenary_stat_lines(w)
   table.insert(lines, hp_text)
 
   -- Stamina line
-  local st_bar = draw_mini_bar(stats.stamina_current, stats.stamina_max, 6)
+  local st_bar = draw_mini_bar(stats.stamina_current, stats.stamina_max, 6, dim)
   local st_text = string.format("%s %s %s/%s",
     colors.yellow .. "ST" .. colors.reset,
     st_bar,
@@ -278,7 +282,7 @@ local function mercenary_stat_lines(w)
   table.insert(lines, st_text)
 
   -- AP line
-  local ap_bar = draw_mini_bar(stats.ap_current, stats.ap_max, 6)
+  local ap_bar = draw_mini_bar(stats.ap_current, stats.ap_max, 6, dim)
   local ap_text = string.format("%s %s %s/%s",
     colors.magenta .. "AP" .. colors.reset,
     ap_bar,
@@ -290,8 +294,14 @@ local function mercenary_stat_lines(w)
   end
   table.insert(lines, ap_text)
 
-  -- Target line (if has target)
-  if stats.target and stats.target ~= "None" and stats.target ~= "" then
+  -- Dormancy takes the target line: query_attack() is cleared on collapse, so
+  -- the line is always free while dormant and the countdown costs no rows.
+  if dim then
+    local secs = stats.dormant or 0
+    local mins = math.floor(secs / 60)
+    table.insert(lines, string.format("%sDORMANT %d:%02d%s",
+      colors.bright_red, mins, secs - mins * 60, colors.reset))
+  elseif stats.target and stats.target ~= "None" and stats.target ~= "" then
     local tgt_color = pct_color(stats.target_pct)
     local tgt_name = trunc(stats.target, w - 10)
     local tgt_text = string.format("%s->%s%s %s%d%%%s",
@@ -303,7 +313,8 @@ local function mercenary_stat_lines(w)
   -- PL/IL line (compact)
   local pl_pct = stats.pl_needed > 0 and math.floor(stats.pl_xp / stats.pl_needed * 100) or 100
   local il_pct = stats.il_needed > 0 and math.floor(stats.il_xp / stats.il_needed * 100) or 100
-  if stats.pl_level < 150 or stats.il_level < 30 then
+  if stats.pl_level < (stats.pl_max_level or 150)
+     or stats.il_level < (stats.il_max_level or 30) then
     local lvl_text = string.format("%sPL%s%d %s%d%% %sIL%s%d %s%d%%",
       colors.cyan, colors.reset, stats.pl_level,
       colors.dim, pl_pct,

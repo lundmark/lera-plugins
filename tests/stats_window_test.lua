@@ -179,5 +179,92 @@ M.show_player(true)
 M.show_mercenary(true)
 M.show_killers(true)
 
+-- ---- mercenary dormancy ---------------------------------------------------
+-- Isolate the mercenary block: the guild and killers blocks come from other
+-- plugins and would otherwise land in the same capture.
+live_plugins.guild_druid = nil
+live_plugins.guild_viking = nil
+M.show_player(false)
+M.show_guild(false)
+M.show_killers(false)
+M.show_mercenary(true)
+
+local function merc_double(stats)
+  return {
+    has_data = function() return true end,
+    get_stats = function() return stats end,
+  }
+end
+
+local dormant_stats = {
+  name = "Kaziar", hp_current = 118, hp_max = 500, hp_percent = 23,
+  hp_delta = 0,
+  stamina_current = 0, stamina_max = 90, stamina_percent = 0, stamina_regen = 0,
+  ap_current = 0, ap_max = 50, ap_percent = 0, ap_regen = 0,
+  target = "Orc", target_pct = 42,
+  pl_level = 12, pl_xp = 900, pl_needed = 1500, pl_max_level = 150,
+  il_level = 4, il_xp = 30, il_needed = 100, il_max_level = 30,
+  is_dormant = true, dormant = 298,
+}
+
+live_plugins.mercenary = merc_double(dormant_stats)
+local joined = table.concat(render_capture(40, 20), "\n")
+
+-- A collapsed mercenary holds hp/stam/ap frozen for a 300 second recovery.
+-- Kills: rendering it identically to a live mercenary, which is exactly the
+-- frozen-HUD failure the mudlib added the Merc.* push to fix.
+check("a dormant mercenary renders a countdown",
+  joined:find("DORMANT", 1, true) ~= nil and joined:find("4:58", 1, true) ~= nil,
+  joined)
+
+-- Kills: leaving the bars in their percentage colour, which reads as live data
+-- sitting next to a countdown. hp 118/500 over a 6-cell bar fills exactly one
+-- cell, so a dimmed bar emits ESC[2m immediately followed by "|"; an undimmed
+-- one emits the bright-red percentage colour there instead.
+check("a dormant mercenary dims its bars",
+  joined:find("\027%[2m|") ~= nil, joined)
+
+-- Kills: keeping the target line while dormant. query_attack() is cleared on
+-- collapse, so the line is free and the countdown must take it rather than
+-- costing an extra row in a narrow sidebar.
+check("the countdown replaces the target line",
+  joined:find("->", 1, true) == nil, joined)
+
+-- ---- server-sent level caps -----------------------------------------------
+-- Kills: hardcoding the caps at 150/30 the way the old MIP plugin did. They
+-- are server-sent now (Info.perm_cap / Info.inst_cap), and a mercenary at the
+-- cap must not draw a level line implying progress it cannot make.
+local capped_stats = {
+  name = "Kaziar", hp_current = 400, hp_max = 500, hp_percent = 80,
+  hp_delta = 0,
+  stamina_current = 50, stamina_max = 90, stamina_percent = 55, stamina_regen = 1,
+  ap_current = 30, ap_max = 50, ap_percent = 60, ap_regen = 1,
+  target = "", target_pct = 0,
+  pl_level = 20, pl_xp = 10, pl_needed = 100, pl_max_level = 20,
+  il_level = 5, il_xp = 5, il_needed = 50, il_max_level = 5,
+  is_dormant = false, dormant = 0,
+}
+-- render.render lazily caches the fetched mercenary plugin (`if not
+-- mercenary then mercenary = plugin.get("mercenary") end`), so swapping the
+-- live double requires forcing a refetch the same way M.register_guild does
+-- for the guild probe. M.on_load() re-fetches unconditionally.
+live_plugins.mercenary = merc_double(capped_stats)
+M.on_load()
+joined = table.concat(render_capture(40, 20), "\n")
+check("a capped mercenary draws no level line",
+  joined:find("PL", 1, true) == nil, joined)
+
+-- Kills: reading the caps but inverting the test, which would hide the line
+-- for every mercenary still levelling.
+capped_stats.pl_max_level = 150
+capped_stats.il_max_level = 30
+live_plugins.mercenary = merc_double(capped_stats)
+joined = table.concat(render_capture(40, 20), "\n")
+check("a levelling mercenary still draws the level line",
+  joined:find("PL", 1, true) ~= nil, joined)
+
+live_plugins.mercenary = nil
+M.show_mercenary(false)
+
 if failures > 0 then os.exit(1) end
 print("ALL STATS_WINDOW TESTS PASSED")
