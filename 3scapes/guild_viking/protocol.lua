@@ -475,7 +475,7 @@ end
 -- it up to 2 seconds from first sight to finish before dropping it whole
 -- (guild_viking.lua:2896-2931, `_mip_batch_ts`, guild_viking.lua:489).
 -- `now` is SECONDS (LEGACY semantics); the caller (init.lua's sweep timer)
--- divides lera.time()'s milliseconds down before calling in.
+-- passes lera.time() straight through, which already returns epoch seconds.
 -- Note: the no-total branch above differs slightly from LEGACY in timing,
 -- not outcome -- LEGACY arms a fixed 0.1s one-shot timer per batch, while
 -- this sweep is a free-running 100ms timer that dispatches whatever no-total

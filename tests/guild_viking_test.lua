@@ -92,8 +92,9 @@ trigger = {
 }
 -- Fix 1 regression: capture every timer.every registration (interval, fn) so
 -- the sweep timer's callback can be fired directly with realistic
--- millisecond-scale lera.time() values, the same way mip/gmcp stubs above
--- capture their callbacks for wiring tests.
+-- lera.time() values, the same way mip/gmcp stubs above capture their
+-- callbacks for wiring tests. lera.time() returns EPOCH SECONDS
+-- (src/lua/api_lera.c), so the stub below must move in whole seconds.
 local timer_regs = {}
 -- The real lera timer API is add/every/after/cancel/count -- there is no
 -- timer.remove. This stub used to define `remove`, mirroring a mistaken call in
@@ -496,12 +497,14 @@ gmcp.fire("Guild", { guild = "viking",
                      blocks = { { good = "gmcpwired", amount = 3 } } })
 check("gmcp Guild wiring feeds protocol.on_gmcp", S.blocks.gmcpwired == 3)
 
--- Fix 1 regression: init.lua's sweep timer must divide lera.time()'s
--- milliseconds down to seconds before calling protocol.sweep, so a known-total
--- batch gets the full ~2s grace period LEGACY intends, not ~2ms. Drive the
--- captured sweep callback directly (it takes no arguments -- it reads
--- lera.time() itself, exactly as init.lua wires it), controlling the
--- millisecond-scale wall clock it sees via the lera.time stub.
+-- Regression: protocol.sweep()'s grace period is in SECONDS, and lera.time()
+-- already returns epoch seconds (src/lua/api_lera.c), so init.lua must pass it
+-- through unscaled. It used to divide by 1000 -- on the false premise, taken
+-- from a wrong lera.time() help string, that the API returned milliseconds --
+-- which turned LEGACY's intended ~2s grace into ~2000s, so an incomplete
+-- known-total batch was effectively never dropped. Drive the captured sweep
+-- callback directly (it takes no arguments -- it reads lera.time() itself,
+-- exactly as init.lua wires it), moving the stubbed clock in whole seconds.
 local sweep_reg
 for _, r in ipairs(timer_regs) do
   if r.interval == 100 then sweep_reg = r end
@@ -511,15 +514,15 @@ check("sweep timer registered at 100ms", sweep_reg ~= nil)
 local real_lera_time = lera.time
 protocol.source("mip")   -- force mip: an earlier test in this file may have left source("gmcp")
 seen = {}
-lera.time = function() return 100000 end          -- simulated wall clock: 100.000s
+lera.time = function() return 100000 end          -- simulated wall clock: t = 100000s
 protocol.on_bbe("TESTKEY_2of3^^x^^")               -- incomplete known-total batch arrives
 sweep_reg.fn()
 check("fresh known-total batch survives first sweep", protocol.stats().batches_pending == 1)
-lera.time = function() return 100100 end          -- +100ms of real time
+lera.time = function() return 100001 end          -- +1s of real time, inside the grace
 sweep_reg.fn()
-check("known-total batch NOT dropped after 100ms of real time",
+check("known-total batch NOT dropped after 1s of real time",
       protocol.stats().batches_pending == 1 and #seen == 0)
-lera.time = function() return 103000 end          -- +3s of real time
+lera.time = function() return 100003 end          -- +3s of real time, past the 2s grace
 sweep_reg.fn()
 check("known-total batch dropped after >2s of real time",
       protocol.stats().batches_pending == 0 and #seen == 0)

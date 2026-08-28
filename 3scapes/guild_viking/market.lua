@@ -20,8 +20,9 @@ local PRICE_HIST_MAX = 48
 -- buy or sell actually changed, so history holds one sample per market
 -- shift rather than one per packet. Timestamps with os.time() (epoch
 -- seconds), matching LEGACY exactly: price_history is the persisted
--- artifact, and lera.time() (monotonic ms since process start) would be
--- incomparable across sessions.
+-- artifact. lera.time() would in fact do just as well -- it returns the same
+-- epoch seconds -- but os.time() is what LEGACY used and is the plainer choice
+-- for a persisted timestamp.
 function M.on_tgoods(lin, good, buy, sell)
   if not buy or not sell then return end
   local ph = S.price_history

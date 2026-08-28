@@ -443,9 +443,12 @@ function M.on_load()
   -- here.
   gmcp_id = gmcp.on("Guild", function(pkg, data) protocol.on_gmcp(pkg, data) end)
   -- protocol.sweep's grace period is measured in seconds (LEGACY parity, see
-  -- protocol.lua's sweep comment); lera.time() is milliseconds, so it must be
-  -- divided down here at the call site rather than changing sweep()'s contract.
-  sweep_id = timer.every(100, function() protocol.sweep(lera.time() / 1000) end)
+  -- protocol.lua's sweep comment), and lera.time() already returns epoch
+  -- seconds, so it passes through unscaled. This used to divide by 1000, on the
+  -- false premise -- taken from a wrong lera.time() help string -- that the API
+  -- returned milliseconds; that turned the intended ~2s grace into ~2000s, so
+  -- an incomplete known-total batch was effectively never dropped.
+  sweep_id = timer.every(100, function() protocol.sweep(lera.time()) end)
 
   -- Fix 1: persist.load() must run BEFORE the initial combat-trigger
   -- registration, not after. register_combat_triggers() reads
