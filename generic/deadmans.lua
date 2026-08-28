@@ -37,6 +37,18 @@ local colors = {
   white_fg = 231,    -- White
 }
 
+-- Persist the thresholds. Called on every change rather than only at unload:
+-- on_unload runs on a clean exit, so a killed process used to lose the setting.
+local function save_config()
+  store.set({
+    config = {
+      warning_time = config.warning_time,
+      block_time = config.block_time,
+    }
+  })
+  store.save()
+end
+
 -- Get current time in seconds
 local function get_time()
   return lera.time()
@@ -84,7 +96,7 @@ local function show_help()
   print("  /deadmans status        - Show current status")
   print("  /deadmans reset         - Reset idle timer (re-enable sends)")
   print("  /deadmans warning <min> - Set warning time (minutes)")
-  print("  /deadmans block <min>   - Set block time (minutes)")
+  print("  /deadmans set <min>     - Set block time (minutes)")
 end
 
 local function show_status()
@@ -112,6 +124,8 @@ local function split_subcommand(args)
   return sub:lower(), rest
 end
 
+-- The usage line echoes the subcommand the user typed, so "block" reports
+-- itself rather than pointing at a name they did not use.
 local function set_minutes(sub, rest)
   local minutes = tonumber(rest:match("^%d+$"))
   if not minutes then
@@ -136,7 +150,8 @@ local function dispatch(args)
     show_status()
   elseif sub == "reset" then
     M.reset()
-  elseif sub == "warning" or sub == "block" then
+  elseif sub == "warning" or sub == "set" or sub == "block" then
+    -- "block" predates "set" and stays accepted; only "set" is advertised.
     set_minutes(sub, rest)
   else
     print("[deadmans] Unknown subcommand: " .. sub)
@@ -148,12 +163,14 @@ local function register_command()
   if not command then return end
   local id, err = command.register({
     name = "/deadmans",
-    usage = "/deadmans [status|reset|warning <min>|block <min>]",
+    usage = "/deadmans [status|reset|warning <min>|set <min>]",
     summary = "Idle detection and automated-send blocking",
     description = "Tracks how long it has been since you last typed something. "
       .. "After the warning time an overlay appears; after the block time "
       .. "automated sends from triggers and timers are suppressed until you "
-      .. "type again. 'reset' clears the idle timer by hand.",
+      .. "type again. 'set <minutes>' changes the block time and 'warning "
+      .. "<minutes>' the warning time; both are saved as soon as they change. "
+      .. "'reset' clears the idle timer by hand.",
     accepts_args = true,
     handler = dispatch,
   })
@@ -307,14 +324,7 @@ function M.on_unload()
     update_timer = nil
   end
 
-  -- Save config
-  store.set({
-    config = {
-      warning_time = config.warning_time,
-      block_time = config.block_time,
-    }
-  })
-  store.save()
+  save_config()
 end
 
 --------------------------------------------------------------------------------
@@ -324,12 +334,14 @@ end
 -- Set warning time (in minutes)
 function M.set_warning_time(minutes)
   config.warning_time = minutes * 60
+  save_config()
   print("[deadmans] Warning time set to " .. minutes .. " minutes")
 end
 
 -- Set block time (in minutes)
 function M.set_block_time(minutes)
   config.block_time = minutes * 60
+  save_config()
   print("[deadmans] Block time set to " .. minutes .. " minutes")
 end
 

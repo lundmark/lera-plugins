@@ -1,70 +1,61 @@
 -- Player Stats Plugin for Lera
--- Extracts player stats from MIP FFF (composite) messages
--- Provides API for UI plugins to access player HP, SP, GP, and combat info
+--
+-- GMCP-fed. Char.Vitals carries hp/sp with their maxima, encumbrance, the
+-- morgue-coffin counts and the player's guild; Char.Combat carries the attacker
+-- block. Provides an API for UI plugins (stats_window's player block,
+-- guild_druid's HP bar) to read player state.
+--
+-- This plugin used to parse MIP FFF/BBA/BBB/BBC/BBD and had no GMCP path at
+-- all, which is why it was dropped from every MIP-free profile. Two fields did
+-- not survive the move and were removed rather than faked:
+--
+--   gp1/gp2 + gline1/gline2  MIP FFF and the GLINE keys. There is no generic
+--                            GMCP source: guild points are guild-specific, and
+--                            the only emitter is the Viking guild's Guild.State
+--                            (bars.gp1/gp2), which guild_viking already owns.
+--   attacker_image           MIP-only; nothing in this tree ever read it.
+--
+-- Nothing in the repo consumed any of them.
 
 local M = {}
 M.name = "player_stats"
-M.version = "1.0"
-M.priority = 40  -- Run early to parse MIP data
+M.version = "2.0"
+M.priority = 40  -- Run early so UI plugins see fresh state
 
 --------------------------------------------------------------------------------
 -- State
 --------------------------------------------------------------------------------
 
 local player = {
-  -- HP
-  hp = 0,
-  hp_max = 0,
-  hp_percent = 0,
+  hp = 0, hp_max = 0, hp_percent = 0,
+  sp = 0, sp_max = 0, sp_percent = 0,
 
-  -- SP (Spell Points)
-  sp = 0,
-  sp_max = 0,
-  sp_percent = 0,
+  -- Char.Vitals extras. Carried because the payload already has them and a
+  -- consumer would otherwise have to subscribe to Char.Vitals separately.
+  enc = 0,
+  coffin = 0,
+  coffin_max = 0,
+  guild = "",
 
-  -- GP1 (Guild Points 1)
-  gp1 = 0,
-  gp1_max = 0,
-  gp1_percent = 0,
-  gp1_label = "GP1",
+  -- Char.Combat
+  attacker = "",
+  attacker_hp = 0,
+  rounds = 0,
 
-  -- GP2 (Guild Points 2)
-  gp2 = 0,
-  gp2_max = 0,
-  gp2_percent = 0,
-  gp2_label = "GP2",
-
-  -- Guild info lines
-  gline1 = "",
-  gline2 = "",
-
-  -- Combat info
-  attacker = "",        -- Name of monster being fought
-  attacker_hp = 0,      -- % HP of attacker
-  attacker_image = "",  -- Image file for attacker
-
-  -- Deltas
   hp_delta = 0,
   sp_delta = 0,
-  gp1_delta = 0,
-  gp2_delta = 0,
-
-  -- Previous values for delta
   prev_hp = 0,
   prev_sp = 0,
-  prev_gp1 = 0,
-  prev_gp2 = 0,
 
-  -- Timestamp
   last_update = 0,
 }
 
--- Label masks
+-- Label masks. Kept as module state (not payload-driven) because GMCP carries
+-- no label for either pool; stats_window reads them through get_stats().
 local hp_label = "HP"
 local sp_label = "SP"
 
--- MIP handler ref
-local mip_handlers = {}
+local handler_ids = {}
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -75,7 +66,6 @@ local function calc_percent(current, max)
   return math.floor((current / max) * 100)
 end
 
--- Color based on percentage
 local function get_percent_color(pct)
   if pct > 90 then
     return "19ff25"  -- Bright green
@@ -90,113 +80,66 @@ local function get_percent_color(pct)
   end
 end
 
+local function num(value, fallback)
+  return tonumber(value) or fallback or 0
+end
+
 --------------------------------------------------------------------------------
--- MIP Handlers
+-- GMCP handlers
 --------------------------------------------------------------------------------
 
--- FFF - Composite stats (HP, SP, GP, attacker info)
--- Format: CODE~VALUE~CODE~VALUE~... (tilde-separated pairs)
-local function handle_fff(key, code, data)
-  -- Debug: see raw MIP data (comment out when done debugging)
-  -- print("[player_stats] FFF data: " .. data)
+-- Char.Vitals: { hp, maxhp, sp, maxsp, enc, coffin, coffin_max, guild }.
+-- The server sends a complete snapshot (its delta step decides *whether* to
+-- send, never *what* to send), so every field is read on every frame rather
+-- than merged -- unlike the Merc.* and Guild.* namespaces, which page deltas.
+local function on_vitals(_, data)
+  if type(data) ~= "table" then return end
 
-  -- Store previous values
   player.prev_hp = player.hp
   player.prev_sp = player.sp
-  player.prev_gp1 = player.gp1
-  player.prev_gp2 = player.gp2
 
-  -- Split by tilde
-  local parts = {}
-  for part in (data .. "~"):gmatch("([^~]*)~") do
-    table.insert(parts, part)
-  end
+  player.hp = num(data.hp)
+  player.hp_max = num(data.maxhp)
+  player.sp = num(data.sp)
+  player.sp_max = num(data.maxsp)
+  player.enc = num(data.enc)
+  player.coffin = num(data.coffin)
+  player.coffin_max = num(data.coffin_max)
+  if type(data.guild) == "string" then player.guild = data.guild end
 
-  -- Parse pairs: CODE, VALUE, CODE, VALUE, ...
-  local i = 1
-  while i < #parts do
-    local field_code = parts[i]
-    local value = parts[i + 1] or ""
-    i = i + 2
-
-    -- Handle each code
-    if field_code == "A" then
-      player.hp = tonumber(value) or 0
-    elseif field_code == "B" then
-      player.hp_max = tonumber(value) or 0
-    elseif field_code == "C" then
-      player.sp = tonumber(value) or 0
-    elseif field_code == "D" then
-      player.sp_max = tonumber(value) or 0
-    elseif field_code == "E" then
-      player.gp1 = tonumber(value) or 0
-    elseif field_code == "F" then
-      player.gp1_max = tonumber(value) or 0
-    elseif field_code == "G" then
-      player.gp2 = tonumber(value) or 0
-    elseif field_code == "H" then
-      player.gp2_max = tonumber(value) or 0
-    elseif field_code == "I" then
-      player.gline1 = value
-    elseif field_code == "J" then
-      player.gline2 = value
-    elseif field_code == "K" then
-      player.attacker = value
-    elseif field_code == "L" then
-      player.attacker_hp = tonumber(value) or 0
-    elseif field_code == "M" then
-      player.attacker_image = value
-    end
-  end
-
-  -- Calculate percentages
   player.hp_percent = calc_percent(player.hp, player.hp_max)
   player.sp_percent = calc_percent(player.sp, player.sp_max)
-  player.gp1_percent = calc_percent(player.gp1, player.gp1_max)
-  player.gp2_percent = calc_percent(player.gp2, player.gp2_max)
 
-  -- Calculate deltas
-  player.hp_delta = player.hp - player.prev_hp
-  player.sp_delta = player.sp - player.prev_sp
-  player.gp1_delta = player.gp1 - player.prev_gp1
-  player.gp2_delta = player.gp2 - player.prev_gp2
+  -- Deltas are meaningless against a never-populated baseline, so the first
+  -- frame reports zero rather than the full value as a gain.
+  if player.last_update > 0 then
+    player.hp_delta = player.hp - player.prev_hp
+    player.sp_delta = player.sp - player.prev_sp
+  else
+    player.hp_delta = 0
+    player.sp_delta = 0
+  end
 
-  player.last_update = lera.time()
+  player.last_update = os.time()
+  ui.dirty()
 end
 
--- BBA - GP1 label mask
-local function handle_bba(key, code, data)
-  if data and #data > 0 then
-    player.gp1_label = data
-  end
-end
+-- Char.Combat: { attacker, attacker_hp, rounds }. Field names match this
+-- plugin's own, which is why no renaming happens here.
+local function on_combat(_, data)
+  if type(data) ~= "table" then return end
 
--- BBB - GP2 label mask
-local function handle_bbb(key, code, data)
-  if data and #data > 0 then
-    player.gp2_label = data
-  end
-end
+  if type(data.attacker) == "string" then player.attacker = data.attacker end
+  if data.attacker_hp ~= nil then player.attacker_hp = num(data.attacker_hp) end
+  if data.rounds ~= nil then player.rounds = num(data.rounds) end
 
--- BBC - HP label mask
-local function handle_bbc(key, code, data)
-  if data and #data > 0 then
-    hp_label = data
-  end
-end
-
--- BBD - SP label mask
-local function handle_bbd(key, code, data)
-  if data and #data > 0 then
-    sp_label = data
-  end
+  ui.dirty()
 end
 
 --------------------------------------------------------------------------------
 -- Public API
 --------------------------------------------------------------------------------
 
--- Get all stats as a table
 function M.get_stats()
   return {
     hp = player.hp,
@@ -211,30 +154,19 @@ function M.get_stats()
     sp_delta = player.sp_delta,
     sp_label = sp_label,
 
-    gp1 = player.gp1,
-    gp1_max = player.gp1_max,
-    gp1_percent = player.gp1_percent,
-    gp1_delta = player.gp1_delta,
-    gp1_label = player.gp1_label,
-
-    gp2 = player.gp2,
-    gp2_max = player.gp2_max,
-    gp2_percent = player.gp2_percent,
-    gp2_delta = player.gp2_delta,
-    gp2_label = player.gp2_label,
-
-    gline1 = player.gline1,
-    gline2 = player.gline2,
+    enc = player.enc,
+    coffin = player.coffin,
+    coffin_max = player.coffin_max,
+    guild = player.guild,
 
     attacker = player.attacker,
     attacker_hp = player.attacker_hp,
-    attacker_image = player.attacker_image,
+    rounds = player.rounds,
 
     last_update = player.last_update,
   }
 end
 
--- Individual accessors
 function M.hp() return player.hp, player.hp_max, player.hp_percent end
 function M.hp_delta() return player.hp_delta end
 function M.hp_label() return hp_label end
@@ -243,51 +175,32 @@ function M.sp() return player.sp, player.sp_max, player.sp_percent end
 function M.sp_delta() return player.sp_delta end
 function M.sp_label() return sp_label end
 
-function M.gp1() return player.gp1, player.gp1_max, player.gp1_percent end
-function M.gp1_delta() return player.gp1_delta end
-function M.gp1_label() return player.gp1_label end
-
-function M.gp2() return player.gp2, player.gp2_max, player.gp2_percent end
-function M.gp2_delta() return player.gp2_delta end
-function M.gp2_label() return player.gp2_label end
-
-function M.gline1() return player.gline1 end
-function M.gline2() return player.gline2 end
+function M.enc() return player.enc end
+function M.coffin() return player.coffin, player.coffin_max end
+function M.guild() return player.guild end
 
 function M.attacker() return player.attacker, player.attacker_hp end
-function M.attacker_image() return player.attacker_image end
+function M.rounds() return player.rounds end
 
 function M.in_combat()
-  return player.attacker and player.attacker ~= ""
+  return player.attacker ~= nil and player.attacker ~= ""
 end
 
--- Color helpers
-function M.get_color(pct)
-  return get_percent_color(pct)
-end
+function M.get_color(pct) return get_percent_color(pct) end
+function M.hp_color() return get_percent_color(player.hp_percent) end
+function M.sp_color() return get_percent_color(player.sp_percent) end
+function M.attacker_color() return get_percent_color(player.attacker_hp) end
 
-function M.hp_color()
-  return get_percent_color(player.hp_percent)
-end
-
-function M.sp_color()
-  return get_percent_color(player.sp_percent)
-end
-
-function M.attacker_color()
-  return get_percent_color(player.attacker_hp)
-end
-
--- Check if we have data
 function M.has_data()
   return player.last_update > 0
 end
 
--- Clear attacker (useful when combat ends)
+-- Combat end is not always announced, so consumers that detect it themselves
+-- (guild_druid does) can clear the block.
 function M.clear_attacker()
   player.attacker = ""
   player.attacker_hp = 0
-  player.attacker_image = ""
+  player.rounds = 0
 end
 
 --------------------------------------------------------------------------------
@@ -295,20 +208,15 @@ end
 --------------------------------------------------------------------------------
 
 function M.on_load()
-  -- Register MIP handlers
-  table.insert(mip_handlers, mip.on("FFF", handle_fff))
-  table.insert(mip_handlers, mip.on("BBA", handle_bba))
-  table.insert(mip_handlers, mip.on("BBB", handle_bbb))
-  table.insert(mip_handlers, mip.on("BBC", handle_bbc))
-  table.insert(mip_handlers, mip.on("BBD", handle_bbd))
+  handler_ids[#handler_ids + 1] = gmcp.on("Char.Vitals", on_vitals)
+  handler_ids[#handler_ids + 1] = gmcp.on("Char.Combat", on_combat)
 end
 
 function M.on_unload()
-  -- Unregister MIP handlers
-  for _, handler_id in ipairs(mip_handlers) do
-    mip.off(handler_id)
+  for _, id in ipairs(handler_ids) do
+    gmcp.remove(id)
   end
-  mip_handlers = {}
+  handler_ids = {}
 end
 
 return M

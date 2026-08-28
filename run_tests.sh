@@ -108,3 +108,4 @@ LERA_ROOT=$lera_root "$luajit" tests/wizard_table_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/wizard_protocol_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/wizard_init_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/wizard_pane_test.lua
+LERA_ROOT=$lera_root "$luajit" tests/player_stats_test.lua

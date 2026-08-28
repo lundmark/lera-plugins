@@ -18,11 +18,12 @@ end
 
 -- ---- stubs ------------------------------------------------------------------
 local stored_data = nil
+local saves = 0
 store = {
   load = function() end,
   get = function() return stored_data end,
   set = function(d) stored_data = d end,
-  save = function() end,
+  save = function() saves = saves + 1 end,
 }
 
 local now = 1000
@@ -97,7 +98,9 @@ check("status_shows_status", out:find("Status", 1, true) ~= nil, out)
 check("status_omits_help", out:find("/deadmans reset", 1, true) == nil, out)
 
 out = run("help")
-check("help_shows_help", out:find("/deadmans block", 1, true) ~= nil, out)
+check("help_shows_help", out:find("/deadmans set", 1, true) ~= nil, out)
+check("help_advertises_set_not_block", out:find("/deadmans block", 1, true) == nil, out)
+check("usage_advertises_set", spec and spec.usage:find("set <min>", 1, true) ~= nil, spec and spec.usage)
 
 -- ---- whitespace and case ----------------------------------------------------
 out = run("   status   ")
@@ -126,6 +129,57 @@ check("block_rejects_non_numeric_keeps_config", dm.get_config().block_time == 20
 out = run("warning 5 7")
 check("warning_rejects_extra_argument", out:find("Usage: /deadmans warning", 1, true) ~= nil, out)
 
+-- ---- "set" is the documented name for the block threshold --------------------
+run("set 25")
+check("set_sets_block_time", dm.get_config().block_time == 25 * 60,
+      dm.get_config().block_time)
+check("set_leaves_warning_alone", dm.get_config().warning_time == 5 * 60,
+      dm.get_config().warning_time)
+
+out = run("set")
+check("set_without_value_prints_usage", out:find("Usage: /deadmans set", 1, true) ~= nil, out)
+check("set_without_value_keeps_config", dm.get_config().block_time == 25 * 60)
+
+out = run("set abc")
+check("set_rejects_non_numeric", out:find("Usage: /deadmans set", 1, true) ~= nil, out)
+check("set_rejects_non_numeric_keeps_config", dm.get_config().block_time == 25 * 60)
+
+-- "block" stays accepted so an existing script or muscle-memory keeps working,
+-- it is simply no longer what the help text names.
+run("block 30")
+check("block_still_accepted", dm.get_config().block_time == 30 * 60,
+      dm.get_config().block_time)
+run("set 25")
+
+-- ---- a threshold change persists immediately, not only at unload ------------
+stored_data = nil
+saves = 0
+run("set 40")
+check("set_saves_immediately", saves == 1, "saves=" .. saves)
+check("set_persists_block_time", stored_data and stored_data.config
+      and stored_data.config.block_time == 40 * 60,
+      stored_data and stored_data.config and stored_data.config.block_time)
+check("set_persists_warning_time", stored_data and stored_data.config
+      and stored_data.config.warning_time == 5 * 60,
+      stored_data and stored_data.config and stored_data.config.warning_time)
+
+stored_data = nil
+saves = 0
+run("warning 8")
+check("warning_saves_immediately", saves == 1, "saves=" .. saves)
+check("warning_persists_both", stored_data and stored_data.config
+      and stored_data.config.warning_time == 8 * 60
+      and stored_data.config.block_time == 40 * 60)
+
+-- A rejected argument must not write anything.
+stored_data = nil
+saves = 0
+run("set abc")
+check("rejected_value_does_not_save", saves == 0 and stored_data == nil, "saves=" .. saves)
+
+run("warning 5")
+run("set 20")
+
 -- ---- reset ------------------------------------------------------------------
 now = 5000
 out = run("reset")
@@ -143,7 +197,9 @@ dm.on_unload()
 print = real_print
 check("unload_unregisters_command", #unregistered == 1, tostring(#unregistered))
 check("unload_persists_config", stored_data and stored_data.config
-      and stored_data.config.warning_time == 5 * 60)
+      and stored_data.config.warning_time == 5 * 60
+      and stored_data.config.block_time == 20 * 60,
+      stored_data and stored_data.config and stored_data.config.block_time)
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")

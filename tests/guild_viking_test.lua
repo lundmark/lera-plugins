@@ -95,12 +95,21 @@ trigger = {
 -- millisecond-scale lera.time() values, the same way mip/gmcp stubs above
 -- capture their callbacks for wiring tests.
 local timer_regs = {}
+-- The real lera timer API is add/every/after/cancel/count -- there is no
+-- timer.remove. This stub used to define `remove`, mirroring a mistaken call in
+-- the plugin's on_unload rather than the API, so a nil-field crash that aborted
+-- on_unload halfway passed this suite. Cancellations are recorded so the
+-- teardown case can assert they actually happened.
+timer_cancels = {}
 timer = {
   every = function(interval, fn)
     timer_regs[#timer_regs + 1] = { interval = interval, fn = fn }
     return #timer_regs
   end,
-  remove = function() end,
+  cancel = function(id)
+    timer_cancels[#timer_cancels + 1] = id
+    return true
+  end,
 }
 -- Task 10: capture the ^resetvikxp$ registration so later cases can fire it
 -- directly, the same way mip/gmcp stubs above capture their callbacks.
@@ -1741,8 +1750,16 @@ pcall(M2.on_unload)
 page_opts.set("gag_status_lines", true)   -- restore the shared instance's default
 
 -- ---- on_unload: full cleanup, must not error (Task 10; call LAST) ----------
-local ok_unload = pcall(M.on_unload)
-check("on_unload does not error", ok_unload)
+local cancels_before_unload = #timer_cancels
+local ok_unload, unload_err = pcall(M.on_unload)
+check("on_unload does not error", ok_unload, unload_err)
+-- on_unload cancels the sweep and countdown timers. Asserting the count is what
+-- proves on_unload ran to completion rather than aborting early: every teardown
+-- step after the timer cancels (combat triggers, notify triggers, the /vik
+-- command registration) is silent, so "did not error" alone cannot see it.
+check("on_unload cancelled both of its timers",
+      #timer_cancels - cancels_before_unload == 2,
+      #timer_cancels - cancels_before_unload)
 
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING TESTS PASSED")
