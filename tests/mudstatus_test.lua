@@ -22,18 +22,20 @@ local now_ms = 1000000
 lera = { time = function() return now_ms end }
 
 local handlers = {}
+local removed_handlers = {}
 gmcp = {
   on = function(pkg, fn) handlers[pkg] = fn; return pkg end,
-  remove = function() return true end,
+  remove = function(id) removed_handlers[#removed_handlers + 1] = id; return true end,
 }
 
 local dirty_count = 0
 ui = { dirty = function() dirty_count = dirty_count + 1 end }
 
 local timers = {}
+local cancelled_timers = {}
 timer = {
   every = function(ms, fn) timers[#timers + 1] = { ms = ms, fn = fn }; return #timers end,
-  cancel = function() return true end,
+  cancel = function(id) cancelled_timers[#cancelled_timers + 1] = id; return true end,
 }
 
 local M = require("mudstatus")
@@ -190,8 +192,14 @@ M.on_disconnect()
 check("disconnect clears the mirror", M.title_fragment() == nil)
 check("disconnect repaints the now-empty title", dirty_count == 1, dirty_count)
 
+removed_handlers = {}
+cancelled_timers = {}
 M.on_unload()
 check("unload leaves no state behind", M.snapshot() == nil)
+check("unload removes exactly the handler on_load installed",
+      #removed_handlers == 1 and removed_handlers[1] == "Mud", removed_handlers[1])
+check("unload cancels exactly the timer on_load installed",
+      #cancelled_timers == 1 and cancelled_timers[1] == 1, cancelled_timers[1])
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")
