@@ -56,4 +56,51 @@ function M.reboot_left()
   return math.floor(left)
 end
 
+-- The bar fills with ELAPSED time, left to right, toward the reboot; the
+-- parenthesised time is what remains. floor(), so a cell lights only once its
+-- tenth is fully spent.
+local function bar(left, total)
+  if type(total) ~= "number" or total <= 0 then return nil end
+  local elapsed = total - left
+  local filled = math.floor(elapsed / total * BAR_CELLS)
+  if filled < 0 then filled = 0 end
+  if filled > BAR_CELLS then filled = BAR_CELLS end
+  return "[" .. string.rep("X", filled) .. string.rep(".", BAR_CELLS - filled) .. "]"
+end
+
+-- Days appear from 1d up, hours from 1h up, minutes always. Seconds are never
+-- shown: the display would change every second while the underlying value is
+-- only re-synced every 2 minutes.
+local function duration(seconds)
+  local d = math.floor(seconds / 86400)
+  local h = math.floor((seconds % 86400) / 3600)
+  local m = math.floor((seconds % 3600) / 60)
+  if d > 0 then return string.format("%dd %dh %dm", d, h, m) end
+  if h > 0 then return string.format("%dh %dm", h, m) end
+  return string.format("%dm", m)
+end
+
+-- The output-pane title's status half, or nil when nothing usable has arrived.
+-- nil matters for rollout: against a mud that does not send Mud.Status the
+-- profile shows host:port alone rather than a zeroed bar.
+function M.title_fragment()
+  if not state then return nil end
+  local parts = {}
+
+  local left = M.reboot_left()
+  if left then
+    local drawn = bar(left, state.reboot_total)
+    if drawn then
+      parts[#parts + 1] = "Reboot " .. drawn .. " (" .. duration(left) .. ")"
+    end
+  end
+
+  if type(state.lag) == "number" then
+    parts[#parts + 1] = string.format("Lag %.2f", state.lag)
+  end
+
+  if #parts == 0 then return nil end
+  return table.concat(parts, " | ")
+end
+
 return M

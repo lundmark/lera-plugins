@@ -96,6 +96,63 @@ check("the countdown clamps at zero rather than going negative",
 M.reset()
 check("no frame yet means no countdown", M.reboot_left() == nil)
 
+-- ---- rendering --------------------------------------------------------------
+M.reset()
+check("no frame yet means no fragment", M.title_fragment() == nil)
+
+M.reset()
+now_ms = 1000000
+-- Just booted: nothing elapsed, so the bar is empty.
+M.apply("Mud.Status", { reboot_left = 432000, reboot_total = 432000, uptime = 0, lag = 0.02 })
+check("a fresh boot draws an empty bar",
+      M.title_fragment() == "Reboot [..........] (5d 0h 0m) | Lag 0.02",
+      M.title_fragment())
+
+M.reset()
+-- Half elapsed.
+M.apply("Mud.Status", { reboot_left = 216000, reboot_total = 432000, uptime = 216000, lag = 0.0 })
+check("a half-elapsed cycle fills half the bar",
+      M.title_fragment() == "Reboot [XXXXX.....] (2d 12h 0m) | Lag 0.00",
+      M.title_fragment())
+
+M.reset()
+-- Due imminently: days and hours drop out of the text. The bar is NOT full --
+-- 720s of a 432000s cycle is 99.83% elapsed, which floors to 9 cells. A tenth
+-- cell means the tenth tenth is fully spent, and it is not.
+M.apply("Mud.Status", { reboot_left = 720, reboot_total = 432000, uptime = 431280, lag = 0.31 })
+check("an imminent reboot shows minutes only and stops one cell short",
+      M.title_fragment() == "Reboot [XXXXXXXXX.] (12m) | Lag 0.31",
+      M.title_fragment())
+
+M.reset()
+-- Only a fully spent cycle fills every cell.
+M.apply("Mud.Status", { reboot_left = 0, reboot_total = 432000, uptime = 432000, lag = 0.0 })
+check("a spent cycle fills the bar completely",
+      M.title_fragment() == "Reboot [XXXXXXXXXX] (0m) | Lag 0.00",
+      M.title_fragment())
+
+M.reset()
+M.apply("Mud.Status", { reboot_left = 7140, reboot_total = 432000, uptime = 424860, lag = 0.0 })
+check("under a day shows hours and minutes without a day field",
+      M.title_fragment():find("(1h 59m)", 1, true) ~= nil, M.title_fragment())
+
+M.reset()
+-- A denominator of zero cannot produce a fraction; the bar is omitted rather
+-- than dividing by zero or drawing a meaningless full bar.
+M.apply("Mud.Status", { reboot_left = 60, reboot_total = 0, uptime = 0, lag = 0.05 })
+check("a zero denominator omits the bar but keeps lag",
+      M.title_fragment() == "Lag 0.05", M.title_fragment())
+
+M.reset()
+M.apply("Mud.Status", { lag = 1.5 })
+check("lag alone renders without a reboot group",
+      M.title_fragment() == "Lag 1.50", M.title_fragment())
+
+M.reset()
+M.apply("Mud.Status", { reboot_left = 3600, reboot_total = 7200, uptime = 3600 })
+check("a reboot group renders without lag",
+      M.title_fragment() == "Reboot [XXXXX.....] (1h 0m)", M.title_fragment())
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
