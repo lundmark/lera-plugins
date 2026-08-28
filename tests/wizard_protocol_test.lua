@@ -128,6 +128,20 @@ check("request: a second request for an in-flight path is not resent",
       #sent == 0,
       "an outstanding request must not be duplicated by a fast second Tab")
 
+protocol.reset()
+sent = {}
+local dedup_fired = {}
+protocol.request("/dedup", function(e) dedup_fired[#dedup_fired + 1] = e end)
+protocol.request("/dedup", function(e) dedup_fired[#dedup_fired + 1] = e end)
+check("request: an in-flight duplicate sends once", #sent == 1, #sent .. " sent")
+protocol.on_message("Files.List", {
+  path = "/dedup", dirs = { "z" }, files = {}, page = 1, pages = 1,
+})
+check("request: BOTH waiters fire on the single response",
+      #dedup_fired == 2,
+      "a queue-after-early-return bug drops the second caller silently; got "
+        .. #dedup_fired)
+
 -- ---- responses ------------------------------------------------------------
 
 protocol.reset()
@@ -254,6 +268,31 @@ local ok = pcall(protocol.on_message, "Files.List", nil)
 check("robustness: a nil payload does not raise", ok == true)
 ok = pcall(protocol.on_message, "Files.List", { dirs = {}, files = {} })
 check("robustness: a payload with no path does not raise", ok == true)
+
+-- Finding 2: a raising callback must not take down the other waiters queued
+-- on the same completion.
+protocol.reset()
+local survivor = {}
+protocol.request("/boom", function() error("deliberate") end)
+protocol.request("/boom", function(e) survivor[#survivor + 1] = e end)
+protocol.on_message("Files.List", {
+  path = "/boom", dirs = {}, files = {}, page = 1, pages = 1,
+})
+check("callback: a raising callback does not lose the other waiters",
+      #survivor == 1,
+      "got " .. #survivor)
+
+-- Finding 3: truncated is sticky once any page reports it, not reset by a
+-- later page that doesn't.
+protocol.reset()
+protocol.on_message("Files.List", {
+  path = "/tr", dirs = { "a" }, files = {}, page = 1, pages = 2, truncated = 1,
+})
+protocol.on_message("Files.List", {
+  path = "/tr", dirs = {}, files = { "b" }, page = 2, pages = 2,
+})
+check("paging: truncated persists once any page reports it",
+      protocol.lookup("/tr").truncated == true)
 
 print(failures == 0 and "ALL PASS" or (failures .. " FAILURE(S)"))
 os.exit(failures == 0 and 0 or 1)
