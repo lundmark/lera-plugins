@@ -50,18 +50,18 @@ check("candidates: dir kind offers directories only",
       names(complete.candidates(DIRS, FILES, "ar", "dir")) == "archive,areas")
 
 check("candidates: file kind still offers directories",
-      names(complete.candidates(DIRS, FILES, "ar", "file")) == "archive,arena.c,arena.h,areas",
+      names(complete.candidates(DIRS, FILES, "ar", "file")) == "archive,areas,arena.c,arena.h",
       "a files-only command must still be able to descend")
 
 check("candidates: lpc kind offers .c files and directories",
-      names(complete.candidates(DIRS, FILES, "ar", "lpc")) == "archive,arena.c,areas",
+      names(complete.candidates(DIRS, FILES, "ar", "lpc")) == "archive,areas,arena.c",
       "arena.h is not a loadable object")
 
 check("candidates: none kind offers nothing",
       #complete.candidates(DIRS, FILES, "ar", "none") == 0)
 
 check("candidates: any kind offers everything matching",
-      names(complete.candidates(DIRS, FILES, "ar", "any")) == "archive,arena.c,arena.h,areas")
+      names(complete.candidates(DIRS, FILES, "ar", "any")) == "archive,areas,arena.c,arena.h")
 
 check("candidates: an empty prefix matches all",
       #complete.candidates(DIRS, FILES, "", "any") == 5)
@@ -133,7 +133,7 @@ do
   for i = 1, #d.items do labels[i] = d.items[i].label end
   table.sort(labels)
   check("decide: menu labels mark directories with a slash",
-        table.concat(labels, ",") == "archive/,arena.c,arena.h,areas/",
+        table.concat(labels, ",") == "archive/,areas/,arena.c,arena.h",
         table.concat(labels, ","))
   local values = {}
   for i = 1, #d.items do values[d.items[i].label] = d.items[i].value end
