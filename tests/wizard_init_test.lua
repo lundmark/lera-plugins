@@ -191,6 +191,34 @@ wizard.complete()
 check("tab: lpc completes nothing",
       input_text == "lpc ar" and menu_opened == nil, input_text)
 
+-- grep's argument 1 is a search term, not a path (cmds/secure/grep.c SYNTAX).
+-- Completing it against the filesystem is actively wrong, so from_arg is 2.
+sent = {}
+input_text, input_cursor = "grep ar", 8
+menu_opened = nil
+wizard.complete()
+check("tab: grep argument 1 is a search term and does not complete",
+      input_text == "grep ar" and menu_opened == nil and #sent == 0,
+      input_text .. " / menu=" .. tostring(menu_opened ~= nil))
+
+-- ...but argument 2 is a path and completes normally.
+input_text, input_cursor = "grep pattern ar", 16
+menu_opened = nil
+wizard.complete()
+check("tab: grep argument 2 completes as a path",
+      menu_opened ~= nil and #menu_opened.items == 3,
+      "menu=" .. tostring(menu_opened ~= nil)
+        .. " items=" .. tostring(menu_opened and #menu_opened.items))
+
+-- A path-shaped word in COMMAND position has arg_index 0. The guard's
+-- `arg_index > 0` clause is what stops `0 < from_arg` rejecting it.
+input_text, input_cursor = "/players/simon/archi", 21
+menu_opened = nil
+wizard.complete()
+check("tab: a path-shaped word in command position still completes",
+      input_text == "/players/simon/archive/",
+      input_text)
+
 -- A cache miss requests rather than completing.
 sent = {}
 input_text, input_cursor = "cd /unseen/x", 13
