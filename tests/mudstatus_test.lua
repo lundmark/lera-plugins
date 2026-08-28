@@ -18,8 +18,8 @@ local function check(name, ok, detail)
 end
 
 -- ---- stubs ------------------------------------------------------------------
-local now_ms = 1000000
-lera = { time = function() return now_ms end }
+local now_s = 1000
+lera = { time = function() return now_s end }
 
 local handlers = {}
 local removed_handlers = {}
@@ -76,22 +76,35 @@ check("a non-table payload is ignored", M.snapshot() == nil)
 
 -- ---- derived countdown ------------------------------------------------------
 M.reset()
-now_ms = 1000000
+now_s = 1000
 M.apply("Mud.Status", full_frame())
 check("the countdown starts at the frame's value", M.reboot_left() == 352740)
 
-now_ms = 1000000 + 60000
+now_s = 1000 + 60
 check("the countdown ticks down locally between frames",
       M.reboot_left() == 352680, M.reboot_left())
 
-now_ms = 1000000 + 60000 + 120000
+now_s = 1000 + 60 + 120
 M.apply("Mud.Status", { reboot_left = 352500 })
 check("an arriving frame re-syncs the countdown", M.reboot_left() == 352500)
 
+-- Regression demonstration for the lera.time() units bug: lera.time() returns
+-- whole seconds (src/lua/api_lera.c), not milliseconds, so `elapsed` must NOT
+-- be divided by 1000. A full 2-minute inter-frame gap with no frame delivered
+-- must move the countdown down by exactly 120, not by ~0 (the /1000 bug) or 1.
 M.reset()
-now_ms = 1000000
+now_s = 1000
+M.apply("Mud.Status", full_frame())
+local before = M.reboot_left()
+now_s = 1000 + 120
+local after = M.reboot_left()
+check("a 120-second advance with no new frame drops the countdown by 120",
+      before - after == 120, "before=" .. tostring(before) .. " after=" .. tostring(after))
+
+M.reset()
+now_s = 1000
 M.apply("Mud.Status", { reboot_left = 30, reboot_total = 100, uptime = 70, lag = 0.0 })
-now_ms = 1000000 + 90000
+now_s = 1000 + 90
 check("the countdown clamps at zero rather than going negative",
       M.reboot_left() == 0, M.reboot_left())
 
@@ -103,7 +116,7 @@ M.reset()
 check("no frame yet means no fragment", M.title_fragment() == nil)
 
 M.reset()
-now_ms = 1000000
+now_s = 1000
 -- Just booted: nothing elapsed, so the bar is empty.
 M.apply("Mud.Status", { reboot_left = 432000, reboot_total = 432000, uptime = 0, lag = 0.02 })
 check("a fresh boot draws an empty bar",
@@ -138,6 +151,25 @@ M.apply("Mud.Status", { reboot_left = 7140, reboot_total = 432000, uptime = 4248
 check("under a day shows hours and minutes without a day field",
       M.title_fragment():find("(1h 59m)", 1, true) ~= nil, M.title_fragment())
 
+-- duration() boundary: exactly 86400s is 1 whole day with nothing left over.
+-- By hand: d = floor(86400/86400) = 1, h = floor((86400%86400)/3600) = 0,
+-- m = floor((86400%3600)/60) = 0 -> "1d 0h 0m".
+-- total = 172800, left = 86400 -> elapsed = 86400 -> filled = floor(86400/172800*10) = 5.
+M.reset()
+M.apply("Mud.Status", { reboot_left = 86400, reboot_total = 172800, uptime = 86400 })
+check("duration renders exactly one day with no leftover hours or minutes",
+      M.title_fragment() == "Reboot [XXXXX.....] (1d 0h 0m)", M.title_fragment())
+
+-- duration() boundary: a value in [3540, 3599] is under one hour, so it must
+-- render as a bare "59m" with no hours field at all.
+-- By hand (left = 3540): d = 0, h = floor(3540/3600) = 0, m = floor(3540/60) = 59
+-- -> "59m" (the h > 0 branch never triggers).
+-- total = 7080, left = 3540 -> elapsed = 3540 -> filled = floor(3540/7080*10) = 5.
+M.reset()
+M.apply("Mud.Status", { reboot_left = 3540, reboot_total = 7080, uptime = 3540 })
+check("duration renders a bare minutes field just under one hour",
+      M.title_fragment() == "Reboot [XXXXX.....] (59m)", M.title_fragment())
+
 M.reset()
 -- A denominator of zero cannot produce a fraction; the bar is omitted rather
 -- than dividing by zero or drawing a meaningless full bar.
@@ -155,6 +187,20 @@ M.apply("Mud.Status", { reboot_left = 3600, reboot_total = 7200, uptime = 3600 }
 check("a reboot group renders without lag",
       M.title_fragment() == "Reboot [XXXXX.....] (1h 0m)", M.title_fragment())
 
+-- reboot_total never changes during a boot, so the server's delta cache never
+-- resends it once cached: a plugin reload starts with an empty mirror and may
+-- go on refilling from reboot_left/uptime/lag frames alone, with reboot_total
+-- absent for a long time (or until the next full frame). uptime + reboot_left
+-- must reconstruct the denominator so the bar still renders.
+-- By hand: total = uptime(324000) + reboot_left(108000) = 432000.
+-- elapsed = 432000 - 108000 = 324000; filled = floor(324000/432000*10) = 7.
+-- duration(108000): 108000/86400 = 1d, remainder 21600 = 6h, remainder 0 = 0m.
+M.reset()
+M.apply("Mud.Status", { reboot_left = 108000, uptime = 324000, lag = 0.10 })
+check("reboot_total absent (post-reload) still derives the bar from uptime",
+      M.title_fragment() == "Reboot [XXXXXXX...] (1d 6h 0m) | Lag 0.10",
+      M.title_fragment())
+
 -- ---- lifecycle --------------------------------------------------------------
 M.reset()
 handlers = {}
@@ -167,7 +213,7 @@ check("on_load installs a one-second tick",
       #timers == 1 and timers[1].ms == 1000, #timers)
 
 -- The plugin must repaint when the rendered string changes...
-now_ms = 2000000
+now_s = 2000
 dirty_count = 0
 handlers["Mud"]("Mud.Status", { reboot_left = 7200, reboot_total = 7200, uptime = 0, lag = 0.02 })
 check("an arriving frame marks the ui dirty", dirty_count > 0, dirty_count)
@@ -179,7 +225,7 @@ timers[1].fn()
 check("an unchanged tick does not mark the ui dirty", dirty_count == 0, dirty_count)
 
 -- A minute later the rendered minutes have changed, so a repaint is due.
-now_ms = 2000000 + 60000
+now_s = 2000 + 60
 dirty_count = 0
 timers[1].fn()
 check("a tick that changes the rendered text marks the ui dirty",
