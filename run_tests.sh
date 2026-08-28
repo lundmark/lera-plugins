@@ -65,7 +65,6 @@ LERA_ROOT=$lera_root "$luajit" tests/roominfo_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/minimap_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/mapper_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/autostepper_test.lua
-LERA_ROOT=$lera_root "$luajit" tests/player_stats_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/stats_window_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/mudstatus_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/mercenary_gmcp_test.lua

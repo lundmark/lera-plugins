@@ -31,10 +31,11 @@ package.loaded["wm"] = {
 }
 
 local drawn = {}
+local boxes = {}
 ui = {
   dirty = function() end,
   text = function(_, s) drawn[#drawn + 1] = s end,
-  box = function() end,
+  box = function(_, style, title) boxes[#boxes + 1] = { style = style, title = title } end,
   -- Real rects are userdata with method accessors; the stub returns the plain
   -- table form the renderer also has to accept.
   rect = function(x, y, w, h) return { x = x, y = y, w = w, h = h } end,
@@ -119,7 +120,9 @@ protocol.store("/players/simon", {
 })
 
 sent = {}
-local consumed = pane.on_pointer({ kind = "down", button = "left", x = 0, y = 0,
+-- y=1: the pane now boxes itself, so pane-local y=0 is the top border and
+-- y=1 is the first content row (was y=0 before the border existed).
+local consumed = pane.on_pointer({ kind = "down", button = "left", x = 0, y = 1,
                                    inside = true, width = 20, height = 10 })
 check("pointer: a click on a directory sends a cd",
       #sent == 1 and sent[1] == "cd archive",
@@ -129,7 +132,8 @@ check("pointer: a consumed down returns literal true",
       "only literal true consumes the event")
 
 sent = {}
-consumed = pane.on_pointer({ kind = "down", button = "left", x = 0, y = 1,
+-- y=2: the second content row (was y=1 before the border existed).
+consumed = pane.on_pointer({ kind = "down", button = "left", x = 0, y = 2,
                              inside = true, width = 20, height = 10 })
 check("pointer: a click on a file sends nothing",
       #sent == 0, sent[1])
@@ -170,21 +174,58 @@ protocol.store("/players/simon", {
   dirs = { "d1", "d2", "d3" }, files = {}, complete = true, truncated = false,
 })
 
+-- height=4 (was 2): with the border now drawn, two content rows need four
+-- pane rows, and y=1 (was 0) is the first content row.
 offset = 0
 sent = {}
-pane.on_pointer({ kind = "down", button = "left", x = 0, y = 0,
-                  inside = true, width = 20, height = 2 })
+pane.on_pointer({ kind = "down", button = "left", x = 0, y = 1,
+                  inside = true, width = 20, height = 4 })
 check("pointer: at the tail, the top visible row is the second entry",
       #sent == 1 and sent[1] == "cd d2",
       tostring(sent[1]))
 
 pane.scroll(-1)
 sent = {}
-pane.on_pointer({ kind = "down", button = "left", x = 0, y = 0,
-                  inside = true, width = 20, height = 2 })
+pane.on_pointer({ kind = "down", button = "left", x = 0, y = 1,
+                  inside = true, width = 20, height = 4 })
 check("pointer: scrolled back one, the top visible row is the first entry",
       #sent == 1 and sent[1] == "cd d1",
       tostring(sent[1]))
+
+-- ---- border ----------------------------------------------------------------
+
+protocol.reset()
+protocol.set_available(true)
+protocol.set_cwd("/players/simon")
+protocol.store("/players/simon", {
+  dirs = { "areas" }, files = {}, complete = true, truncated = false,
+})
+
+boxes = {}
+pane.render({ x = 0, y = 0, w = 20, h = 10 }, { title = "Files /players/simon" })
+check("render: the pane boxes itself with the title wm passed",
+      #boxes == 1 and boxes[1].title == "Files /players/simon",
+      boxes[1] and tostring(boxes[1].title))
+
+boxes = {}
+pane.render({ x = 0, y = 0, w = 20, h = 10 })
+check("render: a missing opts table still renders", #boxes == 1)
+
+-- A click on the top border must not navigate, and the first content row
+-- (pane-local y=1, once bordered) must.
+protocol.store("/players/simon", {
+  dirs = { "d1" }, files = {}, complete = true, truncated = false,
+})
+sent = {}
+pane.on_pointer({ kind = "down", button = "left", x = 1, y = 0,
+                  inside = true, width = 20, height = 10 })
+check("pointer: a click on the top border does not navigate", #sent == 0, sent[1])
+
+sent = {}
+pane.on_pointer({ kind = "down", button = "left", x = 1, y = 1,
+                  inside = true, width = 20, height = 10 })
+check("pointer: the first content row is at y=1 once bordered",
+      #sent == 1 and sent[1] == "cd d1", tostring(sent[1]))
 
 print(failures == 0 and "ALL PASS" or (failures .. " FAILURE(S)"))
 os.exit(failures == 0 and 0 or 1)

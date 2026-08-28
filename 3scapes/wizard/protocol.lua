@@ -14,6 +14,7 @@ local home_dir = nil    -- learned from the first cwd of a connection
 local is_available = false
 local inflight = {}     -- absolute path -> true while a page is outstanding
 local waiters = {}      -- absolute path -> array of callbacks
+local seed_pending = false  -- true while a bodyless "where am I" request is outstanding
 
 -- ---- path arithmetic ------------------------------------------------------
 
@@ -64,6 +65,7 @@ function M.reset()
   is_available = false
   inflight = {}
   waiters = {}
+  seed_pending = false
 end
 
 function M.set_cwd(path)
@@ -119,6 +121,8 @@ end
 function M.request(path, cb)
   local key = path and M.normalize(path) or nil
 
+  if not path then seed_pending = true end
+
   if cb then
     if key then
       waiters[key] = waiters[key] or {}
@@ -170,6 +174,14 @@ function M.on_message(_, data)
     fire(path, entry)
     if ui and ui.dirty then ui.dirty() end
     return
+  end
+
+  -- The bodyless request is the "where am I" request: its echoed path is the
+  -- wizard's own working directory. A Tab-driven request for some other
+  -- directory must never move the cwd, so only a pending seed consumes this.
+  if seed_pending then
+    seed_pending = false
+    M.set_cwd(path)
   end
 
   local page = tonumber(data.page) or 1

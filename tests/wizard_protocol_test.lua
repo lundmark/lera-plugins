@@ -294,5 +294,29 @@ protocol.on_message("Files.List", {
 check("paging: truncated persists once any page reports it",
       protocol.lookup("/tr").truncated == true)
 
+-- On connect the plugin sends a bodyless Files.List; its echoed path IS the
+-- wizard's working directory. Without this the pane never leaves "loading...".
+protocol.reset()
+sent = {}
+protocol.request(nil)
+protocol.on_message("Files.List", {
+  path = "/players/simon", dirs = { "areas" }, files = {}, page = 1, pages = 1,
+})
+check("seed: a bodyless response sets the cwd",
+      protocol.cwd() == "/players/simon", tostring(protocol.cwd()))
+check("seed: it also establishes home", protocol.home() == "/players/simon")
+
+-- A Tab-driven request for another directory must NOT move the cwd.
+protocol.reset()
+protocol.set_cwd("/players/simon")
+protocol.request("/open")
+protocol.on_message("Files.List", {
+  path = "/open", dirs = {}, files = { "a.c" }, page = 1, pages = 1,
+})
+check("seed: a targeted response does not move the cwd",
+      protocol.cwd() == "/players/simon",
+      "a completion request must never relocate the wizard; got "
+        .. tostring(protocol.cwd()))
+
 print(failures == 0 and "ALL PASS" or (failures .. " FAILURE(S)"))
 os.exit(failures == 0 and 0 or 1)
