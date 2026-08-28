@@ -103,4 +103,43 @@ function M.title_fragment()
   return table.concat(parts, " | ")
 end
 
+local handler_id = nil
+local timer_id = nil
+local last_fragment = nil
+
+-- Repaint only when the rendered string actually changed. The minute text
+-- moves once a minute and the bar far less often, so an idle session leaves
+-- lera's "a frame costs GPU work only when the cell grid changed" property
+-- intact instead of dirtying the screen every second.
+local function tick()
+  local fragment = M.title_fragment()
+  if fragment ~= last_fragment then
+    last_fragment = fragment
+    ui.dirty()
+  end
+end
+
+function M.on_load()
+  -- One registration covers the namespace: the mudlib resolves "Mud 1" to
+  -- every Mud.* sub-package through its root fallback, so a sub-package added
+  -- server-side later arrives with no client change.
+  handler_id = gmcp.on("Mud", function(pkg, data)
+    M.apply(pkg, data)
+    tick()
+  end)
+  timer_id = timer.every(1000, tick)
+end
+
+function M.on_unload()
+  if handler_id then gmcp.remove(handler_id); handler_id = nil end
+  if timer_id then timer.cancel(timer_id); timer_id = nil end
+  M.reset()
+  last_fragment = nil
+end
+
+function M.on_disconnect()
+  M.reset()
+  tick()
+end
+
 return M

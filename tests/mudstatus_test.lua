@@ -153,6 +153,46 @@ M.apply("Mud.Status", { reboot_left = 3600, reboot_total = 7200, uptime = 3600 }
 check("a reboot group renders without lag",
       M.title_fragment() == "Reboot [XXXXX.....] (1h 0m)", M.title_fragment())
 
+-- ---- lifecycle --------------------------------------------------------------
+M.reset()
+handlers = {}
+timers = {}
+dirty_count = 0
+M.on_load()
+check("on_load subscribes to the Mud namespace once, not per sub-package",
+      handlers["Mud"] ~= nil and handlers["Mud.Status"] == nil)
+check("on_load installs a one-second tick",
+      #timers == 1 and timers[1].ms == 1000, #timers)
+
+-- The plugin must repaint when the rendered string changes...
+now_ms = 2000000
+dirty_count = 0
+handlers["Mud"]("Mud.Status", { reboot_left = 7200, reboot_total = 7200, uptime = 0, lag = 0.02 })
+check("an arriving frame marks the ui dirty", dirty_count > 0, dirty_count)
+
+-- ...and must NOT repaint on a tick that changes nothing, or an idle session
+-- would rebuild the screen every second for no reason.
+dirty_count = 0
+timers[1].fn()
+check("an unchanged tick does not mark the ui dirty", dirty_count == 0, dirty_count)
+
+-- A minute later the rendered minutes have changed, so a repaint is due.
+now_ms = 2000000 + 60000
+dirty_count = 0
+timers[1].fn()
+check("a tick that changes the rendered text marks the ui dirty",
+      dirty_count == 1, dirty_count)
+
+-- The server drops its whole namespace cache on disconnect, so a retained
+-- mirror would stop being congruent with it.
+dirty_count = 0
+M.on_disconnect()
+check("disconnect clears the mirror", M.title_fragment() == nil)
+check("disconnect repaints the now-empty title", dirty_count == 1, dirty_count)
+
+M.on_unload()
+check("unload leaves no state behind", M.snapshot() == nil)
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
