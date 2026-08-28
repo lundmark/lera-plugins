@@ -16,10 +16,14 @@ M.name = "mudstatus"
 M.version = "1.0"
 
 local BAR_CELLS = 10
+-- page/pages are stripped as envelope keys but never reassembled across
+-- pages -- each page would merge independently and a paged full frame would
+-- keep only its last page. Out of reach for this four-scalar payload; not
+-- handled deliberately, not by omission.
 local ENVELOPE = { full = true, page = true, pages = true }
 
 local state = nil       -- mirror, congruent with the server's delta cache
-local synced_at = nil   -- lera.time() ms when the mirror was last written
+local synced_at = nil   -- lera.time() seconds when the mirror was last written
 
 local function is_status(pkg)
   return type(pkg) == "string" and pkg:lower() == "mud.status"
@@ -50,7 +54,7 @@ end
 -- has carried reboot_left yet.
 function M.reboot_left()
   if not state or type(state.reboot_left) ~= "number" then return nil end
-  local elapsed = (lera.time() - (synced_at or lera.time())) / 1000
+  local elapsed = lera.time() - (synced_at or lera.time())
   local left = state.reboot_left - elapsed
   if left < 0 then left = 0 end
   return math.floor(left)
@@ -89,7 +93,19 @@ function M.title_fragment()
 
   local left = M.reboot_left()
   if left then
-    local drawn = bar(left, state.reboot_total)
+    -- reboot_total never changes during a boot, so the server's delta cache
+    -- never resends it once cached. After a plugin reload the mirror starts
+    -- empty and refills from whatever frames arrive next, which may carry
+    -- reboot_left/uptime/lag but not reboot_total for a long time (or ever,
+    -- until the next full frame). state.uptime + state.reboot_left
+    -- reconstructs it from that same snapshot: the mudlib builds reboot_total
+    -- as up + left in the first place (obj/shut.c), so the identity always
+    -- holds. Deliberately state.reboot_left, not the locally ticked `left`
+    -- above -- uptime is a snapshot too, and pairing it with a value that
+    -- keeps ticking down would make the reconstructed total shrink over time.
+    local total = state.reboot_total or
+      (state.uptime and (state.uptime + state.reboot_left))
+    local drawn = bar(left, total)
     if drawn then
       parts[#parts + 1] = "Reboot " .. drawn .. " (" .. duration(left) .. ")"
     end
