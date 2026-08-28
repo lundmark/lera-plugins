@@ -137,6 +137,28 @@ wizard.on_input("cd")
 cd_line("/players/simon")
 check("cwd: a bare cd arms the flag", protocol.cwd() == "/players/simon")
 
+-- A scripted cd (the pane's click-to-navigate goes through mud.send, which
+-- dispatches on_send, not on_input) must track the cwd exactly as a typed one.
+protocol.reset()
+protocol.set_available(true)
+wizard.on_send("cd /clicked")
+cd_line("/clicked")
+check("cwd: a scripted cd via on_send tracks the cwd",
+      protocol.cwd() == "/clicked",
+      "got " .. tostring(protocol.cwd()))
+
+protocol.reset()
+wizard.on_send("cdtest foo")
+cd_line("/open")
+check("cwd: on_send does not arm on a command merely starting with cd",
+      protocol.cwd() == nil,
+      "got " .. tostring(protocol.cwd()))
+
+check("hooks: on_input passes the text through",
+      wizard.on_input("cd /x") == "cd /x")
+check("hooks: on_send passes the text through",
+      wizard.on_send("cd /x") == "cd /x")
+
 -- ---- disconnect -----------------------------------------------------------
 
 protocol.set_available(true)

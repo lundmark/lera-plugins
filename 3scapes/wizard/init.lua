@@ -35,7 +35,15 @@ local CD_FAILURES = {
   ["Invalid path with spaces in it."] = true,
 }
 
-function M.on_input(text)
+-- A line the user typed dispatches on_input; a scripted mud.send() dispatches
+-- on_send (src/core/session.c:422 vs src/lua/api_mud.c:113). Both must arm the
+-- flag. The pane's click-to-navigate sends a real `cd` through mud.send, so
+-- without on_send a clicked cd moves the MUD and leaves the pane behind.
+--
+-- Arming on any scripted cd is deliberate, not just a fix for our own click: a
+-- cd from a user alias or another plugin should move the pane too, which is
+-- what keeps one source of truth for the working directory.
+local function arm_if_cd(text)
   if type(text) == "string" then
     -- The first word must be exactly "cd": `cdtest foo` is a different command.
     local first = text:match("^%s*(%S+)")
@@ -43,6 +51,9 @@ function M.on_input(text)
   end
   return text
 end
+
+function M.on_input(text) return arm_if_cd(text) end
+function M.on_send(text) return arm_if_cd(text) end
 
 function M.on_line(line)
   if cd_pending and type(line) == "string" then
