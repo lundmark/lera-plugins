@@ -21,6 +21,9 @@ local settings = {
 
 local command_id = nil
 
+-- Rows the contents list will not take from the map, however crowded the room.
+local LINES_RESERVED_FOR_MAP = 3
+
 -- require("command") is optional: a profile that never required 'commands' has
 -- no registry, and the map rendering still works.
 local command
@@ -518,41 +521,62 @@ function M.render(rect, opts)
     end
   end
 
-  -- Room contents from roominfo, one line per kind. The colour IS the type
-  -- marker -- monsters, players and items each take the colour their glyph
+  -- Room contents from roominfo, one line per occupant: names are sentences on
+  -- this mud and a comma-joined run of them is unreadable. The colour IS the
+  -- type marker -- monsters, players and items each take the colour their glyph
   -- gets on the grid above -- so the lines carry no M:/P:/I: prefix and spend
-  -- every cell of a narrow pane on names instead.
+  -- every cell of a narrow pane on the name.
+  local contents = {}
   if roominfo then
-    local monsters = roominfo.monsters()
-    local players = roominfo.players()
+    for _, name in ipairs(roominfo.monsters()) do
+      contents[#contents + 1] = { text = name, fg = colors.mob1_fg }
+    end
+
+    for _, name in ipairs(roominfo.players()) do
+      contents[#contents + 1] = { text = name, fg = colors.player_fg }
+    end
+
     -- items() is newer than the rest of the roominfo surface; tolerate a
-    -- roominfo that predates it rather than erroring the whole pane.
+    -- roominfo that predates it rather than erroring the whole pane. Unlike
+    -- monsters()/players() it returns entries rather than name strings, since
+    -- the mudlib stacks duplicates into a count.
     local items = roominfo.items and roominfo.items() or {}
-
-    if #monsters > 0 then
-      add_line(table.concat(monsters, ", "), colors.mob1_fg)
-    end
-
-    if #players > 0 then
-      add_line(table.concat(players, ", "), colors.player_fg)
-    end
-
-    if #items > 0 then
-      -- Unlike monsters()/players(), items() returns entries rather than name
-      -- strings: the mudlib stacks duplicates into a count.
-      local names = {}
-      for _, e in ipairs(items) do
-        local n = tostring(e.name)
-        local count = tonumber(e.count) or 1
-        if count > 1 then n = n .. " x" .. count end
-        names[#names + 1] = n
-      end
-      add_line(table.concat(names, ", "), colors.item_fg)
+    for _, e in ipairs(items) do
+      local n = tostring(e.name)
+      local count = tonumber(e.count) or 1
+      if count > 1 then n = n .. " x" .. count end
+      contents[#contents + 1] = { text = n, fg = colors.item_fg }
     end
   end
 
-  -- Calculate layout: info at bottom, map centered in remaining space
-  local info_height = #info_lines
+  -- One line per occupant is unbounded, and this is still the map pane: a busy
+  -- room would otherwise consume the whole height and push the grid off the
+  -- top. Contents get whatever is left after the fixed lines, minus a few rows
+  -- kept for the map, and the remainder collapses into a "+N more" marker.
+  if #contents > 0 then
+    local reserved = math.min(#output_lines, LINES_RESERVED_FOR_MAP)
+    local budget = rh - #info_lines - reserved
+    if budget >= 1 then
+      local shown = #contents
+      if shown > budget then
+        -- The last available line states what did not fit, so a truncated
+        -- list never looks like a complete one.
+        shown = budget - 1
+      end
+      for i = 1, shown do
+        add_line(contents[i].text, contents[i].fg)
+      end
+      if shown < #contents then
+        add_line("+" .. (#contents - shown) .. " more", colors.area_fg)
+      end
+    end
+  end
+
+  -- Calculate layout: info at bottom, map centered in remaining space. The
+  -- clamp matters: without it a pane shorter than the info block gives a
+  -- negative map area and an info_y above ry, drawing over whatever sits
+  -- above this pane.
+  local info_height = math.min(#info_lines, rh)
   local map_area_height = rh - info_height
   local map_height = #output_lines
   local y_offset = math.max(0, math.floor((map_area_height - map_height) / 2))
@@ -568,9 +592,9 @@ function M.render(rect, opts)
 
   -- Render info at fixed bottom position
   local info_y = ry + rh - info_height
-  for i, line in ipairs(info_lines) do
+  for i = 1, info_height do
     -- text_ansi, not text: the contents lines and the name-line tags carry SGR.
-    ui.text_ansi(ui.rect(rx, info_y + i - 1, rw, 1), line)
+    ui.text_ansi(ui.rect(rx, info_y + i - 1, rw, 1), info_lines[i])
   end
 end
 

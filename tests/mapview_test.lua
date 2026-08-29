@@ -123,9 +123,10 @@ local function strip(s) return (s:gsub("\027%[[0-9;]*m", "")) end
 
 -- Render at a width wide enough that nothing truncates, and return the drawn
 -- lines bottom-up: the info block is anchored to the bottom of the pane.
+local PANE_H = 12
 local function render(width)
   drawn = {}
-  mv.render({ x = 0, y = 0, w = width or 60, h = 12 }, { show_border = false })
+  mv.render({ x = 0, y = 0, w = width or 60, h = PANE_H }, { show_border = false })
   local lines = {}
   for _, d in ipairs(drawn) do lines[#lines + 1] = d end
   table.sort(lines, function(a, b) return a.y < b.y end)
@@ -241,6 +242,86 @@ check("narrow pane keeps the room name",
   find(lines, "Wizard's") ~= nil, table.concat(lines, " | "))
 check("narrow pane keeps the annotations",
   find(lines, "%[Area: Wizard Hall%]") ~= nil, table.concat(lines, " | "))
+
+-- One occupant per line: a comma-joined run is unreadable, and each line
+-- carries its kind's colour anyway.
+ri.area = nil
+mp.waypoints = {}
+ri.monsters = { "a large rat", "a wizard's apprentice" }
+ri.players = { "Lennart", "Bob" }
+ri.items = {
+  { name = "A newspaper rack.", count = 1 },
+  { name = "A nifty machine with a lever on one side.", count = 1 },
+}
+lines = info_text(120)
+check("each monster gets its own line", find(lines, "^a large rat$") ~= nil
+  and find(lines, "^a wizard's apprentice$") ~= nil, table.concat(lines, " | "))
+check("each player gets its own line", find(lines, "^Lennart$") ~= nil
+  and find(lines, "^Bob$") ~= nil, table.concat(lines, " | "))
+check("each item gets its own line", find(lines, "^A newspaper rack%.$") ~= nil
+  and find(lines, "^A nifty machine with a lever on one side%.$") ~= nil,
+  table.concat(lines, " | "))
+check("no line concatenates two occupants",
+  find(lines, "rack%., A nifty") == nil, table.concat(lines, " | "))
+
+-- A stacked entry keeps its count on its own line.
+ri.items = { { name = "a torch", count = 3 } }
+ri.monsters, ri.players = {}, {}
+lines = info_text(120)
+check("a stacked item shows its count", find(lines, "^a torch x3$") ~= nil,
+  table.concat(lines, " | "))
+
+-- The pane still has to show a map. Overflow collapses into a marker rather
+-- than pushing the grid off the top.
+local many = {}
+for i = 1, 40 do many[i] = { name = "item " .. i, count = 1 } end
+ri.items = many
+lines = info_text(120)
+check("overflowing contents collapse into a +N more marker",
+  find(lines, "^%+%d+ more$") ~= nil, table.concat(lines, " | "))
+
+-- The hard invariant: nothing may be drawn outside the pane, however many
+-- occupants the room holds.
+local rows = render(120)
+local out_of_bounds = nil
+for _, d in ipairs(rows) do
+  if d.y < 0 or d.y >= PANE_H then out_of_bounds = d.y end
+end
+check("never draws outside the pane", out_of_bounds == nil,
+  "y=" .. tostring(out_of_bounds) .. " for pane height " .. PANE_H)
+
+check("the map still gets rows when the room is crowded",
+  find(lines, "^#$") ~= nil, table.concat(lines, " | "))
+
+-- A short pane must not draw the info block above its own top edge. The
+-- contents budget cannot cover this: here the FIXED lines alone outnumber the
+-- pane's rows -- at width 24 the name, its tags and the exits are three lines
+-- in a two-row pane -- so only the clamp on info_height keeps y >= 0.
+ri.items = {}
+ri.area = "Wizard Hall"
+mp.waypoints = { home = 50205 }
+PANE_H = 2
+rows = render(24)
+out_of_bounds = nil
+for _, d in ipairs(rows) do
+  if d.y < 0 or d.y >= PANE_H then out_of_bounds = d.y end
+end
+check("fixed lines taller than the pane stay in bounds", out_of_bounds == nil,
+  "y=" .. tostring(out_of_bounds) .. " for pane height " .. PANE_H)
+
+-- Crowded room, short pane: both guards at once.
+ri.items = many
+PANE_H = 3
+rows = render(120)
+out_of_bounds = nil
+for _, d in ipairs(rows) do
+  if d.y < 0 or d.y >= PANE_H then out_of_bounds = d.y end
+end
+check("short pane stays in bounds", out_of_bounds == nil,
+  "y=" .. tostring(out_of_bounds) .. " for pane height " .. PANE_H)
+PANE_H = 12
+ri.items = {}
+mp.waypoints = {}
 
 if failures > 0 then
   print(failures .. " failure(s)")
