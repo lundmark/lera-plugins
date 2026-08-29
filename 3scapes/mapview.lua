@@ -71,6 +71,13 @@ local colors = {
 
   -- Waypoint
   waypoint_bg = {80, 40, 100},    -- purple background
+  waypoint_fg = {190, 130, 220},  -- the [Waypoint: x] tag, echoing the grid bg
+
+  -- Room name annotations
+  area_fg = {130, 130, 150},      -- the [Area: x] tag: present but secondary
+
+  -- Items (the third contents kind; monsters use mob1_fg, players player_fg)
+  item_fg = {200, 170, 120},      -- warm tan
 
   -- Corridors/connections
   corridor_fg = {100, 100, 120},  -- dim for corridors
@@ -409,7 +416,23 @@ function M.render(rect, opts)
   local info_lines = {}
   local speedwalk = plugin.get("speedwalk")
 
-  -- Room name (from roominfo or minimap) - trim whitespace
+  -- Truncate against the pane width on the plain text, before any colour is
+  -- added: an SGR escape costs bytes but no cells, so measuring the coloured
+  -- string would clip visible text that actually fits.
+  local function fit(text)
+    if #text > rw then return text:sub(1, rw - 1) .. "~" end
+    return text
+  end
+
+  local function add_line(text, fg)
+    text = fit(text)
+    if text == "" then return end
+    info_lines[#info_lines + 1] = fg and colorize(text, fg, nil) or text
+  end
+
+  -- Room name, annotated with facts about the room the player is standing in.
+  -- The annotations ride on the name line rather than taking lines of their
+  -- own, and spill onto a continuation line only when the pane is too narrow.
   local room_name = nil
   if roominfo then
     room_name = roominfo.room()
@@ -417,35 +440,64 @@ function M.render(rect, opts)
   if (not room_name or room_name == "") and minimap then
     room_name = minimap.room_name()
   end
-  if room_name and room_name ~= "" then
-    room_name = room_name:match("^%s*(.-)%s*$")  -- trim
-    if #room_name > rw then room_name = room_name:sub(1, rw - 1) .. "~" end
-    if room_name ~= "" then
-      table.insert(info_lines, room_name)
+  room_name = room_name and room_name:match("^%s*(.-)%s*$") or ""
+
+  if room_name ~= "" then
+    local segments = { { text = room_name } }
+
+    -- The waypoint tag is mapper's, keyed by room id, so it is true of THIS
+    -- room. speedwalk's current_place is deliberately not used here: it only
+    -- moves when a walk completes or /speedwalk place is run, and it persists
+    -- in the store, so it would label every room with wherever the last walk
+    -- ended -- including across sessions, in a profile with no speedwalks.
+    local wp_name = current_room_id and waypoint_rooms[current_room_id]
+    if wp_name then
+      segments[#segments + 1] = {
+        text = "[Waypoint: " .. wp_name .. "]",
+        fg = colors.waypoint_fg,
+      }
     end
+
+    local area = roominfo and roominfo.area()
+    if not area or area == "" then area = "Unknown" end
+    segments[#segments + 1] = { text = "[Area: " .. area .. "]", fg = colors.area_fg }
+
+    local line, plain = "", ""
+    local function flush()
+      if plain ~= "" then info_lines[#info_lines + 1] = line end
+      line, plain = "", ""
+    end
+    for _, seg in ipairs(segments) do
+      local text = fit(seg.text)
+      local sep = (plain == "") and "" or " "
+      if plain ~= "" and #plain + #sep + #text > rw then
+        flush()
+        sep = ""
+      end
+      plain = plain .. sep .. text
+      line = line .. sep .. (seg.fg and colorize(text, seg.fg, nil) or text)
+    end
+    flush()
   end
 
   -- Exits (from roominfo)
   if roominfo then
     local exits_str = roominfo.exits_string()
     if exits_str and exits_str ~= "" then
-      if #exits_str > rw then exits_str = exits_str:sub(1, rw - 1) .. "~" end
-      table.insert(info_lines, exits_str)
+      add_line(exits_str)
     end
   end
 
-  -- Speedwalk place and step counter
+  -- Speedwalk place and step counter, but only while a walk is actually
+  -- running. See the note above: an idle session has a stale current_place,
+  -- and rendering it unconditionally is what put a permanent "home" under
+  -- every room name.
   if speedwalk then
-    local place = speedwalk.get_current_place()
+    local step_info = speedwalk.step_info()
+    local total = step_info and tonumber(step_info.total) or 0
+    local place = (total > 0) and speedwalk.get_current_place() or nil
     if place then
-      local step_info = speedwalk.step_info()
-      local step_str = ""
-      if step_info and step_info.total > 0 then
-        step_str = string.format(" [%d/%d]", step_info.current, step_info.total)
-      end
-      local place_line = place .. step_str
-      if #place_line > rw then place_line = place_line:sub(1, rw - 1) .. "~" end
-      table.insert(info_lines, place_line)
+      add_line(place .. string.format(" [%d/%d]", step_info.current, total))
 
       -- Targets
       local targets = speedwalk.get_targets()
@@ -461,28 +513,41 @@ function M.render(rect, opts)
         end
       end
       if #targets > 0 then
-        local tgt_line = "T:" .. table.concat(targets, ",")
-        if #tgt_line > rw then tgt_line = tgt_line:sub(1, rw - 1) .. "~" end
-        table.insert(info_lines, tgt_line)
+        add_line("T:" .. table.concat(targets, ","))
       end
     end
   end
 
-  -- Monsters and players from roominfo
+  -- Room contents from roominfo, one line per kind. The colour IS the type
+  -- marker -- monsters, players and items each take the colour their glyph
+  -- gets on the grid above -- so the lines carry no M:/P:/I: prefix and spend
+  -- every cell of a narrow pane on names instead.
   if roominfo then
     local monsters = roominfo.monsters()
     local players = roominfo.players()
+    -- items() is newer than the rest of the roominfo surface; tolerate a
+    -- roominfo that predates it rather than erroring the whole pane.
+    local items = roominfo.items and roominfo.items() or {}
 
     if #monsters > 0 then
-      local mon_str = "M:" .. table.concat(monsters, ",")
-      if #mon_str > rw then mon_str = mon_str:sub(1, rw - 1) .. "~" end
-      table.insert(info_lines, mon_str)
+      add_line(table.concat(monsters, ", "), colors.mob1_fg)
     end
 
     if #players > 0 then
-      local ply_str = "P:" .. table.concat(players, ",")
-      if #ply_str > rw then ply_str = ply_str:sub(1, rw - 1) .. "~" end
-      table.insert(info_lines, ply_str)
+      add_line(table.concat(players, ", "), colors.player_fg)
+    end
+
+    if #items > 0 then
+      -- Unlike monsters()/players(), items() returns entries rather than name
+      -- strings: the mudlib stacks duplicates into a count.
+      local names = {}
+      for _, e in ipairs(items) do
+        local n = tostring(e.name)
+        local count = tonumber(e.count) or 1
+        if count > 1 then n = n .. " x" .. count end
+        names[#names + 1] = n
+      end
+      add_line(table.concat(names, ", "), colors.item_fg)
     end
   end
 
@@ -504,7 +569,8 @@ function M.render(rect, opts)
   -- Render info at fixed bottom position
   local info_y = ry + rh - info_height
   for i, line in ipairs(info_lines) do
-    ui.text(ui.rect(rx, info_y + i - 1, rw, 1), line)
+    -- text_ansi, not text: the contents lines and the name-line tags carry SGR.
+    ui.text_ansi(ui.rect(rx, info_y + i - 1, rw, 1), line)
   end
 end
 
@@ -610,6 +676,13 @@ local function handle_command(args)
     print("  Dark gray - unmapped (visible but not explored)")
     print("  Pale yellow - rooms with monsters")
     print("  Purple background - waypoint")
+    print("")
+    print("Info lines under the map (the colour is the only type marker):")
+    print("  Pale yellow - monsters in the room")
+    print("  Cyan - players in the room")
+    print("  Warm tan - items in the room")
+    print("  Purple - [Waypoint: name], when this room is a mapper waypoint")
+    print("  Dim gray - [Area: name]")
     print("")
     print("Commands:")
     print("  /mapview mobs      - Toggle mob coloring")
