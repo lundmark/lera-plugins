@@ -96,6 +96,16 @@ local PAGE_MENUS = {
     { key = "show_stock_find",    label = "Show Livestock Find" },
     { key = "show_stock_market",  label = "Show Market" },
     { key = "show_stock_needs",   label = "Show Needs" },
+    -- LEGACY:12625-12626, the two Auto-Herd rows, verbatim. LEGACY carried
+    -- them on its City page because every livestock section lived in the City
+    -- miniwindow; this port gave those sections their own page, so the rows
+    -- follow their content here rather than sitting on a City page that shows
+    -- no livestock at all. Same convention as auto_trade on goods/trade and
+    -- auto_voyage on sea. Auto-Herd is the one automation that SPENDS the
+    -- player's daler, so having no menu presence at all made it the least
+    -- visible of the four rather than the most.
+    { key = "auto_herd",          label = "Auto-Herd (husbandry)" },
+    { action = "aherd_config",    label = "Auto-Herd settings..." },
   },
   -- LEGACY [4]
   builds = {
@@ -225,6 +235,8 @@ local function dispatch_action(action)
     require("autoraid").open_menu()
   elseif action == "avoyage_config" then
     require("autovoyage").open_menu()
+  elseif action == "aherd_config" then
+    require("autoherd").open_menu()
   elseif action == "travel" then
     require("popups.map").open_poi_menu()
   end

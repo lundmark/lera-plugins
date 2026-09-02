@@ -201,6 +201,7 @@ check("combat.lua exports STFX_CAT_LABELS", type(combat.STFX_CAT_LABELS) == "tab
 local autotrade_tick_page = require("autotrader.tick")
 local autoraid_page = require("autoraid")
 local autovoyage_page = require("autovoyage")
+local autoherd_page = require("autoherd")
 
 -- pagelib.kv colors the label and value separately (dim label, RESET, a
 -- plain space, then the value's own color) -- so "Auto-Trade: off (...)" is
@@ -231,6 +232,12 @@ check("Automation section: Auto-Raid row, off by default, no dispatch yet",
       find_row(lines, "Auto-Raid:") == "Auto-Raid: off (last: none)", find_row(lines, "Auto-Raid:"))
 check("Automation section: Auto-Voyage row, off by default, no log yet",
       find_row(lines, "Auto-Voyage:") == "Auto-Voyage: off (last: none)", find_row(lines, "Auto-Voyage:"))
+-- Auto-Herd is the only one of the four that spends the player's daler, and
+-- it appeared in neither status surface -- so a user who enabled it had no
+-- on-screen indication anywhere that it was running, while every non-spending
+-- sibling had two.
+check("Automation section: Auto-Herd row, off by default, no log yet",
+      find_row(lines, "Auto-Herd:") == "Auto-Herd: off (last: none)", find_row(lines, "Auto-Herd:"))
 
 -- Flipping page_opts flags on is reflected immediately (read at render time,
 -- not cached) -- and each row picks up real state from the automation's own
@@ -239,8 +246,10 @@ check("Automation section: Auto-Voyage row, off by default, no log yet",
 page_opts.set("auto_trade", true)
 page_opts.set("auto_raid", true)
 page_opts.set("auto_voyage", true)
+page_opts.set("auto_herd", true)
 autoraid_page.settings().last_dispatch = { t = "09:00", target = "Bjorn", n = 3, convoy = true }
 autovoyage_page.settings().log = { "08:00 explore -> B4" }
+autoherd_page.settings().log = { { t = "07:30", desc = "stock sheep into sheepfold" } }
 local lines_on = stats_page.lines(WIDTH)
 check("Automation section: Auto-Trade row flips to ON",
       find_row(lines_on, "Auto-Trade:") == "Auto-Trade: ON (phase=idle pending=0)",
@@ -251,12 +260,18 @@ check("Automation section: Auto-Raid row flips to ON and shows the last dispatch
 check("Automation section: Auto-Voyage row flips to ON and shows the last log entry",
       find_row(lines_on, "Auto-Voyage:") == "Auto-Voyage: ON (last: 08:00 explore -> B4)",
       find_row(lines_on, "Auto-Voyage:"))
+check("Automation section: Auto-Herd row flips to ON and shows the last log entry",
+      find_row(lines_on, "Auto-Herd:")
+        == "Auto-Herd: ON (last: 07:30 stock sheep into sheepfold)",
+      find_row(lines_on, "Auto-Herd:"))
 
 page_opts.set("auto_trade", false)
 page_opts.set("auto_raid", false)
 page_opts.set("auto_voyage", false)
+page_opts.set("auto_herd", false)
 autoraid_page.settings().last_dispatch = nil
 autovoyage_page.settings().log = {}
+autoherd_page.settings().log = {}
 
 -- Gate: show_stats_automation off removes the whole section, header and
 -- rows alike -- and this is the one check a mutant that deletes the gate

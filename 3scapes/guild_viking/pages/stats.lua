@@ -131,6 +131,9 @@ end
 local function voyage_settings()
   return require("autovoyage").settings()
 end
+local function herd_settings()
+  return require("autoherd").settings()
+end
 
 function M.lines(width)
   width = width or 80
@@ -325,6 +328,21 @@ function M.lines(width)
     add(pagelib.kv(width, "Auto-Voyage:",
       string.format("%s (last: %s)", voyage_on and "ON" or "off", voyage_last),
       voyage_on and C.bright_green or C.dim))
+
+    -- Auto-Herd, mirroring the three rows above. Its log entries are
+    -- { t = "HH:MM", desc = ... } records rather than Auto-Voyage's plain
+    -- strings, hence the join. It is the one automation that SPENDS the
+    -- player's daler and was the one missing from both status surfaces.
+    local ah = herd_settings()
+    local herd_on = page_opts.get("auto_herd")
+    local herd_last = "none"
+    if ah.log and #ah.log > 0 then
+      local e = ah.log[#ah.log]
+      herd_last = tostring(e.t or "") .. " " .. tostring(e.desc or "")
+    end
+    add(pagelib.kv(width, "Auto-Herd:",
+      string.format("%s (last: %s)", herd_on and "ON" or "off", herd_last),
+      herd_on and C.bright_green or C.dim))
   end
 
   return lines

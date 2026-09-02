@@ -228,6 +228,23 @@ local function print_automation_status()
     "  Auto-Voyage: %s | last: %s | next: %s",
     page_opts.get("auto_voyage") and "ON" or "off", voyage_last,
     fmt_next((av.last or 0) + autovoyage.AV_INTERVAL)))
+
+  -- Auto-Herd, mirroring the three blocks above. Its log entries are
+  -- { t = "HH:MM", desc = ... } records rather than Auto-Voyage's plain
+  -- strings, hence the join. This block being absent made the `/vik` help
+  -- text's own promise ("each automation's on/off state and
+  -- last-action/next-eligible summary") false by omission -- for the ONE
+  -- automation that spends the player's daler.
+  local ah = autoherd.settings()
+  local herd_last = "none"
+  if ah.log and #ah.log > 0 then
+    local e = ah.log[#ah.log]
+    herd_last = tostring(e.t or "") .. " " .. tostring(e.desc or "")
+  end
+  buffer.color_print(nil, "DAA520", string.format(
+    "  Auto-Herd: %s | last: %s | next: %s",
+    page_opts.get("auto_herd") and "ON" or "off", herd_last,
+    fmt_next((ah.last or 0) + autoherd.AH_INTERVAL)))
 end
 
 -- The keys GMCP has fed this connection, sorted. The single extraction both
