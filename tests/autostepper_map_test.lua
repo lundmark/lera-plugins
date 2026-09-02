@@ -80,8 +80,21 @@ m:record({ "n", "e", "out", "enter", "in" })
 here = m:room(0, 0, 0)
 check("non-walkable exits are dropped", here.exits.out == nil and here.exits.enter == nil
   and here.exits["in"] == nil)
-check("re-recording replaces the exit set rather than merging",
+check("re-recording keeps the exits still reported",
   here.exits.n == true and here.exits.e == true)
+
+-- Replace, not merge -- and this needs its own map. The case above cannot show
+-- it: both records list n and e, so a merging implementation produces exactly
+-- the same table and passes. The property only becomes visible when an exit
+-- STOPS being reported. A separate map keeps the main sequence's origin at
+-- {n,e}, which the frontier case below depends on.
+local rep = map_mod.new()
+rep:record({ "n", "e" })
+rep:record({ "n" })
+local rep_room = rep:room(0, 0, 0)
+check("re-recording drops an exit no longer reported",
+  rep_room.exits.n == true and rep_room.exits.e == nil,
+  tostring(rep_room.exits.n) .. "/" .. tostring(rep_room.exits.e))
 
 -- ---- movement ----------------------------------------------------------------
 check("move follows the delta", m:move("n") == true)
