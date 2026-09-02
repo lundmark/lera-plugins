@@ -375,6 +375,45 @@ act = ah.plan()
 check("reserve + price exactly -> the buy is allowed",
       act ~= nil and act.kind == "buy", act and act.why)
 
+-- ---- the server's precondition is price * count, not price ----------------
+-- The record's `price` is ALREADY the lot total (livestock_daemon.c:310
+-- stores `price * count`), and vlivestock.c's do_buy then defaults
+-- `buy_count = lot_count` and requires `total_cost = price * buy_count` --
+-- so a lot of 3 costs three times what the record's `price` field reads.
+-- Every other fixture in this file uses count = 1, the one value where the
+-- two figures agree, which is exactly why gating on `price` alone shipped
+-- green. Gating on the wrong figure is not a harmless refusal: the command
+-- goes out, the server rejects it, no state changes, and the phase machine
+-- re-picks the same listing forever.
+S.autoherd = nil
+ah.settings()                             -- reserve back to its 2000 default
+S.lpending = {}
+S.herds = {}
+S.buildings = { sheepfold = 2 }
+S.lfeed = { grain = 0, water = 0, head = 0 }
+S.wstock_by_good = { grain = { good = "grain", amount = 9999 } }
+S.wstock = { { good = "grain", amount = 9999 } }
+S.lmarket = {
+  [1] = { { lin = 1, idx = 0, species = "sheep", breed = "nordic", count = 3,
+            price = 400, hard = 30, fert = 40, yield = 50, vigor = 45,
+            con = 35 } },
+}
+S.daler = 2400                            -- budget 400: covers price, not 1200
+act = ah.plan()
+check("a lot of 3 the budget cannot cover in full is not planned",
+      act == nil or act.kind ~= "buy", act and act.cmd)
+S.daler = 3199                            -- budget 1199, one under the lot
+act = ah.plan()
+check("one daler short of the whole lot -> still no buy",
+      act == nil or act.kind ~= "buy", act and act.cmd)
+S.daler = 3200                            -- budget exactly 1200
+act = ah.plan()
+check("budget covering the whole lot -> the buy is allowed",
+      act ~= nil and act.kind == "buy", act and act.why)
+check("the note quotes the lot total the server actually charges",
+      act and act.why and act.why:find("1200d", 1, true) ~= nil, act and act.why)
+S.daler = 100000
+
 -- ---- quality buy-in: the margin, and its own cap check ---------------------
 -- Added beyond the brief, which never exercises branch 4 at all. Crossbreed
 -- and restock are both silenced here (cross off; head == the keep floor), so
@@ -552,6 +591,24 @@ ah.tick()
 check("tick with the toggle on but not connected sends nothing", #sent == 0, #sent)
 mud_connected = true
 
+-- The reconnect settling hold. init.lua's M.on_connect sets S.at_hold_until
+-- on every connect and state.reset_connection() deliberately PRESERVES guild
+-- data, so S.herds/S.lmarket/S.buildings/S.daler all survive a disconnect and
+-- the first tick after reconnect would otherwise plan against last session's
+-- market pool -- at an index the server has since rebuilt, buying a different
+-- animal than the one it scored. The fixture below is the same one that buys
+-- two lines down, so only the hold can be responsible for the silence.
+S.at_hold_until = os.time() + 60
+ah.tick()
+check("tick inside the reconnect settling hold sends nothing", #sent == 0, #sent)
+check("tick inside the settling hold says why",
+      (ah.settings().status or ""):find("settling", 1, true) ~= nil,
+      ah.settings().status)
+-- An ELAPSED hold (a real past timestamp, not nil) must not block anything:
+-- the toggle-ON case immediately below runs with this set and is the
+-- assertion that it does not.
+S.at_hold_until = os.time() - 1
+
 -- The toggle ON, all else unchanged: the planner must actually run and act.
 ah.tick()
 check("tick with the master toggle ON plans and sends exactly one command",
@@ -562,6 +619,7 @@ check("tick never sends slaughter",
       sent[1] and sent[1]:find("slaughter", 1, true) == nil)
 
 -- Flipping it back off must stop it again.
+S.at_hold_until = nil
 page_opts.set("auto_herd", false)
 sent = {}
 for _ = 1, 5 do ah.tick() end

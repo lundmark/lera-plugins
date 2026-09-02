@@ -529,6 +529,24 @@ local function each_listing(fn)
   end
 end
 
+-- What the server will actually CHARGE for a listing, which is NOT the
+-- record's `price` field. CORRECTION TO LEGACY (and to this port's own first
+-- cut), verified against the server:
+--   * world/livestock_daemon.c:310 stores `"price": price * count` -- the
+--     record's price is already a LOT TOTAL, not a per-head price;
+--   * cmd/vlivestock.c's do_buy then sets `int buy_count = lot_count;` when
+--     no count argument is given (buy_cmd below never passes one) and
+--     requires `int total_cost = price * buy_count;`.
+-- So the daler the player needs on hand is price * count, and the server's
+-- own market table agrees -- vlivestock.c:210 renders `price * qty` as the
+-- "T:" (total) column beside "P:". Gating on `price` alone lets the planner
+-- send a buy the server refuses, and because a refusal changes no state the
+-- phase machine cools down, replans, picks the SAME listing and repeats
+-- forever. Every count = 1 lot is the one case where the two figures agree.
+local function lot_cost(m)
+  return num(m.price) * math.max(1, num(m.count))
+end
+
 -- LEGACY:169 (best_listing). Best AFFORDABLE listing of `species`, optionally
 -- requiring a breed different from `avoid_breed` and/or a score at or above
 -- `min_score`, scored by the active goal. The server already gates and scales
@@ -541,7 +559,7 @@ local function best_listing(ah, species, budget, avoid_breed, min_score)
   local w = GOAL_W[ah.goal] or GOAL_W.balanced
   local best, best_score
   each_listing(function(m)
-    if m.species == species and num(m.price) <= budget then
+    if m.species == species and lot_cost(m) <= budget then
       if not (avoid_breed and m.breed == avoid_breed) then
         local sc = score_stats(m, w)
         -- Trait preference: strongly reward a rare-trait animal so the
@@ -585,7 +603,8 @@ end
 --      name a building the player does not own, or one the user disabled.
 --   2. budget           -- `budget = S.daler - reserve`, and each of the
 --      three buy branches is gated on `budget > 0`; best_listing() then only
---      ever returns a listing whose price is <= budget.
+--      ever returns a listing whose WHOLE LOT (lot_cost: price x count, the
+--      figure the server's own precondition uses) is <= budget.
 --   3. herd space       -- `head + pending_head(b) < cap_for(b, tier)`.
 --   4. pending delivery -- pending_head(b) is added to head in all three
 --      branches, so a delivery already on the road blocks a re-buy.
@@ -674,7 +693,7 @@ function M.plan()
             return { kind = "buy", cmd = cmd,
               why = string.format("stock %s: buy %s x%d into %s (%d/%d) for %dd",
                 species, (m.breed ~= "" and m.breed) or "?", num(m.count), b,
-                head, desired, num(m.price)) }, nil
+                head, desired, lot_cost(m)) }, nil
           end
         else
           ah.status = string.format(
@@ -722,7 +741,7 @@ function M.plan()
               return { kind = "buy", cmd = cmd,
                 why = string.format("crossbreed %s: +%s into %s (gen %d, %d sterile%s) for %dd",
                   species, (m.breed ~= "" and m.breed) or "?", b, num(herd.gen),
-                  num(herd.sterile), age_note, num(m.price)) }, nil
+                  num(herd.sterile), age_note, lot_cost(m)) }, nil
             end
           end
         end
@@ -748,7 +767,7 @@ function M.plan()
           if cmd then
             return { kind = "buy", cmd = cmd,
               why = string.format("quality buy %s %s into %s for %dd",
-                species, (m.breed ~= "" and m.breed) or "?", b, num(m.price)) }, nil
+                species, (m.breed ~= "" and m.breed) or "?", b, lot_cost(m)) }, nil
           end
         end
       end
@@ -843,6 +862,23 @@ function M.tick()
     return
   end
   local now = os.time()
+
+  -- Reconnect settling hold, the same gate autotrader/plan.lua:287 applies to
+  -- cart dispatch. init.lua's M.on_connect sets S.at_hold_until on every
+  -- connect, and state.reset_connection() deliberately PRESERVES guild data,
+  -- so S.herds, S.lmarket, S.buildings and S.daler all survive a disconnect
+  -- and the data gate below is satisfied instantly by stale city data. Without
+  -- this the first tick after reconnect plans against last session's market
+  -- pool and buys at an index the server has since rebuilt -- a different
+  -- species, stats and price than the listing it scored -- and on confirm can
+  -- chain further buys every 2s while Guild.Livestock's slow cadence has
+  -- refreshed nothing.
+  if S.at_hold_until and now < S.at_hold_until then
+    local ah = M.settings()
+    ah.status = string.format("settling after reconnect (%ds)",
+      S.at_hold_until - now)
+    return
+  end
 
   -- Data gate: do nothing until the city feed has arrived, since every
   -- access check below depends on S.buildings.
