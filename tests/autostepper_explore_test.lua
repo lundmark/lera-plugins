@@ -458,6 +458,29 @@ check("the post-reset room was filed on the layer, so a revisit finds it",
   mode.stats().rooms == 1, tostring(mode.stats().rooms))
 mode.stop()
 
+-- ---- reset drops the outstanding direction -----------------------------------
+-- reset() is public: the area-entry reset and the farm loop both call it
+-- between an emitted move and its arrival. A direction left pending is
+-- committed by the very next on_arrival, so the fresh origin immediately walks
+-- off itself and every coordinate after it is offset by one room.
+quiet(function() mode.start(profile, "clear") end)
+frame({ num = 0, area = "Unknown", name = "Layer one of the Sea of Chaos",
+        exits = { "n", "e" } })
+quiet(mode.on_arrival)
+local pend = mode.next_step()
+check("a direction is outstanding before the reset", pend ~= nil,
+  tostring(pend))
+quiet(function() mode.reset("test") end)
+frame({ num = 0, area = "Unknown", name = "Layer one of the Sea of Chaos",
+        exits = { "n", "e" } })
+quiet(mode.on_arrival)
+local pst = mode.stats()
+check("the arrival after a reset lands on the fresh origin, not one step off it",
+  pst.x == 0 and pst.y == 0, pst.x .. "," .. pst.y)
+check("the fresh origin holds exactly one room", pst.rooms == 1,
+  tostring(pst.rooms))
+mode.stop()
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
