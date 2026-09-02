@@ -189,10 +189,82 @@ end
 local REFINED_GOODS = { "mead", "salted_fish", "bread", "fine_furs", "tools", "gemstones" }
 
 -- LEGACY:3315-3318 (wh_amount_of). Warehouse amount of a good, from the
--- WSTOCK feed (handlers/trade.lua populates S.wstock_by_good).
-local function wh_amount_of(good)
+-- WSTOCK feed (handlers/trade.lua's write_wstock populates S.wstock_by_good
+-- and S.wstock together).
+--
+-- EXPORTED (husbandry plan, Task 4), and given the S.wstock array
+-- fallback LEGACY's second warehouse reader
+-- (guild_viking_husbandry.lua:139, warehouse_amount) also carried. This is
+-- now the ONE place in the plugin that answers "how much of this good is in
+-- the warehouse" -- autoherd.lua's feed guard and pages/livestock.lua's Feed
+-- section both call it, so the planner and the page cannot drift apart on
+-- the same question. The array fallback is unreachable while write_wstock
+-- writes both halves in one go; it is kept because the two LEGACY readers
+-- disagreed on whether it was needed and the cheaper answer is to satisfy
+-- both.
+function M.wh_amount_of(good)
   local rec = S.wstock_by_good and S.wstock_by_good[good]
-  return rec and rec.amount or 0
+  if rec then return tonumber(rec.amount) or 0 end
+  local n = 0
+  for _, ws in ipairs(S.wstock or {}) do
+    if ws.good == good then n = n + (tonumber(ws.amount) or 0) end
+  end
+  return n
+end
+
+-- Has the WSTOCK feed arrived at all? state.lua leaves S.wstock_by_good nil
+-- until write_wstock runs, and write_wstock always creates it (even for an
+-- empty warehouse), so nil means "not received yet" and {} means "received,
+-- warehouse empty". Callers that would otherwise render a 0 as fact need to
+-- tell those two apart -- see pages/livestock.lua's Feed section, which omits
+-- its "Covers" line rather than claim a 0-tick runway it cannot know.
+function M.wh_known()
+  return S.wstock_by_good ~= nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Livestock figures shared by pages/livestock.lua and autoherd.lua. They live
+-- here, beside wh_amount_of/wh_known, for the same reason those do: the page
+-- and the spending planner must not be able to drift apart on the same
+-- question. Before this they lived in autoherd.lua, which made loading ANY
+-- page pull in the whole spending planner just to render a Feed line -- and
+-- the spec's "pure builder ... reading only `state` and `page_opts`"
+-- constraint on the pages was never amended to allow that.
+-- ---------------------------------------------------------------------------
+
+-- HERD_CAP, tiers 1..5, from the server's HERD_CAP_* constants
+-- (3s/players/viking/world/trade_goods.h:1050-1054, dropping its leading
+-- tier-0 zero -- LEGACY's own shape at guild_viking.lua:9832-9835). ONE
+-- definition: it drives spending, and it was duplicated with divergent
+-- semantics (a clamped read in the planner, a direct index on the page).
+-- Both readers keep their own out-of-range behaviour AT THE CALL SITE, which
+-- is where the difference is meaningful: the planner clamps, because a buy
+-- must never be sized against a nil cap, and the page shows head alone.
+M.HERD_CAP = {
+  sheepfold = { 6, 14, 28, 50, 80 },
+  henhouse  = { 12, 28, 56, 100, 160 },
+  piggery   = { 6, 14, 28, 50, 80 },
+  byre      = { 4, 10, 20, 36, 56 },
+  stable    = { 8, 16, 28, 40, 60 },
+}
+
+-- LIVESTOCK_FEED_PER_HEAD (trade_goods.h:1074): one grain per eight head.
+local LIVESTOCK_FEED_PER_HEAD = 8
+
+-- The herds' per-tick grain draw.
+--
+-- The SERVER has already computed this figure -- S.lfeed.grain, via
+-- _v_lfeed() -> query_livestock_feed_needs() (query.h:2464) -- and its number
+-- is strictly better than any client re-derivation, because it applies the
+-- fesetr feed-saving skill and the per-building minimum of 1 grain, neither
+-- of which a client can see. LEGACY's own ceil(head / 8)
+-- (guild_viking_husbandry.lua:231) is therefore kept only as the fallback for
+-- the window before the LFEED key has arrived, where `head` is the caller's
+-- own head figure.
+function M.feed_draw(head)
+  local g = tonumber(S.lfeed and S.lfeed.grain) or 0
+  if g > 0 then return g end
+  return math.ceil((tonumber(head) or 0) / LIVESTOCK_FEED_PER_HEAD)
 end
 
 -- LEGACY:3354-3372 (compute_refined_sells). Best-sell opportunities for
@@ -204,7 +276,7 @@ function M.compute_refined_sells()
   for _, g in ipairs(REFINED_GOODS) do
     local sp, sl, dem = M.best_sell_of(g)
     if sp and sl then
-      local total = wh_amount_of(g)
+      local total = M.wh_amount_of(g)
       local blk = (S.blocks and S.blocks[g]) or 0
       local avail = total - blk
       if avail < 0 then avail = 0 end

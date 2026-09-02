@@ -177,8 +177,14 @@ check("state en5 default", S.en5 == "None")
 -- reset_connection clears per-connection combat state but keeps persisted-style fields
 S.combat = true
 S.en5 = "orc"
+-- The Guild.Livestock arrival latch is per-connection: Auto-Herd gates its
+-- spending on it, so a latch left standing across a disconnect would let the
+-- first tick after reconnect plan against last session's herds.
+S.livestock_seen = true
 state_mod.reset_connection()
 check("reset clears combat", S.combat == false and S.en5 == "None")
+check("reset clears the Guild.Livestock arrival latch",
+      S.livestock_seen == false, tostring(S.livestock_seen))
 
 -- ---- plugin table loads -----------------------------------------------------
 local M = dofile("3scapes/guild_viking/init.lua")
@@ -1324,6 +1330,82 @@ check("/vik voyage auto (bare): 13 items",
 last_menu_open = nil
 S.autovoyage = nil
 
+-- ---- /vik herd <sub>: LEGACY's ah_config grammar --------------------------
+-- Full gate/branch/planner/menu coverage lives in
+-- guild_viking_autoherd_test.lua; this section only proves the DISPATCH
+-- WIRING (init.lua's `sub_lower == "herd"` branch) actually reaches
+-- autoherd.lua's M.herd_command/M.config, and that the immediate-persist
+-- behavior survives that whole path -- the same thing the trader/raid/voyage
+-- blocks above prove for their own automations. It matters most here: `herd
+-- on` is the switch that authorises Auto-Herd to SPEND DALER, and it was the
+-- one directive set in this file with no dispatch test at all.
+local autoherd_cmd = require("autoherd")
+S.autoherd = nil
+page_opts.set("auto_herd", false)
+
+check("/vik herd: auto_herd off by default", page_opts.get("auto_herd") == false)
+printed = {}
+stored = nil
+registered_vik.handler("herd on", "/vik")
+check("/vik herd on: flips page_opts.auto_herd", page_opts.get("auto_herd") == true)
+check("/vik herd on: reply text verbatim", printed[1] == "[Auto-Herd] ON.", printed[1])
+check("/vik herd on: persists IMMEDIATELY through the full /vik dispatch path "
+      .. "(no separate /vik save needed)",
+      stored ~= nil and stored.page_opts and stored.page_opts.auto_herd == true)
+
+printed = {}
+registered_vik.handler("herd off", "/vik")
+check("/vik herd off: flips page_opts.auto_herd back", page_opts.get("auto_herd") == false)
+check("/vik herd off: reply text verbatim", printed[1] == "[Auto-Herd] OFF.", printed[1])
+
+printed = {}
+stored = nil
+registered_vik.handler("herd reserve 3000", "/vik")
+check("/vik herd reserve <n>: sets the reserve", S.autoherd.reserve == 3000,
+      S.autoherd and S.autoherd.reserve)
+check("/vik herd reserve <n>: reply text verbatim",
+      printed[1] == "[Auto-Herd] reserve = 3000", printed[1])
+check("/vik herd reserve <n>: persists immediately through the dispatch path",
+      stored ~= nil and stored.autoherd and stored.autoherd.reserve == 3000)
+
+registered_vik.handler("herd goal fert", "/vik")
+check("/vik herd goal <stat>: sets the goal", S.autoherd.goal == "fert", S.autoherd.goal)
+registered_vik.handler("herd quality off", "/vik")
+check("/vik herd quality off: clears buy_quality", S.autoherd.buy_quality == false)
+registered_vik.handler("herd bldg byre target 8", "/vik")
+check("/vik herd bldg <name> target <n>: sets the per-building target",
+      S.autoherd.buildings.byre and S.autoherd.buildings.byre.target == 8)
+
+printed = {}
+local ok_bad_herd = pcall(registered_vik.handler, "herd bogus", "/vik")
+check("/vik herd bogus: does not error", ok_bad_herd)
+check("/vik herd bogus: usage message verbatim",
+      printed[1] == "[Auto-Herd] usage: aherd on|off | goal "
+        .. "<yield|fert|con|hard|vigor|balanced> | reserve <n> | keep <n> | "
+        .. "gen <n|auto> | age <n|off> | trait "
+        .. "<any|off|prolific|hardy|bountiful|purebred> | stock on|off | "
+        .. "cross on|off | quality on|off | feed on|off | feedticks <n> | "
+        .. "margin <n> | bldg <name> on|off|target <n>|keep <n> | "
+        .. "debug on|off | log [clear] | status",
+      printed[1])
+
+-- ---- /vik herd (bare): opens the settings menu ----------------------------
+S.autoherd = nil
+page_opts.set("auto_herd", false)
+last_menu_open = nil
+registered_vik.handler("herd", "/vik")
+check("/vik herd (bare): opens a menu", last_menu_open ~= nil)
+check("/vik herd (bare): menu title",
+      last_menu_open and last_menu_open.title == "Auto-Herd Settings")
+
+last_menu_open.on_select("on")
+check("/vik herd menu: selecting 'on' flips auto_herd", page_opts.get("auto_herd") == true)
+check("/vik herd menu: reopens itself in place", last_menu_open ~= nil)
+
+page_opts.set("auto_herd", false)   -- restore the default for later tests
+S.autoherd = nil
+last_menu_open = nil
+
 -- =============================================================================
 -- Task 9: the safety lock + the integration ordering test.
 --
@@ -1554,6 +1636,9 @@ raid2.settings().last_dispatch = { t = "12:34", target = "Uppsala", n = 2, convo
 raid2.settings().last = 0
 voyage2.settings().log = { "12:00 explore -> A2" }
 voyage2.settings().last = 0
+local herd2 = require("autoherd")
+herd2.settings().log = { { t = "11:45", desc = "stock sheep into sheepfold" } }
+herd2.settings().last = 0
 
 printed = {}
 registered_vik.handler("status", "/vik")
@@ -1564,8 +1649,15 @@ check("/vik status: Auto-Raid line reports off + the last dispatch + ready",
       printed[5])
 check("/vik status: Auto-Voyage line reports ON + the last log entry + ready",
       printed[6] == "  Auto-Voyage: ON | last: 12:00 explore -> A2 | next: ready", printed[6])
-check("/vik status: exactly 6 lines printed (3 ingestion + 3 automation)",
-      #printed == 6, #printed)
+-- Auto-Herd is the only automation that spends daler, and /vik help
+-- advertises status as showing "each automation's on/off state and
+-- last-action/next-eligible summary" -- which was false by omission while
+-- this line did not exist.
+check("/vik status: Auto-Herd line reports off + the last log entry + ready",
+      printed[7] == "  Auto-Herd: off | last: 11:45 stock sheep into sheepfold | next: ready",
+      printed[7])
+check("/vik status: exactly 7 lines printed (3 ingestion + 4 automation)",
+      #printed == 7, #printed)
 
 -- "next: Ns" -- not yet ready -- when a real dispatch happened recently.
 raid2.settings().last = os.time()

@@ -132,6 +132,17 @@ local state = {
   buildings          = {},   -- { [bldg_id] = tier }
   monuments          = {},   -- array of inscription strings
   monument_cap       = 0,    -- max slots (guild_level / 5)
+  -- Guild.Livestock. Read by pages/livestock.lua and by autoherd.lua's planner.
+  herds = {}, bqueue = {}, bqueue_used = 0, bqueue_max = 0,
+  lfeed = {}, lpending = {}, lfind = { posts = {}, offers = {}, auctions = {} },
+  lmarket = {}, lneeds = {},
+  -- Has Guild.Livestock arrived this connection? Set by handlers/livestock.lua's
+  -- write_herds (herds is always sent, even empty) and cleared by
+  -- reset_connection below, so it is strictly per-connection. Auto-Herd's tick
+  -- gates its spending on it: Guild.City and Guild.Livestock are separate
+  -- slow-cadence panels, so a planner gated only on S.buildings runs while
+  -- every herd still reads empty.
+  livestock_seen = false,
   thralls          = 0,
   thralls_longhouse = 0,
   thralls_warehouse = 0,
@@ -251,6 +262,9 @@ function M.reset_connection()
   state.combat_rounds = 0
   state.stfx = {}
   state.vis_gain, state.kap_gain, state.soe_gain, state.aud_gain = 0, 0, 0, 0
+  -- Guild data itself is deliberately preserved across a reconnect, but the
+  -- claim that it has ARRIVED this connection is not -- see the field comment.
+  state.livestock_seen = false
   -- The map planes themselves are left standing (a reconnect redraws them on
   -- the next Guild.Map push, and a blank map in the meantime helps nobody),
   -- but their decoding context is not: see the field comments above.

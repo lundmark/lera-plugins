@@ -185,6 +185,7 @@ package.loaded["autotrader.tick"] = { open_menu = function() dispatched = "atrad
 package.loaded["autoraid"] = { open_menu = function() dispatched = "araid" end }
 package.loaded["autovoyage"] = { open_menu = function() dispatched = "avoyage" end }
 package.loaded["popups.map"] = { open_poi_menu = function() dispatched = "travel" end }
+package.loaded["autoherd"] = { open_menu = function() dispatched = "aherd" end }
 
 local function pick_action(page, needle)
   dispatched = nil
@@ -200,6 +201,21 @@ check("the Auto-Voyage action row opens the auto-voyage menu",
   pick_action("sea", "Auto-Voyage settings...") == "avoyage")
 check("the Travel action row opens the POI menu",
   pick_action("map", "Travel to...") == "travel")
+-- Auto-Herd is the one automation that SPENDS the player's daler, and it had
+-- no page_menu presence at all -- no toggle row and no settings row, while
+-- each of its three non-spending siblings had both. LEGACY carried exactly
+-- these two rows (guild_viking.lua:12625-12626); they live on the stock page
+-- here rather than city because this port moved every livestock section onto
+-- its own page, which is where LEGACY's rows sat relative to their content.
+check("the Auto-Herd toggle row exists on the stock page",
+  label_of(page_menu.items("stock"), "Auto-Herd (husbandry)") ~= nil,
+  label_of(page_menu.items("stock"), "Auto-Herd"))
+check("the Auto-Herd toggle row is a page_opts key row, not an action",
+  (value_of(page_menu.items("stock"), "Auto-Herd (husbandry)") or "")
+    == "key:auto_herd",
+  value_of(page_menu.items("stock"), "Auto-Herd (husbandry)"))
+check("the Auto-Herd action row opens the auto-herd menu",
+  pick_action("stock", "Auto-Herd settings...") == "aherd")
 
 -- An action row must never touch page_opts or persist.
 saves = 0

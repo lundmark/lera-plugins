@@ -2,8 +2,11 @@
 -- transport source mode (protocol.lua), (stage 2) the page options and
 -- current page (page_opts.lua / window.lua), and (stage 4) the auto-trade
 -- settings knobs (autotrader/core.lua, Task 1), the auto-raid settings
--- (autoraid.lua, Task 8: target/ships/convoy) and the auto-voyage settings
--- (autovoyage.lua, Task 7: risk/ship/mission_prio/etc), mirroring LEGACY's
+-- (autoraid.lua, Task 8: target/ships/convoy), the auto-voyage settings
+-- (autovoyage.lua, Task 7: risk/ship/mission_prio/etc) and (viking husbandry
+-- plan, Task 3) the Auto-Herd settings (autoherd.lua: goal/reserve/keep/
+-- trait_pref/restock/crossbreed/buy_quality/feed_guard/etc, plus
+-- per-building overrides), mirroring LEGACY's
 -- SetVariable("popt_"..k) + SetVariable("page", ...)
 -- (/home/simon/code/3s_scripts_old/lua/guild_viking.lua:3025-3040) -- LEGACY's
 -- OnPluginSaveState (MAIN 3023-3024) actually serializes the WHOLE `state`
@@ -32,8 +35,13 @@ local M = {}
 -- module has finished loading) sidesteps the cycle without depending on
 -- notify.lua's particular require order -- same idiom as autoraid.lua's own
 -- deferred require("persist") and popups.lua's deferred require("wm").
+-- autoherd.lua (Task 3 of the viking husbandry plan) is deferred the same
+-- way for the same reason (see that module's own header) -- nothing
+-- requires it from a page yet, so it is not part of any live cycle today,
+-- but deferring costs nothing and keeps this file's require list uniform.
 local function ar_module() return require("autoraid") end
 local function av_module() return require("autovoyage") end
+local function ah_module() return require("autoherd") end
 
 function M.save()
   local opts = {}
@@ -47,6 +55,7 @@ function M.save()
     autotrade = at_core.snapshot().autotrade,
     autoraid = ar_module().snapshot().autoraid,
     autovoyage = av_module().snapshot().autovoyage,
+    autoherd = ah_module().snapshot().autoherd,
   })
   store.save()
 end
@@ -72,15 +81,19 @@ function M.load()
   if data.autotrade then
     at_core.restore({ autotrade = data.autotrade })
   end
-  -- Both keys are ABSENT in a store file saved before this fix -- data.autoraid
-  -- and data.autovoyage are simply nil then, so both branches are skipped and
-  -- autoraid.lua's/autovoyage.lua's own M.settings() lazily creates fresh
-  -- defaults on first use, exactly as if this file had never been touched.
+  -- All three keys are ABSENT in a store file saved before their own fix --
+  -- data.autoraid/data.autovoyage/data.autoherd are simply nil then, so
+  -- each branch is skipped and that module's own M.settings() lazily
+  -- creates fresh defaults on first use, exactly as if this file had never
+  -- been touched.
   if data.autoraid then
     ar_module().restore({ autoraid = data.autoraid })
   end
   if data.autovoyage then
     av_module().restore({ autovoyage = data.autovoyage })
+  end
+  if data.autoherd then
+    ah_module().restore({ autoherd = data.autoherd })
   end
 end
 

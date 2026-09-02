@@ -51,6 +51,10 @@ local real_mods = {}
 for _, p in ipairs(window.PAGES) do real_mods[p.key] = p.mod end
 
 -- ---- PAGES registry ---------------------------------------------------------
+-- Task 2 (Viking husbandry) appended "stock" as a 13th entry, AFTER "trade"
+-- rather than after "farm" (where the order would read more naturally) --
+-- deliberately, so every tab BEFORE it here keeps the exact column span
+-- this file's tab-bar/pointer-seam math below already asserts against.
 local expected_pages = {
   { key = "stats",  label = "Stats" },
   { key = "city",   label = "City" },
@@ -64,14 +68,15 @@ local expected_pages = {
   { key = "army",   label = "Army" },
   { key = "war",    label = "War" },
   { key = "trade",  label = "Trade" },
+  { key = "stock",  label = "Stock" },
 }
-check("PAGES has 12 entries", #window.PAGES == 12, #window.PAGES)
+check("PAGES has 13 entries", #window.PAGES == 13, #window.PAGES)
 local pages_ok = true
 for i, exp in ipairs(expected_pages) do
   local got = window.PAGES[i]
   if not got or got.key ~= exp.key or got.label ~= exp.label then pages_ok = false end
 end
-check("PAGES keys/labels match the twelve stage-2 pages", pages_ok)
+check("PAGES keys/labels match the thirteen stage-2 pages", pages_ok)
 check("every PAGES entry is a valid page module (stats real, the rest placeholder)", (function()
   for _, p in ipairs(window.PAGES) do
     if type(p.mod) ~= "table" or type(p.mod.lines) ~= "function" then return false end
@@ -86,7 +91,7 @@ local function find_page(key)
   end
 end
 
--- ---- tab bar: all twelve labels rendered, current highlighted --------------
+-- ---- tab bar: all thirteen labels rendered, current highlighted ------------
 reset_drawn()
 window.render(make_rect(0, 0, 100, 5), {})
 check("tab bar drew at least the header row", #drawn.ansi >= 1)
@@ -95,7 +100,7 @@ local all_present = true
 for _, p in ipairs(expected_pages) do
   if not tabrow:find(p.label, 1, true) then all_present = false end
 end
-check("tab bar contains all twelve labels", all_present, tabrow)
+check("tab bar contains all thirteen labels", all_present, tabrow)
 check("current tab (Stats) is reverse-video highlighted",
       tabrow:find("\27%[7mStats\27%[27m") ~= nil, tabrow)
 check("non-current tab (City) is not reverse-video wrapped",
@@ -111,7 +116,7 @@ check("set_page back to stats", window.set_page("stats") == true)
 -- ---- on_pointer: tab-span down switches page, body down does not -----------
 -- Column layout for a 100-wide bar (one label per gap, 1-space separator):
 -- Stats[0,5) City[6,10) Farm[11,15) Builds[16,22) ... -- verified against the
--- render above (all twelve labels fit on row 0 at width 100).
+-- render above (all thirteen labels fit on row 0 at width 100).
 reset_drawn()
 window.render(make_rect(0, 0, 100, 5), {})
 

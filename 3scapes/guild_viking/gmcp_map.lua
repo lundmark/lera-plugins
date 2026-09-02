@@ -98,6 +98,19 @@ M.COMPOSITE = {
   -- because ordinary frames are deltas and a step sends `pos` alone.
   VMAP      = { "w", "h", "active", "pos", "legend", "legend_edge", "enc",
                 "terrain", "east", "south", "landmarks" },
+  -- Guild.Livestock. bqueue is a sibling split of one server mapping
+  -- (_v_bqueue()'s used/max/slots). lfind was three MIP values '!'-joined.
+  BQUEUE = { "bqueue_used", "bqueue_max", "bqueue" },
+  LFIND  = { "lfind_posts", "lfind_offers", "lfind_auctions" },
+  -- lmarket is ONE key PER LINEAGE, and a lineage with no pool sends no key
+  -- at all -- so this composite is variable-arity by necessity. That is
+  -- already how GMCP composites work (protocol.lua: the writer gets whichever
+  -- halves this frame had); do not confuse it with the MIP-side
+  -- KEY_<n>of<m> batch mechanism, which IS fixed-arity.
+  LMARKET = { "lmarket_1", "lmarket_2", "lmarket_3", "lmarket_4",
+              "lmarket_5", "lmarket_6", "lmarket_7", "lmarket_8",
+              "lmarket_9", "lmarket_10", "lmarket_11", "lmarket_12",
+              "lmarket_13" },
 }
 
 -- Packages whose ENTIRE payload is one MIP key's data, dispatched as a unit
@@ -142,6 +155,16 @@ local MAP = {
   cityplan_perks = "CPLAN",
   blot = "BLOT", weather = "WEATHER", dcycle = "DCYCLE", nexttick = "NEXTTICK",
   production = "PRODUCTION", farm_meta = "FARM", farm_plots = "FARM",
+
+  -- Guild.Livestock
+  herds = "HERDS", lfeed = "LFEED", lpending = "LPENDING", lneeds = "LNEEDS",
+  bqueue_used = "BQUEUE", bqueue_max = "BQUEUE", bqueue = "BQUEUE",
+  lfind_posts = "LFIND", lfind_offers = "LFIND", lfind_auctions = "LFIND",
+  lmarket_1 = "LMARKET", lmarket_2 = "LMARKET", lmarket_3 = "LMARKET",
+  lmarket_4 = "LMARKET", lmarket_5 = "LMARKET", lmarket_6 = "LMARKET",
+  lmarket_7 = "LMARKET", lmarket_8 = "LMARKET", lmarket_9 = "LMARKET",
+  lmarket_10 = "LMARKET", lmarket_11 = "LMARKET", lmarket_12 = "LMARKET",
+  lmarket_13 = "LMARKET",
 
   -- Guild.Roster. gneeds and rneeds are deliberately absent: they have no MIP
   -- counterpart and no consumer, so they stay counted under their own names.

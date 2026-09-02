@@ -19,10 +19,21 @@
 -- (autotrader/tick.lua's M.tick); Task 7 wired the third (autovoyage.lua's
 -- M.tick); Task 8 (this change) inserts the second (autoraid.lua's M.tick)
 -- BETWEEN them, so the order is now trade, raid, voyage -- LEGACY's own.
+--
+-- CITATION CORRECTION (husbandry plan, Task 4): the "LEGACY 2885-2890" above
+-- is wrong. LEGACY's auto-module tick tail is guild_viking.lua:3232-3240
+-- (`grep -n "auto_herd_tick" guild_viking.lua` -> 3240; 2885-2890 is inside
+-- the MIP VFIND auction decoder). That real site runs FIVE ticks in the
+-- order trade, raid, voyage, vfind, herd. Husbandry Task 4 (this change)
+-- appends the fifth, autoherd.lua's M.tick, LAST -- this plugin has no
+-- auto-vfind, so herd simply follows voyage. Auto-Herd is OFF by default
+-- (page_opts' auto_herd = false) and its own first line re-checks that gate,
+-- so adding this call sends nothing until a user opts in.
 local S = require("state").S
 local autotrade_tick = require("autotrader.tick")
 local autoraid = require("autoraid")
 local autovoyage = require("autovoyage")
+local autoherd = require("autoherd")
 
 local M = {}
 
@@ -355,11 +366,13 @@ function M.countdown_tick()
     ui.dirty()
   end
 
-  -- LEGACY guild_viking.lua:2885-2890 (trade, raid, voyage order). See this
-  -- function's header.
+  -- LEGACY guild_viking.lua:3232-3240 (trade, raid, voyage, vfind, herd
+  -- order; the older "2885-2890" citation is corrected in this function's
+  -- header). No auto-vfind in this plugin, so herd follows voyage.
   autotrade_tick.tick()
   autoraid.tick()
   autovoyage.tick()
+  autoherd.tick()
 end
 
 return M

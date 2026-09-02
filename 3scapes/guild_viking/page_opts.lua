@@ -17,6 +17,13 @@ page_opts.defaults = {
   show_city_plan_icons=false,   -- graphical building/terrain icons (WIP, off by default)
   show_city_couriers=true, show_city_spies=true, show_city_training=true, show_city_heat=true,
   show_farm_weather=true, show_farm_plots=true, show_farm_blot=true,
+  show_stock_herds=true, show_stock_queue=true, show_stock_feed=true,
+  show_stock_pending=true, show_stock_find=true, show_stock_market=true,
+  show_stock_needs=true,
+  auto_herd=false,   -- on/off for the client-side auto-husbandry planner
+                     -- (Task 4); added here now, like auto_trade/auto_raid/
+                     -- auto_voyage before it, since it authorises spending
+                     -- and must default off.
   show_builds_construction=true, show_builds_upgrades=true,
   show_builds_damage=true, show_builds_staff=true,
   show_people_settlers=true, show_people_garrison=true, show_people_raids=true,

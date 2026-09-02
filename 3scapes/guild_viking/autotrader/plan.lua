@@ -293,7 +293,12 @@ function M.build()
     return { status = at.status, jobs = {}, commands = commands }
   end
   if not S.carts or not S.trade_queue or not S.idle_carts then
-    at.status = "waiting for city data -- enable 'vtoggle mip_city' on the MUD"
+    -- Reworded, not ported verbatim: Guild.City is a GMCP package here, always
+    -- sent, with no toggle and no `vtoggle` command in this client at all. The
+    -- port-exactly-don't-fix rule this plugin applies to LEGACY response
+    -- strings does not extend to telling a user to run a command that does not
+    -- exist. Same disposition as the two livestock hints in autoherd.lua.
+    at.status = "waiting for city data"
     return { status = at.status, jobs = {}, commands = commands }
   end
   if #S.idle_carts == 0 then

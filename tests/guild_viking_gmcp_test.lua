@@ -541,6 +541,78 @@ do
     S2.en5 .. "/" .. S2.ens .. "/" .. S2.rndz)
 end
 
+-- ---- the `full` envelope flag reaches writers ------------------------------
+-- The protocol layer strips `full` as an envelope member, so before this it
+-- was consumed and thrown away. A writer that MERGES a variable-arity key set
+-- (handlers/livestock.lua's write_lmarket) cannot evict a key the server has
+-- stopped sending without knowing that this push was a full resend rather
+-- than a delta: on a shrinking key set the server sets `full: 1` and repeats
+-- the COMPLETE current key set, so absence in that frame is the eviction
+-- signal. Each writer now receives it as a second argument.
+local full_seen = {}
+protocol.gmcp_handler("LNEEDS", function(v, full) full_seen.LNEEDS = { v = v, full = full } end)
+protocol.gmcp_handler("LMARKET", function(v, full) full_seen.LMARKET = { v = v, full = full } end)
+
+reset()
+full_seen = {}
+frame("Guild.Livestock", { guild = "viking", full = 1,
+                           lneeds = { { species = "sheep" } } })
+check("a full frame reaches a single-key writer as full = true",
+      full_seen.LNEEDS and full_seen.LNEEDS.full == true,
+      full_seen.LNEEDS and tostring(full_seen.LNEEDS.full))
+
+reset()
+full_seen = {}
+frame("Guild.Livestock", { guild = "viking",
+                           lneeds = { { species = "sheep" } } })
+check("a delta frame reaches a single-key writer as full = false",
+      full_seen.LNEEDS and full_seen.LNEEDS.full == false,
+      full_seen.LNEEDS and tostring(full_seen.LNEEDS.full))
+
+-- The composite path is the one that matters for lmarket: its writer is
+-- invoked once with the gathered halves, not once per GMCP key.
+reset()
+full_seen = {}
+frame("Guild.Livestock", { guild = "viking", full = 1,
+                           lmarket_1 = { { lin = 1 } } })
+check("a full frame reaches a COMPOSITE writer as full = true",
+      full_seen.LMARKET and full_seen.LMARKET.full == true,
+      full_seen.LMARKET and tostring(full_seen.LMARKET.full))
+
+reset()
+full_seen = {}
+frame("Guild.Livestock", { guild = "viking", lmarket_1 = { { lin = 1 } } })
+check("a delta frame reaches a COMPOSITE writer as full = false",
+      full_seen.LMARKET and full_seen.LMARKET.full == false,
+      full_seen.LMARKET and tostring(full_seen.LMARKET.full))
+
+-- A paged push repeats `full` identically on every page (gmcp.h's PAGING
+-- note), and merge_page strips it with the rest of the envelope -- so the run
+-- has to carry it to the writer that fires when the last page lands.
+reset()
+full_seen = {}
+frame("Guild.Livestock", { guild = "viking", full = 1, page = 1, pages = 2,
+                           lmarket_1 = { { lin = 1 } } })
+check("no writer fires mid-run", full_seen.LMARKET == nil)
+frame("Guild.Livestock", { guild = "viking", full = 1, page = 2, pages = 2,
+                           lmarket_2 = { { lin = 2 } } })
+check("a paged full push reaches the writer as full = true",
+      full_seen.LMARKET and full_seen.LMARKET.full == true,
+      full_seen.LMARKET and tostring(full_seen.LMARKET.full))
+check("a paged full push still delivers every page's keys",
+      full_seen.LMARKET and full_seen.LMARKET.v
+        and full_seen.LMARKET.v.lmarket_1 and full_seen.LMARKET.v.lmarket_2)
+
+reset()
+full_seen = {}
+frame("Guild.Livestock", { guild = "viking", page = 1, pages = 2,
+                           lmarket_1 = { { lin = 1 } } })
+frame("Guild.Livestock", { guild = "viking", page = 2, pages = 2,
+                           lmarket_2 = { { lin = 2 } } })
+check("a paged delta push reaches the writer as full = false",
+      full_seen.LMARKET and full_seen.LMARKET.full == false,
+      full_seen.LMARKET and tostring(full_seen.LMARKET.full))
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)

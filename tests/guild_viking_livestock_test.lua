@@ -1,0 +1,159 @@
+-- guild_viking livestock page builder tests. Run from the lera-plugins repo
+-- root with LERA_ROOT pointing at a built Lera checkout.
+package.path = "3scapes/guild_viking/?.lua;" .. package.path
+
+local failures = 0
+local function check(name, ok, detail)
+  if ok then
+    print("CASE " .. name .. ": PASS")
+  else
+    failures = failures + 1
+    print("CASE " .. name .. ": FAIL" .. (detail and (" - " .. tostring(detail)) or ""))
+  end
+end
+
+ui = { dirty = function() end }
+lera = { time = function() return 1000 end }
+buffer = { color_print = function() end }
+
+local S = require("state").S
+local page_opts = require("page_opts")
+local page = require("pages.livestock")
+-- The page is a pure builder over `state` and `page_opts` (the spec's own
+-- constraint). Its Feed section shares two figures with the Auto-Herd feed
+-- guard, and it used to reach them by requiring autoherd -- so loading ANY
+-- page loaded the whole spending planner. They live in market.lua now.
+check("requiring the livestock page does not load the spending planner",
+      package.loaded["autoherd"] == nil)
+
+local function joined(width)
+  return table.concat(page.lines(width or 80), "\n")
+end
+
+-- Colour-stripped view of the page. The Feed cases below assert on phrases
+-- that span more than one colour run ("Covers: 8 ticks"), which no raw-string
+-- search can match -- pagelib emits a reset between the label and the value.
+local function plain(width)
+  return (joined(width):gsub("\027%[[%d;]*m", ""))
+end
+
+-- Empty state: the page must still build, and must offer the discoverability
+-- hint rather than LEGACY's obsolete "enable vtoggle mip_livestock" (GMCP
+-- always sends these keys, so that hint would be a lie).
+S.herds, S.lmarket, S.lneeds = {}, {}, {}
+S.bqueue, S.lpending = {}, {}
+S.lfind = { posts = {}, offers = {}, auctions = {} }
+S.lfeed = { grain = 0, water = 0, head = 0 }
+local empty = joined(80)
+check("empty page builds", type(page.lines(80)) == "table")
+check("empty page hints at vlivestock market",
+      empty:find("vlivestock market", 1, true) ~= nil)
+check("empty page does not mention mip_livestock",
+      empty:find("mip_livestock", 1, true) == nil)
+
+-- With a herd, the species label appears and head/cap is rendered.
+S.buildings = { sheepfold = 2 }   -- tier 2 -> cap 14
+S.herds = {
+  sheepfold = { bldg = "sheepfold", head = 9, quality = 61, gen = 3,
+                sterile = 0, hard = 40, fert = 55, yield = 70, vigor = 66,
+                con = 50, breed = "nordic", hv = 1, trait = "prolific",
+                age_ticks = 12 },
+}
+local withherd = joined(80)
+check("herd shows its species label", withherd:find("Sheep", 1, true) ~= nil)
+check("herd shows head against cap", withherd:find("9", 1, true) ~= nil
+      and withherd:find("14", 1, true) ~= nil)
+check("herd trait is named, not printed raw",
+      withherd:find("Prolific", 1, true) ~= nil)
+
+-- A section toggled off must vanish entirely.
+page_opts.set("show_stock_herds", false)
+check("herds section respects its toggle",
+      joined(80):find("Sheep", 1, true) == nil)
+page_opts.set("show_stock_herds", true)
+
+-- Narrow width must not error and must not exceed the width.
+local narrow = page.lines(40)
+check("narrow width builds", type(narrow) == "table" and #narrow > 0)
+local overlong = false
+for _, l in ipairs(narrow) do
+  if #(l:gsub("\027%[[%d;]*m", "")) > 40 then overlong = true end
+end
+check("no visible line exceeds the width", not overlong)
+
+-- ---- Feed section (husbandry Task 4 fix round) -----------------------------
+-- The old rendering divided the server's per-tick grain NEED (S.lfeed.grain,
+-- from query_livestock_feed_needs) by a client re-derivation of the same
+-- need (ceil(head / 8)) and labelled the quotient "Covers: N ticks" -- a
+-- starvation runway it had no data for. The runway now comes from WAREHOUSE
+-- grain stock, read through the same market.wh_amount_of the Auto-Herd feed
+-- guard uses, and is omitted entirely when the WSTOCK feed has not arrived.
+S.lfeed = { grain = 2, water = 2, head = 14 }
+S.wstock, S.wstock_by_good = nil, nil
+local feed_nowh = plain(80)
+check("feed shows the server's per-tick figures as per-tick",
+      feed_nowh:find("Per tick:", 1, true) ~= nil
+        and feed_nowh:find("2 grain", 1, true) ~= nil
+        and feed_nowh:find("2 water", 1, true) ~= nil, feed_nowh)
+check("feed no longer labels a client re-derivation 'Draw'",
+      feed_nowh:find("Draw:", 1, true) == nil)
+check("no warehouse data -> the Covers line is omitted, not zeroed",
+      feed_nowh:find("Covers", 1, true) == nil, feed_nowh)
+
+-- Warehouse received: 99 grain against a 2/tick draw is 49 ticks.
+S.wstock_by_good = { grain = { good = "grain", amount = 99 } }
+S.wstock = { { good = "grain", amount = 99 } }
+local feed_wh = plain(80)
+check("warehouse stock drives the Covers figure",
+      feed_wh:find("Covers: 49 ticks", 1, true) ~= nil, feed_wh)
+check("the Covers line names the stock it divided",
+      feed_wh:find("99 grain in the warehouse", 1, true) ~= nil, feed_wh)
+
+-- Singular, and the array fallback (by_good present but missing the good).
+S.wstock_by_good = {}
+S.wstock = { { good = "grain", amount = 2 } }
+check("Covers reads the wstock array when by_good lacks the good",
+      plain(80):find("Covers: 1 tick ", 1, true) ~= nil, plain(80))
+
+-- A received-but-empty warehouse is a true 0, not the old fabricated one.
+S.wstock_by_good = {}
+S.wstock = {}
+check("an empty warehouse that HAS been received reports 0 ticks",
+      plain(80):find("Covers: 0 ticks (0 grain in the warehouse)", 1, true)
+        ~= nil, plain(80))
+
+-- The page and the planner must answer both questions from the same code.
+local mk = require("market")
+S.wstock_by_good = { grain = { good = "grain", amount = 40 } }
+S.wstock = { { good = "grain", amount = 40 } }
+check("page and planner read the same warehouse figure",
+      mk.wh_amount_of("grain") == 40)
+check("page and planner read the same per-tick draw",
+      mk.feed_draw(14) == 2, mk.feed_draw(14))
+-- The server's own figure wins over the ceil(head / 8) fallback...
+S.lfeed = { grain = 5, water = 5, head = 14 }
+check("the server's per-tick figure is preferred over ceil(head / 8)",
+      mk.feed_draw(14) == 5, mk.feed_draw(14))
+check("the page shows that same preferred figure",
+      plain(80):find("Per tick: 5 grain", 1, true) ~= nil, plain(80))
+check("Covers uses the preferred figure too (40 / 5 = 8)",
+      plain(80):find("Covers: 8 ticks", 1, true) ~= nil, plain(80))
+-- ...and the fallback only applies before the LFEED key has arrived.
+S.lfeed = {}
+check("with no LFEED key the draw falls back to ceil(head / 8)",
+      mk.feed_draw(14) == 2, mk.feed_draw(14))
+check("with no LFEED key the Feed section says there is no head",
+      plain(80):find("No head to feed", 1, true) ~= nil)
+
+-- The section still respects its own toggle.
+S.lfeed = { grain = 2, water = 2, head = 14 }
+page_opts.set("show_stock_feed", false)
+check("feed section respects its toggle",
+      plain(80):find("Per tick:", 1, true) == nil)
+page_opts.set("show_stock_feed", true)
+
+if failures > 0 then
+  print(failures .. " FAILURE(S)")
+  os.exit(1)
+end
+print("all livestock page cases passed")

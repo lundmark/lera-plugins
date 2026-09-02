@@ -563,8 +563,13 @@ check("plan/waiting for city data sanity: S.trade_queue is still nil (never inge
       S.trade_queue == nil)
 local p0b = plan.build()
 check("plan/waiting for city data: status set, no jobs/commands",
-      p0b and p0b.status == "waiting for city data -- enable 'vtoggle mip_city' on the MUD"
+      p0b and p0b.status == "waiting for city data"
       and #p0b.jobs == 0 and #p0b.commands == 0, p0b and p0b.status)
+-- The status must not tell the player to run a command this client does not
+-- have: Guild.City is a GMCP package here, always sent, with no toggle and no
+-- `vtoggle` command at all.
+check("plan/waiting for city data: no stale vtoggle advice",
+      p0b and p0b.status:find("vtoggle", 1, true) == nil, p0b and p0b.status)
 
 -- ---------------------------------------------------------------------------
 -- Branch: budget clamp (LEGACY:376-379, inside at_add_deal_legs). One
