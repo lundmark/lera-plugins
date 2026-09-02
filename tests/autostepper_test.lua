@@ -229,7 +229,7 @@ check("roominfo still lists the dead monster",
 -- ---- entering a new room reseeds the view -----------------------------------
 -- Kills: seeding the view once and never again. A step into a new room must
 -- pick up that room's occupants.
-run_timers()  -- the post-step glance
+run_timers()  -- drain any pending timer
 arrive(101, "A quiet lane", { "a large rat" }, {})
 sent = {}
 prompt_cycle()

@@ -141,7 +141,8 @@ local function do_attack(monster)
   log("Attacking: " .. monster)
   notify(on_attack_callbacks, monster, cmd)
   mud.send(cmd)
-  -- After attack, we'll get a prompt which will trigger next glance
+  -- After attack, a prompt ends the fight and the next decision follows
+  -- straight from the pruned view -- there is no glance any more.
 end
 
 local function do_step()
