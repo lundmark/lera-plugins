@@ -423,6 +423,41 @@ check("an identical re-record is not a desync",
   mode.desyncs() == before_desyncs, tostring(mode.desyncs()))
 mode.stop()
 
+-- ---- a desync reset keeps the layer ------------------------------------------
+-- The room name names the layer we are standing on, so a reset that files this
+-- room at z = 0 while the name says layer two leaves an orphan node whose
+-- coordinates can collide with genuine layer-one rooms -- and the next arrival's
+-- layer correction jumps z, so the room just recorded is never reached again.
+quiet(function() mode.start(profile, "clear") end)
+frame({ num = 0, area = "Unknown", name = "Layer two of the Sea of Chaos",
+        exits = { "e", "w" } })
+quiet(mode.on_arrival)
+check("the layer-two origin is recorded at z = 1", mode.stats().z == 1,
+  tostring(mode.stats().z))
+
+-- Return to that coordinate and contradict its exits.
+before_desyncs = mode.desyncs()
+mode.debug_set_position(0, 0, 1)
+frame({ num = 0, area = "Unknown", name = "Layer two of the Sea of Chaos",
+        exits = { "n", "s" } })
+quiet(mode.on_arrival)
+check("the contradiction on layer two is detected",
+  mode.desyncs() == before_desyncs + 1, tostring(mode.desyncs()))
+local rst = mode.stats()
+check("the map is reset", rst.rooms == 1, tostring(rst.rooms))
+check("the fresh origin keeps the layer the room name gives it", rst.z == 1,
+  tostring(rst.z))
+
+-- And the room really was filed there, not at z = 0: arriving at (0,0,1) again
+-- with the same exits finds it rather than forking a second node.
+mode.debug_set_position(0, 0, 1)
+frame({ num = 0, area = "Unknown", name = "Layer two of the Sea of Chaos",
+        exits = { "n", "s" } })
+quiet(mode.on_arrival)
+check("the post-reset room was filed on the layer, so a revisit finds it",
+  mode.stats().rooms == 1, tostring(mode.stats().rooms))
+mode.stop()
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)

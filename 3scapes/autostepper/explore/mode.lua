@@ -166,6 +166,15 @@ function M.on_arrival()
     if not map_mod.same_exits(prior.exits, arriving) then
       desync_count = desync_count + 1
       M.reset("exits at " .. x .. "," .. y .. "," .. z .. " contradict the map")
+      -- The fresh origin keeps the layer, because the room name still names it.
+      -- Filing this room at z = 0 while standing on layer two puts it where
+      -- genuine layer-one rooms live, and the next arrival's layer correction
+      -- jumps z away from it -- an orphan node that can collide, and a cascade
+      -- of further resets at every layer boundary.
+      if profile and profile.layer_of and last_name then
+        local layer = profile.layer_of(last_name)
+        if type(layer) == "number" then map:set_position(0, 0, layer) end
+      end
       map:record(last_exits)
       return
     end
