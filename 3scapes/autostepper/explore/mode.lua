@@ -122,21 +122,21 @@ function M.on_arrival()
   local x, y, z = map:position()
   if profile and profile.layer_of and last_name then
     local layer = profile.layer_of(last_name)
-    if layer and layer ~= z then
+    if type(layer) == "number" and layer ~= z then
       layer_corrections = layer_corrections + 1
       map:set_position(x, y, layer)
       z = layer
     end
   end
 
-  -- z is a coordinate map.lua's keying concatenates into a string and has no
-  -- way to represent as "missing", so it must never reach map:room/record as
-  -- nil. It cannot in correct code -- map:position() only ever returns the
-  -- numbers move() and set_position() write, and the guard just above only
-  -- ever calls set_position with a real layer. This bails out instead of
-  -- crashing inside map.lua so a caller sees the corrupted position (through
-  -- M.stats()) rather than an unhandled error.
-  if z == nil then return end
+  -- Tripwire, and it earns its place: if the check above is ever broken, this is
+  -- what turns a corrupted position into an observable, logged refusal instead
+  -- of an unhandled error deep in map.lua. It logs rather than returning
+  -- silently, because every other defensive path in this function says why.
+  if type(z) ~= "number" then
+    log("explore: refusing a non-numeric layer; position left as reckoned")
+    return
+  end
 
   -- The desync proof: the lattice is generated once per run and each room's
   -- coordinates are baked into its own file name, so a coordinate's exits
