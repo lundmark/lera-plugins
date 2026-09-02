@@ -227,6 +227,26 @@ function Map:search_frontier(opts)
   return path
 end
 
+-- Policy wrapper over search_frontier.
+--
+-- "clear"  -- nearest frontier; a distance tie breaks by compass order with
+--             defer_dirs ranked last. This is legacy's behaviour: it descends
+--             whenever a descent happens to be the nearest frontier, and only
+--             ranks 'up' behind everything else.
+-- "dive"   -- take the nearest UNEXPLORED descent wherever it is, however far,
+--             and fall back to "clear" when the map holds none. The portal sits
+--             on the deepest floor, so this reaches it far sooner at the cost of
+--             leaving most of each layer unexplored.
+function Map:next_frontier(opts)
+  opts = opts or {}
+  if opts.policy == "dive" then
+    local dived = self:search_frontier({ only = opts.dive_dirs,
+                                         defer = opts.defer_dirs })
+    if dived then return dived end
+  end
+  return self:search_frontier({ defer = opts.defer_dirs })
+end
+
 M.Map = Map
 
 return M

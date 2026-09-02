@@ -264,6 +264,64 @@ check("the search terminates on a 2000-room map", big_path ~= nil)
 check("and finds the single frontier",
   big_path and big_path[#big_path] == "s", big_path and big_path[#big_path])
 
+-- ---- policy ------------------------------------------------------------------
+-- One room with an unexplored 'u' and an unexplored 'e', plus a far room with an
+-- unexplored 'd'. Distances: e and u are 0 away, d is 3 away.
+local policy_map = build({
+  { 0, 0, 0, { "e", "u", "s" } },
+  { 0, -1, 0, { "n", "s" } },
+  { 0, -2, 0, { "n", "s" } },
+  { 0, -3, 0, { "n", "d" } },
+})
+
+local clear = policy_map:next_frontier({ policy = "clear", dive_dirs = { "d" },
+                                         defer_dirs = { "u" } })
+check("clear takes the nearest frontier",
+  table.concat(clear or {}, "") == "e", table.concat(clear or {}, ","))
+
+-- With 'e' explored away, only 'u' (here) and 'd' (three rooms south) remain.
+-- clear ranks a deferred direction last, but it is still nearer, so it wins.
+policy_map:set_position(1, 0, 0)
+policy_map:record({ "w" })
+policy_map:set_position(0, 0, 0)
+clear = policy_map:next_frontier({ policy = "clear", dive_dirs = { "d" },
+                                   defer_dirs = { "u" } })
+check("clear still prefers a near deferred exit over a far ordinary one",
+  table.concat(clear or {}, "") == "u", table.concat(clear or {}, ","))
+
+-- dive goes for the descent wherever it is: three rooms south, then down.
+local dive = policy_map:next_frontier({ policy = "dive", dive_dirs = { "d" },
+                                        defer_dirs = { "u" } })
+check("dive prefers a distant descent over a near frontier",
+  table.concat(dive or {}, "") == "sssd", table.concat(dive or {}, ","))
+
+-- With no descent anywhere, dive falls back to clear rather than giving up.
+local nodive = build({ { 0, 0, 0, { "e" } } })
+local fallback = nodive:next_frontier({ policy = "dive", dive_dirs = { "d" },
+                                        defer_dirs = { "u" } })
+check("dive falls back to clear when nothing descends",
+  table.concat(fallback or {}, "") == "e", table.concat(fallback or {}, ","))
+
+-- Tie-breaking must be deterministic, or the explorer picks differently on two
+-- identical maps and nothing here is testable.
+local tie = build({ { 0, 0, 0, { "e", "n", "w", "s" } } })
+local first = tie:next_frontier({ policy = "clear", defer_dirs = { "u" } })
+local second = tie:next_frontier({ policy = "clear", defer_dirs = { "u" } })
+check("equal-distance ties break in compass order",
+  table.concat(first or {}, "") == "n", table.concat(first or {}, ","))
+check("tie-breaking is stable across calls",
+  table.concat(first or {}, "") == table.concat(second or {}, ","))
+
+-- A deferred direction must LOSE an equal-distance tie. The tie map above cannot
+-- show this: it has no vertical exit, so defer_dirs never applies to it and a
+-- rank function that ranked deferred directions FIRST would still pass. This map
+-- puts a deferred exit and an ordinary one at the same distance, which is the
+-- only shape that discriminates.
+local defertie = build({ { 0, 0, 0, { "u", "n" } } })
+local dt = defertie:next_frontier({ policy = "clear", defer_dirs = { "u" } })
+check("a deferred direction loses an equal-distance tie",
+  table.concat(dt or {}, "") == "n", table.concat(dt or {}, ","))
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
