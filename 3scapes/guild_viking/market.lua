@@ -189,10 +189,37 @@ end
 local REFINED_GOODS = { "mead", "salted_fish", "bread", "fine_furs", "tools", "gemstones" }
 
 -- LEGACY:3315-3318 (wh_amount_of). Warehouse amount of a good, from the
--- WSTOCK feed (handlers/trade.lua populates S.wstock_by_good).
-local function wh_amount_of(good)
+-- WSTOCK feed (handlers/trade.lua's write_wstock populates S.wstock_by_good
+-- and S.wstock together).
+--
+-- Husbandry Task 4 (fix round): EXPORTED, and given the S.wstock array
+-- fallback LEGACY's second warehouse reader
+-- (guild_viking_husbandry.lua:139, warehouse_amount) also carried. This is
+-- now the ONE place in the plugin that answers "how much of this good is in
+-- the warehouse" -- autoherd.lua's feed guard and pages/livestock.lua's Feed
+-- section both call it, so the planner and the page cannot drift apart on
+-- the same question. The array fallback is unreachable while write_wstock
+-- writes both halves in one go; it is kept because the two LEGACY readers
+-- disagreed on whether it was needed and the cheaper answer is to satisfy
+-- both.
+function M.wh_amount_of(good)
   local rec = S.wstock_by_good and S.wstock_by_good[good]
-  return rec and rec.amount or 0
+  if rec then return tonumber(rec.amount) or 0 end
+  local n = 0
+  for _, ws in ipairs(S.wstock or {}) do
+    if ws.good == good then n = n + (tonumber(ws.amount) or 0) end
+  end
+  return n
+end
+
+-- Has the WSTOCK feed arrived at all? state.lua leaves S.wstock_by_good nil
+-- until write_wstock runs, and write_wstock always creates it (even for an
+-- empty warehouse), so nil means "not received yet" and {} means "received,
+-- warehouse empty". Callers that would otherwise render a 0 as fact need to
+-- tell those two apart -- see pages/livestock.lua's Feed section, which omits
+-- its "Covers" line rather than claim a 0-tick runway it cannot know.
+function M.wh_known()
+  return S.wstock_by_good ~= nil
 end
 
 -- LEGACY:3354-3372 (compute_refined_sells). Best-sell opportunities for
@@ -204,7 +231,7 @@ function M.compute_refined_sells()
   for _, g in ipairs(REFINED_GOODS) do
     local sp, sl, dem = M.best_sell_of(g)
     if sp and sl then
-      local total = wh_amount_of(g)
+      local total = M.wh_amount_of(g)
       local blk = (S.blocks and S.blocks[g]) or 0
       local avail = total - blk
       if avail < 0 then avail = 0 end

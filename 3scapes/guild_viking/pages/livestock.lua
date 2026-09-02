@@ -45,7 +45,9 @@
 -- directly here, dropping trade_goods.h's leading tier-0 zero, matching
 -- LEGACY's own HERD_CAP shape at guild_viking.lua:9832-9835 -- an unknown
 -- tier then naturally misses the table instead of needing a clamp);
--- LIVESTOCK_FEED_PER_HEAD from trade_goods.h:1074; species/breed display
+-- LIVESTOCK_FEED_PER_HEAD was mirrored from trade_goods.h:1074 (it now
+-- lives only in autoherd.lua -- see the note where it used to be declared);
+-- species/breed display
 -- names from 3s/players/viking/world/livestock_daemon.c:20-115, mirrored
 -- into LEGACY's own SP_LABEL/SP_DISP/BR_DISP tables at guild_viking.lua:
 -- 9830 (SP_LABEL), 9902/9926/10033/10105 (SP_DISP's four occurrences),
@@ -59,6 +61,16 @@ local pagelib = require("pagelib")
 local state = require("state")
 local page_opts = require("page_opts")
 local cc = require("pages.city_common")
+-- Fix round: the Feed section's two numbers come from the same code the
+-- Auto-Herd feed guard uses -- market.M.wh_amount_of/M.wh_known for
+-- warehouse stock, autoherd.M.feed_draw for the herds' per-tick draw -- so a
+-- page and a planner cannot disagree about whether the animals are fed. Both
+-- are leaf-ish requires from here (market pulls only state; autoherd pulls
+-- state, page_opts and market, and defers its own persist require), so
+-- neither closes a load-time cycle through window.lua -> pages.livestock.
+-- Same precedent as pages/city.lua requiring autoraid for M.max_ships().
+local market = require("market")
+local autoherd = require("autoherd")
 
 local S = state.S
 local C = pagelib.C
@@ -126,7 +138,10 @@ local function herd_cap(bldg)
   return nil
 end
 
-local LIVESTOCK_FEED_PER_HEAD = 8
+-- LIVESTOCK_FEED_PER_HEAD (trade_goods.h:1074) used to live here, for the
+-- Feed section's own ceil(head / 8). That re-derivation is gone (see
+-- feed_lines below), so the constant now has exactly one home in this
+-- plugin, autoherd.lua's M.feed_draw, and is not duplicated here any more.
 
 local LIN_NAMES = {
   [0] = "Midgard", [1] = "Lodbrok's Hold", [2] = "Eiriksson Hold", [3] = "Ui Imair Hold",
@@ -235,20 +250,49 @@ end
 -- Feed (no LEGACY panel precedent -- see header comment; gated show_stock_feed)
 -- ---------------------------------------------------------------------------
 
+-- CORRECTED in the husbandry plan's Task 4 fix round. This section used to
+-- render:
+--     Grain: 2   Water: 2   Head: 14
+--     Draw: 2 grain/tick   Covers: 0 ticks
+-- where "Draw" was a client re-derivation of ceil(head / 8) and "Covers" was
+-- floor(f.grain / draw) -- i.e. one per-tick NEED divided by another per-tick
+-- need, labelled as a starvation runway. S.lfeed is not a stock: the server's
+-- _v_lfeed() (3s/players/viking/obj/include/client.h:4202) fills grain/water
+-- from query_livestock_feed_needs() (query.h:2464), which sums grain NEEDED
+-- PER TICK, and vlivestock.c:609 renders those same numbers as "Feed per
+-- tick: %d grain + %d water (%d head)". So the old "Covers" figure was
+-- always 1 for a single building and never told the player anything true
+-- about whether their animals would starve -- worse than showing nothing.
+--
+-- Now: the server's own per-tick figures are shown as the per-tick
+-- requirement they are (no re-derivation -- autoherd.M.feed_draw returns
+-- S.lfeed.grain when it is present, and only falls back to LEGACY's
+-- ceil(head / 8) before the LFEED key has arrived), and "Covers" is
+-- warehouse grain STOCK divided by that per-tick need, read through the same
+-- market.M.wh_amount_of the Auto-Herd feed guard uses. When the WSTOCK feed
+-- has not arrived (market.wh_known() false) the Covers line is OMITTED
+-- rather than printing a 0-tick runway this page cannot know.
 local function feed_lines(add, width)
   add(pagelib.header(width, "Feed"))
   local f = S.lfeed or {}
-  add(pagelib.trunc(string.format("%sGrain:%s %d   %sWater:%s %d   %sHead:%s %d",
-    C.dim, pagelib.RESET, f.grain or 0, C.dim, pagelib.RESET, f.water or 0,
-    C.dim, pagelib.RESET, f.head or 0), width))
-  local draw = math.ceil((f.head or 0) / LIVESTOCK_FEED_PER_HEAD)
-  if draw > 0 then
-    local ticks = math.floor((f.grain or 0) / draw)
-    add(pagelib.trunc(string.format("Draw: %s%d grain/tick%s   Covers: %s%d tick%s%s",
-      C.yellow, draw, pagelib.RESET,
-      C.cyan, ticks, ticks == 1 and "" or "s", pagelib.RESET), width))
-  else
+  local head = tonumber(f.head) or 0
+  if head <= 0 then
     add(pagelib.trunc(C.dim .. "No head to feed" .. pagelib.RESET, width))
+    return
+  end
+  local draw = autoherd.feed_draw(head)
+  add(pagelib.trunc(string.format(
+    "%sPer tick:%s %s%d grain%s %s+%s %s%d water%s   %sHead:%s %d",
+    C.dim, pagelib.RESET, C.yellow, draw, pagelib.RESET,
+    C.dim, pagelib.RESET, C.cyan, tonumber(f.water) or 0, pagelib.RESET,
+    C.dim, pagelib.RESET, head), width))
+  if market.wh_known() and draw > 0 then
+    local stock = market.wh_amount_of("grain")
+    local ticks = math.floor(stock / draw)
+    add(pagelib.trunc(string.format(
+      "%sCovers:%s %s%d tick%s%s %s(%d grain in the warehouse)%s",
+      C.dim, pagelib.RESET, C.cyan, ticks, ticks == 1 and "" or "s",
+      pagelib.RESET, C.dim, stock, pagelib.RESET), width))
   end
 end
 

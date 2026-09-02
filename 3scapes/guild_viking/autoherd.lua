@@ -163,8 +163,32 @@
 --         queue; that cross-module spend is not ported (see branch 1).
 --   * `/vik herd [<sub>]` is wired in init.lua by M.herd_command below --
 --     without it the entire Task 3 config/menu surface is unreachable.
+--   * FIX ROUND, two further adaptations:
+--     (e) LEGACY's two `vtoggle` hints are REWORDED, not ported verbatim:
+--         "no livestock data - buy stock, or enable: vtoggle mip_livestock"
+--         (LEGACY:356) and "waiting for city data (vtoggle mip_city)"
+--         (LEGACY:399). The port-exactly-don't-fix rule this plugin applies
+--         to LEGACY response strings does not extend to telling a user to
+--         run a command that does not exist: Guild.Livestock and Guild.City
+--         are GMCP packages here, always sent, with no toggle and no
+--         `vtoggle` command in this client. pages/livestock.lua already
+--         dropped the same half of the same hint in Task 2 (see that file's
+--         header) -- this makes the two files consistent.
+--     (f) The per-tick grain draw and the warehouse grain stock each have
+--         exactly ONE implementation now, shared with pages/livestock.lua's
+--         Feed section: M.feed_draw (below) and market.lua's
+--         M.wh_amount_of/M.wh_known. The page previously divided the
+--         server's per-tick NEED by a client re-derivation of the same need
+--         and labelled the result a starvation runway; the planner and the
+--         page can no longer disagree about either quantity.
 local S = require("state").S
 local page_opts = require("page_opts")
+-- Fix round: the ONE warehouse reader in the plugin (M.wh_amount_of /
+-- M.wh_known) now lives in market.lua, so the feed guard here and
+-- pages/livestock.lua's Feed section answer "how much grain is in the
+-- warehouse" from the same code. market.lua requires only state, so this is
+-- a leaf require -- no cycle, unlike the deferred persist require below.
+local market = require("market")
 
 local M = {}
 
@@ -413,22 +437,37 @@ end
 -- per-tick draw "against S.lfeed.grain". S.lfeed.grain is not a grain STOCK
 -- -- the server's _v_lfeed() (client.h:4202) fills it from
 -- query_livestock_feed_needs() (query.h:2464), which sums grain NEEDED PER
--- TICK, and vlivestock.c:608 renders that very number as "Feed per tick: N
--- grain". Comparing need against need * feed_ticks is true whenever any head
--- exists, so the brief's literal reading makes the feed guard fire
--- unconditionally forever. LEGACY compared the WAREHOUSE stock
--- (warehouse_amount("grain"), LEGACY:233) against the need, which is the
--- only comparison that means anything, so that is what is ported here --
--- reading S.wstock_by_good/S.wstock, populated by handlers/trade.lua:543.
--- Reported to the reviewer rather than silently resolved.
+-- TICK, and vlivestock.c:609 renders that very number as "Feed per tick: N
+-- grain + N water (N head)". Comparing need against need * feed_ticks is
+-- true whenever any head exists, so the brief's literal reading makes the
+-- feed guard fire unconditionally forever. LEGACY compared the WAREHOUSE
+-- stock (warehouse_amount("grain"), LEGACY:233) against the need, which is
+-- the only comparison that means anything, so that is what is ported here.
+--
+-- Fix round: the body moved to market.lua's M.wh_amount_of (LEGACY:3315-3318
+-- extended with LEGACY:139's array fallback), which pages/livestock.lua's
+-- Feed section now calls too. Kept as a one-line local so the call sites
+-- below still read like LEGACY's.
 local function warehouse_amount(good)
-  local rec = S.wstock_by_good and S.wstock_by_good[good]
-  if rec then return num(rec.amount) end
-  local n = 0
-  for _, ws in ipairs(S.wstock or {}) do
-    if ws.good == good then n = n + num(ws.amount) end
-  end
-  return n
+  return market.wh_amount_of(good)
+end
+
+-- The herds' per-tick grain draw, and the single answer both this module's
+-- feed guard and pages/livestock.lua's Feed section use.
+--
+-- The SERVER has already computed this figure -- S.lfeed.grain, via
+-- _v_lfeed() -> query_livestock_feed_needs() (query.h:2464) -- and its
+-- number is strictly better than any client re-derivation, because it
+-- applies the fesetr feed-saving skill and the per-building minimum of 1
+-- grain, neither of which a client can see. LEGACY's own ceil(head / 8)
+-- (guild_viking_husbandry.lua:231) is therefore kept only as the fallback
+-- for the window before the LFEED key has arrived. `head` is the caller's
+-- own head figure, so the feed guard keeps LEGACY's owned-buildings-only
+-- scoping while the page passes the server's total.
+function M.feed_draw(head)
+  local g = num(S.lfeed and S.lfeed.grain)
+  if g > 0 then return g end
+  return math.ceil(num(head) / LIVESTOCK_FEED_PER_HEAD)
 end
 
 -- LEGACY:148 (score_stats). Works on a herd record and a market record
@@ -598,7 +637,7 @@ function M.plan()
       end
     end
     if head > 0 then
-      local per_tick = math.ceil(head / LIVESTOCK_FEED_PER_HEAD)
+      local per_tick = M.feed_draw(head)
       local need = per_tick * math.max(1, num(ah.feed_ticks))
       local grain = warehouse_amount("grain")   -- STOCK, not S.lfeed.grain
       if grain < need then
@@ -727,12 +766,13 @@ function M.plan()
   end
 
   -- If we own a livestock building but have neither herd nor market data,
-  -- the livestock feed is probably off (or there is simply nothing yet).
-  -- LEGACY's own trailing hint names the MIP toggle; this plugin ingests
-  -- Guild.Livestock over GMCP, so that hint is stale -- kept byte-for-byte
-  -- anyway, per this plan's port-exactly-don't-fix rule for LEGACY response
-  -- strings (the same rule autoraid.lua's header applies to its "araid"
-  -- usage line). Flagged in the task report.
+  -- there is simply nothing to plan against yet. LEGACY's own trailing hint
+  -- read "enable: vtoggle mip_livestock"; REWORDED here, not ported
+  -- byte-for-byte -- see the header's Adaptations note. Guild.Livestock is a
+  -- GMCP package, so there is no toggle for a user to enable and no
+  -- `vtoggle` command in this client at all; telling them to run one would
+  -- send them chasing a command that does not exist. pages/livestock.lua
+  -- dropped the same half of the same hint in Task 2 for the same reason.
   local any_data = false
   each_listing(function() any_data = true end)
   if not any_data then
@@ -742,7 +782,7 @@ function M.plan()
     end
   end
   if not any_data then
-    return nil, "no livestock data - buy stock, or enable: vtoggle mip_livestock"
+    return nil, "no livestock data yet - buy stock via 'vlivestock market'"
   end
   return nil, "herds steady - nothing to do"
 end
@@ -807,7 +847,9 @@ function M.tick()
   -- Data gate: do nothing until the city feed has arrived, since every
   -- access check below depends on S.buildings.
   if not S.buildings or not next(S.buildings) then
-    local ah = M.settings(); ah.status = "waiting for city data (vtoggle mip_city)"
+    -- LEGACY:399 said "(vtoggle mip_city)"; reworded for the same reason as
+    -- the livestock hint above -- Guild.City is GMCP-only here.
+    local ah = M.settings(); ah.status = "waiting for city data"
     return
   end
 

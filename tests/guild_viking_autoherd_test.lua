@@ -476,6 +476,24 @@ S.wstock_by_good = { grain = { good = "grain", amount = 3 } }
 S.wstock = { { good = "grain", amount = 3 } }
 act = ah.plan()
 check("8 head with 3 grain does warn", act ~= nil and act.kind == "warn")
+-- ...and once the server HAS sent its own per-tick figure, that figure wins
+-- over the ceil(head / 8) fallback (it accounts for the fesetr feed-saving
+-- skill and the per-building minimum, neither of which a client can see).
+-- 5 grain/tick over a 4-tick buffer needs 20: 19 in the warehouse warns, 20
+-- does not. Under the fallback the need would be 4 and both would go silent,
+-- which is exactly the drift this shares its implementation with
+-- pages/livestock.lua to prevent.
+S.lfeed = { grain = 5, water = 5, head = 8 }
+S.wstock_by_good = { grain = { good = "grain", amount = 19 } }
+S.wstock = { { good = "grain", amount = 19 } }
+act = ah.plan()
+check("the server's per-tick figure drives the buffer (19 < 5 * 4)",
+      act ~= nil and act.kind == "warn", act and act.why)
+S.wstock_by_good = { grain = { good = "grain", amount = 20 } }
+S.wstock = { { good = "grain", amount = 20 } }
+act = ah.plan()
+check("the server's per-tick figure drives the buffer (20 >= 5 * 4)",
+      act == nil, act and act.why)
 
 -- (c) A listing whose lineage id has no token yields no command at all,
 -- rather than a half-built one. lin 99 is not in the server's lmap.
