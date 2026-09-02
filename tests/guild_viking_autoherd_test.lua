@@ -15,6 +15,16 @@ end
 ui = { dirty = function() end }
 lera = { time = function() return 1000 end }
 buffer = { color_print = function() end }
+-- Task 4 adds M.tick(), which gates on mud.connected() and sends through
+-- mud.send() -- the same two-function stub guild_viking_autoraid_test.lua
+-- carries for the identical reason. `sent` is captured by the closure, so
+-- reassigning it below (sent = {}) resets the recorder in place.
+local mud_connected = true
+local sent = {}
+mud = {
+  send = function(cmd) sent[#sent + 1] = cmd end,
+  connected = function() return mud_connected end,
+}
 -- Task-3-brief correction #2 (beyond the page_opts.auto_herd fix): the
 -- brief's own test content omits a `store` stub. autoherd.lua's M.config
 -- persists through the same mechanism autoraid.lua uses -- M.config calls a
@@ -114,6 +124,430 @@ check("owning any building: the fallback row vanishes", ids2._none == nil)
 -- note() is a stub, so this only asserts the call does not error.
 local ok_status = pcall(ah.config, "status")
 check("config status with an owned building does not error", ok_status)
+
+-- ---- planner ---------------------------------------------------------------
+-- Reset to defaults for the planner cases.
+S.autoherd = nil
+local s2 = ah.settings()
+S.daler = 100000
+S.lpending = {}
+
+-- No owned husbandry building: the planner must refuse, with a reason.
+S.buildings = {}
+S.herds = {}
+local act, why = ah.plan()
+check("no buildings -> no action", act == nil)
+check("no buildings -> reason given", type(why) == "string" and #why > 0)
+
+-- Owned but disabled: still no action.
+S.buildings = { sheepfold = 2 }
+ah.config("bldg sheepfold off")
+act = ah.plan()
+check("disabled building -> no action", act == nil)
+ah.config("bldg sheepfold on")
+
+-- Empty owned building with restock on and an affordable listing -> one buy.
+S.herds = {}
+S.lmarket = {
+  [1] = { { lin = 1, idx = 0, species = "sheep", breed = "nordic", count = 1,
+            price = 400, hard = 30, fert = 40, yield = 50, vigor = 45,
+            con = 35, trait = "0" } },
+}
+act = ah.plan()
+check("restock plans a buy", act ~= nil and act.kind == "buy")
+check("buy command shape and 1-based id",
+      act and act.cmd == "vlivestock buy lodbrok 1",
+      act and act.cmd)
+
+-- Below reserve: nothing may be bought.
+S.daler = 100
+act = ah.plan()
+check("below reserve -> no buy", act == nil or act.kind ~= "buy")
+S.daler = 100000
+
+-- At building cap: no restock buy.
+S.herds = {
+  sheepfold = { bldg = "sheepfold", head = 14, quality = 61, gen = 1,
+                sterile = 0, hard = 40, fert = 55, yield = 70, vigor = 66,
+                con = 50, breed = "nordic", hv = 1, trait = nil,
+                age_ticks = 1 },
+}
+act = ah.plan()
+check("at cap -> no restock buy", act == nil or act.kind ~= "buy")
+
+-- Feed shortfall with feed_guard on: a warning, never a command.
+S.lfeed = { grain = 0, water = 0, head = 14 }
+act = ah.plan()
+check("feed shortfall warns", act ~= nil and act.kind == "warn")
+check("a warning carries no command", act and act.cmd == nil)
+
+-- The planner never emits more than one action per cycle.
+check("plan returns a single action, not a list",
+      act == nil or act.kind ~= nil)
+
+-- Slaughter must never be emitted, under any settings.
+S.lfeed = { grain = 9999, water = 9999, head = 1 }
+for _ = 1, 5 do
+  local a = ah.plan()
+  check("never emits slaughter",
+        a == nil or a.cmd == nil or a.cmd:find("slaughter", 1, true) == nil)
+end
+
+-- ---- feed guard: the source of the grain figure ----------------------------
+-- Added beyond the brief. The brief said to compare the herds' per-tick draw
+-- against S.lfeed.grain, but S.lfeed.grain is itself a per-tick NEED (the
+-- server's _v_lfeed(), client.h:4202, fills it from
+-- query_livestock_feed_needs(), query.h:2464, and vlivestock.c:608 renders
+-- it as "Feed per tick: N grain"). Comparing a need against need *
+-- feed_ticks is true for every positive head, which would make the feed
+-- guard fire forever. LEGACY:233 compares the WAREHOUSE stock, which is what
+-- this port does -- assert that a stocked warehouse actually clears the
+-- warning, since S.lfeed.grain stays 0 throughout.
+S.autoherd = nil
+ah.settings()
+S.daler = 100000
+S.lpending = {}
+S.buildings = { sheepfold = 2 }
+S.herds = {
+  sheepfold = { bldg = "sheepfold", head = 14, gen = 1, sterile = 0,
+                hard = 40, fert = 55, yield = 70, vigor = 66, con = 50,
+                breed = "nordic", hv = 1, age_ticks = 1 },
+}
+S.lfeed = { grain = 0, water = 0, head = 14 }
+S.wstock, S.wstock_by_good = nil, nil
+act = ah.plan()
+check("empty warehouse -> feed guard warns", act ~= nil and act.kind == "warn")
+S.wstock_by_good = { grain = { good = "grain", amount = 9999 } }
+S.wstock = { { good = "grain", amount = 9999 } }
+act, why = ah.plan()
+check("stocked warehouse -> feed guard silent (herd at cap, so still no buy)",
+      act == nil, act and act.why)
+check("stocked warehouse -> a reason is still returned",
+      type(why) == "string" and #why > 0)
+
+-- ---- crossbreed: the generation threshold ----------------------------------
+-- Added beyond the brief. LEGACY's planner reads `herd.generation`
+-- (husbandry.lua:298); handlers/livestock.lua stores that field as `gen`,
+-- the key the server's _v_herds() builder emits. A literal port reads nil,
+-- falls back to 0, and `0 >= thresh` is false for every positive threshold,
+-- so crossbreed would silently never fire on generation -- it would still
+-- fire on sterility and age, so the module would look alive with half this
+-- branch dead. These two cases pin the generation path on its own: quality
+-- buy-ins are off and the age threshold is 0 (off), so a buy here can only
+-- have come from the generation comparison.
+S.autoherd = nil
+ah.settings()
+ah.config("quality off")
+ah.config("age 0")
+S.daler = 100000
+S.lpending = {}
+S.buildings = { sheepfold = 2 }         -- tier 2 -> cap 14
+S.lfeed = { grain = 0, water = 0, head = 4 }
+S.wstock_by_good = { grain = { good = "grain", amount = 9999 } }
+S.wstock = { { good = "grain", amount = 9999 } }
+-- Two listings: the same breed as the herd, and a different one. Crossbreed
+-- must pick the DIFFERENT breed (idx 1 -> wire id 2).
+S.lmarket = {
+  [1] = {
+    { lin = 1, idx = 0, species = "sheep", breed = "nordic", count = 1,
+      price = 400, hard = 99, fert = 99, yield = 99, vigor = 99, con = 99 },
+    { lin = 1, idx = 1, species = "sheep", breed = "highland", count = 1,
+      price = 400, hard = 30, fert = 40, yield = 50, vigor = 45, con = 35 },
+  },
+}
+-- head 4 == the restock floor (keep = 4), so restock cannot fire; con 50
+-- makes the auto (gen_refresh = 0) threshold floor(50/20) + 5 = 7.
+local function set_herd(gen)
+  S.herds = {
+    sheepfold = { bldg = "sheepfold", head = 4, quality = 60, gen = gen,
+                  sterile = 0, hard = 40, fert = 55, yield = 70, vigor = 66,
+                  con = 50, breed = "nordic", hv = 0, age_ticks = 1 },
+  }
+end
+
+set_herd(0)
+act = ah.plan()
+check("generation under the auto threshold -> no crossbreed buy",
+      act == nil or act.kind ~= "buy", act and act.cmd)
+
+set_herd(8)
+act = ah.plan()
+check("generation over the auto threshold -> a crossbreed buy",
+      act ~= nil and act.kind == "buy", act and act.why)
+check("crossbreed prefers a different breed (idx 1 -> 1-based id 2)",
+      act and act.cmd == "vlivestock buy lodbrok 2", act and act.cmd)
+
+-- An explicit gen threshold overrides the Con-derived one, and 0 means
+-- "auto via Con" -- not "always fire" and not "never fire".
+ah.config("gen 20")
+set_herd(8)
+act = ah.plan()
+check("an explicit gen threshold above the herd's gen blocks the buy",
+      act == nil or act.kind ~= "buy", act and act.cmd)
+ah.config("gen auto")
+act = ah.plan()
+check("gen auto restores the Con-derived threshold and the buy returns",
+      act ~= nil and act.kind == "buy", act and act.why)
+
+-- The other two crossbreed triggers, each isolated: generation stays under
+-- the threshold in all three cases below, so only sterility or age can be
+-- responsible for a buy.
+set_herd(0)
+S.herds.sheepfold.sterile = 2
+act = ah.plan()
+check("a sterile head triggers a crossbreed with gen under the threshold",
+      act ~= nil and act.kind == "buy", act and act.why)
+
+set_herd(0)
+S.herds.sheepfold.age_ticks = 50
+act = ah.plan()
+check("age alone does not trigger while age_refresh is 0 (off)",
+      act == nil or act.kind ~= "buy", act and act.cmd)
+ah.config("age 40")                       -- LEGACY's own default
+act = ah.plan()
+check("age at or over age_refresh triggers a crossbreed",
+      act ~= nil and act.kind == "buy", act and act.why)
+ah.config("age 0")
+
+-- Restore the fixture the pending-delivery cases below expect.
+set_herd(8)
+
+-- ---- pending deliveries block a re-buy -------------------------------------
+-- Added beyond the brief (LEGACY:131's whole purpose: "so the planner
+-- doesn't keep re-buying while deliveries are on the road"). Deleting the
+-- `+ pending_head(b)` from any branch is otherwise invisible -- no case in
+-- the brief ever puts anything in S.lpending.
+--
+-- Crossbreed first, reusing the fixture above (gen 8 over the Con threshold
+-- 7, cap 14, head 4): 10 head already in transit fills the building, so the
+-- buy that fired a moment ago must not fire now.
+S.lpending = { { bldg = "sheepfold", species = "sheep", breed = "nordic",
+                 count = 10, secs = 300 } }
+act = ah.plan()
+check("crossbreed: deliveries in transit fill the cap -> no buy",
+      act == nil or act.kind ~= "buy", act and act.cmd)
+S.lpending = { { bldg = "byre", species = "cow", breed = "nordic",
+                 count = 10, secs = 300 } }
+act = ah.plan()
+check("crossbreed: a delivery to a DIFFERENT building does not block it",
+      act ~= nil and act.kind == "buy", act and act.why)
+
+-- Restock next: an empty building whose breeding floor is already on the
+-- road must not be stocked twice.
+S.herds = {}
+ah.config("gen auto")
+S.lpending = { { bldg = "sheepfold", species = "sheep", breed = "nordic",
+                 count = 4, secs = 300 } }
+act = ah.plan()
+check("restock: a delivery already covering the floor -> no buy",
+      act == nil or act.kind ~= "buy", act and act.cmd)
+S.lpending = {}
+act = ah.plan()
+check("restock: with nothing in transit the same state buys",
+      act ~= nil and act.kind == "buy", act and act.why)
+
+-- ---- the reserve is the only brake -----------------------------------------
+-- Added beyond the brief. The brief's own "below reserve" case uses
+-- daler = 100 against a 2000 reserve, which is so far under that dropping
+-- the `- reserve` term entirely still leaves budget = 100 < the 400 price --
+-- the case passes either way. These pin the actual boundary, since `reserve`
+-- is documented in this module's header as the ONLY thing stopping the
+-- planner spending every daler above it.
+S.autoherd = nil
+ah.settings()                             -- reserve back to its 2000 default
+S.lpending = {}
+S.herds = {}
+S.buildings = { sheepfold = 2 }
+S.lfeed = { grain = 0, water = 0, head = 0 }
+S.wstock_by_good = { grain = { good = "grain", amount = 9999 } }
+S.wstock = { { good = "grain", amount = 9999 } }
+S.lmarket = {
+  [1] = { { lin = 1, idx = 0, species = "sheep", breed = "nordic", count = 1,
+            price = 400, hard = 30, fert = 40, yield = 50, vigor = 45,
+            con = 35 } },
+}
+S.daler = 2399                            -- reserve 2000 -> budget 399 < 400
+act = ah.plan()
+check("one daler short of reserve + price -> no buy",
+      act == nil or act.kind ~= "buy", act and act.cmd)
+S.daler = 2400                            -- budget exactly 400
+act = ah.plan()
+check("reserve + price exactly -> the buy is allowed",
+      act ~= nil and act.kind == "buy", act and act.why)
+
+-- ---- quality buy-in: the margin, and its own cap check ---------------------
+-- Added beyond the brief, which never exercises branch 4 at all. Crossbreed
+-- and restock are both silenced here (cross off; head == the keep floor), so
+-- any buy below can only be a quality buy-in. Goal is the default "yield"
+-- (weights hard 1, fert 1, yield 4, vigor 1, con 2), so the herd below
+-- scores 40 + 55 + 280 + 66 + 100 = 541 and the default margin of 5 puts the
+-- acceptance floor at 546.
+S.autoherd = nil
+ah.settings()
+ah.config("cross off")
+S.daler = 100000
+S.lpending = {}
+S.buildings = { sheepfold = 2 }
+S.lfeed = { grain = 0, water = 0, head = 4 }
+S.herds = {
+  sheepfold = { bldg = "sheepfold", head = 4, quality = 60, gen = 0,
+                sterile = 0, hard = 40, fert = 55, yield = 70, vigor = 66,
+                con = 50, breed = "nordic", hv = 0, age_ticks = 1 },
+}
+-- Scores 40 + 55 + 284 + 66 + 100 = 545, one under the floor.
+S.lmarket = {
+  [1] = { { lin = 1, idx = 0, species = "sheep", breed = "nordic", count = 1,
+            price = 400, hard = 40, fert = 55, yield = 71, vigor = 66,
+            con = 50 } },
+}
+act = ah.plan()
+check("a listing one point under the quality margin -> no buy",
+      act == nil or act.kind ~= "buy", act and act.cmd)
+-- Scores 40 + 55 + 320 + 66 + 100 = 581, clear of the floor.
+S.lmarket[1][1].yield = 80
+act = ah.plan()
+check("a listing clear of the quality margin -> a buy",
+      act ~= nil and act.kind == "buy", act and act.why)
+check("the quality buy uses the one command form",
+      act and act.cmd == "vlivestock buy lodbrok 1", act and act.cmd)
+-- The quality branch runs its own cap/pending check too.
+S.lpending = { { bldg = "sheepfold", species = "sheep", breed = "nordic",
+                 count = 10, secs = 300 } }
+act = ah.plan()
+check("quality buy: deliveries in transit fill the cap -> no buy",
+      act == nil or act.kind ~= "buy", act and act.cmd)
+S.lpending = {}
+
+-- ---- three narrower guards -------------------------------------------------
+-- All three added beyond the brief, each because deleting the line it covers
+-- otherwise changes nothing observable (found by mutating this file's
+-- planner, not by guessing -- see the task-4 report's mutant table).
+
+-- (a) The building cap wins over an over-ambitious per-building target.
+-- `head < desired AND head < cap` looks redundant, because `desired` is
+-- min(cap, keep) when no target is set -- it is reachable only through an
+-- explicit target above the cap, which is exactly the case that would
+-- otherwise buy animals a building cannot house.
+S.autoherd = nil
+ah.settings()
+S.daler = 100000
+S.lpending = {}
+S.buildings = { sheepfold = 2 }           -- cap 14
+S.lfeed = { grain = 0, water = 0, head = 14 }
+S.wstock_by_good = { grain = { good = "grain", amount = 9999 } }
+S.wstock = { { good = "grain", amount = 9999 } }
+S.lmarket = {
+  [1] = { { lin = 1, idx = 0, species = "sheep", breed = "nordic", count = 1,
+            price = 400, hard = 30, fert = 40, yield = 50, vigor = 45,
+            con = 35 } },
+}
+S.herds = {
+  sheepfold = { bldg = "sheepfold", head = 14, quality = 60, gen = 0,
+                sterile = 0, hard = 40, fert = 55, yield = 70, vigor = 66,
+                con = 50, breed = "nordic", hv = 0, age_ticks = 1 },
+}
+ah.config("bldg sheepfold target 20")     -- above the tier-2 cap of 14
+act = ah.plan()
+check("a per-building target above the cap does not buy past the cap",
+      act == nil or act.kind ~= "buy", act and act.cmd)
+ah.config("bldg sheepfold target 0")
+
+-- (b) The feed draw is per-head-batch (ceil(head / 8)), not per head. With
+-- 8 head and a 4-tick buffer the need is 4 grain, so 4 in the warehouse is
+-- exactly enough and must NOT warn. (The market is emptied so no branch can
+-- return a buy and mask the result.)
+S.autoherd = nil
+ah.settings()
+S.daler = 100000
+S.lpending = {}
+S.lmarket = {}
+S.lfeed = { grain = 0, water = 0, head = 8 }
+S.wstock_by_good = { grain = { good = "grain", amount = 4 } }
+S.wstock = { { good = "grain", amount = 4 } }
+S.herds = {
+  sheepfold = { bldg = "sheepfold", head = 8, quality = 60, gen = 0,
+                sterile = 0, hard = 40, fert = 55, yield = 70, vigor = 66,
+                con = 50, breed = "nordic", hv = 0, age_ticks = 1 },
+}
+act, why = ah.plan()
+check("8 head with 4 grain and a 4-tick buffer does not warn",
+      act == nil, act and act.why)
+S.wstock_by_good = { grain = { good = "grain", amount = 3 } }
+S.wstock = { { good = "grain", amount = 3 } }
+act = ah.plan()
+check("8 head with 3 grain does warn", act ~= nil and act.kind == "warn")
+
+-- (c) A listing whose lineage id has no token yields no command at all,
+-- rather than a half-built one. lin 99 is not in the server's lmap.
+S.autoherd = nil
+ah.settings()
+S.daler = 100000
+S.lpending = {}
+S.herds = {}
+S.lfeed = { grain = 0, water = 0, head = 0 }
+S.wstock_by_good = { grain = { good = "grain", amount = 9999 } }
+S.wstock = { { good = "grain", amount = 9999 } }
+S.lmarket = {
+  [99] = { { lin = 99, idx = 0, species = "sheep", breed = "nordic",
+             count = 1, price = 400, hard = 30, fert = 40, yield = 50,
+             vigor = 45, con = 35 } },
+}
+act = ah.plan()
+check("an unknown lineage id produces no command",
+      act == nil or act.kind ~= "buy", act and act.cmd)
+
+-- ---- tick gate -------------------------------------------------------------
+-- Added beyond the brief, deliberately. LEGACY's own gate (husbandry.lua:387)
+-- is a bare `page_opts.auto_herd` read, which is PERMANENTLY nil here
+-- (page_opts keeps its values in a private closure), so a literal port makes
+-- M.tick() return early forever -- Auto-Herd would never run even with the
+-- toggle on, and every planner case above would still pass. Nothing else in
+-- this plan's tests would catch that, so both states are asserted here: with
+-- the toggle off, many ticks over rich state must send nothing; with it on,
+-- that same state must actually plan and send.
+S.autoherd = nil
+ah.settings()
+S.daler = 100000
+S.lpending = {}
+S.herds = {}
+S.buildings = { sheepfold = 2 }
+S.lfeed = { grain = 0, water = 0, head = 0 }
+S.wstock_by_good = { grain = { good = "grain", amount = 9999 } }
+S.wstock = { { good = "grain", amount = 9999 } }
+S.lmarket = {
+  [1] = { { lin = 1, idx = 0, species = "sheep", breed = "nordic", count = 1,
+            price = 400, hard = 30, fert = 40, yield = 50, vigor = 45,
+            con = 35, trait = "0" } },
+}
+
+check("tick-gate setup: the master toggle is still off",
+      page_opts.get("auto_herd") == false)
+sent = {}
+for _ = 1, 5 do ah.tick() end
+check("tick with the master toggle OFF sends nothing", #sent == 0, #sent)
+
+-- Not-connected gate, proven to block on its own before the toggle is
+-- credited with anything.
+mud_connected = false
+page_opts.set("auto_herd", true)
+ah.tick()
+check("tick with the toggle on but not connected sends nothing", #sent == 0, #sent)
+mud_connected = true
+
+-- The toggle ON, all else unchanged: the planner must actually run and act.
+ah.tick()
+check("tick with the master toggle ON plans and sends exactly one command",
+      #sent == 1, #sent)
+check("tick sends the one command form the planner builds",
+      sent[1] == "vlivestock buy lodbrok 1", sent[1])
+check("tick never sends slaughter",
+      sent[1] and sent[1]:find("slaughter", 1, true) == nil)
+
+-- Flipping it back off must stop it again.
+page_opts.set("auto_herd", false)
+sent = {}
+for _ = 1, 5 do ah.tick() end
+check("flipping the master toggle back OFF stops sends", #sent == 0, #sent)
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")

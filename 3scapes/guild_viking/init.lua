@@ -109,6 +109,15 @@ local autoraid = require("autoraid")
 -- its own header); init.lua only needs it for the command surface.
 local autovoyage = require("autovoyage")
 
+-- Husbandry plan Task 4: Auto-Herd + its /vik herd control surface and
+-- settings menu. notify.lua calls autoherd.tick() itself (see its own
+-- header); init.lua only needs it for the command surface. Without the
+-- `herd` branch in M.vik_command below, the whole Task 3 settings surface
+-- (goal/reserve/keep/per-building/menu) would be unreachable -- only the
+-- master toggle would be, via `/vik set auto_herd on`. Auto-Herd is OFF by
+-- default and sends nothing until explicitly enabled.
+local autoherd = require("autoherd")
+
 local S = state_mod.S
 
 local M = {}
@@ -387,6 +396,8 @@ function M.vik_command(args)
     autotrade_tick.trader_command(rest)
   elseif sub_lower == "raid" then
     autoraid.raid_command(rest)
+  elseif sub_lower == "herd" then
+    autoherd.herd_command(rest)
   elseif sub_lower == "voyage" and rest:sub(1, 4):lower() == "auto"
       and (#rest == 4 or rest:sub(5, 5):match("%s")) then
     -- "/vik voyage auto [<sub>]" -- strip the "auto" token (case-
@@ -417,7 +428,7 @@ function M.vik_command(args)
       "Usage: /vik [status | trace | save | source [mip|gmcp|auto] | resetxp | "
       .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
       .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | raid [<sub>] | "
-      .. "voyage auto [<sub>]]")
+      .. "voyage auto [<sub>] | herd [<sub>]]")
   end
 end
 
@@ -475,7 +486,7 @@ function M.on_load()
     usage = "/vik [status | trace | save | source [mip|gmcp|auto] | resetxp | "
       .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
       .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | raid [<sub>] | "
-      .. "voyage auto [<sub>]]",
+      .. "voyage auto [<sub>] | herd [<sub>]]",
     summary = "Viking guild data, pane, and controls",
     description = "Ingestion status and counters, plus each automation's "
       .. "on/off state and last-action/next-eligible summary (status), message tracing "
@@ -502,8 +513,15 @@ function M.on_load()
       .. "log [clear]); and the client-side auto-voyage router: bare "
       .. "'voyage auto' opens its settings menu, 'voyage auto <sub>' "
       .. "configures it (on|off, balanced|max|safe, abyssal on|off, "
-      .. "ship <name>|auto, verbose on|off, log). Both automations are "
-      .. "OFF by default and send nothing until explicitly enabled.",
+      .. "ship <name>|auto, verbose on|off, log); and the client-side "
+      .. "Auto-Herd livestock planner: bare 'herd' opens its settings menu, "
+      .. "'herd <sub>' configures it (on|off, goal <stat>, reserve/keep/gen/"
+      .. "age/feedticks/margin <n>, trait <pref>, stock|cross|quality|feed "
+      .. "on|off, bldg <name> on|off|target <n>|keep <n>, debug on|off, "
+      .. "log [clear], status). All three automations are "
+      .. "OFF by default and send nothing until explicitly enabled -- note "
+      .. "that enabling Auto-Herd authorises it to SPEND DALER on "
+      .. "'vlivestock buy', down to its own configurable reserve.",
     accepts_args = true,
     handler = function(args) M.vik_command(args or "") end,
   })
