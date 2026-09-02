@@ -691,6 +691,7 @@ function M.plan()
           local cmd = buy_cmd(m)
           if cmd then
             return { kind = "buy", cmd = cmd,
+              lin = num(m.lin), idx = num(m.idx),
               why = string.format("stock %s: buy %s x%d into %s (%d/%d) for %dd",
                 species, (m.breed ~= "" and m.breed) or "?", num(m.count), b,
                 head, desired, lot_cost(m)) }, nil
@@ -739,6 +740,7 @@ function M.plan()
               local age_note = (age_thresh and num(herd.age_ticks) >= age_thresh)
                 and string.format(", age %d", num(herd.age_ticks)) or ""
               return { kind = "buy", cmd = cmd,
+                lin = num(m.lin), idx = num(m.idx),
                 why = string.format("crossbreed %s: +%s into %s (gen %d, %d sterile%s) for %dd",
                   species, (m.breed ~= "" and m.breed) or "?", b, num(herd.gen),
                   num(herd.sterile), age_note, lot_cost(m)) }, nil
@@ -766,6 +768,7 @@ function M.plan()
           local cmd = buy_cmd(m)
           if cmd then
             return { kind = "buy", cmd = cmd,
+              lin = num(m.lin), idx = num(m.idx),
               why = string.format("quality buy %s %s into %s for %dd",
                 species, (m.breed ~= "" and m.breed) or "?", b, lot_cost(m)) }, nil
           end
@@ -810,7 +813,30 @@ end
 -- single atomic command, so M.tick sends one and then waits for the feed to
 -- confirm that herds/market/daler actually changed before planning again --
 -- which is what stops it double-buying a stale listing.
-local ah_sm = { phase = "idle", next_at = 0, deadline = 0, sig = "" }
+-- `cmd`/`lin`/`idx` record the action currently in flight, and `refused` the
+-- last command whose confirmation never arrived -- see the confirm-timeout
+-- branch in M.tick.
+local ah_sm = { phase = "idle", next_at = 0, deadline = 0, sig = "",
+                cmd = nil, lin = nil, idx = nil, refused = nil }
+
+-- Forget a listing the server never confirmed. A refused buy changes NO state
+-- (the server tells the player and returns), so the state signature is
+-- unchanged, the confirm deadline expires, the cooldown lapses, the planner
+-- replans over the same S.lmarket and picks the SAME listing -- forever. The
+-- two common refusals are "That listing has already been purchased" (the pool
+-- entry is gone server-side but this client's per-lineage pool still holds it,
+-- because a lineage whose key vanishes cannot be evicted from a delta frame)
+-- and a lot the player cannot afford. Dropping the attempted listing here
+-- breaks the loop for both, and does not lose anything real: if the listing
+-- does still exist, the next Guild.Livestock push carries it again.
+local function drop_listing(lin, idx)
+  if lin == nil then return end
+  local pool = S.lmarket and S.lmarket[lin]
+  if type(pool) ~= "table" then return end
+  for i = #pool, 1, -1 do
+    if num(pool[i].idx) == num(idx) then table.remove(pool, i) end
+  end
+end
 
 -- LEGACY:368 (ah_state_sig). Three field adaptations: `h.generation` ->
 -- `h.gen` (see the crossbreed note above), `state.butchery_queue` ->
@@ -889,10 +915,30 @@ function M.tick()
     return
   end
 
+  -- CORRECTION TO LEGACY, required by the spec's Corrections-to-LEGACY table
+  -- ("Gate on `Guild.Livestock` having arrived", replacing LEGACY's
+  -- mip_livestock gate). The city gate above is not a substitute: Guild.City
+  -- and Guild.Livestock are separate slow-cadence panels in a round-robin, so
+  -- City routinely lands first and S.buildings is populated while S.herds is
+  -- still last session's -- or empty. A planner running in that window
+  -- believes every owned building is empty and stocks all five. Latched by
+  -- handlers/livestock.lua's write_herds and cleared by
+  -- state.reset_connection(), so it is strictly per-connection.
+  if not S.livestock_seen then
+    local ah = M.settings(); ah.status = "waiting for livestock data"
+    return
+  end
+
   if ah_sm.phase == "confirming" then
     if ah_state_sig() ~= ah_sm.sig then
       ah_sm.phase, ah_sm.next_at = "idle", now + 2
     elseif now >= ah_sm.deadline then
+      -- Nothing moved inside the confirm window, so the server refused the
+      -- command (or it never landed). Forget the listing and remember the
+      -- command, so the next cycle cannot simply re-emit it -- see
+      -- drop_listing above and the refusal check in the buy branch below.
+      drop_listing(ah_sm.lin, ah_sm.idx)
+      ah_sm.refused = ah_sm.cmd
       ah_sm.phase, ah_sm.next_at = "cooldown", now + AH_COOLDOWN
       note("FF0000", "[Auto-Herd] no confirmation for last action; pausing briefly")
     end
@@ -912,8 +958,23 @@ function M.tick()
   -- filtered inside every branch). Checked anyway -- this is the one line in
   -- the module that spends money.
   if action and action.kind == "buy" and action.cmd then
+    -- The command whose confirmation last timed out is not re-emitted on the
+    -- very next cycle. Deliberately ONE-SHOT rather than a permanent
+    -- blacklist: the refusal may have been transient (a lot that became
+    -- affordable, a listing that really is back on the market), and a
+    -- permanent blacklist would silently stop the planner buying an animal it
+    -- should. Combined with drop_listing above this bounds the retry loop
+    -- without ever refusing a legitimate repeat for more than one cycle.
+    if ah_sm.refused and ah_sm.refused == action.cmd then
+      ah_sm.refused = nil
+      ah.status = "held back an unconfirmed repeat of: " .. action.cmd
+      if ah.debug then note("808080", "[Auto-Herd] " .. ah.status) end
+      ah_sm.next_at = now + AH_INTERVAL
+      return
+    end
     ah.status = nil                 -- LEGACY:422, overwritten two lines down
     ah_sm.sig = ah_state_sig()
+    ah_sm.cmd, ah_sm.lin, ah_sm.idx = action.cmd, action.lin, action.idx
     mud.send(action.cmd)
     log_action(ah, action.why)
     ah.status = "last: " .. action.why

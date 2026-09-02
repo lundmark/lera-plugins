@@ -177,8 +177,14 @@ check("state en5 default", S.en5 == "None")
 -- reset_connection clears per-connection combat state but keeps persisted-style fields
 S.combat = true
 S.en5 = "orc"
+-- The Guild.Livestock arrival latch is per-connection: Auto-Herd gates its
+-- spending on it, so a latch left standing across a disconnect would let the
+-- first tick after reconnect plan against last session's herds.
+S.livestock_seen = true
 state_mod.reset_connection()
 check("reset clears combat", S.combat == false and S.en5 == "None")
+check("reset clears the Guild.Livestock arrival latch",
+      S.livestock_seen == false, tostring(S.livestock_seen))
 
 -- ---- plugin table loads -----------------------------------------------------
 local M = dofile("3scapes/guild_viking/init.lua")

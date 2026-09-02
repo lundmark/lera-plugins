@@ -55,6 +55,16 @@ local function write_herds(value)
     end
   end
   S.herds = out
+  -- The Guild.Livestock arrival latch. gmcp.h's Guild.Livestock comment says
+  -- herds is one of the keys ALWAYS sent, even empty, so this writer running
+  -- at all is the package having arrived. Auto-Herd gates its spending on it
+  -- (the spec's Corrections-to-LEGACY table: "Gate on `Guild.Livestock`
+  -- having arrived", replacing LEGACY's mip_livestock gate) -- Guild.City and
+  -- Guild.Livestock are separate slow-cadence panels in a round-robin, so
+  -- City routinely lands first and a planner gated only on S.buildings runs
+  -- believing every building is empty. state.reset_connection() clears the
+  -- latch, so it can never outlive the connection that set it.
+  S.livestock_seen = true
 end
 
 local BQUEUE_SLOT_ORDER = { "slot", "species", "meat", "qty", "secs", "trait" }
@@ -209,10 +219,31 @@ end
 -- LEGACY 2942 (guild_viking.lua, the MIP LMARKET branch). The server
 -- sends one key per lineage (lmarket_1..lmarket_13) and OMITS a lineage
 -- with no pool entirely, so this composite is inherently variable-arity --
--- MERGE, do not replace. A delta frame carrying only some lineages must
--- leave the others' last-known pools standing.
-local function write_lmarket(parts)
+-- MERGE on a delta, do not replace. A delta frame carrying only some
+-- lineages must leave the others' last-known pools standing.
+--
+-- But merging is only right for a DELTA. Because a lineage whose pool empties
+-- loses its key altogether, a shrinking key set makes the protocol layer send
+-- the whole Livestock push as a full resend with the complete current key set
+-- (gmcp.h's own note on that trade-off, at the lmarket_<n> partitioning
+-- comment). On such a frame a missing lineage means GONE, and merging leaves
+-- its last-known pool standing forever: Auto-Herd then scores an animal that
+-- is no longer for sale, emits a buy the server refuses, and -- since a
+-- refusal changes no state -- replans, picks the same listing and repeats. A
+-- stale TRAIT listing carries a +1000 score bonus, so it would win every
+-- comparison permanently and the planner would never buy anything again.
+--
+-- `full` is the frame's own flag, surfaced by protocol.lua (see frame_is_full
+-- there). Replace on full, merge on a delta.
+--
+-- Residual, worth knowing: a full frame that carries NO lmarket_<n> key at
+-- all -- every one of the thirteen pools empty at once -- never reaches this
+-- writer, because protocol.lua only builds a composite unit when at least one
+-- of its part keys is present in the frame. Closing that would need a
+-- package -> composite association the key map does not currently hold.
+local function write_lmarket(parts, full)
   parts = parts or {}
+  local replacement = full and {} or nil
   for k, records in pairs(parts) do
     local lin = tostring(k):match("^lmarket_(%d+)$")
     if lin and type(records) == "table" then
@@ -220,9 +251,14 @@ local function write_lmarket(parts)
       for _, r in ipairs(records) do
         table.insert(out, build_lmarket_record(r))
       end
-      S.lmarket[tonumber(lin)] = out
+      if replacement then
+        replacement[tonumber(lin)] = out
+      else
+        S.lmarket[tonumber(lin)] = out
+      end
     end
   end
+  if replacement then S.lmarket = replacement end
 end
 
 local LNEEDS_ORDER = { "species", "current", "cap" }

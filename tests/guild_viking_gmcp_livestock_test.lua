@@ -34,6 +34,13 @@ w.HERDS({
     breed = "", hv = 0, trait = "0", age_ticks = 41 },
 })
 check("herds keyed by bldg", S.herds and S.herds.sheepfold and S.herds.byre)
+-- The spec's Corrections-to-LEGACY table requires Auto-Herd to gate on
+-- "Guild.Livestock having arrived", replacing LEGACY's MIP gate. herds is one
+-- of the keys gmcp.h says is ALWAYS sent, even empty, so its writer is the
+-- arrival signal; state.reset_connection() clears the latch so it can never
+-- outlive the connection that set it.
+check("a herds frame latches S.livestock_seen", S.livestock_seen == true,
+      tostring(S.livestock_seen))
 check("herds numeric fields land", S.herds.sheepfold.head == 12
       and S.herds.sheepfold.yield == 70 and S.herds.sheepfold.con == 50)
 check("herds real trait kept", S.herds.sheepfold.trait == "prolific")
@@ -112,6 +119,33 @@ w.LMARKET({
 })
 check("lmarket delta preserves other lineages", S.lmarket[1] ~= nil)
 check("lmarket delta updates its own lineage", S.lmarket[5][1].price == 999)
+
+-- A FULL resend replaces instead of merging. The server omits lmarket_<lid>
+-- entirely when a pool empties, and on a shrinking key set it sets full=1 and
+-- repeats the complete current key set -- so a lineage absent from a full
+-- frame is gone, not unchanged. Merging one leaves phantom listings standing
+-- forever, and Auto-Herd then scores a sold animal, re-emits a buy the server
+-- refuses, and wedges (a stale TRAIT listing carries a +1000 score bonus and
+-- would win permanently).
+w.LMARKET({
+  lmarket_5 = { { lin = 5, idx = 0, species = "cow", breed = "aurochs",
+                  count = 1, price = 777, hard = 50, fert = 30, yield = 60,
+                  vigor = 40, con = 55, trait = "bountiful" } },
+}, true)
+check("a full frame omitting a lineage evicts it", S.lmarket[1] == nil,
+      S.lmarket[1] and #S.lmarket[1])
+check("a full frame keeps the lineages it does carry", S.lmarket[5]
+      and S.lmarket[5][1].price == 777)
+
+-- ...and a delta must still merge, which is the behaviour the two cases above
+-- this one pin.
+w.LMARKET({
+  lmarket_1 = { { lin = 1, idx = 0, species = "sheep", breed = "nordic",
+                  count = 2, price = 400, hard = 30, fert = 40, yield = 50,
+                  vigor = 45, con = 35, trait = "0" } },
+})
+check("a delta after a full frame merges, not replaces",
+      S.lmarket[1] ~= nil and S.lmarket[5] ~= nil)
 
 -- ---- lneeds ----------------------------------------------------------------
 w.LNEEDS({ { species = "sheep", current = 2, cap = 14 } })

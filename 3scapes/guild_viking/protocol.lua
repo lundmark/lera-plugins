@@ -33,6 +33,28 @@ local gmcp_handlers = {}
 -- Reserved envelope members the protocol layer owns (gmcp_guild_key_reserved).
 local ENVELOPE = { guild = true, full = true, page = true, pages = true }
 
+-- `full` is owned by this layer -- it is stripped with the rest of the
+-- envelope and never reaches a writer as a payload key -- but its MEANING is a
+-- writer's business, so it is passed on as a second argument to every GMCP
+-- writer instead of being consumed and discarded.
+--
+-- gmcp.h's DELTA SEMANTICS: the first push of a sub-package after subscribing
+-- (or after send_gmcp_full_snapshot()) carries `full: 1` plus the COMPLETE key
+-- set; every later push carries only the keys that changed and no `full` key
+-- at all. So on a full frame, a key's ABSENCE means gone, and on a delta it
+-- means unchanged. A writer that merges a variable-arity key set cannot tell
+-- those apart without this flag -- see handlers/livestock.lua's write_lmarket,
+-- whose per-lineage pools are exactly that shape.
+--
+-- The wire value is the mudlib's `1`; `true` and `"1"` are accepted so a
+-- change of JSON encoder on either side cannot silently turn every full
+-- resend into a delta. Anything else, absence included, is a delta -- note
+-- that a bare truthiness test would read a `0` as full, since 0 is truthy in
+-- Lua.
+local function frame_is_full(v)
+  return v == 1 or v == true or v == "1"
+end
+
 -- A composite MIP key (gmcp_map.COMPOSITE) receives two GMCP keys -- e.g.
 -- SROLES gets `sroles` and `sroles_meta`. Both halves may arrive in the same
 -- frame, or a delta may carry just one; either way the writer gets a single
@@ -294,17 +316,18 @@ end
 -- registered writer for a MIP key and dispatch it, or count the key as
 -- unknown when no writer is registered (e.g. MONUMENTS, which has no writer
 -- yet -- see composite_of's callers).
-local function dispatch_gmcp(mip_key, value)
+local function dispatch_gmcp(mip_key, value, full)
   local fn = gmcp_handlers[mip_key]
   if not fn then
     gmcp_stats.unknown[mip_key] = (gmcp_stats.unknown[mip_key] or 0) + 1
     return
   end
-  dispatch(mip_key, fn, gmcp_dispatch_opts, value)
+  dispatch(mip_key, fn, gmcp_dispatch_opts, value, full and true or false)
 end
 
--- Route one payload key through the explicit key map.
-function protocol.apply_gmcp_key(gmcp_key, value)
+-- Route one payload key through the explicit key map. `full` is the frame's
+-- own full-resend flag, forwarded to the writer -- see frame_is_full above.
+function protocol.apply_gmcp_key(gmcp_key, value, full)
   local mip_key = gmcp_map.mip_key(gmcp_key)
   if not mip_key then
     -- Counted under the GMCP name, so /vik source shows the key the guild
@@ -312,7 +335,7 @@ function protocol.apply_gmcp_key(gmcp_key, value)
     gmcp_stats.unknown[gmcp_key] = (gmcp_stats.unknown[gmcp_key] or 0) + 1
     return
   end
-  dispatch_gmcp(mip_key, value)
+  dispatch_gmcp(mip_key, value, full)
 end
 
 -- Order two apply units. Mapped keys go first, sorted by the MIP key they
@@ -343,7 +366,7 @@ end
 -- (SETTLERX owns the housing totals outright -- see write_shplots in
 -- handlers/city.lua), but a later plan adds ~20 more keys, and this is the one
 -- class of bug that cannot be reconstructed from a bug report.
-local function apply_gmcp_frame(data, skip_envelope)
+local function apply_gmcp_frame(data, skip_envelope, full)
   local pending = {}  -- mip_key -> { [gmcp_key] = value }, composites only
   local units = {}    -- { mip = <MIP key or nil>, gmcp = <name>, value = ... }
   for key, value in pairs(data) do
@@ -366,11 +389,11 @@ local function apply_gmcp_frame(data, skip_envelope)
   table.sort(units, unit_lt)
   for _, u in ipairs(units) do
     if u.composite then
-      dispatch_gmcp(u.mip, u.value)
+      dispatch_gmcp(u.mip, u.value, full)
     else
       -- Single keys keep going through apply_gmcp_key, so the unmapped-key
       -- accounting lives in exactly one place.
-      protocol.apply_gmcp_key(u.gmcp, u.value)
+      protocol.apply_gmcp_key(u.gmcp, u.value, full)
     end
   end
 end
@@ -378,10 +401,10 @@ end
 -- A package whose whole payload is one MIP key's data bypasses the key map
 -- entirely -- see gmcp_map.PACKAGE_KEY for why that has to exist rather than
 -- being a shortcut. Everything else is applied key by key.
-local function apply_gmcp_package(package, data, skip_envelope)
+local function apply_gmcp_package(package, data, skip_envelope, full)
   local whole = gmcp_map.package_key(package)
   if not whole then
-    apply_gmcp_frame(data, skip_envelope)
+    apply_gmcp_frame(data, skip_envelope, full)
     return
   end
   -- The envelope is the protocol layer's, not the writer's, so it is stripped
@@ -393,7 +416,7 @@ local function apply_gmcp_package(package, data, skip_envelope)
       if not ENVELOPE[key] then payload[key] = value end
     end
   end
-  dispatch_gmcp(whole, payload)
+  dispatch_gmcp(whole, payload, full)
 end
 
 -- One Guild.* frame. Keys are applied individually: a key absent from a frame
@@ -423,19 +446,20 @@ function protocol.on_gmcp(package, data)
 
   local page = tonumber(data.page)
   local pages = tonumber(data.pages)
+  local full = frame_is_full(data.full)
 
   -- page/pages appear only when a frame is split, so their absence means
   -- this frame is complete on its own.
   if not page or not pages or pages <= 1 then
     page_runs[package] = nil
-    apply_gmcp_package(package, data, true)
+    apply_gmcp_package(package, data, true, full)
     return
   end
 
   local run = page_runs[package]
   -- A fresh page 1 abandons whatever was accumulating: it is a new snapshot.
   if page == 1 or not run then
-    run = { pages = pages, next_page = 1, keys = {} }
+    run = { pages = pages, next_page = 1, keys = {}, full = full }
     page_runs[package] = run
   end
 
@@ -448,10 +472,16 @@ function protocol.on_gmcp(package, data)
 
   merge_page(run, data)
   run.next_page = page + 1
+  -- gmcp.h's PAGING note says `full` is repeated identically on every page of
+  -- a push, and merge_page strips it with the rest of the envelope -- so the
+  -- run carries it instead. OR-ed rather than last-wins so a page that lost
+  -- the flag cannot downgrade a full resend to a delta and re-open the
+  -- eviction hole this exists to close.
+  run.full = run.full or full
 
   if page == pages then
     page_runs[package] = nil
-    apply_gmcp_package(package, run.keys, false)
+    apply_gmcp_package(package, run.keys, false, run.full)
   end
 end
 

@@ -591,6 +591,22 @@ ah.tick()
 check("tick with the toggle on but not connected sends nothing", #sent == 0, #sent)
 mud_connected = true
 
+-- The Guild.Livestock arrival gate the spec's Corrections-to-LEGACY table
+-- mandates ("Gate on `Guild.Livestock` having arrived", replacing LEGACY's
+-- mip_livestock gate). Guild.City and Guild.Livestock are separate
+-- slow-cadence panels in a round-robin, so City routinely lands first and the
+-- S.buildings gate below is satisfied while every herd still reads empty --
+-- the planner would then believe every building is empty and stock all five.
+-- The fixture here is the one that buys three lines down, so only the gate can
+-- account for the silence.
+S.livestock_seen = false
+ah.tick()
+check("tick before Guild.Livestock has arrived sends nothing", #sent == 0, #sent)
+check("tick before Guild.Livestock has arrived says why",
+      (ah.settings().status or ""):find("livestock", 1, true) ~= nil,
+      ah.settings().status)
+S.livestock_seen = true
+
 -- The reconnect settling hold. init.lua's M.on_connect sets S.at_hold_until
 -- on every connect and state.reset_connection() deliberately PRESERVES guild
 -- data, so S.herds/S.lmarket/S.buildings/S.daler all survive a disconnect and
@@ -624,6 +640,70 @@ page_opts.set("auto_herd", false)
 sent = {}
 for _ = 1, 5 do ah.tick() end
 check("flipping the master toggle back OFF stops sends", #sent == 0, #sent)
+
+-- ---- the confirm-timeout retry loop ---------------------------------------
+-- A buy the server refuses (already purchased, or -- before the lot-total fix
+-- above -- unaffordable) changes NO state, so the phase machine waits out its
+-- confirm timeout, cools down, replans, picks the same listing and repeats
+-- forever. Nothing in the client ever noticed. The timeout transition now
+-- evicts the attempted listing from S.lmarket and refuses to re-emit an
+-- identical command on the next cycle.
+S.autoherd = nil
+ah.settings()
+page_opts.set("auto_herd", true)
+S.livestock_seen = true
+S.at_hold_until = nil
+mud_connected = true
+S.daler = 100000
+S.lpending = {}
+S.herds = {}
+S.buildings = { sheepfold = 2 }
+S.lfeed = { grain = 0, water = 0, head = 0 }
+S.wstock_by_good = { grain = { good = "grain", amount = 9999 } }
+S.wstock = { { good = "grain", amount = 9999 } }
+local function one_listing()
+  return {
+    [1] = { { lin = 1, idx = 0, species = "sheep", breed = "nordic",
+              count = 1, price = 400, hard = 30, fert = 40, yield = 50,
+              vigor = 45, con = 35 } },
+  }
+end
+S.lmarket = one_listing()
+sent = {}
+ah.tick()
+check("retry-loop setup: the first tick sends the buy", #sent == 1, #sent)
+
+-- The server refused: no herd, no daler and no market change, so the state
+-- signature is unchanged and the confirm deadline expires. os.time is stubbed
+-- rather than slept on, the same idiom guild_viking_test.lua's hold-window
+-- case uses.
+local real_time = os.time
+os.time = function() return real_time() + 100 end
+ah.tick()
+check("confirm timeout evicts the attempted listing from S.lmarket",
+      #(S.lmarket[1] or {}) == 0, S.lmarket[1] and #S.lmarket[1])
+
+sent = {}
+os.time = function() return real_time() + 200 end
+ah.tick()
+check("after the eviction there is nothing left to re-buy", #sent == 0, sent[1])
+
+-- Even when the server resends the identical listing, the refused command is
+-- not repeated on the very next cycle -- that is what caps the loop for a
+-- refusal the eviction cannot explain (an unaffordable lot, say).
+S.lmarket = one_listing()
+os.time = function() return real_time() + 300 end
+ah.tick()
+check("a re-arrived identical listing is not bought again immediately",
+      #sent == 0, sent[1])
+
+-- The refusal is one-shot, not a permanent blacklist: a listing that really
+-- is back on the market must eventually be buyable again.
+os.time = function() return real_time() + 400 end
+ah.tick()
+check("the refusal is one-shot, not a permanent blacklist", #sent == 1, #sent)
+os.time = real_time
+page_opts.set("auto_herd", false)
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")
