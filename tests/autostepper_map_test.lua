@@ -206,6 +206,32 @@ path = disjoint:search_frontier({})
 check("the search does not teleport across a gap",
   table.concat(path or {}, "") == "e", table.concat(path or {}, ","))
 
+-- FIFO vs LIFO needs a graph the corridor cannot provide. Every fixture above
+-- has a reachable graph that is a TREE -- one route per room -- and in a tree
+-- both queue disciplines yield the same dist, because dist is assigned at
+-- DISCOVERY time and a tree room is discovered exactly once. The bug legacy
+-- actually shipped (reading the last pushed entry, making its "BFS" a DFS) only
+-- shows where a room is reachable by two routes of different length AND the
+-- longer one is explored first. DIR_ORDER puts "n" before "e", so a stack pops
+-- the "e" branch first -- which is why the long route hangs off "e" here.
+--
+--   (0,2) F <-w- (1,2)      F = (0,2,0); its "n" leads to unrecorded (0,3,0)
+--     ^n           ^n       short route: n,n      (dist 2)
+--   (0,1)        (1,1)      long route:  e,n,n,w  (dist 4)
+--     ^n           ^n
+--   (0,0) --e---> (1,0)
+local twoway = build({
+  { 0, 0, 0, { "n", "e" } },
+  { 0, 1, 0, { "s", "n" } },
+  { 0, 2, 0, { "s", "n", "e" } },
+  { 1, 0, 0, { "w", "n" } },
+  { 1, 1, 0, { "s", "n" } },
+  { 1, 2, 0, { "s", "w" } },
+})
+local tw = twoway:search_frontier({})
+check("the shortest of two routes to one frontier wins",
+  table.concat(tw or {}, "") == "nnn", table.concat(tw or {}, ","))
+
 -- ---- termination and cost ----------------------------------------------------
 -- The real upper bound from setup_maze: min(8, 3+diff/20) floors of
 -- min(50+diff*1.25, 250) rooms. 8 x 250 = 2000 rooms, fully connected in a line
