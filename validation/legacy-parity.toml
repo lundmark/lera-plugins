@@ -14,7 +14,19 @@ key = "autostepper"
 path = "3scapes/autostepper/init.lua"
 target_keys = ["autostepper"]
 fixtures = ["autostepper-control-state"]
-notes = "Directory plugin: init.lua is the mapped entry module. The autostepper_* rows below register its other source files purely so their paths satisfy the current-refs path check; each carries no separate target mapping of its own."
+notes = "Directory plugin: init.lua is the mapped entry module. The autostepper_* rows below register its other source files purely so their paths satisfy the current-refs path check; each carries no separate target mapping of its own. Stage 4 added explore/map.lua (the pure coordinate map, BFS and frontier engine) and stage 5 explore/mode.lua (exit ingestion, dead-reckoned position, the area profile) -- same file-registration-only pattern as the guild_viking_* rows."
+
+[[current_plugins]]
+key = "autostepper_explore_map"
+path = "3scapes/autostepper/explore/map.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "autostepper_explore_mode"
+path = "3scapes/autostepper/explore/mode.lua"
+target_keys = []
+fixtures = []
 
 [[current_plugins]]
 key = "chat_monitor"
