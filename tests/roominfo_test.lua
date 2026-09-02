@@ -351,6 +351,50 @@ deliver("Room.Info", { num = -1, name = "Nowhere", area = "X", exits = {} })
 check("negative num is still refused",
   ri.room() == "Layer one of the Sea of Chaos", tostring(ri.room()))
 
+-- ---- on_room_info ------------------------------------------------------------
+-- "a frame arrived" and "identity changed" are different questions. In the
+-- Chaos Sea the id is nil and the name is the same for a whole layer, so
+-- on_room_change fires once per layer while on_room_info fires per room.
+local seen_a, seen_b = {}, {}
+local id_a = ri.on_room_info(function(info) seen_a[#seen_a + 1] = info.room end)
+local id_b = ri.on_room_info(function(info) seen_b[#seen_b + 1] = info.room end)
+check("on_room_info returns distinct ids", id_a ~= nil and id_b ~= nil and id_a ~= id_b,
+  tostring(id_a) .. "/" .. tostring(id_b))
+
+deliver("Room.Info", { num = 0, name = "Layer one of the Sea of Chaos",
+                       area = "Unknown", exits = { s = 0, w = 0, e = 0 } })
+check("on_room_info fires on an accepted frame", #seen_a == 1, tostring(#seen_a))
+check("on_room_info fires for every registration", #seen_b == 1, tostring(#seen_b))
+
+-- Same name, same id: no identity change at all, but a frame did arrive.
+deliver("Room.Info", { num = 0, name = "Layer one of the Sea of Chaos",
+                       area = "Unknown", exits = { e = 0, w = 0 } })
+check("on_room_info fires without an identity change", #seen_a == 2, tostring(#seen_a))
+
+-- Removing the FIRST registration must not renumber the second. This is the
+-- bug the on_room_change registry has: it allocates ids with table.insert and
+-- releases them with table.remove, so every later id then points at the wrong
+-- callback.
+check("off_room_info removes by id", ri.off_room_info(id_a) == true)
+deliver("Room.Info", { num = 0, name = "Layer one of the Sea of Chaos",
+                       area = "Unknown", exits = { n = 0 } })
+check("removed callback stops firing", #seen_a == 2, tostring(#seen_a))
+check("surviving id is unaffected by the removal", #seen_b == 3, tostring(#seen_b))
+check("off_room_info on an unknown id is false", ri.off_room_info(id_a) == false)
+
+-- One raising handler must not stop the rest (same convention as gmcp.on).
+local after = 0
+local id_raise = ri.on_room_info(function() error("boom") end)
+local id_after = ri.on_room_info(function() after = after + 1 end)
+print = function() end
+deliver("Room.Info", { num = 0, name = "Layer one of the Sea of Chaos",
+                       area = "Unknown", exits = { s = 0 } })
+print = print_real
+check("a raising handler does not stop the rest", after == 1, tostring(after))
+ri.off_room_info(id_raise)
+ri.off_room_info(id_after)
+ri.off_room_info(id_b)
+
 -- ---- unload -----------------------------------------------------------------
 ri.on_unload()
 check("unregisters Room.Info", removed["Room.Info"] == true)

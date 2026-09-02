@@ -44,6 +44,15 @@ local history_max = 50
 -- Callbacks for when room changes
 local on_room_change_callbacks = {}
 
+-- Frame-arrival callbacks. Deliberately NOT the on_room_change pattern: that
+-- one allocates ids with table.insert and releases them with table.remove, so
+-- removing any handler renumbers every later one and the surviving ids point at
+-- the wrong callbacks. It is latent only because mapper is its sole caller and
+-- never removes. Here the id is stored in the record, so removal never
+-- renumbers, and the array preserves registration order.
+local on_room_info_callbacks = {}   -- array of { id = n, fn = f }
+local next_room_info_id = 0
+
 --------------------------------------------------------------------------------
 -- Direction Helpers
 --------------------------------------------------------------------------------
@@ -84,6 +93,15 @@ local function notify_room_change(old_room, new_room)
     local ok, err = pcall(callback, new_room, old_room)
     if not ok then
       print("[roominfo] Callback error: " .. tostring(err))
+    end
+  end
+end
+
+local function notify_room_info(info)
+  for _, entry in ipairs(on_room_info_callbacks) do
+    local ok, err = pcall(entry.fn, info)
+    if not ok then
+      print("[roominfo] on_room_info error: " .. tostring(err))
     end
   end
 end
@@ -161,6 +179,10 @@ local function handle_room_info(data)
     add_to_history(current.room)
     notify_room_change(old_room, current.room)
   end
+
+  -- Unconditional: a frame arrived, whether or not identity changed. In an area
+  -- with no room ids and one name per layer, this is the only per-room signal.
+  notify_room_info(M.info())
 end
 
 local function classify_entry(raw)
@@ -306,6 +328,7 @@ function M.on_unload()
   -- '/plugins reload roominfo' therefore leaves mapper holding a dead
   -- registration id and no notifications; reload the subscribers too.
   on_room_change_callbacks = {}
+  on_room_info_callbacks = {}
   print("[roominfo] Unloaded")
 end
 
@@ -521,6 +544,28 @@ function M.off_room_change(id)
   if id and on_room_change_callbacks[id] then
     table.remove(on_room_change_callbacks, id)
     return true
+  end
+  return false
+end
+
+-- Register a callback for every accepted Room.Info frame. Unlike
+-- on_room_change this fires even when name and id are unchanged, which is the
+-- only per-room signal an area without room ids provides.
+function M.on_room_info(callback)
+  if type(callback) ~= "function" then return nil end
+  next_room_info_id = next_room_info_id + 1
+  on_room_info_callbacks[#on_room_info_callbacks + 1] =
+    { id = next_room_info_id, fn = callback }
+  return next_room_info_id
+end
+
+function M.off_room_info(id)
+  if id == nil then return false end
+  for i, entry in ipairs(on_room_info_callbacks) do
+    if entry.id == id then
+      table.remove(on_room_info_callbacks, i)
+      return true
+    end
   end
   return false
 end
