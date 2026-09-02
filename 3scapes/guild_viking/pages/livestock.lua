@@ -43,16 +43,18 @@
 -- constants: BLDG_* ids and the HERD_CAP_* tier tables from
 -- 3s/players/viking/world/trade_goods.h:262-266,1050-1054 (indexed 1..5
 -- directly here, dropping trade_goods.h's leading tier-0 zero, matching
--- LEGACY's own HERD_CAP shape at guild_viking.lua:9829-9832 -- an unknown
+-- LEGACY's own HERD_CAP shape at guild_viking.lua:9832-9835 -- an unknown
 -- tier then naturally misses the table instead of needing a clamp);
 -- LIVESTOCK_FEED_PER_HEAD from trade_goods.h:1074; species/breed display
 -- names from 3s/players/viking/world/livestock_daemon.c:20-115, mirrored
 -- into LEGACY's own SP_LABEL/SP_DISP/BR_DISP tables at guild_viking.lua:
--- 9828,9901,9926,10033,10104-10110; lineage/town names from LIN_NAMES
--- (guild_viking.lua:10668-10677, duplicated locally the same way
--- pages/goods.lua's own copy is, rather than reaching across page modules);
--- and trait display names from livestock_daemon.c:132-138, mirrored into
--- LEGACY's own VK_LTRAIT_NAME (guild_viking.lua:4816-4818).
+-- 9830 (SP_LABEL), 9902/9926/10033/10105 (SP_DISP's four occurrences),
+-- 10107-10113 (BR_DISP); lineage/town names from LIN_NAMES (guild_viking.lua:
+-- 12229-12244 -- forward-declared empty at 3540, populated at 12229 --
+-- duplicated locally the same way pages/goods.lua's own copy is, rather than
+-- reaching across page modules); and trait display names from
+-- livestock_daemon.c:132-138, mirrored into LEGACY's own VK_LTRAIT_NAME
+-- (guild_viking.lua:4816-4818).
 local pagelib = require("pagelib")
 local state = require("state")
 local page_opts = require("page_opts")
@@ -97,9 +99,16 @@ local BR_DISP = {
   fjord = "Fjord Horse", gotland_russ = "Gotland Russ",
   icelandic_horse = "Icelandic",
 }
+-- Fallback for a breed id not in BR_DISP: title-case every word, matching
+-- LEGACY's own _breed_name fallback (guild_viking.lua:9843-9847) exactly --
+-- cc.cap_first only capitalises the string's first letter, which is right
+-- for a species/good id (one word) but wrong here now that a future breed
+-- could add a second word (unreachable today: BR_DISP already covers every
+-- breed livestock_daemon.c's _breed_defs defines).
 local function breed_name(b)
   if not b or b == "" then return "Unknown" end
-  return BR_DISP[b] or cc.cap_first((b:gsub("_", " ")))
+  if BR_DISP[b] then return BR_DISP[b] end
+  return (b:gsub("_", " "):gsub("(%a)(%w*)", function(a, c) return a:upper() .. c end))
 end
 
 -- Tier-cap tables, tiers 1..5 (see the header comment for the direct-index
@@ -279,7 +288,7 @@ local function find_lines(add, width)
   local lf = S.lfind or {}
   local posts, offers, auctions = lf.posts or {}, lf.offers or {}, lf.auctions or {}
   if #posts == 0 and #offers == 0 and #auctions == 0 then
-    add(pagelib.trunc(C.dim .. "No postings, offers, or auctions - use 'vfind livestock'" .. pagelib.RESET, width))
+    add(pagelib.trunc(C.dim .. "No postings, offers, or auctions - use 'vfind livestock post'" .. pagelib.RESET, width))
     return
   end
 
