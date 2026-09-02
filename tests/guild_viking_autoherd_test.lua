@@ -89,6 +89,32 @@ for _, it in ipairs(items) do if it.id then ids[it.id] = true end end
 check("menu exposes the four action toggles",
       ids.feed and ids.restock and ids.cross and ids.quality)
 
+-- Review-round fix 4: S.buildings is {} up to this point (state.lua's own
+-- default), so owns() has been false for all five buildings throughout the
+-- run above -- the per-building rows and the "_none" fallback they gate
+-- were previously untested. Assert both states explicitly.
+check("no buildings owned: the fallback row appears", ids._none == true)
+check("no buildings owned: no per-building row appears",
+      not (ids.bldg_sheepfold or ids.bldg_henhouse or ids.bldg_piggery
+           or ids.bldg_byre or ids.bldg_stable))
+
+S.buildings = { sheepfold = 2, byre = 1 }
+local items2 = ah.menu_items()
+local ids2 = {}
+for _, it in ipairs(items2) do if it.id then ids2[it.id] = true end end
+check("owning sheepfold+byre: their rows appear",
+      ids2.bldg_sheepfold and ids2.bldg_byre)
+check("owning sheepfold+byre: an unowned building produces no row",
+      not (ids2.bldg_henhouse or ids2.bldg_piggery or ids2.bldg_stable))
+check("owning any building: the fallback row vanishes", ids2._none == nil)
+
+-- status_line()'s "owned: ..." branch (only reachable when owns(b) is true
+-- for at least one building) is exercised the same way -- via M.config's
+-- blank/"status" directive -- so it isn't left at zero coverage either.
+-- note() is a stub, so this only asserts the call does not error.
+local ok_status = pcall(ah.config, "status")
+check("config status with an owned building does not error", ok_status)
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)

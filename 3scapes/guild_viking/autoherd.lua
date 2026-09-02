@@ -48,10 +48,30 @@
 --   ah_status_line (-> local status_line)             450-467
 --   ah_usage (-> local usage)                         469-474
 --   ah_config (-> M.config)                           476-544
---   AH_RESERVE_STEPS / AH_KEEP_STEPS / AH_TRAIT_CHOICES /
---     ah_step (-> local step_fwd, forward-only; see below)   565-579
---   aherd_menu_build (-> M.menu_items)                588-612
+--   AH_RESERVE_STEPS / AH_KEEP_STEPS / AH_TRAIT_CHOICES     565-567
+--   ah_step (-> local step_fwd, forward-only; see below)    574-580
+--   aherd_menu_build (-> M.menu_items)                588
+--   aherd_menu_build's "no buildings owned" fallback row
+--     (-> M.menu_items' "_none" row)                  646-649
+--   viking_show_aherd_menu (-> M.open_menu)           653-687
 --   viking_aherd_menu_pick (-> local menu_pick)       689-736
+--
+-- Review-round citation fixes (this round only; see the task-3 report's
+-- "Fix round" section for the grep/awk commands that verified each): the
+-- open_menu citation previously read 653-672, which is mid-function (inside
+-- a WindowAddHotspot call) -- the real close is 687. The steps-tables/
+-- ah_step citation previously read 565-579 as one range; split above into
+-- the three one-line step tables (565-567, no ambiguity: each is a
+-- single-line local ending on its own line) and ah_step itself (574-580,
+-- closing `end` verified). The "no buildings owned" fallback row (LEGACY's
+-- `id="_none"` row, previously silently dropped from M.menu_items()) is now
+-- ported, at its real location 646-649 -- not 610-611 (that range is
+-- actually the middle of the `_hdr` row a few lines above it in the
+-- function; a second citation error, this one not mine, corrected here
+-- rather than copied). Per updated instruction: citations below and above
+-- name the opening line only where a range added nothing; a range is kept
+-- only where it usefully bounds a whole function/block, and every range's
+-- closing line was located (not estimated) before being written down.
 --
 -- CORRECTION to the task-3 brief's own citations and directive list: the
 -- brief cites the config-directive grammar at
@@ -378,15 +398,16 @@ function M.config(rest)
   save()   -- persist auto_herd on/off (page_opts) + settings immediately
 end
 
--- LEGACY:565-567 (AH_RESERVE_STEPS/AH_KEEP_STEPS/AH_TRAIT_CHOICES) plus a
--- forward-only cycle helper. LEGACY's own ah_step (568-579) supported a
--- `back` direction for right-click; menu.lua has no equivalent gesture, so
--- this only ever steps forward -- see module header's interaction-fidelity
--- note.
+-- LEGACY:565-567 (AH_RESERVE_STEPS/AH_KEEP_STEPS/AH_TRAIT_CHOICES, three
+-- one-line locals). LEGACY's own ah_step (574-580, verified via its closing
+-- `end` -- see the task-3 report's Fix round) supported a `back` direction
+-- for right-click; menu.lua has no equivalent gesture, so step_fwd below
+-- only ever steps forward -- see module header's interaction-fidelity note.
 local AH_RESERVE_STEPS = { 0, 500, 1000, 2000, 3000, 5000, 10000 }
 local AH_KEEP_STEPS    = { 0, 2, 4, 6, 8, 10, 15 }
 local AH_TRAIT_CHOICES = { "any", "prolific", "hardy", "bountiful", "purebred", "off" }
 
+-- LEGACY:574-580 (ah_step). Forward-only port, see comment above.
 local function step_fwd(cur, list)
   local i = 1
   for k, v in ipairs(list) do if v == cur then i = k break end end
@@ -395,10 +416,14 @@ local function step_fwd(cur, list)
   return list[i]
 end
 
--- LEGACY:588-612 (aherd_menu_build). Item order/labels/ids are verbatim
+-- LEGACY:588 (aherd_menu_build). Item order/labels/ids are verbatim
 -- (id = row.id); per-item colours (col=...) and tooltips (tip=...) have no
 -- equivalent in menu.lua's plain-label rows and are dropped, same
--- disposition as autoraid.lua's own menu port.
+-- disposition as autoraid.lua's own menu port. The "no buildings owned"
+-- fallback row (LEGACY:646-649, `id="_none"`) is ported below too -- a
+-- settings menu that silently renders no per-building rows when the player
+-- owns none of the five livestock buildings would be worse than one that
+-- says so.
 function M.menu_items()
   local ah = M.settings()
   local on = page_opts.get("auto_herd")
@@ -414,8 +439,10 @@ function M.menu_items()
     { id = "feed", value = "feed", label = "Feed guard: " .. (ah.feed_guard and "on" or "off") },
     { id = "_hdr", value = "_hdr", label = "Per-building (L-click toggles on/off):" },
   }
+  local any_bldg = false
   for _, b in ipairs(LIVE_BLDGS) do
     if owns(b) then
+      any_bldg = true
       local bc = ah.buildings[b] or { enabled = true, target = 0 }
       local en = bc.enabled ~= false
       local tgt = (bc.target and bc.target > 0) and tostring(bc.target) or "auto"
@@ -424,6 +451,11 @@ function M.menu_items()
         label = string.format("  %s t%d [%s, target %s]", b, bldg_tier(b), en and "on" or "off", tgt),
       }
     end
+  end
+  -- LEGACY:646-649 (aherd_menu_build's `if not any_bldg then` fallback).
+  if not any_bldg then
+    items[#items + 1] = { id = "_none", value = "_none",
+      label = "  (no husbandry buildings owned)" }
   end
   return items
 end
@@ -459,13 +491,15 @@ local function menu_pick(id)
       local bc = ah.buildings[b]
       bc.enabled = not (bc.enabled ~= false)
     end
-    -- "_hdr" and anything unrecognised: no-op, just reopen below.
+    -- "_hdr", "_none", and anything else unrecognised: no-op, reopen below.
   end
   save()
   M.open_menu()
 end
 
--- LEGACY:653-672 (viking_show_aherd_menu).
+-- LEGACY:653-687 (viking_show_aherd_menu; closing `end` verified, see the
+-- task-3 report's Fix round -- the previous 653-672 citation ended
+-- mid-function, inside a WindowAddHotspot call).
 function M.open_menu()
   require("menu").open({
     items = M.menu_items(),
