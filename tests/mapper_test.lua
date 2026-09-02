@@ -360,24 +360,7 @@ check("load_map drops a self-referential edge from a surviving node",
 
 mp.on_unload()
 
--- ---- ordinary rooms are unaffected (regression) ------------------------------
-mp.clear()
-enter(7001, "A sunny meadow", { "e" }, {})
-enter(7002, "A shaded grove", { "w" }, { w = 7001 })
-local meadow, grove = mp.get_room(7001), mp.get_room(7002)
-check("an ordinary room is still mapped and positioned normally",
-  meadow and grove and grove.x == meadow.x + 1 and grove.y == meadow.y,
-  meadow and grove and (grove.x .. "," .. grove.y .. " vs " .. meadow.x .. "," .. meadow.y))
-
-mp.on_unload()
-
 -- ---- is_ignored / ignore_pattern surface -------------------------------------
--- Deliberately last: a mutant that drops ignore_pattern's type check lets a
--- non-string value into the pattern list, and is_ignored (correctly, once the
--- list is clean) calls :lower() on every stored pattern with no further type
--- guard of its own. Running this after every other is_ignored/process_room
--- call in the suite means a poisoned list entry from that mutant has nothing
--- left downstream to crash.
 
 -- Kills: lowercasing only one side of the comparison in is_ignored. The
 -- pattern is added in Title Case and the name embeds it in ALL CAPS, so a
@@ -391,7 +374,10 @@ check("is_ignored is case-insensitive and matches a substring",
 
 -- Kills: removing the type check in ignore_pattern. A rejected call must
 -- neither be accepted nor grow the list, while a genuinely new pattern
--- submitted right after still must.
+-- submitted right after still must. is_ignored defensively skips a
+-- non-string list entry (see mapper.lua), so this no longer depends on
+-- running last -- a poisoned entry from this mutant is inert everywhere,
+-- including in the ordinary-room regression case below.
 local before_count = #mp.ignored_patterns()
 local rejected = mp.ignore_pattern(42)
 mp.ignore_pattern("frost giants of the wild")
@@ -399,6 +385,17 @@ local after_count = #mp.ignored_patterns()
 check("ignore_pattern rejects a non-string but still extends the list for a valid one",
   rejected == false and after_count == before_count + 1,
   "rejected=" .. tostring(rejected) .. " before=" .. before_count .. " after=" .. after_count)
+
+-- ---- ordinary rooms are unaffected (regression) ------------------------------
+mp.clear()
+enter(7001, "A sunny meadow", { "e" }, {})
+enter(7002, "A shaded grove", { "w" }, { w = 7001 })
+local meadow, grove = mp.get_room(7001), mp.get_room(7002)
+check("an ordinary room is still mapped and positioned normally",
+  meadow and grove and grove.x == meadow.x + 1 and grove.y == meadow.y,
+  meadow and grove and (grove.x .. "," .. grove.y .. " vs " .. meadow.x .. "," .. meadow.y))
+
+mp.on_unload()
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")

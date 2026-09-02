@@ -721,7 +721,11 @@ function M.is_ignored(name)
   if type(name) ~= "string" then return false end
   local lname = name:lower()
   for _, p in ipairs(ignore_patterns) do
-    if lname:find(p:lower(), 1, true) then return true end
+    -- Defensive: ignore_pattern's own type check is meant to be the only way
+    -- into this list, but this guard means a hole there (or a future direct
+    -- writer) can only ever no-op a stray entry, never crash every caller of
+    -- is_ignored/process_room that runs after it.
+    if type(p) == "string" and lname:find(p:lower(), 1, true) then return true end
   end
   return false
 end
