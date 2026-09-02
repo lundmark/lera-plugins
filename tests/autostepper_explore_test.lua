@@ -132,6 +132,93 @@ check("an unknown policy is refused and clear is kept",
   mode.policy() == "dive", mode.policy())
 mode.stop()
 
+-- ---- exclude_exits protects a walkable compass direction ---------------------
+-- The premise behind an earlier mutant here -- "'out' is the first
+-- compass-ordered frontier" -- does not hold: map.lua already drops 'out' on
+-- its own (it has no DELTA entry and DIR_ORDER never lists it), independent
+-- of mode.lua's filter_exits. filter_exits is load-bearing only for a
+-- direction the lattice DOES support, which exclude_exits is documented to
+-- accept: any exit name, compass directions included. 'n' is walkable (it has
+-- both a DELTA and a DIR_ORDER entry) and ranks first in compass order, so a
+-- profile that excludes it is the direct, documented case this guards.
+local excl_profile = {
+  name = "test-exclude-n",
+  exclude_exits = { out = true, enter = true, ["in"] = true, n = true },
+  dive_dirs = { "d" },
+  defer_dirs = { "u" },
+  default_policy = "clear",
+  in_area = profile.in_area,
+  layer_of = profile.layer_of,
+  complete = function() return false end,
+}
+
+quiet(function() mode.start(excl_profile, "clear") end)
+frame({ name = "Layer one of the Sea of Chaos",
+        exits = { "n", "e", "s", "w", "out" } })
+quiet(mode.on_arrival)
+
+local ex1 = mode.next_step()
+check("next_step never proposes an excluded compass exit",
+  ex1 and ex1.raw ~= "n", ex1 and ex1.raw)
+check("the excluded direction is skipped outright -- 'e' is chosen instead",
+  ex1 and ex1.raw == "e", ex1 and ex1.raw)
+
+-- Walk the direction next_step actually proposed and confirm the coordinate
+-- 'n' would have produced -- (0,1,0), one step north of the origin -- was
+-- never reached. Position only ever moves along what next_step proposes and
+-- on_arrival commits, so this is the direct, observable form of "the room
+-- north of the origin was never recorded."
+frame({ name = "Layer one of the Sea of Chaos", exits = { "w" } })
+quiet(mode.on_arrival)
+local ex_st = mode.stats()
+check("the coordinate north of the origin is never reached",
+  not (ex_st.x == 0 and ex_st.y == 1),
+  ex_st.x .. "," .. ex_st.y)
+mode.stop()
+
+-- ---- next_step over a multi-hop route -----------------------------------------
+-- The three-room capture above never forced this: every frontier in it was
+-- adjacent to the current room, so the underlying path was always length 1
+-- and 'commands = path' was indistinguishable from 'commands = { dir }'.
+-- Force the distinguishing case by walking into a dead end, so the nearest
+-- remaining frontier is reachable only by backtracking through an
+-- already-visited room first.
+local hop_profile = {
+  name = "test-multihop",
+  exclude_exits = { out = true, enter = true, ["in"] = true },
+  dive_dirs = { "d" },
+  defer_dirs = { "u" },
+  default_policy = "clear",
+  in_area = profile.in_area,
+  layer_of = function() return nil end,
+  complete = function() return false end,
+}
+
+quiet(function() mode.start(hop_profile, "clear") end)
+-- Room A has two exits so a frontier remains after the first is exhausted.
+frame({ name = "Room A", exits = { "e", "n" } })
+quiet(mode.on_arrival)
+
+-- 'n' ranks before 'e' in compass order, so it is the first hop taken.
+local hop1 = mode.next_step()
+check("first hop heads to the compass-first frontier ('n')",
+  hop1 and hop1.raw == "n", hop1 and hop1.raw)
+
+-- Room B is a dead end: its only exit leads back to the already-visited
+-- room A. The remaining frontier -- A's still-unexplored 'e' exit -- is now
+-- two hops from where we're standing: south back to A, then east. The first
+-- hop back ('s') is deliberately a different direction than the eventual
+-- frontier ('e'), so raw and the frontier direction can't be confused.
+frame({ name = "Room B (dead end)", exits = { "s" } })
+quiet(mode.on_arrival)
+
+local hop2 = mode.next_step()
+check("next_step returns exactly one command over a multi-hop route",
+  hop2 and #hop2.commands == 1, hop2 and hop2.commands and #hop2.commands)
+check("raw is the route's first hop ('s', back toward A) -- not the frontier direction ('e') and not the whole path",
+  hop2 and hop2.raw == "s", hop2 and hop2.raw)
+mode.stop()
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
