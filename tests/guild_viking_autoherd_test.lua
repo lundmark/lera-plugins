@@ -127,7 +127,7 @@ check("owning sheepfold+byre: an unowned building produces no row",
       not (ids2.bldg_henhouse or ids2.bldg_piggery or ids2.bldg_stable))
 check("owning any building: the fallback row vanishes", ids2._none == nil)
 
--- LEGACY:614-641's per-building row content: head against cap, `tgt` and
+-- LEGACY:614-645's per-building row content: head against cap, `tgt` and
 -- `keep`. `keep` is settable through `/vik herd bldg <name> keep <n>` and was
 -- previously unreadable anywhere in the UI, and head-against-cap is what says
 -- whether a target is even reachable.

@@ -49,7 +49,7 @@
 --   AH_RESERVE_STEPS / AH_KEEP_STEPS / AH_TRAIT_CHOICES     565-567
 --   ah_step (-> local step_fwd, forward-only; see below)    574-580
 --   aherd_menu_build (-> M.menu_items)                588
---   aherd_menu_build's per-building rows              614-641
+--   aherd_menu_build's per-building rows              614-645
 --   aherd_menu_build's "no buildings owned" fallback row
 --     (-> M.menu_items' "_none" row)                  646-649
 --   viking_show_aherd_menu (-> M.open_menu)           653-687
@@ -1117,7 +1117,7 @@ function M.menu_items()
   for _, b in ipairs(LIVE_BLDGS) do
     if owns(b) then
       any_bldg = true
-      -- LEGACY:614-641's row content, restored: head against cap, `tgt` and
+      -- LEGACY:614-645's row content, restored: head against cap, `tgt` and
       -- `keep`. LEGACY carried them in row.val ("%d/%d tgt:%s keep:%s" when
       -- enabled, "OFF" when not); menu.lua has one plain label per row, so
       -- they are folded into it. `keep` is settable via
