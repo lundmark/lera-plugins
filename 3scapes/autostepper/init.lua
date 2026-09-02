@@ -94,7 +94,11 @@ local config = {
   step_on_player = true,      -- Take step if player in room (don't fight)
   step_on_no_monster = true,  -- Take step if no monsters
   targets_only = false,       -- Only kill monsters in target list (-> mode)
-  explore_policy = "clear",  -- "clear" | "dive"; see explore/map.lua
+  -- nil until the user picks one with "/step set dive on|off". It must stay
+  -- nil: the AREA PROFILE defaults the policy (spec 5.3), and a value here
+  -- is passed to explore.start unconditionally, which would make the
+  -- profile's own default_policy unreachable dead config.
+  explore_policy = nil,      -- "clear" | "dive"; see explore/map.lua
 }
 
 -- Callbacks
@@ -484,11 +488,27 @@ local function dispatch_set(rest)
     end
   elseif key == "dive" then
     if value == "" then
-      log("dive: " .. (config.explore_policy == "dive" and "on" or "off"))
-    else
+      -- Report what is in EFFECT, which is the live run's policy while one is
+      -- running and the config only once the user has set it. Before that the
+      -- honest answer is that the area profile decides -- printing "off" there
+      -- would claim a setting nothing holds.
+      local effective = nil
+      if explore and explore.active() and explore.policy then
+        effective = explore.policy()
+      else
+        effective = config.explore_policy
+      end
+      if effective then
+        log("dive: " .. (effective == "dive" and "on" or "off"))
+      else
+        log("dive: profile default")
+      end
+    elseif value == "on" or value == "off" then
       config.explore_policy = (value == "on") and "dive" or "clear"
       if explore and explore.active() then explore.set_policy(config.explore_policy) end
       log("dive: " .. (config.explore_policy == "dive" and "on" or "off"))
+    else
+      log("Usage: /step set dive [on|off]")
     end
   else
     log("Unknown setting: " .. key)

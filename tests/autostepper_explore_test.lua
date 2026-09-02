@@ -208,6 +208,26 @@ check("a seeded exit the profile excludes is never proposed",
   seed_ex and seed_ex.raw == "e", seed_ex and seed_ex.raw)
 mode.stop()
 
+-- ---- the area profile defaults the policy ------------------------------------
+-- Spec 5.3: the policy is defaulted by the area profile and only overridden by
+-- the user, so started with no policy of its own the mode must take the
+-- profile's. Every other case in this suite passes an explicit policy, which
+-- leaves this branch unexercised and the profile field silently ignorable.
+local dive_default = {
+  name = "test-dive-default",
+  exclude_exits = { out = true },
+  dive_dirs = { "d" },
+  defer_dirs = { "u" },
+  default_policy = "dive",
+  in_area = profile.in_area,
+  layer_of = profile.layer_of,
+  complete = function() return false end,
+}
+quiet(function() mode.start(dive_default, nil) end)
+check("with no policy given, the profile's default_policy is used",
+  mode.policy() == "dive", mode.policy())
+mode.stop()
+
 -- ---- next_step over a multi-hop route -----------------------------------------
 -- The three-room capture above never forced this: every frontier in it was
 -- adjacent to the current room, so the underlying path was always length 1

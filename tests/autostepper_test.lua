@@ -63,8 +63,12 @@ alias = {
   remove = function() return true end,
 }
 
+-- The registry hands the spec straight back, so the /step handler the plugin
+-- actually registered is callable from here. That is the only way to reach
+-- dispatch(), which is a local.
+local step_cmd = nil
 local command_stub = {
-  register = function() return 1 end,
+  register = function(spec) step_cmd = spec return 1 end,
   unregister = function() return true end,
 }
 local real_require = require
@@ -165,6 +169,28 @@ local function quiet(fn, ...)
   local ok, err = pcall(fn, ...)
   print = real_print
   if not ok then error(err, 0) end
+end
+
+-- Like quiet(), but hands back the lines the plugin logged. The /step reporting
+-- subcommands have no return value; what they print IS their output.
+local function capture(fn, ...)
+  local lines = {}
+  print = function(...)
+    local parts = {}
+    for i = 1, select('#', ...) do parts[#parts + 1] = tostring((select(i, ...))) end
+    lines[#lines + 1] = table.concat(parts, " ")
+  end
+  local ok, err = pcall(fn, ...)
+  print = real_print
+  if not ok then error(err, 0) end
+  return lines
+end
+
+local function has_line(lines, want)
+  for _, line in ipairs(lines) do
+    if line:find(want, 1, true) then return true end
+  end
+  return false
 end
 
 -- Move the player: this is a room ENTRY, so roominfo's slice is replaced whole.
@@ -496,6 +522,13 @@ as.debug_set_explore({
   -- roominfo's key cannot change inside a sea layer (id nil, one name per
   -- layer), so the only thing that can drive a reseed is this coordinate.
   room_key = function() return "xyz:" .. explore_state.coord .. ",0,0" end,
+  attach = function(mod) explore_state.attached = mod end,
+  start = function(prof, pol)
+    explore_state.start_prof = prof
+    explore_state.start_policy = pol
+    explore_state.active = true
+    return true
+  end,
   stop = function()
     explore_state.active = false
     explore_state.stops = explore_state.stops + 1
@@ -582,6 +615,61 @@ arrival_prompt()
 check("a monster in the NEXT sea room is attacked despite the same room name",
   last_sent() == "kill a second organism", table.concat(sent, "|"))
 quiet(as.stop)
+
+-- ---- the area profile defaults the policy ------------------------------------
+-- Spec 5.3: the policy is defaulted by the AREA PROFILE and only overridden by
+-- the user. So init must pass nothing until "/step set dive" has been used --
+-- a config value that is never nil makes mode.lua's
+-- `initial_policy or prof.default_policy` unreachable and silently ignores the
+-- field every area profile declares.
+package.preload["areas.chaossea"] = function()
+  return {
+    name = "chaossea-stub",
+    default_policy = "dive",
+    exclude_exits = {},
+    dive_dirs = { "d" },
+    defer_dirs = { "u" },
+    in_area = function() return true end,
+    layer_of = function() return 0 end,
+    complete = function() return false end,
+  }
+end
+
+explore_state.active = false
+explore_state.policy = nil
+local dive_lines = capture(step_cmd.handler, "set dive")
+check("bare 'set dive' reports the profile default before the user picks one",
+  has_line(dive_lines, "dive: profile default"), table.concat(dive_lines, "|"))
+
+explore_state.start_policy = "sentinel"
+explore_state.attached = nil
+local ex_ok = nil
+quiet(function() ex_ok = as.explore_start("chaossea") end)
+check("explore_start loads the area and starts the mode", ex_ok == true,
+  tostring(ex_ok))
+check("explore_start passes no policy of its own, so the profile's default wins",
+  explore_state.start_policy == nil, tostring(explore_state.start_policy))
+-- attach is what lets mode.start seed itself from the room the player is
+-- standing in; without it the explorer has no roominfo to read.
+check("explore_start attaches roominfo to the explorer",
+  explore_state.attached == fake_roominfo, tostring(explore_state.attached))
+
+-- With a run live, "effective" means the run's own policy. The config is still
+-- nil here, so a report built from the config alone would say "off" about a run
+-- that is diving.
+explore_state.policy = "dive"
+dive_lines = capture(step_cmd.handler, "set dive")
+check("bare 'set dive' reports the live run's policy, not the unset config",
+  has_line(dive_lines, "dive: on"), table.concat(dive_lines, "|"))
+
+explore_state.policy = "clear"
+quiet(step_cmd.handler, "set dive on")
+check("'set dive on' reaches the live run", explore_state.policy == "dive",
+  tostring(explore_state.policy))
+explore_state.active = false
+dive_lines = capture(step_cmd.handler, "set dive")
+check("bare 'set dive' reports the user's choice once no run is live",
+  has_line(dive_lines, "dive: on"), table.concat(dive_lines, "|"))
 
 -- ---- stopping the stepper stops the explorer ---------------------------------
 -- Explore mode is dead reckoned: it believes it knows where it is only because
