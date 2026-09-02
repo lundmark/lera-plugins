@@ -4,9 +4,14 @@
 -- pure (explore/map.lua); everything that touches the outside world is here.
 --
 -- Position is dead reckoned because it has to be: the areas this exists for
--- report no room identity at all (Room.Info num is 0 for every no-explorer
--- virtual room), and exit destinations are 0 too, so nothing in the protocol
--- says which room we are standing in.
+-- report no room identity at all. A no-explorer virtual room has none --
+-- explorer_d collapses such a VR path at its ':' before asking the explorer DB
+-- -- so every room in the area shares one Room.Info num: 0 when the DB holds no
+-- row for this character, and a single constant for every room when it does
+-- (60494 was captured in the Chaos Sea). Exit destinations answer the same way,
+-- which makes them self-references: the portal room's sole exit reads that
+-- room's own num. Either way nothing in the protocol says which room we are
+-- standing in.
 
 local map_mod = require("explore.map")
 
