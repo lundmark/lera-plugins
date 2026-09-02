@@ -250,6 +250,80 @@ check("layer_corrections increments when the name overrides dead reckoning",
   vst.layer_corrections == before_corrections + 1, tostring(vst.layer_corrections))
 mode.stop()
 
+-- ---- the room name is the authority for z ------------------------------------
+-- Not a desync: the profile reads an absolute layer out of the room name, so a
+-- reckoned z that differs is corrected, not disputed. The area this exists for
+-- inverts up/down (its level-exit override makes "down" increase z), which is
+-- exactly why the vertical delta is never trusted.
+quiet(function() mode.start(profile, "clear") end)
+frame(CAPTURE[1])
+quiet(mode.on_arrival)
+local before_desyncs = mode.desyncs()
+step = mode.next_step()
+check("a step is available on layer one", step ~= nil)
+
+-- Arrive somewhere naming layer two while we reckoned z = 0.
+frame({ num = 0, area = "Unknown", name = "Layer two of the Sea of Chaos",
+        exits = { "e", "w" } })
+quiet(mode.on_arrival)
+st = mode.stats()
+check("z is taken from the room name", st.z == 1, tostring(st.z))
+check("a layer correction is not a desync",
+  mode.desyncs() == before_desyncs, tostring(mode.desyncs()))
+check("the correction is counted", st.layer_corrections >= 1,
+  tostring(st.layer_corrections))
+check("the map is NOT reset by a layer correction", st.rooms >= 2,
+  tostring(st.rooms))
+
+-- An unparseable name leaves the reckoned z alone rather than zeroing it.
+local z_before = mode.stats().z
+before_desyncs = mode.desyncs()
+frame({ num = 0, area = "Unknown", name = "Somewhere unparseable",
+        exits = { "e", "w" } })
+quiet(mode.on_arrival)
+check("an unparseable layer leaves z as reckoned",
+  mode.stats().z == z_before, tostring(mode.stats().z))
+check("an unparseable layer is not a desync",
+  mode.desyncs() == before_desyncs, tostring(mode.desyncs()))
+mode.stop()
+
+-- ---- desync: contradicted topology -------------------------------------------
+-- The maze is generated once per run and each room's coordinates are baked into
+-- its file name, so a coordinate's exits cannot legitimately change. If they
+-- do, we are not where we think we are.
+quiet(function() mode.start(profile, "clear") end)
+frame({ num = 0, area = "Unknown", name = "Layer one of the Sea of Chaos",
+        exits = { "e", "w" } })
+quiet(mode.on_arrival)
+step = mode.next_step()
+local out_dir = step.raw
+
+-- Walk out and back, so we return to the origin coordinate...
+frame({ num = 0, area = "Unknown", name = "Layer one of the Sea of Chaos",
+        exits = { "e", "w" } })
+quiet(mode.on_arrival)
+before_desyncs = mode.desyncs()
+
+-- ...and now claim the origin has a completely different exit set.
+mode.debug_set_position(0, 0, 0)
+frame({ num = 0, area = "Unknown", name = "Layer one of the Sea of Chaos",
+        exits = { "n", "s" } })
+quiet(mode.on_arrival)
+check("contradicted topology is detected",
+  mode.desyncs() == before_desyncs + 1, tostring(mode.desyncs()))
+check("the map is reset after a topology desync",
+  mode.stats().rooms == 1, tostring(mode.stats().rooms))
+
+-- Re-recording an identical exit set is not a contradiction.
+before_desyncs = mode.desyncs()
+mode.debug_set_position(0, 0, 0)
+frame({ num = 0, area = "Unknown", name = "Layer one of the Sea of Chaos",
+        exits = { "n", "s" } })
+quiet(mode.on_arrival)
+check("an identical re-record is not a desync",
+  mode.desyncs() == before_desyncs, tostring(mode.desyncs()))
+mode.stop()
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)

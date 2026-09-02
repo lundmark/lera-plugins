@@ -22,6 +22,7 @@ local last_exits = {}     -- exit list from the most recent accepted frame
 local last_name = nil     -- room name from the most recent accepted frame
 local pending_dir = nil   -- direction emitted and not yet committed
 local layer_corrections = 0  -- times the room name overrode a reckoned z
+local desync_count = 0       -- times contradicted topology forced a map reset
 
 local function log(msg)
   print("[autostepper] " .. msg)
@@ -68,6 +69,7 @@ function M.start(prof, initial_policy)
   last_exits = {}
   last_name = nil
   layer_corrections = 0
+  desync_count = 0
   return true
 end
 
@@ -114,13 +116,36 @@ function M.on_arrival()
   -- lattice convention -- its level-exit override makes "down" increase z -- so
   -- trusting the vertical delta would collide every layer onto its neighbour.
   -- x and y stay dead-reckoned, which composes correctly because the maze's
-  -- level exit preserves them (nx = x; ny = y).
+  -- level exit preserves them (nx = x; ny = y). This is a correction, never a
+  -- dispute: the room name is the authority for z, so a disagreement here is
+  -- not evidence of a desync.
   local x, y, z = map:position()
   if profile and profile.layer_of and last_name then
     local layer = profile.layer_of(last_name)
     if layer and layer ~= z then
       layer_corrections = layer_corrections + 1
       map:set_position(x, y, layer)
+      z = layer
+    end
+  end
+
+  -- The desync proof: the lattice is generated once per run and each room's
+  -- coordinates are baked into its own file name, so a coordinate's exits
+  -- cannot legitimately change. If they have, we are not where we think we
+  -- are (a blocked move, a teleport, a forced relocation) -- and a desynced
+  -- map is worse than no map, since every later decision is made against
+  -- coordinates that do not correspond to rooms.
+  local prior = map:room(x, y, z)
+  if prior then
+    local arriving = {}
+    for _, dir in ipairs(last_exits) do
+      if map_mod.DELTA[dir] then arriving[dir] = true end
+    end
+    if not map_mod.same_exits(prior.exits, arriving) then
+      desync_count = desync_count + 1
+      M.reset("exits at " .. x .. "," .. y .. "," .. z .. " contradict the map")
+      map:record(last_exits)
+      return
     end
   end
 
@@ -156,6 +181,16 @@ function M.stats()
   end
   return { rooms = map:count(), x = x, y = y, z = z, layer = layer,
            policy = policy, layer_corrections = layer_corrections }
+end
+
+function M.desyncs()
+  return desync_count
+end
+
+-- Test seam: place the tracked position directly. Production code only ever
+-- moves by committing a direction it emitted.
+function M.debug_set_position(x, y, z)
+  if map then map:set_position(x, y, z) end
 end
 
 -- Exposed for the area profile and the farm loop.
