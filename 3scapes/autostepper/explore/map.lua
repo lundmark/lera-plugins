@@ -132,6 +132,101 @@ function Map:frontier_dirs(room)
   return out
 end
 
+-- Breadth-first search from the current position over RECORDED rooms, stopping
+-- at the nearest room holding an exit into a coordinate never visited. Returns
+-- the path there followed by the frontier direction itself, or nil.
+--
+-- This one operation replaces four cooperating mechanisms in the legacy
+-- explorer: a flat (x,y,z,dir) frontier queue, a separate search to route to a
+-- queue entry's source room, skip logic for entries the queue had outlived, and
+-- a reseed pass for when the queue drained while real frontier remained.
+-- Deriving the frontier on demand means nothing can go stale, so there is
+-- nothing to reseed and no obsolete entry to skip.
+--
+-- opts.only  -- consider frontier ONLY in these directions (dive mode)
+-- opts.defer -- rank these last when breaking a distance tie
+function Map:search_frontier(opts)
+  opts = opts or {}
+
+  local only = nil
+  if opts.only and #opts.only > 0 then
+    only = {}
+    for _, dir in ipairs(opts.only) do only[dir] = true end
+  end
+
+  local defer = {}
+  for _, dir in ipairs(opts.defer or {}) do defer[dir] = true end
+
+  local rank_of = {}
+  for i, dir in ipairs(DIR_ORDER) do rank_of[dir] = i end
+  local function rank(dir)
+    return (defer[dir] and 200 or 100) + (rank_of[dir] or 99)
+  end
+
+  local sx, sy, sz = self:position()
+  local start = key(sx, sy, sz)
+  local start_room = self.rooms[start]
+  if not start_room then return nil end
+
+  -- Search bookkeeping lives here, keyed by coordinate -- never written onto the
+  -- room records. Legacy stored parent/parent_dir on the rooms and needed a
+  -- defensive sweep to clear stale markers left by an aborted search; with the
+  -- state scoped to the call that failure mode is structurally impossible.
+  local dist = { [start] = 0 }
+  local prev = {}
+
+  -- FIFO. Dequeue at head, enqueue at tail. Legacy read the LAST pushed entry
+  -- and pushed after it, which is a stack: that made its "BFS" a DFS returning
+  -- non-shortest paths, and is why it ran the wrong way and doubled back.
+  local queue = { start_room }
+  local head = 1
+  local best = nil
+
+  while head <= #queue do
+    local room = queue[head]
+    head = head + 1
+    local rk = key(room.x, room.y, room.z)
+    local d0 = dist[rk]
+
+    -- Every remaining room is at least this far, so once a frontier is found
+    -- nothing deeper can beat it.
+    if best and d0 > best.dist then break end
+
+    for _, dir in ipairs(self:frontier_dirs(room)) do
+      if (not only) or only[dir] then
+        local r = rank(dir)
+        if (not best) or d0 < best.dist or (d0 == best.dist and r < best.rank) then
+          best = { dist = d0, rank = r, room = room, dir = dir }
+        end
+      end
+    end
+
+    for _, dir in ipairs(DIR_ORDER) do
+      if room.exits[dir] then
+        local d = DELTA[dir]
+        local nk = key(room.x + d[1], room.y + d[2], room.z + d[3])
+        if self.rooms[nk] and dist[nk] == nil then
+          dist[nk] = d0 + 1
+          prev[nk] = { from = rk, dir = dir }
+          queue[#queue + 1] = self.rooms[nk]
+        end
+      end
+    end
+  end
+
+  if not best then return nil end
+
+  local path = {}
+  local cur = key(best.room.x, best.room.y, best.room.z)
+  while prev[cur] do
+    local p = prev[cur]
+    table.insert(path, 1, p.dir)
+    cur = p.from
+  end
+  path[#path + 1] = best.dir
+  return path
+end
+
 M.Map = Map
 
 return M

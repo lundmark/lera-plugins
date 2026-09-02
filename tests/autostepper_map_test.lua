@@ -128,6 +128,116 @@ check("same_exits rejects a missing exit",
   map_mod.same_exits({ n = true, e = true }, { n = true }) == false)
 check("same_exits accepts two empty sets", map_mod.same_exits({}, {}) == true)
 
+-- ---- BFS ---------------------------------------------------------------------
+-- Build an explicit corridor so the shortest path is a known, exact string.
+--
+--   (0,0) e- (1,0) e- (2,0) e- (3,0) e->       <- east corridor; (3,0)'s e leads
+--     |n                                          into unrecorded (4,0), so the
+--   (0,1) n->                                     corridor HAS a far frontier
+--
+-- (3,0,0) must carry that "e". Without it the corridor is closed, and once
+-- (0,1,0)'s "n" is removed below the whole map has no frontier at all --
+-- search_frontier then correctly returns nil and the distant-path case fails on
+-- the fixture rather than on anything it is testing.
+--
+-- From (0,0) the nearest frontier is north at distance 1 (room (0,1)'s n exit),
+-- not the east corridor's far end at distance 3.
+local function build(rooms)
+  local mm = map_mod.new()
+  for _, r in ipairs(rooms) do
+    mm:set_position(r[1], r[2], r[3])
+    mm:record(r[4])
+  end
+  mm:set_position(0, 0, 0)
+  return mm
+end
+
+local corridor = build({
+  { 0, 0, 0, { "e", "n" } },
+  { 1, 0, 0, { "e", "w" } },
+  { 2, 0, 0, { "e", "w" } },
+  { 3, 0, 0, { "w", "e" } },
+  { 0, 1, 0, { "s", "n" } },
+})
+
+local path = corridor:search_frontier({})
+check("nearest frontier wins over a distant one",
+  table.concat(path or {}, "") == "nn", table.concat(path or {}, ","))
+
+-- Remove the near frontier: (0,1)'s n exit goes away, so the only frontier left
+-- is at the far end of the corridor and the path must be the exact shortest
+-- route. A LIFO queue -- which is what legacy's "BFS" actually was -- returns a
+-- longer path here or reaches the frontier the long way round.
+corridor:set_position(0, 1, 0)
+corridor:record({ "s" })
+corridor:set_position(0, 0, 0)
+path = corridor:search_frontier({})
+check("path to a distant frontier is the exact shortest route",
+  table.concat(path or {}, "") == "eeee", table.concat(path or {}, ","))
+
+-- Two searches in a row on the same map. Legacy stored parent pointers on the
+-- room records and needed a defensive sweep to clear them, because an aborted
+-- search left them behind and poisoned the next one.
+local again = corridor:search_frontier({})
+check("a second search on the same map gives the same answer",
+  table.concat(again or {}, "") == "eeee", table.concat(again or {}, ","))
+
+-- Fully explored map: every exit leads somewhere recorded.
+local closed = build({
+  { 0, 0, 0, { "e" } },
+  { 1, 0, 0, { "w" } },
+})
+check("a fully explored map has no frontier", closed:search_frontier({}) == nil,
+  table.concat(closed:search_frontier({}) or {}, ","))
+
+-- Standing somewhere unrecorded is not a search failure to paper over.
+local orphan = map_mod.new()
+orphan:set_position(5, 5, 5)
+check("searching from an unrecorded room returns nil",
+  orphan:search_frontier({}) == nil)
+
+-- A frontier reachable only through an unrecorded coordinate is not reachable:
+-- the search walks recorded rooms, and an exit into the void IS the frontier.
+local disjoint = build({
+  { 0, 0, 0, { "e" } },
+  { 5, 0, 0, { "e", "w" } },
+})
+path = disjoint:search_frontier({})
+check("the search does not teleport across a gap",
+  table.concat(path or {}, "") == "e", table.concat(path or {}, ","))
+
+-- ---- termination and cost ----------------------------------------------------
+-- The real upper bound from setup_maze: min(8, 3+diff/20) floors of
+-- min(50+diff*1.25, 250) rooms. 8 x 250 = 2000 rooms, fully connected in a line
+-- per floor, with exactly one frontier at the very end.
+local big = map_mod.new()
+for z = 0, 7 do
+  for i = 0, 249 do
+    big:set_position(i, 0, z)
+    local exits = {}
+    if i > 0 then exits[#exits + 1] = "w" end
+    if i < 249 then exits[#exits + 1] = "e" end
+    -- Gated to match DELTA, which is the ordinary convention here: u is z+1 and
+    -- d is z-1. So "u" needs a floor ABOVE (z < 7) and "d" needs one BELOW
+    -- (z > 0). Inverting these adds a "d" at z=0 into unrecorded (0,0,-1) and a
+    -- "u" at z=7 into (0,0,8) -- two extra frontiers, one of them at distance 0
+    -- from the origin, which the search then correctly prefers over the single
+    -- deep frontier this fixture exists to find.
+    if z < 7 and i == 0 then exits[#exits + 1] = "u" end
+    if z > 0 and i == 0 then exits[#exits + 1] = "d" end
+    big:record(exits)
+  end
+end
+-- Open one frontier: the deepest floor's far end gains a south exit.
+big:set_position(249, 0, 7)
+big:record({ "w", "s" })
+big:set_position(0, 0, 0)
+check("the 2000-room map is fully recorded", big:count() == 2000, tostring(big:count()))
+local big_path = big:search_frontier({})
+check("the search terminates on a 2000-room map", big_path ~= nil)
+check("and finds the single frontier",
+  big_path and big_path[#big_path] == "s", big_path and big_path[#big_path])
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
