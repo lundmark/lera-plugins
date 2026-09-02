@@ -24,6 +24,16 @@ local pending_prompts = 0  -- prompts still owed before the current step arrives
 local enabled = false   -- Is autostepper active?
 local prompt_trigger_id = nil  -- Trigger ID for prompt detection
 
+-- A Room.Info frame is the semantically exact arrival signal, and it lands
+-- before the room text and therefore before the prompt. It is not acted on
+-- directly, though: Room.Contents arrives AFTER Room.Info in the same burst, so
+-- a decision made in the frame callback would read the previous room's
+-- monsters. Settling for a moment lets the whole burst -- including a paged
+-- Room.Contents -- land first.
+local BURST_SETTLE_MS = 150
+local settle_timer = nil
+local room_info_sub = nil
+
 -- Per-room view of what the room held on arrival.
 --
 -- The GMCP Room.* packages fire on room entry only: nothing re-emits when a mob
@@ -123,9 +133,36 @@ end
 
 local process_room  -- forward declaration: on_prompt calls it, it calls do_step
 
+local function cancel_settle()
+  if settle_timer then
+    timer.cancel(settle_timer)
+    settle_timer = nil
+  end
+end
+
+-- The single place an arrival is committed, from either signal. Idempotent:
+-- whichever lands second finds state ~= "stepping" and does nothing.
+local function complete_arrival()
+  if not enabled or state ~= "stepping" then return end
+  cancel_settle()
+  pending_prompts = 0
+  state = "idle"
+  process_room()
+end
+
+local function on_room_info_frame()
+  if not enabled or state ~= "stepping" then return end
+  if settle_timer then return end
+  settle_timer = timer.after(BURST_SETTLE_MS, function()
+    settle_timer = nil
+    complete_arrival()
+  end)
+end
+
 -- Begin waiting for the room we just moved into. One prompt is a whole arrival;
 -- the escape-hatch glance adds a second command and therefore a second prompt.
 local function begin_arrival_wait()
+  cancel_settle()
   state = "stepping"
   pending_prompts = 1
   if config.glance_cmd and config.glance_cmd ~= "" then
@@ -239,8 +276,7 @@ local function on_prompt()
   if state == "stepping" then
     pending_prompts = pending_prompts - 1
     if pending_prompts <= 0 then
-      state = "idle"
-      process_room()
+      complete_arrival()
     end
   elseif state == "fighting" then
     -- Combat ended (or just another prompt). The target is struck from the local
@@ -452,6 +488,10 @@ function M.on_load()
     log("Warning: roominfo plugin not loaded")
   end
 
+  if ri and ri.on_room_info then
+    room_info_sub = ri.on_room_info(on_room_info_frame)
+  end
+
   -- Register the movement shorthands and the /step command
   register_aliases()
   register_command()
@@ -462,6 +502,11 @@ end
 function M.on_unload()
   unregister_aliases()
   unregister_command()
+
+  if room_info_sub and ri and ri.off_room_info then
+    ri.off_room_info(room_info_sub)
+  end
+  room_info_sub = nil
 
   M.stop()
   log("Unloaded")
@@ -563,6 +608,7 @@ function M.stop()
   if enabled then
     log("Stopped")
   end
+  cancel_settle()
   enabled = false
   state = "idle"
   prompt_count = 0

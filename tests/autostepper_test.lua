@@ -24,15 +24,27 @@ local sent = {}
 mud = { send = function(cmd) sent[#sent + 1] = tostring(cmd) end }
 
 local timers = {}
+local next_timer_id = 0
 timer = {
-  after = function(_, fn) timers[#timers + 1] = fn return #timers end,
+  after = function(_, fn)
+    next_timer_id = next_timer_id + 1
+    timers[next_timer_id] = fn
+    return next_timer_id
+  end,
+  cancel = function(id)
+    if id and timers[id] then timers[id] = nil return true end
+    return false
+  end,
 }
 
--- Run every timer callback queued so far, in order.
+-- Run every timer callback queued so far, in id order.
 local function run_timers()
   local queued = timers
   timers = {}
-  for _, fn in ipairs(queued) do fn() end
+  local ids = {}
+  for id in pairs(queued) do ids[#ids + 1] = id end
+  table.sort(ids)
+  for _, id in ipairs(ids) do queued[id]() end
 end
 
 trigger = {
@@ -75,6 +87,25 @@ local fake_roominfo = {
   monster_count = function() return #ri_state.monsters end,
   player_count = function() return #ri_state.players end,
 }
+
+local ri_frame_cbs = {}
+fake_roominfo.on_room_info = function(fn)
+  ri_frame_cbs[#ri_frame_cbs + 1] = fn
+  return #ri_frame_cbs
+end
+fake_roominfo.off_room_info = function(id)
+  if ri_frame_cbs[id] then ri_frame_cbs[id] = nil return true end
+  return false
+end
+fake_roominfo.info = function()
+  return { room = ri_state.room, room_id = ri_state.room_id,
+           exits = ri_state.exits or {} }
+end
+
+-- Deliver a Room.Info frame the way roominfo would.
+local function deliver_frame()
+  for _, fn in pairs(ri_frame_cbs) do fn(fake_roominfo.info()) end
+end
 
 -- speedwalk stand-in: a fixed list of steps the test can count down.
 local sw_steps = {}
@@ -358,6 +389,71 @@ check("hatch on: the second prompt completes the arrival", sent[1] == "s",
 check("hatch on: a glance follows the step", sent[2] == "glance",
   table.concat(sent, "|"))
 as.set_glance_cmd("")
+quiet(as.stop)
+
+-- ---- arrival without a prompt ------------------------------------------------
+-- A frame completes the arrival too, so a drifted or unset prompt pattern no
+-- longer wedges the cycle.
+--
+-- THREE steps, not two: a spurious extra arrival has to have something left to
+-- send, or the bug it would reveal looks identical to a completed route.
+--
+-- as.on_load() is called again on purpose. There is a quiet(as.on_unload) earlier
+-- in this file, which tears down the Room.Info subscription -- so without this,
+-- deliver_frame() below reaches an empty callback table and the two cases fail
+-- with `sent` staying empty forever, which reads like a production bug and is
+-- not one. Re-subscribing here also makes this block self-contained rather than
+-- dependent on how much of the file ran before it. (The blocks added by the
+-- previous task also sit after that on_unload, and work only because they need
+-- no subscription: as.start re-acquires its plugin dependencies itself.)
+quiet(as.on_load)
+quiet(as.stop)
+sw_steps = { { raw = "n", commands = { "n" } }, { raw = "s", commands = { "s" } },
+             { raw = "w", commands = { "w" } } }
+sw_taken = {}
+arrive(300, "A cold cell", {}, {})
+sent = {}
+quiet(function() as.start(false) end)
+deliver_frame()
+check("a frame alone does not arrive before the burst settles",
+  #sent == 0, table.concat(sent, "|"))
+run_timers()
+check("the settled burst completes the arrival",
+  last_sent() == "n", table.concat(sent, "|"))
+
+-- A prompt landing first wins, and must cancel the settle timer it raced --
+-- otherwise that stale timer arrives a second time and takes another step.
+sent = {}
+arrive(301, "A cold cell", {}, {})
+deliver_frame()
+quiet(as.prompt)
+check("prompt wins when it lands first", last_sent() == "s", table.concat(sent, "|"))
+sent = {}
+run_timers()
+check("the raced settle timer does not fire a second arrival",
+  #sent == 0, table.concat(sent, "|"))
+
+-- A raced settle timer must not survive into combat, and this is the ONLY case
+-- that exercises either of the two overlapping protections against a stale
+-- settle: complete_arrival's own cancel_settle(), and the `state ~= "stepping"`
+-- guard. It exercises them JOINTLY, because each alone masks the other --
+-- with cancel_settle intact the stale timer never fires, and with the guard
+-- intact its firing is swallowed. Deleting both lets the stale timer re-enter
+-- process_room mid-fight and attack the same monster a second time.
+--
+-- The route's third step is deliberately left untaken so the run is still live
+-- here; an exhausted route would send nothing either way.
+sent = {}
+arrive(302, "A cold cell", { "a scrawny orc" }, {})
+deliver_frame()
+quiet(as.prompt)
+check("a raced timer in combat: the attack goes out once",
+  count_sent("kill") == 1, table.concat(sent, "|"))
+sent = {}
+run_timers()
+check("a raced settle timer does not re-attack",
+  count_sent("kill") == 0, table.concat(sent, "|"))
+
 quiet(as.stop)
 
 if failures > 0 then
