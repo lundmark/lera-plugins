@@ -32,7 +32,7 @@ local HERDS_ORDER = { "bldg", "head", "quality", "gen", "sterile", "hard",
 -- Keyed by building, because every consumer looks a herd up by the building
 -- that houses it. Replaced wholesale on each arrival: the server OMITS a
 -- building whose head has dropped to 0, so merging would resurrect dead herds.
-function M._gmcp_HERDS(value)
+local function write_herds(value)
   local out = {}
   for _, r in ipairs(value or {}) do
     if r.bldg then
@@ -59,11 +59,11 @@ end
 
 local BQUEUE_SLOT_ORDER = { "slot", "species", "meat", "qty", "secs", "trait" }
 
--- LEGACY 2330 (guild_viking.lua, the MIP BQUEUE branch). A sibling split of
+-- LEGACY 2325 (guild_viking.lua, the MIP BQUEUE branch). A sibling split of
 -- one server mapping (_v_bqueue()'s used/max/slots), so a delta frame may
 -- carry any subset of the three halves -- each is applied only when present,
 -- matching write_sroles/write_monuments in handlers/city.lua.
-function M._gmcp_BQUEUE(parts)
+local function write_bqueue(parts)
   parts = parts or {}
   if parts.bqueue_used ~= nil then
     S.bqueue_used = tonumber(parts.bqueue_used) or 0
@@ -89,9 +89,9 @@ end
 
 local LFEED_ORDER = { "grain", "water", "head" }
 
--- LEGACY 2340 (guild_viking.lua, the MIP LFEED branch). The only mapping key
+-- LEGACY 2352 (guild_viking.lua, the MIP LFEED branch). The only mapping key
 -- in this file: grain/water/head, not a positional record.
-function M._gmcp_LFEED(value)
+local function write_lfeed(value)
   value = value or {}
   S.lfeed = {
     grain = tonumber(value.grain) or 0,
@@ -102,8 +102,8 @@ end
 
 local LPENDING_ORDER = { "bldg", "species", "breed", "count", "secs" }
 
--- LEGACY 2350 (guild_viking.lua, the MIP LPENDING branch).
-function M._gmcp_LPENDING(value)
+-- LEGACY 2361 (guild_viking.lua, the MIP LPENDING branch).
+local function write_lpending(value)
   local out = {}
   for _, r in ipairs(value or {}) do
     table.insert(out, {
@@ -125,11 +125,11 @@ local LFIND_OFFERS_ORDER = { "id", "species", "breed", "count", "quality",
 local LFIND_AUCTIONS_ORDER = { "id", "species", "breed", "quality", "reserve",
                                "my_bid", "secs", "trait" }
 
--- LEGACY 2360-ish (guild_viking.lua, the MIP LFIND branch; bespoke '!'-joined
+-- LEGACY 2899 (guild_viking.lua, the MIP LFIND branch; bespoke '!'-joined
 -- three-section value, matching client.h's _mip_lfind_value()). Three
 -- sub-arrays -- postings, offers, auctions -- each applied only when its own
 -- key arrived in this frame.
-function M._gmcp_LFIND(parts)
+local function write_lfind(parts)
   parts = parts or {}
   if type(parts.lfind_posts) == "table" then
     local out = {}
@@ -206,12 +206,12 @@ local function build_lmarket_record(r)
   }
 end
 
--- LEGACY 2370-ish (guild_viking.lua, the MIP LMARKET branch). The server
+-- LEGACY 2942 (guild_viking.lua, the MIP LMARKET branch). The server
 -- sends one key per lineage (lmarket_1..lmarket_13) and OMITS a lineage
 -- with no pool entirely, so this composite is inherently variable-arity --
 -- MERGE, do not replace. A delta frame carrying only some lineages must
 -- leave the others' last-known pools standing.
-function M._gmcp_LMARKET(parts)
+local function write_lmarket(parts)
   parts = parts or {}
   for k, records in pairs(parts) do
     local lin = tostring(k):match("^lmarket_(%d+)$")
@@ -227,8 +227,8 @@ end
 
 local LNEEDS_ORDER = { "species", "current", "cap" }
 
--- LEGACY 2380-ish (guild_viking.lua, the MIP LNEEDS branch).
-function M._gmcp_LNEEDS(value)
+-- LEGACY 2966 (guild_viking.lua, the MIP LNEEDS branch).
+local function write_lneeds(value)
   local out = {}
   for _, r in ipairs(value or {}) do
     table.insert(out, {
@@ -240,28 +240,21 @@ function M._gmcp_LNEEDS(value)
   S.lneeds = out
 end
 
--- MIP-side ORDER arrays, for symmetry with the other handler modules'
--- declared-order convention (city.lua's SETTLERS_ORDER etc.). None of these
--- profiles are exercised by any MIP branch here -- Guild.Livestock is
--- GMCP-only in this plugin, so these are unused by the tested path and exist
--- only to document the wire order gmcp_map.zip() would need if a MIP decoder
--- were ever added for this package.
-M._mip_orders = {
-  HERDS = HERDS_ORDER,
-  BQUEUE_SLOT = BQUEUE_SLOT_ORDER,
-  LFEED = LFEED_ORDER,
-  LPENDING = LPENDING_ORDER,
-  LFIND_POSTS = LFIND_POSTS_ORDER,
-  LFIND_OFFERS = LFIND_OFFERS_ORDER,
-  LFIND_AUCTIONS = LFIND_AUCTIONS_ORDER,
-  LMARKET = LMARKET_ORDER,
-  LNEEDS = LNEEDS_ORDER,
-}
+-- The nine ORDER locals above (HERDS_ORDER .. LNEEDS_ORDER) are, like
+-- city.lua's SETTLERS_ORDER/SACTIONS_ORDER/SPROJ_ORDER/SHPLOTS_ORDER,
+-- declared-order documentation only -- none of them is consumed by any
+-- function in this file, and none of them is exercised by a MIP branch here:
+-- Guild.Livestock is GMCP-only in this plugin. They exist to record the wire
+-- order gmcp_map.zip() would need if a MIP decoder were ever added for this
+-- package. They are pure locals, matching city.lua's shape exactly: nothing
+-- but `_gmcp` belongs on the returned module table below, since init.lua's
+-- register_handlers loop registers every non-reserved M.* field as an exact
+-- MIP key.
 
 M._gmcp = {
-  HERDS = M._gmcp_HERDS, BQUEUE = M._gmcp_BQUEUE, LFEED = M._gmcp_LFEED,
-  LPENDING = M._gmcp_LPENDING, LFIND = M._gmcp_LFIND,
-  LMARKET = M._gmcp_LMARKET, LNEEDS = M._gmcp_LNEEDS,
+  HERDS = write_herds, BQUEUE = write_bqueue, LFEED = write_lfeed,
+  LPENDING = write_lpending, LFIND = write_lfind,
+  LMARKET = write_lmarket, LNEEDS = write_lneeds,
 }
 
 return M
