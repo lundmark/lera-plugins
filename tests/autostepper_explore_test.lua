@@ -294,6 +294,46 @@ check("an unparseable layer is not a desync",
   mode.desyncs() == before_desyncs, tostring(mode.desyncs()))
 mode.stop()
 
+-- ---- a string layer must not corrupt the map -----------------------------------
+-- A profile whose layer_of returns a STRING must leave the position reckoned
+-- and record exactly one room -- not a second one keyed on the garbage
+-- string. This is the only case in the suite that distinguishes the
+-- type(layer) == "number" guard from a nil-only check (layer ~= nil and
+-- layer ~= z): a nil-only check passes every OTHER case here, including
+-- Mutant 2 above, so without this case a maintainer narrowing the guard to
+-- "handles the nil I've seen" would ship a guard that lets a string sail
+-- straight through to map:set_position and map.lua's key(), producing a
+-- garbage coordinate like "0,0,layer two" with no crash and no diagnostic.
+local string_layer_profile = {
+  name = "test-string-layer",
+  exclude_exits = { out = true, enter = true, ["in"] = true },
+  dive_dirs = { "d" },
+  defer_dirs = { "u" },
+  default_policy = "clear",
+  in_area = function() return true end,
+  layer_of = function() return "layer two" end,  -- deliberately not a number
+  complete = function() return false end,
+}
+
+quiet(function() mode.start(string_layer_profile, "clear") end)
+frame({ name = "Room X", exits = { "e", "w" } })
+quiet(mode.on_arrival)
+local sl_st = mode.stats()
+check("a string layer leaves z as reckoned", sl_st.z == 0, tostring(sl_st.z))
+check("a string layer is not counted as a correction",
+  sl_st.layer_corrections == 0, tostring(sl_st.layer_corrections))
+check("a string layer records exactly one room", sl_st.rooms == 1,
+  tostring(sl_st.rooms))
+
+-- A second arrival at the same reckoned coordinate must land on the SAME
+-- room, not fork a second one keyed on the garbage string -- that is the
+-- observable shape of the corruption this case guards against.
+frame({ name = "Room X", exits = { "e", "w" } })
+quiet(mode.on_arrival)
+check("a second arrival at the same coordinate does not fork a room",
+  mode.stats().rooms == 1, tostring(mode.stats().rooms))
+mode.stop()
+
 -- ---- desync: contradicted topology -------------------------------------------
 -- The maze is generated once per run and each room's coordinates are baked into
 -- its file name, so a coordinate's exits cannot legitimately change. If they
