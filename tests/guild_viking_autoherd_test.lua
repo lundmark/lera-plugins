@@ -14,7 +14,16 @@ end
 
 ui = { dirty = function() end }
 lera = { time = function() return 1000 end }
-buffer = { color_print = function() end }
+-- Notes are recorded, not discarded: the warn-dedupe case below counts them.
+local notes = {}
+buffer = { color_print = function(_, _, text) notes[#notes + 1] = text end }
+local function count_notes(needle)
+  local n = 0
+  for _, t in ipairs(notes) do
+    if t:find(needle, 1, true) then n = n + 1 end
+  end
+  return n
+end
 -- Task 4 adds M.tick(), which gates on mud.connected() and sends through
 -- mud.send() -- the same two-function stub guild_viking_autoraid_test.lua
 -- carries for the identical reason. `sent` is captured by the closure, so
@@ -117,6 +126,39 @@ check("owning sheepfold+byre: their rows appear",
 check("owning sheepfold+byre: an unowned building produces no row",
       not (ids2.bldg_henhouse or ids2.bldg_piggery or ids2.bldg_stable))
 check("owning any building: the fallback row vanishes", ids2._none == nil)
+
+-- LEGACY:614-641's per-building row content: head against cap, `tgt` and
+-- `keep`. `keep` is settable through `/vik herd bldg <name> keep <n>` and was
+-- previously unreadable anywhere in the UI, and head-against-cap is what says
+-- whether a target is even reachable.
+local function bldg_label(items_arr, b)
+  for _, it in ipairs(items_arr) do
+    if it.id == ("bldg_" .. b) then return it.label end
+  end
+  return nil
+end
+S.herds = { sheepfold = { bldg = "sheepfold", head = 4, gen = 0, sterile = 0,
+                          hard = 1, fert = 1, yield = 1, vigor = 1, con = 1,
+                          breed = "nordic", hv = 0, age_ticks = 1 } }
+ah.config("bldg sheepfold keep 6")
+local row = bldg_label(ah.menu_items(), "sheepfold")
+check("the per-building row shows head against the tier cap",
+      row and row:find("4/14", 1, true) ~= nil, row)
+check("the per-building row shows the target", row and row:find("tgt:auto", 1, true) ~= nil, row)
+check("the per-building row shows keep", row and row:find("keep:6", 1, true) ~= nil, row)
+ah.config("bldg sheepfold target 9")
+row = bldg_label(ah.menu_items(), "sheepfold")
+check("an explicit target replaces 'auto' in the row",
+      row and row:find("tgt:9", 1, true) ~= nil, row)
+ah.config("bldg sheepfold off")
+row = bldg_label(ah.menu_items(), "sheepfold")
+check("a disabled building's row reads OFF, as LEGACY's did",
+      row and row:find("OFF", 1, true) ~= nil, row)
+ah.config("bldg sheepfold on")
+ah.config("bldg sheepfold target 0")
+S.autoherd = nil
+ah.settings()
+S.herds = {}
 
 -- status_line()'s "owned: ..." branch (only reachable when owns(b) is true
 -- for at least one building) is exercised the same way -- via M.config's
@@ -703,6 +745,52 @@ os.time = function() return real_time() + 400 end
 ah.tick()
 check("the refusal is one-shot, not a permanent blacklist", #sent == 1, #sent)
 os.time = real_time
+page_opts.set("auto_herd", false)
+
+-- ---- the warn note is deduped on unchanged text ---------------------------
+-- The status a warn carries (a grain shortfall, say) persists until the player
+-- acts on it, and the note fired on every AH_INTERVAL cycle -- a red line
+-- every 20 seconds, forever, which trains a player to ignore the colour.
+-- LEGACY printed nothing here at all unless `debug`.
+S.autoherd = nil
+ah.settings()
+page_opts.set("auto_herd", true)
+S.livestock_seen = true
+S.at_hold_until = nil
+mud_connected = true
+S.daler = 100000
+S.lpending = {}
+S.lmarket = {}                 -- nothing to buy, so only the warn can fire
+S.buildings = { sheepfold = 2 }
+S.herds = {
+  sheepfold = { bldg = "sheepfold", head = 8, quality = 60, gen = 0,
+                sterile = 0, hard = 40, fert = 55, yield = 70, vigor = 66,
+                con = 50, breed = "nordic", hv = 0, age_ticks = 1 },
+}
+S.lfeed = { grain = 0, water = 0, head = 8 }
+S.wstock_by_good = { grain = { good = "grain", amount = 0 } }
+S.wstock = { { good = "grain", amount = 0 } }
+local warn_base = os.time()
+local warn_real_time = os.time
+notes = {}
+for i = 1, 6 do
+  os.time = function() return warn_base + i * 25 end
+  ah.tick()
+end
+check("an unchanged warn prints once, not once per cycle",
+      count_notes("feed low") == 1, count_notes("feed low"))
+
+-- A CHANGE in the shortfall is still worth a line.
+S.wstock_by_good = { grain = { good = "grain", amount = 1 } }
+S.wstock = { { good = "grain", amount = 1 } }
+notes = {}
+for i = 7, 9 do
+  os.time = function() return warn_base + i * 25 end
+  ah.tick()
+end
+check("a changed warn prints again, once",
+      count_notes("feed low") == 1, count_notes("feed low"))
+os.time = warn_real_time
 page_opts.set("auto_herd", false)
 
 if failures > 0 then

@@ -19,6 +19,12 @@ buffer = { color_print = function() end }
 local S = require("state").S
 local page_opts = require("page_opts")
 local page = require("pages.livestock")
+-- The page is a pure builder over `state` and `page_opts` (the spec's own
+-- constraint). Its Feed section shares two figures with the Auto-Herd feed
+-- guard, and it used to reach them by requiring autoherd -- so loading ANY
+-- page loaded the whole spending planner. They live in market.lua now.
+check("requiring the livestock page does not load the spending planner",
+      package.loaded["autoherd"] == nil)
 
 local function joined(width)
   return table.concat(page.lines(width or 80), "\n")
@@ -117,18 +123,17 @@ check("an empty warehouse that HAS been received reports 0 ticks",
         ~= nil, plain(80))
 
 -- The page and the planner must answer both questions from the same code.
-local ah = require("autoherd")
 local mk = require("market")
 S.wstock_by_good = { grain = { good = "grain", amount = 40 } }
 S.wstock = { { good = "grain", amount = 40 } }
 check("page and planner read the same warehouse figure",
       mk.wh_amount_of("grain") == 40)
 check("page and planner read the same per-tick draw",
-      ah.feed_draw(14) == 2, ah.feed_draw(14))
+      mk.feed_draw(14) == 2, mk.feed_draw(14))
 -- The server's own figure wins over the ceil(head / 8) fallback...
 S.lfeed = { grain = 5, water = 5, head = 14 }
 check("the server's per-tick figure is preferred over ceil(head / 8)",
-      ah.feed_draw(14) == 5, ah.feed_draw(14))
+      mk.feed_draw(14) == 5, mk.feed_draw(14))
 check("the page shows that same preferred figure",
       plain(80):find("Per tick: 5 grain", 1, true) ~= nil, plain(80))
 check("Covers uses the preferred figure too (40 / 5 = 8)",
@@ -136,7 +141,7 @@ check("Covers uses the preferred figure too (40 / 5 = 8)",
 -- ...and the fallback only applies before the LFEED key has arrived.
 S.lfeed = {}
 check("with no LFEED key the draw falls back to ceil(head / 8)",
-      ah.feed_draw(14) == 2, ah.feed_draw(14))
+      mk.feed_draw(14) == 2, mk.feed_draw(14))
 check("with no LFEED key the Feed section says there is no head",
       plain(80):find("No head to feed", 1, true) ~= nil)
 

@@ -1,9 +1,6 @@
--- Auto-Herd: client-side livestock husbandry automation (Stage 4 husbandry
--- plan, Tasks 3 and 4 -- now complete). Task 3 built the persisted settings
--- table, the `/vik herd <sub>` config directive parser and the settings
--- menu; Task 4 added the four-action planner (M.plan) and the paced
--- executor (M.tick) below the status_line helper. M.tick() is the ONLY
--- function in this file that calls mud.send.
+-- Auto-Herd: client-side livestock husbandry automation. M.plan() decides
+-- what to buy; M.tick() is the ONLY function in this file that calls
+-- mud.send.
 --
 -- *** SPENDING WARNING -- stated plainly, not softened ***
 -- Turning `page_opts.get("auto_herd")` ON authorises purchases IMMEDIATELY:
@@ -30,18 +27,15 @@
 -- `keep` (default 4) is NOT a slaughter setting, despite LEGACY's own
 -- comment on it (guild_viking_husbandry.lua:86) reading "breeders kept when
 -- slaughtering surplus" -- that comment is stale. The code only ever reads
--- `keep` as the RESTOCK BREEDING FLOOR once Task 4's planner exists (it
--- will be consumed the same way LEGACY's own ah_keep_ok()/restock planner
--- read it, husbandry.lua:270 -- that citation is to Task 4's own
--- not-yet-written file, so unlike every LEGACY citation in this header it
--- could NOT be grep-verified today; flagged as such rather than asserted).
--- Nothing in this port slaughters anything. Documented correctly here
--- rather than copied stale.
+-- `keep` as the RESTOCK BREEDING FLOOR, the same way LEGACY's own
+-- ah_keep_ok()/restock planner read it (husbandry.lua:270). Nothing in this
+-- port slaughters anything. Documented correctly here rather than copied
+-- stale.
 --
 -- PROVENANCE, every line grep-verified against
 -- /home/simon/code/3s_scripts_old/lua/guild_viking_husbandry.lua before
--- writing (see the task-3 report for the exact grep commands and their
--- output):
+-- writing. Where a range is given rather than a single opening line, its
+-- closing line was located, not estimated:
 --   AH_INTERVAL / AH_CONFIRM_TIMEOUT / AH_COOLDOWN   38-40
 --   LIVE_BLDGS                                        42
 --   GOAL_W                                            66-73
@@ -50,64 +44,39 @@
 --   bldg_tier / owns (-> local helpers)               117-122
 --   ah_bldg_alias (-> local bldg_alias)               441-448
 --   ah_status_line (-> local status_line)             450-467
---   ah_usage (-> local usage)                         469-474
+--   ah_usage (-> local usage; the usage STRING is 470-473)  469-474
 --   ah_config (-> M.config)                           476-544
 --   AH_RESERVE_STEPS / AH_KEEP_STEPS / AH_TRAIT_CHOICES     565-567
 --   ah_step (-> local step_fwd, forward-only; see below)    574-580
 --   aherd_menu_build (-> M.menu_items)                588
+--   aherd_menu_build's per-building rows              614-641
 --   aherd_menu_build's "no buildings owned" fallback row
 --     (-> M.menu_items' "_none" row)                  646-649
 --   viking_show_aherd_menu (-> M.open_menu)           653-687
 --   viking_aherd_menu_pick (-> local menu_pick)       689-736
 --
--- Review-round citation fixes (this round only; see the task-3 report's
--- "Fix round" section for the grep/awk commands that verified each): the
--- open_menu citation previously read 653-672, which is mid-function (inside
--- a WindowAddHotspot call) -- the real close is 687. The steps-tables/
--- ah_step citation previously read 565-579 as one range; split above into
--- the three one-line step tables (565-567, no ambiguity: each is a
--- single-line local ending on its own line) and ah_step itself (574-580,
--- closing `end` verified). The "no buildings owned" fallback row (LEGACY's
--- `id="_none"` row, previously silently dropped from M.menu_items()) is now
--- ported, at its real location 646-649 -- not 610-611 (that range is
--- actually the middle of the `_hdr` row a few lines above it in the
--- function; a second citation error, this one not mine, corrected here
--- rather than copied). Per updated instruction: citations below and above
--- name the opening line only where a range added nothing; a range is kept
--- only where it usefully bounds a whole function/block, and every range's
--- closing line was located (not estimated) before being written down.
+-- M.config carries LEGACY's WHOLE directive set, including the master
+-- `on`/`off` toggle and `debug on|off | log [clear] | status` (ah_config,
+-- 476-544, see especially 480-481 for on/off). Dropping on/off would leave
+-- the master toggle unreachable from `/vik herd on`, and dropping
+-- debug/log/status would narrow "exactly LEGACY's directives" to an
+-- unstated subset.
 --
--- CORRECTION to the task-3 brief's own citations and directive list: the
--- brief cites the config-directive grammar at
--- "guild_viking_husbandry.lua:471-472" -- that range is only the middle two
--- of the FOUR lines of ah_usage's usage STRING (the string itself spans
--- 470-473; ah_usage the function is 469-474). The function that actually
--- PARSES those directives, ah_config, is 476-544 (grep-verified above), not
--- 471-472. The brief's own directive list also silently omits the master
--- `on`/`off` toggle and `debug on|off | log [clear] | status`, all of which
--- LEGACY's ah_config handles (476-544, see especially 480-481 for on/off).
--- This port keeps all of them: dropping the only on/off switch would leave
--- the master toggle unreachable from `/vik herd on` (Task 4's wiring of
--- LEGACY's own `aherd on` alias), and dropping debug/log/status would
--- narrow "exactly LEGACY's directives" (the brief's own stated goal) to an
--- unstated subset. Reported to the reviewer rather than silently resolved.
---
--- Also flagged for the reviewer: LEGACY's own usage string advertises
--- `age <n|off>`, but ah_config's numeric-directive grammar
+-- One LEGACY quirk ported as-is rather than fixed: LEGACY's own usage string
+-- advertises `age <n|off>`, but ah_config's numeric-directive grammar
 -- (`"^(%a+)%s+(%d+)$"`, digits only) never matches the literal word "off",
 -- so `aherd age off` has always fallen through to ah_usage() in LEGACY --
 -- the documented "|off" form doesn't actually work (age_refresh=0, via
 -- `aherd age 0`, achieves the same "off" effect the comment describes).
--- Ported verbatim, not fixed, matching the plan's own "port exactly, don't
--- fix" rule (the same rule autoraid.lua's header applies to its own
--- redundant-guards).
+-- Ported verbatim, matching this port's port-exactly-don't-fix rule (the
+-- same rule autoraid.lua's header applies to its own redundant guards).
 --
 -- Adaptations (all mechanical, same idiom as autoraid.lua/autotrader/core.lua):
 --   * LEGACY's implicit global `state` -> `S` (require("state").S).
 --   * `page_opts.auto_herd` (LEGACY's bare table field) ->
 --     page_opts.get("auto_herd") / page_opts.set("auto_herd", v). The key
---     and its `false` default already exist in page_opts.lua (added in
---     Task 2), so no page_opts.lua change is needed here.
+--     and its `false` default already exist in page_opts.lua, so no
+--     page_opts.lua change is needed here.
 --   * ColourNote(name, "", text) -> a local note(hex, text) that calls
 --     buffer.color_print(nil, hex, text), same helper shape as
 --     autoraid.lua. LEGACY's four colour names here (orange/red/darkorange/
@@ -120,11 +89,8 @@
 --     require("persist").save(), with the require DEFERRED into the
 --     function body rather than a top-level `local persist = ...` -- same
 --     idiom and same reasoning as autoraid.lua's own save() (see that
---     module's header): nothing currently requires autoherd.lua from a
---     page, so there is no live cycle today, but deferring costs nothing
---     and keeps this module safe if a later task (Task 4, or a Stats-page
---     Automation-section wiring like pages/stats.lua's own autoraid/
---     autovoyage reads) ends up requiring it from inside the
+--     module's header): deferring costs nothing and keeps this module safe
+--     if a later change requires it from inside the
 --     persist -> window -> pages.city require chain.
 --   * `aherd_menu_build`'s WindowCreate rows -> M.menu_items() returns
 --     require("menu")-shaped items ({id=, label=, value=}); `id` mirrors
@@ -132,7 +98,9 @@
 --     require("menu")'s on_select dispatch (which reads item.value) works
 --     unchanged. Per-item colours (col=... in LEGACY) have no equivalent in
 --     menu.lua's plain-label rows and are dropped, same disposition
---     autoraid.lua's own menu port already discloses.
+--     autoraid.lua's own menu port already discloses -- so where LEGACY
+--     carried enabled/disabled in a row's COLOUR, the label says it in
+--     words (see M.menu_items' per-building rows).
 --   * `viking_aherd_menu_pick`'s left/right/middle-click distinctions (its
 --     own `right_click`/`middle_click` flags, used to raise/lower reserve
 --     and keep, cycle trait either direction, and cycle a building's
@@ -148,46 +116,45 @@
 --     `/vik herd bldg <name> target <n>` / `keep <n>` (M.config, ported
 --     verbatim above).
 --
--- TASK 4 additions to this header:
---   * The planner/executor port table lives above M.plan, not here (it is
---     long enough to be worth keeping beside the code it describes).
---   * FOUR corrections to LEGACY or to the task-4 brief are called out
---     inline where they bite, and each is repeated in the task-4 report:
---     (a) `herd.generation` -> `herd.gen`  (crossbreed branch of M.plan);
---     (b) `page_opts.auto_herd` -> page_opts.get("auto_herd")  (M.tick's
---         first line -- a literal port makes the whole module dead);
---     (c) the feed guard compares warehouse grain STOCK against the herds'
---         need, not S.lfeed.grain, which is itself a per-tick NEED figure
---         (see warehouse_amount's comment for the server citations);
---     (d) LEGACY's feed guard also queued grain into the auto-TRADER's buy
---         queue; that cross-module spend is not ported (see branch 1).
---   * `/vik herd [<sub>]` is wired in init.lua by M.herd_command below --
---     without it the entire Task 3 config/menu surface is unreachable.
---   * FIX ROUND, two further adaptations:
---     (e) LEGACY's two `vtoggle` hints are REWORDED, not ported verbatim:
---         "no livestock data - buy stock, or enable: vtoggle mip_livestock"
---         (LEGACY:356) and "waiting for city data (vtoggle mip_city)"
---         (LEGACY:399). The port-exactly-don't-fix rule this plugin applies
---         to LEGACY response strings does not extend to telling a user to
---         run a command that does not exist: Guild.Livestock and Guild.City
---         are GMCP packages here, always sent, with no toggle and no
---         `vtoggle` command in this client. pages/livestock.lua already
---         dropped the same half of the same hint in Task 2 (see that file's
---         header) -- this makes the two files consistent.
---     (f) The per-tick grain draw and the warehouse grain stock each have
---         exactly ONE implementation now, shared with pages/livestock.lua's
---         Feed section: M.feed_draw (below) and market.lua's
---         M.wh_amount_of/M.wh_known. The page previously divided the
---         server's per-tick NEED by a client re-derivation of the same need
---         and labelled the result a starvation runway; the planner and the
---         page can no longer disagree about either quantity.
+-- CORRECTIONS TO LEGACY, each called out inline where it bites:
+--   (a) `herd.generation` -> `herd.gen`  (crossbreed branch of M.plan);
+--   (b) `page_opts.auto_herd` -> page_opts.get("auto_herd")  (M.tick's
+--       master-toggle gate -- a literal port makes the whole module dead);
+--   (c) the feed guard compares warehouse grain STOCK against the herds'
+--       need, not S.lfeed.grain, which is itself a per-tick NEED figure
+--       (see market.lua's feed_draw for the server citations);
+--   (d) LEGACY's feed guard also queued grain into the auto-TRADER's buy
+--       queue; that cross-module spend is not ported (see branch 1);
+--   (e) LEGACY's two `vtoggle` hints are REWORDED, not ported verbatim:
+--       "no livestock data - buy stock, or enable: vtoggle mip_livestock"
+--       (LEGACY:356) and "waiting for city data (vtoggle mip_city)"
+--       (LEGACY:399). The port-exactly-don't-fix rule this plugin applies
+--       to LEGACY response strings does not extend to telling a user to
+--       run a command that does not exist: Guild.Livestock and Guild.City
+--       are GMCP packages here, always sent, with no toggle and no
+--       `vtoggle` command in this client. pages/livestock.lua and
+--       autotrader/plan.lua drop the same hint for the same reason;
+--   (f) the affordability gate is `price * count`, not `price`: the
+--       record's price is already a lot total and the server multiplies it
+--       by the lot count again (see lot_cost below for the server lines).
+--
+-- The per-tick grain draw, the warehouse grain stock and the HERD_CAP tier
+-- table each have exactly ONE implementation, in market.lua
+-- (M.feed_draw / M.wh_amount_of / M.HERD_CAP), shared with
+-- pages/livestock.lua -- so the planner and the page cannot disagree about
+-- how much grain the herds need, how much is in the warehouse, or how big a
+-- building is.
+--
+-- `/vik herd [<sub>]` is wired in init.lua by M.herd_command below --
+-- without it the whole config/menu surface is unreachable.
 local S = require("state").S
 local page_opts = require("page_opts")
--- Fix round: the ONE warehouse reader in the plugin (M.wh_amount_of /
--- M.wh_known) now lives in market.lua, so the feed guard here and
--- pages/livestock.lua's Feed section answer "how much grain is in the
--- warehouse" from the same code. market.lua requires only state, so this is
--- a leaf require -- no cycle, unlike the deferred persist require below.
+-- market.lua holds the three livestock figures this module shares with
+-- pages/livestock.lua (wh_amount_of/wh_known, feed_draw, HERD_CAP), so the
+-- feed guard here and the page's Feed section answer "how much grain is in
+-- the warehouse" and "how much do the herds draw" from the same code. It
+-- requires only state, so this is a leaf require -- no cycle, unlike the
+-- deferred persist require below.
 local market = require("market")
 
 local M = {}
@@ -201,8 +168,8 @@ end
 
 -- LEGACY:38-40.
 local AH_INTERVAL        = 20   -- seconds between planning cycles
-local AH_CONFIRM_TIMEOUT = 15   -- seconds to wait for confirmation (Task 4)
-local AH_COOLDOWN        = 30   -- seconds to pause after an unconfirmed action (Task 4)
+local AH_CONFIRM_TIMEOUT = 15   -- seconds to wait for confirmation
+local AH_COOLDOWN        = 30   -- seconds to pause after an unconfirmed action
 M.AH_INTERVAL = AH_INTERVAL
 
 local function note(hex, text)
@@ -213,13 +180,12 @@ end
 local LIVE_BLDGS = { "sheepfold", "henhouse", "piggery", "byre", "stable" }
 
 -- ---------------------------------------------------------------------------
--- Static game data mirrored from the server (defines.h / set.h) -- the
--- planner half (Task 4). pages/livestock.lua already carries its own private
--- copies of HERD_CAP and LIVESTOCK_FEED_PER_HEAD for display maths; these
--- are deliberately a SECOND private copy rather than a new shared module,
--- matching the convention this plugin already follows for LIN_NAMES (three
--- private copies today: pages/goods.lua:105, pages/livestock.lua:131,
--- autotrader/plan.lua:157).
+-- Static game data mirrored from the server (defines.h / set.h). HERD_CAP and
+-- LIVESTOCK_FEED_PER_HEAD are NOT here: they are shared with
+-- pages/livestock.lua from market.lua. LIN_TOKENS below stays local -- it is
+-- a command vocabulary, not display data, and does not overlap the LIN_NAMES
+-- display tables (pages/goods.lua, pages/livestock.lua,
+-- autotrader/plan.lua).
 -- ---------------------------------------------------------------------------
 
 -- LEGACY:43. LEGACY:44's SPECIES_BLDG is deliberately NOT carried over: it
@@ -230,18 +196,9 @@ local LIVE_BLDGS = { "sheepfold", "henhouse", "piggery", "byre", "stable" }
 local BLDG_SPECIES = { sheepfold = "sheep", henhouse = "chicken",
                        piggery = "pig", byre = "cow", stable = "horse" }
 
--- LEGACY:46 (HERD_CAP; tiers 1..5, from defines.h's HERD_CAP_* constants).
--- Same five rows pages/livestock.lua:117 mirrors.
-local HERD_CAP = {
-  sheepfold = { 6, 14, 28, 50, 80 },
-  henhouse  = { 12, 28, 56, 100, 160 },
-  piggery   = { 6, 14, 28, 50, 80 },
-  byre      = { 4, 10, 20, 36, 56 },
-  stable    = { 8, 16, 28, 40, 60 },
-}
-
--- LEGACY:53.
-local LIVESTOCK_FEED_PER_HEAD = 8
+-- LEGACY:46 (HERD_CAP) and LEGACY:53 (LIVESTOCK_FEED_PER_HEAD) both live in
+-- market.lua now, beside wh_amount_of -- one definition each, shared with
+-- pages/livestock.lua. cap_for below is the clamped read this module needs.
 
 -- LEGACY:58 (AH_LINEAGE_TOKEN). Single-word lineage tokens the server's
 -- lineage_id_from_name() accepts, keyed by the numeric lineage id LMARKET
@@ -250,8 +207,7 @@ local LIVESTOCK_FEED_PER_HEAD = 8
 -- spelling in the authoritative lmap
 -- (3s/players/viking/cmd/vlivestock.c:46), where LEGACY wrote "imair". That
 -- same lmap line registers "ui_imair", "uiimair" AND "imair" as three keys
--- all mapping to 3, so both spellings work -- this is the authoritative one
--- the task brief asked for, not a bug fix.
+-- all mapping to 3, so both spellings work; this is the authoritative one.
 local LIN_TOKENS = {
   [1]  = "lodbrok",    [2]  = "eiriksson", [3]  = "ui_imair",   [4]  = "rurikid",
   [5]  = "harfagre",   [6]  = "yngling",   [7]  = "skallagrim", [8]  = "stenkil",
@@ -345,7 +301,7 @@ local function bldg_alias(name)
 end
 
 -- LEGACY:469-474 (ah_usage). Text unchanged, including the stale "aherd"
--- alias name (Task 4 maps `/vik herd <sub>` onto M.config, same fold
+-- alias name (`/vik herd <sub>` maps onto M.config, the same fold
 -- autoraid.lua's own header discloses for its "araid" usage-line naming).
 local function usage()
   note("FF0000", "[Auto-Herd] usage: aherd on|off | goal <yield|fert|con|hard|vigor|balanced> | "
@@ -375,9 +331,9 @@ local function status_line(ah)
 end
 
 -- ---------------------------------------------------------------------------
--- PLANNER + EXECUTOR (Task 4). Everything from here to M.plan()/M.tick()
--- decides what to buy, and M.tick() is the ONLY function in this module that
--- calls mud.send. Read the module header's spending warning first.
+-- PLANNER + EXECUTOR. Everything from here to M.plan()/M.tick() decides what
+-- to buy, and M.tick() is the ONLY function in this module that calls
+-- mud.send. Read the module header's spending warning first.
 --
 -- Ported from guild_viking_husbandry.lua:
 --   cap_for                123      -> cap_for (local)
@@ -388,8 +344,7 @@ end
 --   log_action             157      -> log_action (local)
 --   best_listing           169      -> best_listing (local)
 --   buy_cmd                192      -> buy_cmd (local); its format string 195
---   ah_plan                202-359  -> M.plan  (closing `end` at 359, located
---                                      not estimated -- see the task report)
+--   ah_plan                202-359  -> M.plan  (closing `end` at 359)
 --     feed guard             219
 --     stock / restock        256
 --     crossbreed refresh     289
@@ -411,19 +366,22 @@ local function num(x)
   return tonumber(x) or 0
 end
 
--- LEGACY:123 (cap_for).
+-- LEGACY:123 (cap_for). The clamped read: a buy must never be sized against
+-- a nil cap, so an out-of-range tier is pulled back into 1..5 rather than
+-- missing the table. pages/livestock.lua deliberately does NOT clamp -- see
+-- market.M.HERD_CAP.
 local function cap_for(bldg, tier)
-  local t = HERD_CAP[bldg]
+  local t = market.HERD_CAP[bldg]
   if not t then return 0 end
   if tier < 1 then tier = 1 elseif tier > 5 then tier = 5 end
   return t[tier] or 0
 end
 
--- LEGACY:131 (pending_head; the brief's ":130" is the second line of its own
--- two-line comment, 129-130). Animals already paid for and in transit
--- (LPENDING) count toward the herd, "so the planner doesn't keep re-buying
--- while deliveries are on the road" -- LEGACY's own words. This is the
--- pending-delivery access check, and all three buy branches below apply it.
+-- LEGACY:131 (pending_head; its own two-line comment is 129-130). Animals
+-- already paid for and in transit (LPENDING) count toward the herd, "so the
+-- planner doesn't keep re-buying while deliveries are on the road" --
+-- LEGACY's own words. This is the pending-delivery access check, and all
+-- three buy branches below apply it.
 local function pending_head(bid)
   local n = 0
   for _, p in ipairs(S.lpending or {}) do
@@ -432,42 +390,24 @@ local function pending_head(bid)
   return n
 end
 
--- LEGACY:139 (warehouse_amount). NOTE, and this is a correction to the task
--- brief rather than a port decision: the brief says to compare the herds'
--- per-tick draw "against S.lfeed.grain". S.lfeed.grain is not a grain STOCK
--- -- the server's _v_lfeed() (client.h:4202) fills it from
+-- LEGACY:139 (warehouse_amount). CORRECTION TO LEGACY (c), stated where it
+-- bites: the feed guard compares the herds' per-tick draw against the
+-- WAREHOUSE grain stock, NOT against S.lfeed.grain. S.lfeed.grain is not a
+-- stock -- the server's _v_lfeed() (client.h:4202) fills it from
 -- query_livestock_feed_needs() (query.h:2464), which sums grain NEEDED PER
 -- TICK, and vlivestock.c:609 renders that very number as "Feed per tick: N
--- grain + N water (N head)". Comparing need against need * feed_ticks is
--- true whenever any head exists, so the brief's literal reading makes the
--- feed guard fire unconditionally forever. LEGACY compared the WAREHOUSE
--- stock (warehouse_amount("grain"), LEGACY:233) against the need, which is
--- the only comparison that means anything, so that is what is ported here.
+-- grain + N water (N head)". Comparing that need against need * feed_ticks is
+-- true whenever any head exists, which would make the feed guard fire
+-- unconditionally forever. LEGACY compared warehouse_amount("grain")
+-- (LEGACY:233) against the need, which is the only comparison that means
+-- anything.
 --
--- Fix round: the body moved to market.lua's M.wh_amount_of (LEGACY:3315-3318
--- extended with LEGACY:139's array fallback), which pages/livestock.lua's
--- Feed section now calls too. Kept as a one-line local so the call sites
--- below still read like LEGACY's.
+-- The body lives in market.lua's M.wh_amount_of (LEGACY:3315-3318 extended
+-- with LEGACY:139's array fallback), which pages/livestock.lua's Feed section
+-- calls too. Kept as a one-line local so the call sites below still read like
+-- LEGACY's.
 local function warehouse_amount(good)
   return market.wh_amount_of(good)
-end
-
--- The herds' per-tick grain draw, and the single answer both this module's
--- feed guard and pages/livestock.lua's Feed section use.
---
--- The SERVER has already computed this figure -- S.lfeed.grain, via
--- _v_lfeed() -> query_livestock_feed_needs() (query.h:2464) -- and its
--- number is strictly better than any client re-derivation, because it
--- applies the fesetr feed-saving skill and the per-building minimum of 1
--- grain, neither of which a client can see. LEGACY's own ceil(head / 8)
--- (guild_viking_husbandry.lua:231) is therefore kept only as the fallback
--- for the window before the LFEED key has arrived. `head` is the caller's
--- own head figure, so the feed guard keeps LEGACY's owned-buildings-only
--- scoping while the page passes the server's total.
-function M.feed_draw(head)
-  local g = num(S.lfeed and S.lfeed.grain)
-  if g > 0 then return g end
-  return math.ceil(num(head) / LIVESTOCK_FEED_PER_HEAD)
 end
 
 -- LEGACY:148 (score_stats). Works on a herd record and a market record
@@ -656,7 +596,15 @@ function M.plan()
       end
     end
     if head > 0 then
-      local per_tick = M.feed_draw(head)
+      -- market.feed_draw prefers the SERVER's own per-tick figure (S.lfeed.grain)
+      -- whenever it has arrived, and that figure is the whole city's, not this
+      -- caller's. So the `head` passed here only ever selects the
+      -- ceil(head / 8) fallback used before the LFEED key lands -- it does NOT
+      -- scope the result to owned buildings, which an earlier comment here
+      -- claimed. In the branch that matters live (grain > 0, i.e. always once
+      -- Guild.Livestock has arrived) the planner and pages/livestock.lua's Feed
+      -- section get the identical figure, which is the point of sharing it.
+      local per_tick = market.feed_draw(head)
       local need = per_tick * math.max(1, num(ah.feed_ticks))
       local grain = warehouse_amount("grain")   -- STOCK, not S.lfeed.grain
       if grain < need then
@@ -778,8 +726,8 @@ function M.plan()
   end
 
   -- LEGACY:355 (`if ah.status ~= "" then return nil, ah.status end`). The
-  -- one shape change the task brief requires of the port: a recorded
-  -- shortfall/blocked-stock status now surfaces as an explicit
+  -- deliberate shape change: a recorded shortfall/blocked-stock status
+  -- surfaces as an explicit
   -- { kind = "warn", cmd = nil } action so callers can distinguish "nothing
   -- to do" from "you should know about this", instead of LEGACY's bare
   -- `nil, status`. It still carries NO command.
@@ -794,7 +742,7 @@ function M.plan()
   -- GMCP package, so there is no toggle for a user to enable and no
   -- `vtoggle` command in this client at all; telling them to run one would
   -- send them chasing a command that does not exist. pages/livestock.lua
-  -- dropped the same half of the same hint in Task 2 for the same reason.
+  -- drops the same half of the same hint for the same reason.
   local any_data = false
   each_listing(function() any_data = true end)
   if not any_data then
@@ -817,7 +765,8 @@ end
 -- last command whose confirmation never arrived -- see the confirm-timeout
 -- branch in M.tick.
 local ah_sm = { phase = "idle", next_at = 0, deadline = 0, sig = "",
-                cmd = nil, lin = nil, idx = nil, refused = nil }
+                cmd = nil, lin = nil, idx = nil, refused = nil,
+                last_warn = nil }
 
 -- Forget a listing the server never confirmed. A refused buy changes NO state
 -- (the server tells the player and returns), so the state signature is
@@ -873,8 +822,8 @@ end
 -- page_opts.get("auto_herd") returns the real boolean -- copying LEGACY's
 -- line literally would make M.tick() return early forever and Auto-Herd
 -- would never run even when the user enabled it. The gate below is
--- page_opts.get("auto_herd"), the same translation Task 3 applied in
--- M.config and menu_pick, and the tick-gate cases at the bottom of
+-- page_opts.get("auto_herd"), the same translation M.config and menu_pick
+-- apply, and the tick-gate cases at the bottom of
 -- tests/guild_viking_autoherd_test.lua assert BOTH states (off: many ticks
 -- send nothing; on: the same state sends exactly one buy) precisely because
 -- a dead gate would otherwise ship green.
@@ -980,14 +929,25 @@ function M.tick()
     ah.status = "last: " .. action.why
     note("FFA500", "[Auto-Herd] " .. action.why)
     if ah.debug then note("808080", "[Auto-Herd] cmd: " .. action.cmd) end
+    ah_sm.last_warn = nil
     ah_sm.phase, ah_sm.deadline = "confirming", now + AH_CONFIRM_TIMEOUT
     save()   -- persist the log/status only when we actually acted
   else
     -- A "warn" action sends NOTHING; it only notes. Everything else is an
     -- ordinary idle tick.
+    -- A warn is deduped on unchanged text. The status it carries -- a grain
+    -- shortfall, say -- persists until the player acts on it, and printing a
+    -- red line about it every AH_INTERVAL forever trains them to ignore the
+    -- colour. LEGACY printed nothing at all here unless `debug`; this prints
+    -- the first occurrence and then each CHANGE, which is the useful middle.
+    local warn_text = nil
     if action and action.kind == "warn" then
-      note("FF0000", "[Auto-Herd] " .. tostring(action.why or ""))
+      warn_text = tostring(action.why or "")
+      if warn_text ~= ah_sm.last_warn then
+        note("FF0000", "[Auto-Herd] " .. warn_text)
+      end
     end
+    ah_sm.last_warn = warn_text
     ah.status = status or "idle"
     if ah.debug then note("808080", "[Auto-Herd] idle tick -- " .. tostring(status)) end
     ah_sm.next_at = now + AH_INTERVAL
@@ -995,10 +955,9 @@ function M.tick()
 end
 
 -- ---------------------------------------------------------------------------
--- Control surface: /vik herd <sub> (Task 4 wires the alias; this is the
--- LEGACY:476-544 ah_config port) and the settings menu (LEGACY:588-736,
--- aherd_menu_build + viking_aherd_menu_pick). See module header for every
--- adaptation.
+-- Control surface: /vik herd <sub> (the LEGACY:476-544 ah_config port, wired
+-- in init.lua) and the settings menu (LEGACY:588-736, aherd_menu_build +
+-- viking_aherd_menu_pick). See the module header for every adaptation.
 -- ---------------------------------------------------------------------------
 
 -- LEGACY:476-544 (ah_config).
@@ -1067,19 +1026,23 @@ function M.config(rest)
       end
     end
 
-    local key, num = rest:match("^(%a+)%s+(%d+)$")
+    -- `nval`, not `num`: the captured digits are a STRING, and naming them
+    -- `num` shadowed this module's own num() coercion for the rest of the
+    -- branch. Harmless while nothing here reads a number, a landmine for the
+    -- next numeric read added to it.
+    local key, nval = rest:match("^(%a+)%s+(%d+)$")
     if key == "reserve" then
-      ah.reserve = tonumber(num); note("FFA500", "[Auto-Herd] reserve = " .. num)
+      ah.reserve = tonumber(nval); note("FFA500", "[Auto-Herd] reserve = " .. nval)
     elseif key == "keep" then
-      ah.keep = tonumber(num); note("FFA500", "[Auto-Herd] keep = " .. num)
+      ah.keep = tonumber(nval); note("FFA500", "[Auto-Herd] keep = " .. nval)
     elseif key == "gen" then
-      ah.gen_refresh = tonumber(num); note("FFA500", "[Auto-Herd] crossbreed gen threshold = " .. num)
+      ah.gen_refresh = tonumber(nval); note("FFA500", "[Auto-Herd] crossbreed gen threshold = " .. nval)
     elseif key == "age" then
-      ah.age_refresh = tonumber(num); note("FFA500", "[Auto-Herd] crossbreed age threshold = " .. num .. " ticks (0 = off)")
+      ah.age_refresh = tonumber(nval); note("FFA500", "[Auto-Herd] crossbreed age threshold = " .. nval .. " ticks (0 = off)")
     elseif key == "feedticks" then
-      ah.feed_ticks = tonumber(num); note("FFA500", "[Auto-Herd] feed buffer = " .. num .. " ticks")
+      ah.feed_ticks = tonumber(nval); note("FFA500", "[Auto-Herd] feed buffer = " .. nval .. " ticks")
     elseif key == "margin" then
-      ah.quality_margin = tonumber(num); note("FFA500", "[Auto-Herd] quality margin = " .. num)
+      ah.quality_margin = tonumber(nval); note("FFA500", "[Auto-Herd] quality margin = " .. nval)
     else
       -- Per-building: aherd bldg <name> on|off|target <n>|keep <n>
       local bname, brest = rest:match("^bldg%s+(%a+)%s+(.+)$")
@@ -1110,10 +1073,10 @@ function M.config(rest)
 end
 
 -- LEGACY:565-567 (AH_RESERVE_STEPS/AH_KEEP_STEPS/AH_TRAIT_CHOICES, three
--- one-line locals). LEGACY's own ah_step (574-580, verified via its closing
--- `end` -- see the task-3 report's Fix round) supported a `back` direction
--- for right-click; menu.lua has no equivalent gesture, so step_fwd below
--- only ever steps forward -- see module header's interaction-fidelity note.
+-- one-line locals). LEGACY's own ah_step (574-580) supported a `back`
+-- direction for right-click; menu.lua has no equivalent gesture, so step_fwd
+-- below only ever steps forward -- see the module header's
+-- interaction-fidelity note.
 local AH_RESERVE_STEPS = { 0, 500, 1000, 2000, 3000, 5000, 10000 }
 local AH_KEEP_STEPS    = { 0, 2, 4, 6, 8, 10, 15 }
 local AH_TRAIT_CHOICES = { "any", "prolific", "hardy", "bountiful", "purebred", "off" }
@@ -1154,12 +1117,30 @@ function M.menu_items()
   for _, b in ipairs(LIVE_BLDGS) do
     if owns(b) then
       any_bldg = true
+      -- LEGACY:614-641's row content, restored: head against cap, `tgt` and
+      -- `keep`. LEGACY carried them in row.val ("%d/%d tgt:%s keep:%s" when
+      -- enabled, "OFF" when not); menu.lua has one plain label per row, so
+      -- they are folded into it. `keep` is settable via
+      -- `/vik herd bldg <name> keep <n>` and was previously unreadable
+      -- ANYWHERE in the UI, and head-against-cap is what tells a user whether
+      -- a target is even reachable. LEGACY conveyed enabled/disabled by row
+      -- colour, which menu.lua's plain labels cannot, so the word stays.
       local bc = ah.buildings[b] or { enabled = true, target = 0 }
       local en = bc.enabled ~= false
-      local tgt = (bc.target and bc.target > 0) and tostring(bc.target) or "auto"
+      local tier = bldg_tier(b)
+      local herd = S.herds and S.herds[b]
+      local body
+      if en then
+        local tgt = (bc.target and bc.target > 0) and tostring(bc.target) or "auto"
+        local kp = bc.keep and tostring(bc.keep) or "def"
+        body = string.format("on %d/%d tgt:%s keep:%s",
+          (herd and num(herd.head)) or 0, cap_for(b, tier), tgt, kp)
+      else
+        body = "OFF"
+      end
       items[#items + 1] = {
         id = "bldg_" .. b, value = "bldg_" .. b, bldg = b,
-        label = string.format("  %s t%d [%s, target %s]", b, bldg_tier(b), en and "on" or "off", tgt),
+        label = string.format("  %s t%d [%s]", b, tier, body),
       }
     end
   end
@@ -1208,8 +1189,7 @@ local function menu_pick(id)
   M.open_menu()
 end
 
--- LEGACY:653-687 (viking_show_aherd_menu; closing `end` verified, see the
--- task-3 report's Fix round -- the previous 653-672 citation ended
+-- LEGACY:653-687 (viking_show_aherd_menu; the closing `end` is 687 -- 672 is
 -- mid-function, inside a WindowAddHotspot call).
 function M.open_menu()
   require("menu").open({
@@ -1236,8 +1216,8 @@ end
 -- Cross-session persistence snapshot/restore, called from persist.lua's
 -- M.save()/M.load() -- same shape as autoraid.lua's own M.snapshot()/
 -- M.restore(), persist.lua's established pattern for a plugin-local
--- automation-settings table (see persist.lua's header and Fix round 1, I-2
--- note on autoraid.lua for why this pair exists at all).
+-- automation-settings table (see persist.lua's header for why this pair
+-- exists at all).
 function M.snapshot()
   return { autoherd = S.autoherd }
 end

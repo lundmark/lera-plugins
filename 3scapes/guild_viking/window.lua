@@ -95,8 +95,7 @@ window.PAGES = {
   -- Appending here leaves every existing tab's column span byte-identical;
   -- confirmed by running the suite both ways -- inserting after "farm"
   -- reflowed the 30-wide wrap points and cascaded into ~10 unrelated
-  -- failures, appending here reflowed nothing before it. See the Task 2
-  -- report for the full before/after.
+  -- failures, appending here reflowed nothing before it.
   { key = "stock",  label = "Stock",  mod = livestock_page },
 }
 

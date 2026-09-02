@@ -132,7 +132,7 @@ local state = {
   buildings          = {},   -- { [bldg_id] = tier }
   monuments          = {},   -- array of inscription strings
   monument_cap       = 0,    -- max slots (guild_level / 5)
-  -- Guild.Livestock (Task 1: ingest only, no page reads these yet)
+  -- Guild.Livestock. Read by pages/livestock.lua and by autoherd.lua's planner.
   herds = {}, bqueue = {}, bqueue_used = 0, bqueue_max = 0,
   lfeed = {}, lpending = {}, lfind = { posts = {}, offers = {}, auctions = {} },
   lmarket = {}, lneeds = {},

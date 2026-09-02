@@ -12,12 +12,11 @@
 --     (9818-9825) and the grouped-by-species render (9827-9899), which is
 --     immediately followed by the next section's comment at 9900.
 --   * Market          -- guild_viking.lua:10100-10176 (the
---     `show_city_livestock` block). The brief's cited end line, 10173, is
---     the "H=Hardiness..." legend row -- three lines short of the block's
---     actual closing `end` at 10176; both bounds were re-verified here.
+--     `show_city_livestock` block). NOTE the end line: 10173 is the
+--     "H=Hardiness..." legend row, three lines short of the block's actual
+--     closing `end` at 10176. Both bounds were located, not estimated.
 -- Three more sections also have a LEGACY precedent, found during the same
--- sweep and cited here for the same reason -- verify, don't assume -- even
--- though the brief did not require it of them:
+-- sweep and cited here for the same reason -- verify, don't assume:
 --   * Pending Deliveries -- guild_viking.lua:9900-9916 ("Incoming (en
 --     route)"), reused here under this task's own section name/gate.
 --   * Butchery Queue     -- guild_viking.lua:9919-9941.
@@ -45,9 +44,8 @@
 -- directly here, dropping trade_goods.h's leading tier-0 zero, matching
 -- LEGACY's own HERD_CAP shape at guild_viking.lua:9832-9835 -- an unknown
 -- tier then naturally misses the table instead of needing a clamp);
--- LIVESTOCK_FEED_PER_HEAD was mirrored from trade_goods.h:1074 (it now
--- lives only in autoherd.lua -- see the note where it used to be declared);
--- species/breed display
+-- HERD_CAP and LIVESTOCK_FEED_PER_HEAD both live in market.lua now, one
+-- definition each, shared with autoherd.lua; species/breed display
 -- names from 3s/players/viking/world/livestock_daemon.c:20-115, mirrored
 -- into LEGACY's own SP_LABEL/SP_DISP/BR_DISP tables at guild_viking.lua:
 -- 9830 (SP_LABEL), 9902/9926/10033/10105 (SP_DISP's four occurrences),
@@ -61,16 +59,15 @@ local pagelib = require("pagelib")
 local state = require("state")
 local page_opts = require("page_opts")
 local cc = require("pages.city_common")
--- Fix round: the Feed section's two numbers come from the same code the
--- Auto-Herd feed guard uses -- market.M.wh_amount_of/M.wh_known for
--- warehouse stock, autoherd.M.feed_draw for the herds' per-tick draw -- so a
--- page and a planner cannot disagree about whether the animals are fed. Both
--- are leaf-ish requires from here (market pulls only state; autoherd pulls
--- state, page_opts and market, and defers its own persist require), so
--- neither closes a load-time cycle through window.lua -> pages.livestock.
--- Same precedent as pages/city.lua requiring autoraid for M.max_ships().
+-- The Feed section's two numbers, and the tier-cap table, come from the same
+-- code the Auto-Herd feed guard uses -- market.M.wh_amount_of/M.wh_known,
+-- market.M.feed_draw and market.M.HERD_CAP -- so a page and a planner cannot
+-- disagree about whether the animals are fed or how big a building is.
+-- market.lua requires only state, so this is a leaf require and closes no
+-- load-time cycle through window.lua -> pages.livestock. It is deliberately
+-- market.lua and NOT autoherd.lua: requiring the planner from here made
+-- loading any page pull in the whole spending module.
 local market = require("market")
-local autoherd = require("autoherd")
 
 local S = state.S
 local C = pagelib.C
@@ -123,25 +120,19 @@ local function breed_name(b)
   return (b:gsub("_", " "):gsub("(%a)(%w*)", function(a, c) return a:upper() .. c end))
 end
 
--- Tier-cap tables, tiers 1..5 (see the header comment for the direct-index
--- rationale). A building with no known tier (S.buildings[bldg] is nil) or a
--- tier this table doesn't cover simply misses -- callers show head alone.
-local HERD_CAP = {
-  sheepfold = { 6, 14, 28, 50, 80 }, henhouse = { 12, 28, 56, 100, 160 },
-  piggery = { 6, 14, 28, 50, 80 }, byre = { 4, 10, 20, 36, 56 },
-  stable = { 8, 16, 28, 40, 60 },
-}
+-- The page's read of market.M.HERD_CAP: DELIBERATELY unclamped, unlike
+-- autoherd.lua's cap_for. A building with no known tier (S.buildings[bldg] is
+-- nil) or a tier the table doesn't cover simply misses, and returning nil is
+-- how every caller here knows to show head alone rather than invent a cap.
+-- The planner clamps instead, because a buy must never be sized against a nil
+-- cap; the divergence is intentional and belongs at these two call sites, not
+-- in two copies of the table.
 local function herd_cap(bldg)
   local tier = S.buildings and S.buildings[bldg]
-  local caps = HERD_CAP[bldg]
+  local caps = market.HERD_CAP[bldg]
   if tier and caps then return caps[tier] end
   return nil
 end
-
--- LIVESTOCK_FEED_PER_HEAD (trade_goods.h:1074) used to live here, for the
--- Feed section's own ceil(head / 8). That re-derivation is gone (see
--- feed_lines below), so the constant now has exactly one home in this
--- plugin, autoherd.lua's M.feed_draw, and is not duplicated here any more.
 
 local LIN_NAMES = {
   [0] = "Midgard", [1] = "Lodbrok's Hold", [2] = "Eiriksson Hold", [3] = "Ui Imair Hold",
@@ -250,8 +241,8 @@ end
 -- Feed (no LEGACY panel precedent -- see header comment; gated show_stock_feed)
 -- ---------------------------------------------------------------------------
 
--- CORRECTED in the husbandry plan's Task 4 fix round. This section used to
--- render:
+-- A CORRECTION worth keeping the history of, because the old output looked
+-- entirely plausible. This section used to render:
 --     Grain: 2   Water: 2   Head: 14
 --     Draw: 2 grain/tick   Covers: 0 ticks
 -- where "Draw" was a client re-derivation of ceil(head / 8) and "Covers" was
@@ -265,7 +256,7 @@ end
 -- about whether their animals would starve -- worse than showing nothing.
 --
 -- Now: the server's own per-tick figures are shown as the per-tick
--- requirement they are (no re-derivation -- autoherd.M.feed_draw returns
+-- requirement they are (no re-derivation -- market.M.feed_draw returns
 -- S.lfeed.grain when it is present, and only falls back to LEGACY's
 -- ceil(head / 8) before the LFEED key has arrived), and "Covers" is
 -- warehouse grain STOCK divided by that per-tick need, read through the same
@@ -280,7 +271,7 @@ local function feed_lines(add, width)
     add(pagelib.trunc(C.dim .. "No head to feed" .. pagelib.RESET, width))
     return
   end
-  local draw = autoherd.feed_draw(head)
+  local draw = market.feed_draw(head)
   add(pagelib.trunc(string.format(
     "%sPer tick:%s %s%d grain%s %s+%s %s%d water%s   %sHead:%s %d",
     C.dim, pagelib.RESET, C.yellow, draw, pagelib.RESET,
