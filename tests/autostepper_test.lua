@@ -7,7 +7,7 @@
 -- player stands in the room: re-reading it makes the plugin attack a corpse
 -- forever against a live server. These cases pin the local per-room view that
 -- replaced it.
-package.path = "3scapes/?.lua;generic/?.lua;" .. package.path
+package.path = "3scapes/autostepper/?.lua;3scapes/?.lua;generic/?.lua;" .. package.path
 
 local failures = 0
 local function check(name, ok, detail)
@@ -112,7 +112,7 @@ print = function(...)
   printed[#printed + 1] = table.concat(parts, " ")
 end
 
-local as = require("autostepper")
+local as = require("init")
 as.on_load()
 print = real_print
 

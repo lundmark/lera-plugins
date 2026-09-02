@@ -11,9 +11,10 @@ fixtures = []
 
 [[current_plugins]]
 key = "autostepper"
-path = "3scapes/autostepper.lua"
+path = "3scapes/autostepper/init.lua"
 target_keys = ["autostepper"]
 fixtures = ["autostepper-control-state"]
+notes = "Directory plugin: init.lua is the mapped entry module. The autostepper_* rows below register its other source files purely so their paths satisfy the current-refs path check; each carries no separate target mapping of its own."
 
 [[current_plugins]]
 key = "chat_monitor"
@@ -403,7 +404,7 @@ key = "alias_configuration"
 category = "alias"
 status = "plugin_gap"
 summary = "Advanced legacy aliases and runtime configuration controls remain missing."
-current_refs = ["3scapes/autostepper.lua:204", "3scapes/autostepper.lua:310"]
+current_refs = ["3scapes/autostepper/init.lua:204", "3scapes/autostepper/init.lua:310"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -418,7 +419,7 @@ key = "assist_multi_target_combat"
 category = "command"
 status = "plugin_gap"
 summary = "Advanced assist, fallback, and multi-target combat responsibilities remain missing."
-current_refs = ["3scapes/autostepper.lua:68", "3scapes/autostepper.lua:133"]
+current_refs = ["3scapes/autostepper/init.lua:68", "3scapes/autostepper/init.lua:133"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -433,7 +434,7 @@ key = "basic_control_aliases"
 category = "alias"
 status = "parity"
 summary = "Only the two exact overlapping start and stop control registrations are equivalent."
-current_refs = ["3scapes/autostepper.lua:218", "3scapes/autostepper.lua:224"]
+current_refs = ["3scapes/autostepper/init.lua:218", "3scapes/autostepper/init.lua:224"]
 
 [legacy_targets.features.evidence]
 type = "local_behavior"
@@ -448,7 +449,7 @@ key = "callback_dependency_integration"
 category = "callback"
 status = "plugin_gap"
 summary = "Legacy protocol, event, and dependency integrations are not fully equivalent."
-current_refs = ["3scapes/autostepper.lua:51", "3scapes/autostepper.lua:321", "3scapes/autostepper.lua:490"]
+current_refs = ["3scapes/autostepper/init.lua:51", "3scapes/autostepper/init.lua:321", "3scapes/autostepper/init.lua:490"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -463,7 +464,7 @@ key = "host_lifecycle"
 category = "callback"
 status = "plugin_gap"
 summary = "Legacy plugin, host, and window lifecycle behavior is not fully equivalent."
-current_refs = ["3scapes/autostepper.lua:321", "3scapes/autostepper.lua:339"]
+current_refs = ["3scapes/autostepper/init.lua:321", "3scapes/autostepper/init.lua:339"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -478,7 +479,7 @@ key = "ordinary_route_step_dispatch"
 category = "state"
 status = "plugin_gap"
 summary = "Ordinary route dispatch is interleaved with missing prediction, recovery, event, and special-mode behavior."
-current_refs = ["3scapes/autostepper.lua:77", "3scapes/autostepper.lua:166"]
+current_refs = ["3scapes/autostepper/init.lua:77", "3scapes/autostepper/init.lua:166"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -493,7 +494,7 @@ key = "ordinary_single_target_attack"
 category = "trigger"
 status = "plugin_gap"
 summary = "Ordinary single-target attack handling cannot be separated from missing filter, shared-target, and protocol behavior."
-current_refs = ["3scapes/autostepper.lua:114", "3scapes/autostepper.lua:133", "3scapes/autostepper.lua:153"]
+current_refs = ["3scapes/autostepper/init.lua:114", "3scapes/autostepper/init.lua:133", "3scapes/autostepper/init.lua:153"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -508,7 +509,7 @@ key = "ordinary_start_scan"
 category = "command"
 status = "plugin_gap"
 summary = "Ordinary start and initial inspection are interleaved with missing modes, events, and watchdog state."
-current_refs = ["3scapes/autostepper.lua:60", "3scapes/autostepper.lua:64", "3scapes/autostepper.lua:65"]
+current_refs = ["3scapes/autostepper/init.lua:60", "3scapes/autostepper/init.lua:64", "3scapes/autostepper/init.lua:65"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -523,7 +524,7 @@ key = "ordinary_stop_reset"
 category = "state"
 status = "plugin_gap"
 summary = "The basic stop reset is interleaved with richer missing recovery, route, and window cleanup state."
-current_refs = ["3scapes/autostepper.lua:377", "3scapes/autostepper.lua:435"]
+current_refs = ["3scapes/autostepper/init.lua:377", "3scapes/autostepper/init.lua:435"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -568,7 +569,7 @@ key = "richer_room_player_combat_cleanup"
 category = "state"
 status = "plugin_gap"
 summary = "Richer room, player, combat, and stale-state cleanup remains missing."
-current_refs = ["3scapes/autostepper.lua:100", "3scapes/autostepper.lua:114"]
+current_refs = ["3scapes/autostepper/init.lua:100", "3scapes/autostepper/init.lua:114"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -598,7 +599,7 @@ key = "target_filtering_protocol"
 category = "trigger"
 status = "plugin_gap"
 summary = "Ignore, skip, shared-target, and protocol-specific target controls remain missing."
-current_refs = ["3scapes/autostepper.lua:34", "3scapes/autostepper.lua:135"]
+current_refs = ["3scapes/autostepper/init.lua:34", "3scapes/autostepper/init.lua:135"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -628,7 +629,7 @@ key = "window_status_controls"
 category = "rendering"
 status = "plugin_gap"
 summary = "Legacy status-window rendering and window lifecycle controls remain missing."
-current_refs = ["3scapes/autostepper.lua:455"]
+current_refs = ["3scapes/autostepper/init.lua:455"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
