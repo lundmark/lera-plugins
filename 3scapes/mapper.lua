@@ -28,6 +28,12 @@ do
   if ok then command = mod end
 end
 
+-- Room names matching one of these (case-insensitive plain substring, not a
+-- Lua pattern) come from an area that reports no per-room identity -- see
+-- process_room's is_ignored check below for why mapping such an area
+-- corrupts the rest of the map. Ships with one entry covering the Chaos Sea.
+local ignore_patterns = { "of the sea of chaos" }
+
 --------------------------------------------------------------------------------
 -- Direction mappings
 --------------------------------------------------------------------------------
@@ -155,6 +161,25 @@ local function load_map()
 
   map.current_layer = data.current_layer or "default"
   map.waypoints = data.waypoints or {}
+
+  -- Repair a map saved before unmappable areas were refused: drop any node whose
+  -- name matches an ignore pattern, then drop every edge that pointed at one of
+  -- them, plus any self-referential edge. A dangling edge is worse than a
+  -- missing one -- pathfinding would target a node that no longer exists.
+  local removed = {}
+  for id, room in pairs(map.rooms) do
+    if M.is_ignored(room.name) then
+      map.rooms[id] = nil
+      removed[id] = true
+    end
+  end
+  for id, room in pairs(map.rooms) do
+    for dir, dest in pairs(room.connections) do
+      if dest == id or removed[dest] then
+        room.connections[dir] = nil
+      end
+    end
+  end
 end
 
 --------------------------------------------------------------------------------
@@ -164,6 +189,16 @@ end
 -- Core room processing logic - called when we detect a room change
 local function process_room(rid, name, exits, destinations, area)
   if not rid or rid == 0 then return end
+
+  -- An area that reports no per-room identity cannot be mapped, and mapping it
+  -- corrupts the map of everywhere else. Refuse the room, and also drop the
+  -- positioning anchor: leaving current_room_id pointing into an unmappable
+  -- area is what makes the first real room entered on the way out position
+  -- itself relative to a node that is not a room.
+  if M.is_ignored(name) then
+    map.current_room_id = nil
+    return
+  end
 
   name = name or "Unknown"
   -- Strip exits from name if present: "Room Name (exits)" -> "Room Name"
@@ -222,8 +257,11 @@ local function process_room(rid, name, exits, destinations, area)
 
   for dir, dest in pairs(destinations or {}) do
     -- A destination of 0 means the server reported the exit but no usable id.
-    -- Recording it would point pathfinding at a room that does not exist.
-    if dest and dest > 0 then
+    -- Recording it would point pathfinding at a room that does not exist. A
+    -- destination equal to this room's OWN id is equally useless -- a
+    -- self-referential edge cannot move you anywhere -- and it is the signature
+    -- of an area whose rooms all share one id.
+    if dest and dest > 0 and dest ~= rid then
       room.connections[normalize_dir(dir)] = dest
     end
   end
@@ -660,6 +698,33 @@ end
 --------------------------------------------------------------------------------
 -- Public API
 --------------------------------------------------------------------------------
+
+-- Ignore list: rooms whose name matches one of these are refused by
+-- process_room and purged by load_map. See the ignore_patterns declaration
+-- near the top of the file for why.
+function M.ignore_pattern(pat)
+  if type(pat) ~= "string" or pat == "" then return false end
+  for _, p in ipairs(ignore_patterns) do
+    if p == pat then return true end
+  end
+  table.insert(ignore_patterns, pat)
+  return true
+end
+
+function M.ignored_patterns()
+  local copy = {}
+  for i, p in ipairs(ignore_patterns) do copy[i] = p end
+  return copy
+end
+
+function M.is_ignored(name)
+  if type(name) ~= "string" then return false end
+  local lname = name:lower()
+  for _, p in ipairs(ignore_patterns) do
+    if lname:find(p:lower(), 1, true) then return true end
+  end
+  return false
+end
 
 -- Mapping mode is retired: Room.Info names every exit's destination, so
 -- connections are learned on sight and there is nothing to switch on. These

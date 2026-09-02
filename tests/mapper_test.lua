@@ -284,6 +284,122 @@ check("seeded room carries its name", seeded and seeded.name == "A lonely tower"
 
 mp.on_unload()
 
+-- ---- unmappable areas (ignore list) -----------------------------------------
+-- A no-explorer VR area answers every room with the same shared id (roominfo
+-- collapses the VR path at its ':' before asking the explorer DB), so mapping
+-- it corrupts the map of everywhere else. A room whose name matches an ignore
+-- pattern is refused outright. Ships with one default pattern covering the
+-- Chaos Sea: "of the sea of chaos".
+
+-- Kills: deleting the `is_ignored` early return in process_room.
+mp.clear()
+enter(60494, "Depths of the Sea of Chaos", {}, {}, "Chaos Sea")
+check("ignored room is not added to the map", mp.get_room(60494) == nil)
+
+-- Kills: keeping `map.current_room_id = rid` instead of clearing it to nil.
+-- Room 1 stands in for a real room that happens to carry the same id the
+-- (unrelated) ignored area reports on the very next call -- a shared-id area
+-- answers every room with one constant, so a coincidence like this is exactly
+-- the failure mode the anchor-clearing exists to prevent. Only a cleared
+-- anchor stops the next real room from positioning itself off a node that has
+-- nothing to do with where the player actually is.
+mp.clear()
+enter(1, "A quiet dock", { "n" }, {})
+enter(1, "Depths of the Sea of Chaos", {}, {})
+enter(2, "A sunlit jetty", { "s" }, { s = 1 })
+local jetty = mp.get_room(2)
+check("entering an ignored area clears the anchor",
+  jetty and jetty.x == 0 and jetty.y == 0,
+  jetty and (jetty.x .. "," .. jetty.y))
+
+-- Kills: dropping `dest ~= rid` from the destinations guard. The second check
+-- is a regression guard: it exists so the guard above cannot pass by refusing
+-- every destination outright.
+mp.clear()
+enter(5001, "A limestone cavern", { "n", "s" }, { n = 5001, s = 5002 })
+local cavern = mp.get_room(5001)
+check("self-referential destination is not recorded",
+  cavern and cavern.connections.n == nil, cavern and tostring(cavern.connections.n))
+check("a normal destination is still recorded",
+  cavern and cavern.connections.s == 5002, cavern and tostring(cavern.connections.s))
+
+-- ---- load_map repairs a map saved before this fix ---------------------------
+mp.clear()
+stored = {
+  rooms = {
+    ["9001"] = { id = 9001, name = "The Depths of the Sea of Chaos", exits = {},
+                 connections = {}, x = 0, y = 0, layer = "default",
+                 virtual = false, last_seen = 1 },
+    ["9002"] = { id = 9002, name = "An ordinary landing", exits = { "n" },
+                 connections = { n = 9001 }, x = 0, y = 0, layer = "default",
+                 virtual = false, last_seen = 1 },
+    ["9003"] = { id = 9003, name = "A calm harbor", exits = { "e" },
+                 connections = { e = 9003 }, x = 0, y = 0, layer = "default",
+                 virtual = false, last_seen = 1 },
+  },
+  current_layer = "default",
+  waypoints = {},
+}
+mp.on_load()
+
+-- Kills: skipping the first purge loop in load_map.
+check("load_map purges a saved node matching an ignore pattern",
+  mp.get_room(9001) == nil)
+
+-- Kills: skipping the second loop in load_map.
+local landing = mp.get_room(9002)
+check("load_map drops an edge that pointed at a purged node",
+  landing and landing.connections.n == nil,
+  landing and tostring(landing.connections.n))
+
+-- Kills: dropping the `dest == id` clause from the second loop.
+local harbor = mp.get_room(9003)
+check("load_map drops a self-referential edge from a surviving node",
+  harbor and harbor.connections.e == nil,
+  harbor and tostring(harbor.connections.e))
+
+mp.on_unload()
+
+-- ---- ordinary rooms are unaffected (regression) ------------------------------
+mp.clear()
+enter(7001, "A sunny meadow", { "e" }, {})
+enter(7002, "A shaded grove", { "w" }, { w = 7001 })
+local meadow, grove = mp.get_room(7001), mp.get_room(7002)
+check("an ordinary room is still mapped and positioned normally",
+  meadow and grove and grove.x == meadow.x + 1 and grove.y == meadow.y,
+  meadow and grove and (grove.x .. "," .. grove.y .. " vs " .. meadow.x .. "," .. meadow.y))
+
+mp.on_unload()
+
+-- ---- is_ignored / ignore_pattern surface -------------------------------------
+-- Deliberately last: a mutant that drops ignore_pattern's type check lets a
+-- non-string value into the pattern list, and is_ignored (correctly, once the
+-- list is clean) calls :lower() on every stored pattern with no further type
+-- guard of its own. Running this after every other is_ignored/process_room
+-- call in the suite means a poisoned list entry from that mutant has nothing
+-- left downstream to crash.
+
+-- Kills: lowercasing only one side of the comparison in is_ignored. The
+-- pattern is added in Title Case and the name embeds it in ALL CAPS, so a
+-- comparison that lowercases only the name or only the pattern still fails to
+-- find it; only lowering both sides does. This also covers "matches a
+-- substring, not a whole name": the pattern is a small fragment of a longer
+-- room name, not the name itself.
+check("ignore_pattern accepts a new pattern", mp.ignore_pattern("Grey Wastes") == true)
+check("is_ignored is case-insensitive and matches a substring",
+  mp.is_ignored("You enter the GREY WASTES of ash") == true)
+
+-- Kills: removing the type check in ignore_pattern. A rejected call must
+-- neither be accepted nor grow the list, while a genuinely new pattern
+-- submitted right after still must.
+local before_count = #mp.ignored_patterns()
+local rejected = mp.ignore_pattern(42)
+mp.ignore_pattern("frost giants of the wild")
+local after_count = #mp.ignored_patterns()
+check("ignore_pattern rejects a non-string but still extends the list for a valid one",
+  rejected == false and after_count == before_count + 1,
+  "rejected=" .. tostring(rejected) .. " before=" .. before_count .. " after=" .. after_count)
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
