@@ -55,6 +55,9 @@ register_handlers(kingdom)
 local city = require("handlers.city")
 register_handlers(city)
 
+local livestock = require("handlers.livestock")
+register_handlers(livestock)
+
 -- Guild.State's vitals block. Registered like any other handler module, but
 -- note the ordering constraint it does NOT have: the hp-bar triggers below are
 -- registered later and stand down at runtime via S.vitals_gmcp, not by being
