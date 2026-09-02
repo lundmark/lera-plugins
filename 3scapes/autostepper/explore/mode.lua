@@ -129,6 +129,15 @@ function M.on_arrival()
     end
   end
 
+  -- z is a coordinate map.lua's keying concatenates into a string and has no
+  -- way to represent as "missing", so it must never reach map:room/record as
+  -- nil. It cannot in correct code -- map:position() only ever returns the
+  -- numbers move() and set_position() write, and the guard just above only
+  -- ever calls set_position with a real layer. This bails out instead of
+  -- crashing inside map.lua so a caller sees the corrupted position (through
+  -- M.stats()) rather than an unhandled error.
+  if z == nil then return end
+
   -- The desync proof: the lattice is generated once per run and each room's
   -- coordinates are baked into its own file name, so a coordinate's exits
   -- cannot legitimately change. If they have, we are not where we think we

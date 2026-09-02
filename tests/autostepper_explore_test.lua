@@ -190,7 +190,14 @@ local hop_profile = {
   defer_dirs = { "u" },
   default_policy = "clear",
   in_area = profile.in_area,
-  layer_of = function() return nil end,
+  -- A real layer, not nil: this section only walks 'e'/'n'/'s', so z stays
+  -- reckoned at 0 throughout and a constant-0 layer never disagrees with it
+  -- (no correction ever fires here). Layer is incidental to what this section
+  -- tests (multi-hop routing) -- an always-nil layer_of used to make this the
+  -- first place a mutated (guard-dropped) layer check reached a nil layer,
+  -- which crashed inside the topology check's map:room() before the actual
+  -- "unparseable layer" test ever got to run.
+  layer_of = function() return 0 end,
   complete = function() return false end,
 }
 
