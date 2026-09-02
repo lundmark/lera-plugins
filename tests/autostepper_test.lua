@@ -138,11 +138,33 @@ local function arrive(id, name, monsters, players)
   ri_state.players = players or {}
 end
 
--- One glance/prompt cycle: the plugin sends "glance" plus an empty line and
--- makes its decision on the second prompt.
+-- One prompt is a whole arrival now. Kept under its original name so the eight
+-- existing call sites (lines 183, 197, 210, 216, 234, 256, 268, 273) read the
+-- same; it simply no longer manufactures a second prompt. It deliberately does
+-- NOT drain timers -- the original did not either, and several call sites call
+-- run_timers() themselves.
 local function prompt_cycle()
   quiet(as.prompt)
+end
+
+-- One prompt is now a whole arrival: the glance and its manufactured second
+-- prompt are gone. Step 4 collapses prompt_cycle to a single prompt too; this
+-- one additionally drains the timer queue, which Task 5's settle timer needs.
+local function arrival_prompt()
   quiet(as.prompt)
+  run_timers()
+end
+
+-- count_sent is a PREFIX match, so count_sent("") equals #sent and would
+-- silently assert "nothing was sent at all" rather than "no empty line was
+-- sent" -- passing even if an empty line were the only thing sent. Exact
+-- comparison is what the empty-line cases actually need.
+local function exact_sent(want)
+  local n = 0
+  for _, cmd in ipairs(sent) do
+    if cmd == want then n = n + 1 end
+  end
+  return n
 end
 
 local function count_sent(prefix)
@@ -176,8 +198,6 @@ sent = {}
 local started = nil
 quiet(function() started = as.start(false) end)
 check("start succeeds", started == true, tostring(started))
-check("start glances", sent[1] == "glance" and sent[2] == "",
-  table.concat(sent, "|"))
 
 sent = {}
 prompt_cycle()
@@ -186,10 +206,15 @@ check("attacks the monster in the room", last_sent() == "kill a scrawny orc",
 check("tracked view holds the monster", #tracked() == 1,
   #tracked())
 
--- Combat ends: one prompt in the fighting state.
+-- Combat ends: one prompt in the fighting state. It no longer re-glances --
+-- the glance never refreshed Room.Contents, which is exactly why the tracked
+-- view exists -- so the next decision is made straight from the pruned view
+-- and the step goes out immediately.
 sent = {}
 quiet(as.prompt)
-check("re-glances after combat", sent[1] == "glance", table.concat(sent, "|"))
+check("no glance after combat", exact_sent("glance") == 0, table.concat(sent, "|"))
+check("steps straight from the pruned view", sent[1] == "n",
+  table.concat(sent, "|"))
 check("finished target left the tracked view", #tracked() == 0,
   table.concat(tracked(), ","))
 
@@ -197,7 +222,7 @@ sent = {}
 prompt_cycle()
 check("steps instead of attacking again", count_sent("kill") == 0,
   table.concat(sent, "|"))
-check("step command sent", sent[1] == "n", table.concat(sent, "|"))
+check("the following step is sent", sent[1] == "e", table.concat(sent, "|"))
 check("roominfo still lists the dead monster",
   #fake_roominfo.monsters() == 1, #fake_roominfo.monsters())
 
@@ -227,19 +252,26 @@ sw_steps = { { raw = "s", commands = { "s" } } }
 sw_taken = {}
 arrive(102, "A crowded pit", { "a scrawny orc", "a large rat" }, {})
 sent = {}
+quiet(function() as.start(false) end)
+sent = {}
 local kills, steps, guard = 0, 0, 0
 while as.is_running() and guard < 50 do
   guard = guard + 1
   local before = #sent
   prompt_cycle()
-  for i = before + 1, #sent do
-    if sent[i]:sub(1, 4) == "kill" then kills = kills + 1 end
-  end
   if as.get_state() == "fighting" then
     quiet(as.prompt)  -- combat ends
   else
     steps = steps + 1
     run_timers()
+  end
+  -- Counted after the whole iteration, not just after prompt_cycle(): a kill
+  -- on the second (or later) monster in a room now lands during the
+  -- "combat ends" follow-up prompt above, which is still part of this same
+  -- iteration's arrival -- narrowing the window to prompt_cycle() alone would
+  -- silently drop it.
+  for i = before + 1, #sent do
+    if sent[i]:sub(1, 4) == "kill" then kills = kills + 1 end
   end
 end
 check("two monsters cost two fights", kills == 2, kills)
@@ -275,6 +307,58 @@ check("non-target left behind does not restart combat",
   count_sent("kill") == 0, table.concat(sent, "|"))
 
 quiet(as.on_unload)
+
+-- ---- glance-free step cycle --------------------------------------------------
+run_timers()
+sw_steps = { { raw = "n", commands = { "n" } }, { raw = "e", commands = { "e" } } }
+sw_taken = {}
+arrive(200, "A quiet lane", {}, {})
+sent = {}
+quiet(function() as.start(false) end)
+check("start does not send a glance",
+  count_sent("glance") == 0, table.concat(sent, "|"))
+check("start does not send a bare empty line",
+  exact_sent("") == 0, table.concat(sent, "|"))
+
+-- start() leaves us awaiting arrival in the room we are standing in, so one
+-- prompt is enough to make the first decision and take the first step.
+sent = {}
+arrival_prompt()
+check("one prompt is a whole arrival", last_sent() == "n", table.concat(sent, "|"))
+check("state after a step is stepping", as.get_state() == "stepping", as.get_state())
+
+sent = {}
+arrive(201, "A quiet lane", {}, {})
+arrival_prompt()
+check("second arrival takes the second step",
+  last_sent() == "e", table.concat(sent, "|"))
+check("still no glance anywhere in the cycle",
+  count_sent("glance") == 0, table.concat(sent, "|"))
+
+-- ---- glance escape hatch -----------------------------------------------------
+-- Restoring the glance restores the old two-prompt cycle for that user,
+-- including its fragility. It exists for brief-mode players who lose the room
+-- description otherwise.
+quiet(as.stop)
+as.set_glance_cmd("glance")
+sw_steps = { { raw = "s", commands = { "s" } }, { raw = "w", commands = { "w" } } }
+sw_taken = {}
+arrive(202, "A dim hall", {}, {})
+sent = {}
+quiet(function() as.start(false) end)
+check("hatch on: start sends the glance", exact_sent("glance") == 1,
+  table.concat(sent, "|"))
+sent = {}
+arrival_prompt()
+check("hatch on: one prompt is not yet an arrival", #sent == 0,
+  table.concat(sent, "|"))
+arrival_prompt()
+check("hatch on: the second prompt completes the arrival", sent[1] == "s",
+  table.concat(sent, "|"))
+check("hatch on: a glance follows the step", sent[2] == "glance",
+  table.concat(sent, "|"))
+as.set_glance_cmd("")
+quiet(as.stop)
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")

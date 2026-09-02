@@ -18,8 +18,9 @@ local ri = nil      -- roominfo plugin (set in on_load)
 -- State
 --------------------------------------------------------------------------------
 
-local state = "idle"    -- idle, sent_glance, waiting_second, fighting
-local prompt_count = 0  -- Count of prompts received
+local state = "idle"    -- idle, stepping, fighting
+local prompt_count = 0  -- Count of prompts received (diagnostic only)
+local pending_prompts = 0  -- prompts still owed before the current step arrives
 local enabled = false   -- Is autostepper active?
 local prompt_trigger_id = nil  -- Trigger ID for prompt detection
 
@@ -40,7 +41,13 @@ local current_target = nil  -- monster do_attack() is working on
 
 -- Configuration
 local config = {
-  glance_cmd = "glance",      -- Command to look at room
+  -- Disabled by default. Under GMCP a glance buys nothing -- Room.* fires on
+  -- room entry only and is not re-emitted for one, which is why the local
+  -- monster view below exists -- so it survived purely to manufacture a second
+  -- prompt for the state machine, and that pair was the cause of the stall
+  -- where the stepper sat silent waiting for a prompt that never came.
+  -- Set it back to "glance" for a brief-mode player who wants the room text.
+  glance_cmd = "",
   attack_cmd = "kill",        -- Command prefix for attacking (kill <target>)
   prompt_pattern = nil,       -- Pattern to detect prompts (set by user)
   auto_attack = true,         -- Attack valid targets automatically
@@ -114,12 +121,17 @@ local function forget_monster(name)
   end
 end
 
-local function send_glance()
-  state = "sent_glance"
-  prompt_count = 0
-  -- Send glance command followed by empty line
-  mud.send(config.glance_cmd)
-  mud.send("")
+local process_room  -- forward declaration: on_prompt calls it, it calls do_step
+
+-- Begin waiting for the room we just moved into. One prompt is a whole arrival;
+-- the escape-hatch glance adds a second command and therefore a second prompt.
+local function begin_arrival_wait()
+  state = "stepping"
+  pending_prompts = 1
+  if config.glance_cmd and config.glance_cmd ~= "" then
+    mud.send(config.glance_cmd)
+    pending_prompts = pending_prompts + 1
+  end
 end
 
 local function do_attack(monster)
@@ -151,18 +163,12 @@ local function do_step()
     mud.send(cmd)
   end
 
-  -- After step, send glance to check new room
-  -- Use a small delay to let room info come through
-  timer.after(100, function()
-    if enabled then
-      send_glance()
-    end
-  end)
+  begin_arrival_wait()
 
   return true
 end
 
-local function process_room()
+function process_room()
   if not ri then
     log("Error: roominfo plugin not available")
     M.stop()
@@ -229,30 +235,24 @@ local function on_prompt()
 
   prompt_count = prompt_count + 1
 
-  if state == "sent_glance" then
-    -- Got first prompt (from glance)
-    state = "waiting_second"
-  elseif state == "waiting_second" then
-    -- Got second prompt (from empty line) - process room
-    state = "idle"
-    process_room()
+  if state == "stepping" then
+    pending_prompts = pending_prompts - 1
+    if pending_prompts <= 0 then
+      state = "idle"
+      process_room()
+    end
   elseif state == "fighting" then
-    -- Combat ended (or just another prompt) - continue stepping. The target is
-    -- struck from the local view here because nothing else will: Room.Contents
-    -- is not re-sent for a mob that died, so without this the next decision
-    -- would attack the corpse, and the one after that, forever.
+    -- Combat ended (or just another prompt). The target is struck from the local
+    -- view here because nothing else will: Room.Contents is not re-sent for a
+    -- mob that died, so without this the next decision would attack the corpse.
     --
-    -- The trade-off is deliberate. This state machine has always treated the
-    -- first prompt after an attack as "combat over"; it used to re-glance and
-    -- re-attack when the refreshed room still listed the mob, which is exactly
-    -- the poll the protocol no longer supports. So a prompt arriving mid-fight
-    -- now means we step away with the mob still alive, rather than hammering
-    -- 'kill' at a live server until something changes. Only a client-side death
-    -- trigger could tell the two apart.
+    -- It no longer re-glances. The glance never refreshed anything -- that is
+    -- the whole reason this local view exists -- so the decision is made
+    -- straight from the pruned view.
     forget_monster(current_target)
     current_target = nil
     state = "idle"
-    send_glance()
+    process_room()
   end
 end
 
@@ -363,7 +363,9 @@ local function dispatch_set(rest)
     end
   elseif key == "glance" then
     if value == "" then
-      log("Glance command: " .. config.glance_cmd)
+      local shown = (config.glance_cmd == "" or config.glance_cmd == nil)
+        and "(disabled)" or config.glance_cmd
+      log("glance_cmd: " .. shown)
     else
       config.glance_cmd = value
       log("Glance command set: " .. config.glance_cmd)
@@ -548,8 +550,9 @@ function M.start(targets_only)
   room_key = nil
   current_target = nil
 
-  -- Start by sending glance
-  send_glance()
+  -- We are standing in a room already, so wait for the next prompt and decide
+  -- from it rather than manufacturing one.
+  begin_arrival_wait()
 
   return true
 end
@@ -562,6 +565,7 @@ function M.stop()
   enabled = false
   state = "idle"
   prompt_count = 0
+  pending_prompts = 0
   current_target = nil
 end
 
@@ -580,6 +584,7 @@ function M.status()
   log("Status:")
   log("  Running: " .. (enabled and "yes" or "no"))
   log("  State: " .. state)
+  log("  Pending prompts: " .. pending_prompts)
   log("  Mode: " .. (config.targets_only and "targets only (->)" or "any mob (-.))"))
   log("  Prompt count: " .. prompt_count)
 
