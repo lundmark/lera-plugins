@@ -219,6 +219,37 @@ check("raw is the route's first hop ('s', back toward A) -- not the frontier dir
   hop2 and hop2.raw == "s", hop2 and hop2.raw)
 mode.stop()
 
+-- ---- z is read from the room name, not dead-reckoned -------------------------
+-- Every z/layer assertion above sits at the origin room, where pending_dir is
+-- nil, map:move never runs, and dead reckoning (z stays 0) and the
+-- name-derived layer (also 0 for "Layer one...") are indistinguishable. No
+-- fixture above ever takes a "d" or "u" step, so the layer-override block in
+-- on_arrival -- the entire reason this module reads z from the room name
+-- instead of the vertical delta -- has never actually been exercised.
+--
+-- The maze's set_level_exit_pairs((["down":"up"])) makes "down" the level-UP
+-- direction, so a "d" step must INCREASE z. Dead reckoning alone would give
+-- z = -1 here; only the name-derived layer gives the correct z = 1 -- that
+-- is what discriminates a correct implementation from one that either
+-- skips the override or gets its sign backwards.
+quiet(function() mode.start(profile, "clear") end)
+frame({ name = "Layer one of the Sea of Chaos", exits = { "d" } })
+quiet(mode.on_arrival)
+
+local before_corrections = mode.stats().layer_corrections
+local vstep = mode.next_step()
+check("the only exit -- 'd' -- is the one taken", vstep and vstep.raw == "d",
+  vstep and vstep.raw)
+
+frame({ name = "Layer two of the Sea of Chaos", exits = { "u" } })
+quiet(mode.on_arrival)
+local vst = mode.stats()
+check("z is read from the room name, not the vertical delta -- a 'd' step still increases z",
+  vst.z == 1, tostring(vst.z))
+check("layer_corrections increments when the name overrides dead reckoning",
+  vst.layer_corrections == before_corrections + 1, tostring(vst.layer_corrections))
+mode.stop()
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
