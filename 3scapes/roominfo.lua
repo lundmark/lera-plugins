@@ -110,15 +110,19 @@ local function handle_room_info(data)
   if type(data) ~= "table" then return end
 
   local num = tonumber(data.num)
-  -- The mudlib permits num == 0 and it means "no usable id". Accepting it would
-  -- replace a good room with one nothing can key off.
-  if not num or num <= 0 then return end
+  -- num == 0 is the mudlib's "no usable id", and it is not exceptional: every
+  -- no-explorer virtual room answers that way (explorer_d collapses such a VR
+  -- path at its ':' and room.c leaves unique_id at 0), which is every room in
+  -- the Chaos Sea. The frame's name, area and exits are still authoritative and
+  -- are the only room data those areas ever send, so dropping the frame blinded
+  -- roominfo to whole areas. A negative num is not a real answer and is refused.
+  if not num or num < 0 then return end
 
   local old_room = current.room
   local old_room_id = current.room_id
 
   current.room = data.name and tostring(data.name) or ""
-  current.room_id = num
+  current.room_id = (num > 0) and num or nil
   current.area = data.area and tostring(data.area) or nil
   current.timestamp = lera.time()
 

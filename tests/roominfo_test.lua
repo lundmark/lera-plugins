@@ -97,12 +97,11 @@ check("destination recorded", dest.n == 4232, tostring(dest.n))
 check("zero destination preserved as 0", dest.ne == 0, tostring(dest.ne))
 
 -- ---- num == 0 ---------------------------------------------------------------
--- Kills: accepting num == 0 as a room id. The mudlib permits it and it means
--- "no usable id"; mapper.process_room already refuses it, and letting it
--- through here would clobber good state with an unusable room.
-deliver("Room.Info", { num = 0, name = "Nowhere", area = "", exits = {} })
-check("num 0 rejected, room unchanged", ri.room() == "A dusty crossroads", ri.room())
-check("num 0 rejected, id unchanged", ri.room_id() == 4231, ri.room_id())
+-- num == 0 is now accepted (Chaos Sea rooms report it). Negative numbers are
+-- still refused: they are not real mudlib answers.
+deliver("Room.Info", { num = -1, name = "Nowhere", area = "", exits = {} })
+check("negative num rejected, room unchanged", ri.room() == "A dusty crossroads", ri.room())
+check("negative num rejected, id unchanged", ri.room_id() == 4231, ri.room_id())
 
 -- ---- callbacks --------------------------------------------------------------
 local seen = {}
@@ -325,6 +324,32 @@ check("duplicate short direction appears once (reversed)",
   sorted_concat(ri.exits()) == "n", sorted_concat(ri.exits()))
 check("resolved destination survives the duplicate (reversed)",
   ri.exit_destinations().n == 4302, tostring(ri.exit_destinations().n))
+
+-- ---- id-less rooms (no-explorer virtual rooms) -------------------------------
+-- Every Chaos Sea room reports num 0: room/room.c takes room_id from
+-- query_unique_id(), which is only ever set from explorer_d::add_explored(),
+-- and the maze room template calls set_no_explorer(1). The frame's name, area
+-- and exits are still good and are the only room data that area ever provides.
+deliver("Room.Info", {
+  num = 0,
+  name = "Layer one of the Sea of Chaos",
+  area = "Unknown",
+  exits = { out = 266, s = 0, w = 0, e = 0 },
+})
+
+check("id-less frame is accepted",
+  ri.room() == "Layer one of the Sea of Chaos", tostring(ri.room()))
+check("id-less frame reports no room id",
+  ri.room_id() == nil, tostring(ri.room_id()))
+check("id-less frame still carries exits",
+  table.concat(ri.exits(), ",") == "e,s,w,out", table.concat(ri.exits(), ","))
+check("id-less frame sets synced", ri.is_synced() == true)
+
+-- A negative num is still refused: it is not a real mudlib answer, and
+-- accepting it would mean keying on a value nothing can produce.
+deliver("Room.Info", { num = -1, name = "Nowhere", area = "X", exits = {} })
+check("negative num is still refused",
+  ri.room() == "Layer one of the Sea of Chaos", tostring(ri.room()))
 
 -- ---- unload -----------------------------------------------------------------
 ri.on_unload()
