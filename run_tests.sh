@@ -108,6 +108,7 @@ LERA_ROOT=$lera_root "$luajit" tests/guild_viking_livestock_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_autotrader_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_autovoyage_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_autoraid_test.lua
+LERA_ROOT=$lera_root "$luajit" tests/guild_viking_autoherd_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/wizard_complete_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/wizard_table_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/wizard_protocol_test.lua
