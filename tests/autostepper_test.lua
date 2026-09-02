@@ -456,6 +456,86 @@ check("a raced settle timer does not re-attack",
 
 quiet(as.stop)
 
+-- ---- explore mode wiring -----------------------------------------------------
+-- A stand-in explore module: the real one has its own suite, and this pins only
+-- the wiring -- that do_step asks it instead of speedwalk, that exhaustion stops
+-- the run, and that an exhausted explore run never falls through to the route.
+local explore_steps = {}
+local explore_taken = {}
+local explore_state = { active = false, arrivals = 0, stopped_reason = nil }
+as.debug_set_explore({
+  active = function() return explore_state.active end,
+  next_step = function()
+    local dir = table.remove(explore_steps, 1)
+    if not dir then return nil end
+    explore_taken[#explore_taken + 1] = dir
+    return { raw = dir, commands = { dir } }
+  end,
+  on_arrival = function() explore_state.arrivals = explore_state.arrivals + 1 end,
+  on_frame = function() end,
+  -- The key MUST advance as the explorer moves. A constant would make the
+  -- reseed case below unpassable, and it is the whole property under test:
+  -- roominfo's key cannot change inside a sea layer (id nil, one name per
+  -- layer), so the only thing that can drive a reseed is this coordinate.
+  room_key = function() return "xyz:" .. #explore_taken .. ",0,0" end,
+  stop = function() explore_state.active = false end,
+  stats = function()
+    return { rooms = 1, x = #explore_taken, y = 0, z = 0, policy = "clear" }
+  end,
+})
+
+quiet(as.stop)
+explore_state.active = true
+explore_steps = { "n", "e" }
+explore_taken = {}
+sw_steps = { { raw = "SHOULD-NOT-RUN", commands = { "SHOULD-NOT-RUN" } } }
+arrive(400, "Layer one of the Sea of Chaos", {}, {})
+sent = {}
+quiet(function() as.start(false) end)
+arrival_prompt()
+check("explore mode supplies the step", last_sent() == "n", table.concat(sent, "|"))
+check("explore mode is told about the arrival",
+  explore_state.arrivals >= 1, tostring(explore_state.arrivals))
+
+sent = {}
+arrive(401, "Layer one of the Sea of Chaos", {}, {})
+arrival_prompt()
+check("explore mode supplies the second step",
+  last_sent() == "e", table.concat(sent, "|"))
+
+-- Frontier exhausted: the run ends. It must NOT fall through to the stored
+-- route, or the stepper silently starts walking a speedwalk path from wherever
+-- it is standing in the maze.
+sent = {}
+arrive(402, "Layer one of the Sea of Chaos", {}, {})
+arrival_prompt()
+check("an exhausted explore run stops the stepper", as.is_running() == false,
+  tostring(as.is_running()))
+check("an exhausted explore run never takes a route step",
+  count_sent("SHOULD-NOT-RUN") == 0, table.concat(sent, "|"))
+
+-- The room key comes from the explorer's own coordinate while it is active.
+-- roominfo's key is useless in the sea: the id is nil and the name is the same
+-- for a whole layer, so the local monster view would never reseed between rooms.
+explore_state.active = true
+explore_steps = { "n", "s" }
+explore_taken = {}
+arrive(403, "Layer one of the Sea of Chaos", { "a small mutant organism" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+arrival_prompt()
+check("a monster in the first sea room is attacked",
+  last_sent() == "kill a small mutant organism", table.concat(sent, "|"))
+sent = {}
+quiet(as.prompt)     -- combat ends; the mob is struck from the local view
+arrive(403, "Layer one of the Sea of Chaos", { "a second organism" }, {})
+arrival_prompt()
+check("a monster in the NEXT sea room is attacked despite the same room name",
+  last_sent() == "kill a second organism", table.concat(sent, "|"))
+quiet(as.stop)
+explore_state.active = false
+as.debug_set_explore(nil)
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)

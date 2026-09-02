@@ -11,8 +11,38 @@ M.priority = 40  -- After roominfo (10), before speedwalk (50)
 -- Dependencies
 --------------------------------------------------------------------------------
 
+local function log(msg)
+  print("[autostepper] " .. msg)
+end
+
 local sw = nil      -- speedwalk plugin (set in on_load)
 local ri = nil      -- roominfo plugin (set in on_load)
+local explore = require("explore.mode")
+
+-- Area profiles, by name. A profile is data plus four predicates; no engine
+-- logic lives in one.
+local AREAS = {
+  chaossea = "areas.chaossea",
+}
+local area_cache = {}
+
+local function load_area(name)
+  if area_cache[name] then return area_cache[name] end
+  local path = AREAS[name]
+  if not path then return nil end
+  local ok, mod = pcall(require, path)
+  if not ok then
+    log("area '" .. name .. "' failed to load: " .. tostring(mod))
+    return nil
+  end
+  area_cache[name] = mod
+  return mod
+end
+
+-- Test seam: swap the explore module for a stand-in.
+function M.debug_set_explore(stub)
+  explore = stub or require("explore.mode")
+end
 
 --------------------------------------------------------------------------------
 -- State
@@ -64,6 +94,7 @@ local config = {
   step_on_player = true,      -- Take step if player in room (don't fight)
   step_on_no_monster = true,  -- Take step if no monsters
   targets_only = false,       -- Only kill monsters in target list (-> mode)
+  explore_policy = "clear",  -- "clear" | "dive"; see explore/map.lua
 }
 
 -- Callbacks
@@ -75,10 +106,6 @@ local on_skip_callbacks = {}      -- Called when skipping a monster
 --------------------------------------------------------------------------------
 -- Internal Functions
 --------------------------------------------------------------------------------
-
-local function log(msg)
-  print("[autostepper] " .. msg)
-end
 
 local function notify(callbacks, ...)
   for _, cb in ipairs(callbacks) do
@@ -99,6 +126,14 @@ end
 -- name, and then to a constant, so an unsynced roominfo seeds the view once
 -- rather than on every decision.
 local function roominfo_room_key()
+  -- While exploring, the coordinate is the only usable identity. roominfo's is
+  -- not: an area with no room ids reports nil, and its name is the same for a
+  -- whole layer, so the key would never change and the local monster view would
+  -- never reseed between rooms.
+  if explore and explore.active() then
+    local key = explore.room_key()
+    if key then return key end
+  end
   if not ri then return "?" end
   local rid = ri.room_id and ri.room_id()
   if rid then return "id:" .. tostring(rid) end
@@ -147,11 +182,15 @@ local function complete_arrival()
   cancel_settle()
   pending_prompts = 0
   state = "idle"
+  if explore and explore.active() then explore.on_arrival() end
   process_room()
 end
 
 local function on_room_info_frame()
   if not enabled or state ~= "stepping" then return end
+  if explore and explore.active() and explore.on_frame and ri and ri.info then
+    explore.on_frame(ri.info())
+  end
   if settle_timer then return end
   settle_timer = timer.after(BURST_SETTLE_MS, function()
     settle_timer = nil
@@ -183,20 +222,36 @@ local function do_attack(monster)
 end
 
 local function do_step()
-  local step = sw.take_step()
-  if not step then
-    -- Route complete
-    log("Route complete!")
-    enabled = false
-    state = "idle"
-    notify(on_complete_callbacks)
-    return false
+  local step
+  if explore and explore.active() then
+    step = explore.next_step()
+    if not step then
+      -- Every reachable exit leads somewhere already mapped. The area is fully
+      -- explored and nothing completed the run. It must NOT fall through to
+      -- sw.take_step(): the stepper would silently start walking a stored
+      -- speedwalk path from wherever it happens to be standing in the maze.
+      log("Explored: no unvisited exits remain")
+      enabled = false
+      state = "idle"
+      cancel_settle()
+      notify(on_complete_callbacks)
+      return false
+    end
+  else
+    step = sw.take_step()
+    if not step then
+      log("Route complete!")
+      enabled = false
+      state = "idle"
+      cancel_settle()
+      notify(on_complete_callbacks)
+      return false
+    end
   end
 
   log("Step: " .. step.raw)
-  notify(on_step_callbacks, step.raw, sw.step_info())
+  notify(on_step_callbacks, step.raw, sw and sw.step_info and sw.step_info())
 
-  -- Send all commands in this step
   for _, cmd in ipairs(step.commands) do
     mud.send(cmd)
   end
@@ -314,10 +369,13 @@ local function show_help()
   log("  ->                     - Start stepping, only kill targets")
   log("  -!                     - Stop stepping")
   log("  /step status           - Show current status")
+  log("  /step explore [area]   - Start explore mode in an area (default: chaossea)")
+  log("  /step explore off      - Stop explore mode")
   log("  /step set prompt <p>   - Set prompt detection pattern")
   log("  /step set attack [on|off] - Toggle auto-attack")
   log("  /step set glance [cmd]    - Set/show glance command")
   log("  /step set kill [cmd]      - Set/show attack command prefix")
+  log("  /step set dive [on|off]   - Toggle explore dive policy")
   log("  /step set config       - Show configuration")
 end
 
@@ -414,6 +472,14 @@ local function dispatch_set(rest)
       config.attack_cmd = value
       log("Attack command set: " .. config.attack_cmd)
     end
+  elseif key == "dive" then
+    if value == "" then
+      log("dive: " .. (config.explore_policy == "dive" and "on" or "off"))
+    else
+      config.explore_policy = (value == "on") and "dive" or "clear"
+      if explore and explore.active() then explore.set_policy(config.explore_policy) end
+      log("dive: " .. (config.explore_policy == "dive" and "on" or "off"))
+    end
   else
     log("Unknown setting: " .. key)
     show_help()
@@ -436,6 +502,14 @@ local function dispatch(args)
     M.start(true)
   elseif sub == "stop" then
     M.stop()
+  elseif sub == "explore" then
+    local arg = rest:match("^(%S*)")
+    if arg == "off" then
+      M.explore_stop()
+    else
+      local area = (arg ~= "" and arg) or "chaossea"
+      if M.explore_start(area) then M.start(config.targets_only) end
+    end
   else
     log("Unknown subcommand: " .. sub)
     show_help()
@@ -447,12 +521,15 @@ local function register_command()
   local id, err = command.register({
     name = "/step",
     aliases = { "/autostepper" },
-    usage = "/step [start|targets|stop|status|set <key> [value]]",
+    usage = "/step [start|targets|stop|explore [area]|explore off|status|set <key> [value]]",
     summary = "Automatic speedwalk stepping with optional combat",
     description = "Walks a stored step path one room at a time, optionally "
-      .. "glancing and attacking on the way. The shorthands are '-.' to start "
-      .. "on any mob, '->' to start on targets only, '-!' to stop, and '-' for "
-      .. "help. Settings: status, config, prompt, attack, glance, kill.",
+      .. "glancing and attacking on the way. Or, with 'explore [area]', maps an "
+      .. "unmapped area room by room, stopping automatically once every reachable "
+      .. "exit leads somewhere already mapped; 'explore off' stops it early. The "
+      .. "shorthands are '-.' to start on any mob, '->' to start on targets only, "
+      .. "'-!' to stop, and '-' for help. Settings: status, config, prompt, "
+      .. "attack, glance, kill, dive.",
     accepts_args = true,
     handler = dispatch,
   })
@@ -564,29 +641,32 @@ function M.start(targets_only)
     return false
   end
 
-  local place = sw.get_current_place()
-  if not place then
-    log("Error: current place not set (use .set <place>)")
-    return false
-  end
+  local exploring = explore and explore.active()
 
-  -- Load step list from current place
-  if not sw.load_steps() then
-    log("Error: no steps configured for place '" .. place .. "'")
-    log("Use speedwalk.configure_place('" .. place .. "', 'n|s|e|w', 'target1,target2')")
-    return false
-  end
+  if not exploring then
+    local place = sw.get_current_place()
+    if not place then
+      log("Error: current place not set (use .set <place>)")
+      return false
+    end
 
-  local info = sw.step_info()
-  local targets = sw.get_targets()
+    if not sw.load_steps() then
+      log("Error: no steps configured for place '" .. place .. "'")
+      log("Use speedwalk.configure_place('" .. place .. "', 'n|s|e|w', 'target1,target2')")
+      return false
+    end
 
-  -- Set targets_only mode
-  config.targets_only = targets_only or false
-
-  local mode = config.targets_only and "targets only" or "any mob"
-  log("Starting at '" .. place .. "': " .. info.total .. " steps (" .. mode .. ")")
-  if config.targets_only and #targets > 0 then
-    log("Targets: " .. table.concat(targets, ", "))
+    local info = sw.step_info()
+    local targets = sw.get_targets()
+    config.targets_only = targets_only or false
+    local mode_label = config.targets_only and "targets only" or "any mob"
+    log("Starting at '" .. place .. "': " .. info.total .. " steps (" .. mode_label .. ")")
+    if config.targets_only and #targets > 0 then
+      log("Targets: " .. table.concat(targets, ", "))
+    end
+  else
+    config.targets_only = targets_only or false
+    log("Starting explore run (" .. (explore.stats().policy or "clear") .. ")")
   end
 
   enabled = true
@@ -616,6 +696,29 @@ function M.stop()
   current_target = nil
 end
 
+function M.explore_start(area_name)
+  local prof = load_area(area_name)
+  if not prof then
+    log("Unknown area '" .. tostring(area_name) .. "'")
+    return false
+  end
+  explore.attach(ri)
+  if not explore.start(prof, config.explore_policy) then
+    log("Explore mode failed to start")
+    return false
+  end
+  log("Explore mode active: " .. prof.name)
+  return true
+end
+
+function M.explore_stop()
+  if explore and explore.active() then
+    explore.stop()
+    log("Explore mode off")
+  end
+  M.stop()
+end
+
 -- Check if running
 function M.is_running()
   return enabled
@@ -634,6 +737,14 @@ function M.status()
   log("  Pending prompts: " .. pending_prompts)
   log("  Mode: " .. (config.targets_only and "targets only (->)" or "any mob (-.))"))
   log("  Prompt count: " .. prompt_count)
+
+  if explore and explore.active() then
+    local s = explore.stats()
+    log("  Explore: " .. (s.policy or "clear") .. ", " .. s.rooms .. " rooms, "
+        .. "at " .. s.x .. "," .. s.y .. "," .. s.z
+        .. (s.layer and (" (layer " .. s.layer .. ")") or ""))
+    log("  Desyncs: " .. tostring(explore.desyncs and explore.desyncs() or 0))
+  end
 
   if sw then
     local info = sw.step_info()
