@@ -417,16 +417,21 @@ act = ah.plan()
 check("reserve + price exactly -> the buy is allowed",
       act ~= nil and act.kind == "buy", act and act.why)
 
--- ---- the server's precondition is price * count, not price ----------------
--- The record's `price` is ALREADY the lot total (livestock_daemon.c:310
--- stores `price * count`), and vlivestock.c's do_buy then defaults
--- `buy_count = lot_count` and requires `total_cost = price * buy_count` --
--- so a lot of 3 costs three times what the record's `price` field reads.
--- Every other fixture in this file uses count = 1, the one value where the
--- two figures agree, which is exactly why gating on `price` alone shipped
--- green. Gating on the wrong figure is not a harmless refusal: the command
--- goes out, the server rejects it, no state changes, and the phase machine
--- re-picks the same listing forever.
+-- ---- the server's precondition is the lot total, i.e. the record's price ---
+-- The record's `price` is ALREADY the lot total (livestock_daemon.c:310 stores
+-- `price * count`, bulk discount included), and `buy_cmd` passes no count, so
+-- do_buy buys the whole lot and charges exactly that figure.
+--
+-- This case exists because the line has been wrong in BOTH directions. It was
+-- once `price * count`, which matched a server-side bug where do_buy's gate
+-- read `total_cost = price * buy_count` -- an already-multiplied total times
+-- the lot size. That bug is fixed (do_buy derives a per-head unit first), so
+-- the gate is `price`.
+--
+-- Keep `count = 3` here: every other fixture uses count = 1, the one value
+-- where price and price * count agree, which is exactly why gating on the
+-- wrong figure once shipped green. The "covers it exactly" case below fails
+-- if anyone reintroduces the multiply.
 S.autoherd = nil
 ah.settings()                             -- reserve back to its 2000 default
 S.lpending = {}
@@ -440,20 +445,17 @@ S.lmarket = {
             price = 400, hard = 30, fert = 40, yield = 50, vigor = 45,
             con = 35 } },
 }
-S.daler = 2400                            -- budget 400: covers price, not 1200
+S.daler = 2399                            -- budget 399, one under the lot total
 act = ah.plan()
-check("a lot of 3 the budget cannot cover in full is not planned",
+check("one daler short of the lot total -> no buy",
       act == nil or act.kind ~= "buy", act and act.cmd)
-S.daler = 3199                            -- budget 1199, one under the lot
+S.daler = 2400                            -- budget exactly 400
 act = ah.plan()
-check("one daler short of the whole lot -> still no buy",
-      act == nil or act.kind ~= "buy", act and act.cmd)
-S.daler = 3200                            -- budget exactly 1200
-act = ah.plan()
-check("budget covering the whole lot -> the buy is allowed",
+check("a 3-animal lot whose total the budget covers exactly -> buy allowed",
       act ~= nil and act.kind == "buy", act and act.why)
-check("the note quotes the lot total the server actually charges",
-      act and act.why and act.why:find("1200d", 1, true) ~= nil, act and act.why)
+check("the note quotes the lot total, not the total times the lot size",
+      act and act.why and act.why:find("400d", 1, true) ~= nil
+        and act.why:find("1200d", 1, true) == nil, act and act.why)
 S.daler = 100000
 
 -- ---- quality buy-in: the margin, and its own cap check ---------------------

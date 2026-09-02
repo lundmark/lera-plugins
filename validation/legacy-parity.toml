@@ -1,7 +1,7 @@
 [scope]
 revision = 1
 approved_on = "2026-08-10"
-digest = "5c67382634e4941c4ae4ed2878f23221f05958850731d711c671c4e18b531ca2"
+digest = "e1efd19d625709cd8b3e05e8920a0d5114af24a559bf5543a586d66ba029f98f"
 
 [[current_plugins]]
 key = "autologin"
@@ -54,6 +54,12 @@ fixtures = []
 notes = "Directory plugin: init.lua is the mapped entry module. The guild_viking_* rows below register its other source files purely so their paths satisfy the current-refs path check (current_paths is built from every current_plugins path in this file); each carries no separate target mapping of its own. Stage 2 added the pagelib/page_opts/window shell and the twelve pages/*.lua modules (pane rendering); those rows follow the same pattern. Stage 3 added scroller.lua (extracted from window.lua), popups.lua (the named-popup registry and /vik pop), maplib.lua (grid rendering/hit-testing), and the five popups/*.lua board-view modules (map, sea, sea_common, voyage, cityplan, war, war_campaign, war_battle) -- same file-registration-only pattern. Stage 4 added autoraid.lua and autovoyage.lua (the auto-raid/auto-voyage automations), the autotrader/ directory (core.lua policy/quality math, plan.lua route planning, tick.lua paced execution + control surface), and pathfinding.lua (vmap BFS) -- same file-registration-only pattern."
 
 [[current_plugins]]
+key = "guild_viking_autoherd"
+path = "3scapes/guild_viking/autoherd.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
 key = "guild_viking_autoraid"
 path = "3scapes/guild_viking/autoraid.lua"
 target_keys = []
@@ -98,6 +104,12 @@ fixtures = []
 [[current_plugins]]
 key = "guild_viking_handlers_kingdom"
 path = "3scapes/guild_viking/handlers/kingdom.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_handlers_livestock"
+path = "3scapes/guild_viking/handlers/livestock.lua"
 target_keys = []
 fixtures = []
 
@@ -194,6 +206,12 @@ fixtures = []
 [[current_plugins]]
 key = "guild_viking_pages_goods"
 path = "3scapes/guild_viking/pages/goods.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "guild_viking_pages_livestock"
+path = "3scapes/guild_viking/pages/livestock.lua"
 target_keys = []
 fixtures = []
 

@@ -469,22 +469,28 @@ local function each_listing(fn)
   end
 end
 
--- What the server will actually CHARGE for a listing, which is NOT the
--- record's `price` field. CORRECTION TO LEGACY (and to this port's own first
--- cut), verified against the server:
---   * world/livestock_daemon.c:310 stores `"price": price * count` -- the
---     record's price is already a LOT TOTAL, not a per-head price;
---   * cmd/vlivestock.c's do_buy then sets `int buy_count = lot_count;` when
---     no count argument is given (buy_cmd below never passes one) and
---     requires `int total_cost = price * buy_count;`.
--- So the daler the player needs on hand is price * count, and the server's
--- own market table agrees -- vlivestock.c:210 renders `price * qty` as the
--- "T:" (total) column beside "P:". Gating on `price` alone lets the planner
--- send a buy the server refuses, and because a refusal changes no state the
--- phase machine cools down, replans, picks the SAME listing and repeats
--- forever. Every count = 1 lot is the one case where the two figures agree.
+-- What the server will charge for a listing. The record's `price` field IS
+-- that figure already: world/livestock_daemon.c:310 stores
+-- `"price": price * count`, a LOT TOTAL with the count >= 3 bulk discount
+-- already folded into the per-head price it multiplied.
+--
+-- `buy_cmd` below never passes a count argument, so cmd/vlivestock.c's do_buy
+-- takes `buy_count = lot_count` and charges the whole lot -- exactly
+-- `m.price`. Nothing further to compute.
+--
+-- HISTORY, because this line has now been wrong in both directions. This port
+-- first gated on `price` and then on `price * count`, the latter because the
+-- server's own gate read `total_cost = price * buy_count`, multiplying an
+-- already-multiplied total by the lot size and refusing purchases the player
+-- could afford. That was a server-side bug, since fixed (do_buy now derives a
+-- per-head unit from the lot before costing anything), so the gate is `price`
+-- again -- this time because the server agrees, not by accident.
+--
+-- Either way round the planner is safe if the two sides are briefly out of
+-- step: gating too low means one refused buy, which drops the listing and
+-- moves on rather than wedging; gating too high just skips an affordable lot.
 local function lot_cost(m)
-  return num(m.price) * math.max(1, num(m.count))
+  return num(m.price)
 end
 
 -- LEGACY:169 (best_listing). Best AFFORDABLE listing of `species`, optionally
