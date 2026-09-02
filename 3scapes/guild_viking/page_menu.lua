@@ -83,6 +83,20 @@ local PAGE_MENUS = {
     { key = "show_farm_plots",   label = "Show Farm" },
     { key = "show_farm_blot",    label = "Show Blot Grove" },
   },
+  -- lera-only (not in LEGACY): the livestock page (Task 2). No LEGACY page
+  -- index of its own -- Guild.Livestock's herds/queue/feed/pending/find/
+  -- market/needs sections lived in LEGACY's City miniwindow (see
+  -- pages/livestock.lua's header for the exact line ranges), gated here
+  -- under their own page instead since this port gives them a dedicated tab.
+  stock = {
+    { key = "show_stock_herds",   label = "Show My Herds" },
+    { key = "show_stock_queue",   label = "Show Butchery Queue" },
+    { key = "show_stock_feed",    label = "Show Feed" },
+    { key = "show_stock_pending", label = "Show Pending Deliveries" },
+    { key = "show_stock_find",    label = "Show Livestock Find" },
+    { key = "show_stock_market",  label = "Show Market" },
+    { key = "show_stock_needs",   label = "Show Needs" },
+  },
   -- LEGACY [4]
   builds = {
     { key = "show_builds_construction", label = "Show Construction" },
@@ -175,7 +189,7 @@ local PAGE_MENUS = {
 
 -- Menu titles: the page's own name, so the box says what it controls.
 local TITLES = {
-  stats = "Stats", city = "City", farm = "Farm", builds = "Builds",
+  stats = "Stats", city = "City", farm = "Farm", stock = "Stock", builds = "Builds",
   people = "People", goods = "Goods", map = "Map", bonds = "Bonds",
   ranks = "Ranks", sea = "Sea", court = "Court", army = "Army",
   war = "War", trade = "Trade",

@@ -71,6 +71,7 @@ local ranks_page = require("pages.ranks")
 local court_page = require("pages.court")
 local army_page = require("pages.army")
 local war_page = require("pages.war")
+local livestock_page = require("pages.livestock")
 
 window.PAGES = {
   { key = "stats",  label = "Stats",  mod = stats_page },
@@ -85,6 +86,18 @@ window.PAGES = {
   { key = "army",   label = "Army",   mod = army_page },
   { key = "war",    label = "War",    mod = war_page },
   { key = "trade",  label = "Trade",  mod = trade_page },
+  -- Task 2 (Viking husbandry): appended at the END rather than inserted
+  -- after "farm" (where it would read more naturally, farm/livestock being
+  -- neighbouring concerns) -- deliberately, to avoid reflowing this array's
+  -- tab-bar column layout, which guild_viking_window_test.lua asserts
+  -- against down to exact pixel columns and wrap-row boundaries (e.g. its
+  -- 30-wide wrap test, its scrolled/wrapped Task 6 pointer-seam math).
+  -- Appending here leaves every existing tab's column span byte-identical;
+  -- confirmed by running the suite both ways -- inserting after "farm"
+  -- reflowed the 30-wide wrap points and cascaded into ~10 unrelated
+  -- failures, appending here reflowed nothing before it. See the Task 2
+  -- report for the full before/after.
+  { key = "stock",  label = "Stock",  mod = livestock_page },
 }
 
 local pages_by_key = {}
