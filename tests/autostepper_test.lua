@@ -37,6 +37,12 @@ timer = {
   end,
 }
 
+local function queued_timers()
+  local n = 0
+  for _ in pairs(timers) do n = n + 1 end
+  return n
+end
+
 -- Run every timer callback queued so far, in id order.
 local function run_timers()
   local queued = timers
@@ -462,7 +468,8 @@ quiet(as.stop)
 -- the run, and that an exhausted explore run never falls through to the route.
 local explore_steps = {}
 local explore_taken = {}
-local explore_state = { active = false, arrivals = 0, stopped_reason = nil }
+local explore_state = { active = false, arrivals = 0, coord = 0, frames = 0,
+                        stops = 0, start_policy = nil, attached = nil }
 as.debug_set_explore({
   active = function() return explore_state.active end,
   next_step = function()
@@ -471,23 +478,59 @@ as.debug_set_explore({
     explore_taken[#explore_taken + 1] = dir
     return { raw = dir, commands = { dir } }
   end,
-  on_arrival = function() explore_state.arrivals = explore_state.arrivals + 1 end,
-  on_frame = function() end,
+  -- The real module commits the emitted direction HERE -- on_arrival is the one
+  -- place position moves -- so the coordinate, and therefore the room key,
+  -- advances on arrival and not on next_step. Getting that backwards makes the
+  -- key advance before process_room is called under either ordering, which
+  -- silently hides whether on_arrival runs first.
+  on_arrival = function()
+    explore_state.arrivals = explore_state.arrivals + 1
+    explore_state.coord = explore_state.coord + 1
+  end,
+  on_frame = function(info)
+    explore_state.frames = explore_state.frames + 1
+    explore_state.last_frame = info
+  end,
   -- The key MUST advance as the explorer moves. A constant would make the
   -- reseed case below unpassable, and it is the whole property under test:
   -- roominfo's key cannot change inside a sea layer (id nil, one name per
   -- layer), so the only thing that can drive a reseed is this coordinate.
-  room_key = function() return "xyz:" .. #explore_taken .. ",0,0" end,
-  stop = function() explore_state.active = false end,
+  room_key = function() return "xyz:" .. explore_state.coord .. ",0,0" end,
+  stop = function()
+    explore_state.active = false
+    explore_state.stops = explore_state.stops + 1
+  end,
+  policy = function() return explore_state.policy or "clear" end,
+  set_policy = function(name) explore_state.policy = name return true end,
   stats = function()
-    return { rooms = 1, x = #explore_taken, y = 0, z = 0, policy = "clear" }
+    return { rooms = 1, x = explore_state.coord, y = 0, z = 0,
+             policy = explore_state.policy or "clear" }
   end,
 })
+
+-- A frame arriving while no step is outstanding must still reach the explorer.
+-- On the real path the entry room's Room.Info arrives when the player WALKS
+-- INTO the area -- before the explore command runs and before any step is
+-- outstanding -- and an identical payload is never resent, so a frame dropped
+-- here is a room whose exits the explorer never learns. It must NOT arm the
+-- arrival settle timer, though: nothing has been asked to move, so there is no
+-- arrival to commit.
+quiet(as.stop)
+run_timers()
+explore_state.active = true
+explore_state.frames = 0
+arrive(399, "Layer one of the Sea of Chaos", {}, {})
+deliver_frame()
+check("a frame arriving outside a step still reaches the explorer",
+  explore_state.frames == 1, tostring(explore_state.frames))
+check("a frame arriving outside a step arms no arrival timer",
+  queued_timers() == 0, tostring(queued_timers()))
 
 quiet(as.stop)
 explore_state.active = true
 explore_steps = { "n", "e" }
 explore_taken = {}
+explore_state.coord = 0
 sw_steps = { { raw = "SHOULD-NOT-RUN", commands = { "SHOULD-NOT-RUN" } } }
 arrive(400, "Layer one of the Sea of Chaos", {}, {})
 sent = {}
@@ -513,6 +556,11 @@ check("an exhausted explore run stops the stepper", as.is_running() == false,
   tostring(as.is_running()))
 check("an exhausted explore run never takes a route step",
   count_sent("SHOULD-NOT-RUN") == 0, table.concat(sent, "|"))
+-- Exhaustion ends the RUN (6.5), not just the stepping. Left active, the next
+-- "-." re-enters explore mode, instantly re-exhausts the same map, and route
+-- mode is unreachable for the rest of the session.
+check("an exhausted explore run deactivates explore mode",
+  explore_state.active == false, tostring(explore_state.active))
 
 -- The room key comes from the explorer's own coordinate while it is active.
 -- roominfo's key is useless in the sea: the id is nil and the name is the same
@@ -520,6 +568,7 @@ check("an exhausted explore run never takes a route step",
 explore_state.active = true
 explore_steps = { "n", "s" }
 explore_taken = {}
+explore_state.coord = 0
 arrive(403, "Layer one of the Sea of Chaos", { "a small mutant organism" }, {})
 sent = {}
 quiet(function() as.start(false) end)
@@ -533,6 +582,17 @@ arrival_prompt()
 check("a monster in the NEXT sea room is attacked despite the same room name",
   last_sent() == "kill a second organism", table.concat(sent, "|"))
 quiet(as.stop)
+
+-- ---- stopping the stepper stops the explorer ---------------------------------
+-- Explore mode is dead reckoned: it believes it knows where it is only because
+-- it emitted every move itself. Left active across a stop, the next "-."
+-- resumes that reckoning -- and the combat that goes with it -- wherever the
+-- player is now standing, which after walking out of the area is anywhere.
+explore_state.active = true
+quiet(as.stop)
+check("stopping the stepper deactivates explore mode",
+  explore_state.active == false, tostring(explore_state.active))
+
 explore_state.active = false
 as.debug_set_explore(nil)
 

@@ -70,6 +70,19 @@ function M.start(prof, initial_policy)
   last_name = nil
   layer_corrections = 0
   desync_count = 0
+
+  -- Seed from the room we are already standing in. The entry room's Room.Info
+  -- arrives when the player WALKS INTO the area, which is before the explore
+  -- command runs, and the server never resends an identical payload -- so a
+  -- mode that waits for the next frame records its origin with no exits, BFS
+  -- finds no frontier, and the run ends on its first decision. This is also
+  -- exactly the suppression case (6.2): "no frame arrived" means the exits are
+  -- the ones already known, never that the room has none.
+  local info = ri and ri.info and ri.info()
+  if type(info) == "table" then
+    last_exits = filter_exits(info.exits)
+    last_name = info.room
+  end
   return true
 end
 

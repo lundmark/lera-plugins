@@ -186,11 +186,17 @@ local function complete_arrival()
   process_room()
 end
 
+-- Two separate jobs, deliberately gated separately. Feeding the explorer is
+-- information: a frame describes the room we are standing in whether or not a
+-- step is outstanding, and the frames that arrive while the stepper is idle are
+-- the ones that matter most -- the entry room's, seen when the player walks into
+-- the area before explore mode is even started. Arming the arrival settle timer
+-- is the other job, and that only means anything while a step is outstanding.
 local function on_room_info_frame()
-  if not enabled or state ~= "stepping" then return end
   if explore and explore.active() and explore.on_frame and ri and ri.info then
     explore.on_frame(ri.info())
   end
+  if not enabled or state ~= "stepping" then return end
   if settle_timer then return end
   settle_timer = timer.after(BURST_SETTLE_MS, function()
     settle_timer = nil
@@ -234,6 +240,10 @@ local function do_step()
       enabled = false
       state = "idle"
       cancel_settle()
+      -- Exhaustion ends the RUN, not just the stepping (6.5). Left active, the
+      -- next "-." would re-enter explore mode, instantly re-exhaust the same
+      -- map and never reach route mode at all.
+      if explore.stop then explore.stop() end
       notify(on_complete_callbacks)
       return false
     end
@@ -694,6 +704,12 @@ function M.stop()
   prompt_count = 0
   pending_prompts = 0
   current_target = nil
+  -- Explore mode does not outlive the stepper. It is dead reckoned: it believes
+  -- it knows where it is only because it emitted every move itself. Left active
+  -- across a stop, the next "-." resumes that reckoning -- and the combat that
+  -- goes with it -- wherever the player is now standing, which after walking
+  -- out of the area is anywhere at all.
+  if explore and explore.active() and explore.stop then explore.stop() end
 end
 
 function M.explore_start(area_name)

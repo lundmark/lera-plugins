@@ -176,6 +176,38 @@ check("the coordinate north of the origin is never reached",
   ex_st.x .. "," .. ex_st.y)
 mode.stop()
 
+-- ---- start seeds itself from the room we are standing in ---------------------
+-- On the real path the entry room's Room.Info arrives when the player WALKS
+-- INTO the area, which is before explore mode is started, and the server never
+-- resends an identical payload -- so there may be no further frame at all. A
+-- mode that waits for one records its origin with no exits, finds no frontier,
+-- and ends the run on its first decision: the whole feature, dead. Note that no
+-- frame is delivered anywhere in this section; start() has to read roominfo.
+ri_info = { room = "Layer one of the Sea of Chaos", room_id = nil,
+            exits = { "e", "s", "w", "out" } }
+quiet(function() mode.start(profile, "clear") end)
+quiet(mode.on_arrival)
+local seed_st = mode.stats()
+check("the seeded origin records exactly one room", seed_st.rooms == 1,
+  tostring(seed_st.rooms))
+check("start seeds the origin's exits from roominfo, so a frontier exists",
+  mode.next_step() ~= nil, "no frontier")
+check("start seeds the room name from roominfo, so the layer is known",
+  seed_st.layer == 0, tostring(seed_st.layer))
+mode.stop()
+
+-- The seeded exits go through the same exclusion filter a delivered frame does.
+-- 'n' is walkable and ranks first in compass order, so a profile excluding it
+-- is the case that distinguishes a filtered seed from a raw one.
+ri_info = { room = "Layer one of the Sea of Chaos", room_id = nil,
+            exits = { "n", "e" } }
+quiet(function() mode.start(excl_profile, "clear") end)
+quiet(mode.on_arrival)
+local seed_ex = mode.next_step()
+check("a seeded exit the profile excludes is never proposed",
+  seed_ex and seed_ex.raw == "e", seed_ex and seed_ex.raw)
+mode.stop()
+
 -- ---- next_step over a multi-hop route -----------------------------------------
 -- The three-room capture above never forced this: every frontier in it was
 -- adjacent to the current room, so the underlying path was always length 1
