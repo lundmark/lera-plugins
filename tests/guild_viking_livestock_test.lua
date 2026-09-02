@@ -54,10 +54,10 @@ check("herd trait is named, not printed raw",
       withherd:find("Prolific", 1, true) ~= nil)
 
 -- A section toggled off must vanish entirely.
-page_opts.show_stock_herds = false
+page_opts.set("show_stock_herds", false)
 check("herds section respects its toggle",
       joined(80):find("Sheep", 1, true) == nil)
-page_opts.show_stock_herds = true
+page_opts.set("show_stock_herds", true)
 
 -- Narrow width must not error and must not exceed the width.
 local narrow = page.lines(40)

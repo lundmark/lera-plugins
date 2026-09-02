@@ -63,26 +63,6 @@ local C = pagelib.C
 
 local M = {}
 
--- page_opts.lua's get()/set() route through a private `values` closure (see
--- that file), so writing a field directly onto the module table it returns
--- (page_opts.KEY = v) does NOT change what page_opts.get(KEY) sees. Every
--- sibling page in this plugin reads its gates through page_opts.get()
--- exclusively, and in real runtime so does this one -- opt() below falls
--- through to get() whenever no bare field is set, which is always true
--- outside of a test, since nothing else in this plugin (page_menu.lua's
--- M.pick included) ever assigns a field on the page_opts table directly.
--- The one exception is this page's own mandated test
--- (tests/guild_viking_livestock_test.lua), which exercises a toggle by
--- writing `page_opts.show_stock_herds = false` directly rather than calling
--- page_opts.set(...); opt() checks for that bare field first so the test's
--- literal, brief-mandated form takes effect without page_opts.lua itself
--- needing a shared-module change for one page's test shape.
-local function opt(key)
-  local raw = page_opts[key]
-  if raw ~= nil then return raw end
-  return page_opts.get(key)
-end
-
 -- ---------------------------------------------------------------------------
 -- Shared static tables (see the provenance comment above for sources)
 -- ---------------------------------------------------------------------------
@@ -391,13 +371,13 @@ function M.lines(width)
   local lines = {}
   local function add(s) lines[#lines + 1] = s end
 
-  if opt("show_stock_herds") then herds_lines(add, width) end
-  if opt("show_stock_queue") then queue_lines(add, width) end
-  if opt("show_stock_feed") then feed_lines(add, width) end
-  if opt("show_stock_pending") then pending_lines(add, width) end
-  if opt("show_stock_find") then find_lines(add, width) end
-  if opt("show_stock_market") then market_lines(add, width) end
-  if opt("show_stock_needs") then needs_lines(add, width) end
+  if page_opts.get("show_stock_herds") then herds_lines(add, width) end
+  if page_opts.get("show_stock_queue") then queue_lines(add, width) end
+  if page_opts.get("show_stock_feed") then feed_lines(add, width) end
+  if page_opts.get("show_stock_pending") then pending_lines(add, width) end
+  if page_opts.get("show_stock_find") then find_lines(add, width) end
+  if page_opts.get("show_stock_market") then market_lines(add, width) end
+  if page_opts.get("show_stock_needs") then needs_lines(add, width) end
 
   return lines
 end
