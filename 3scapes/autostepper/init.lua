@@ -366,10 +366,33 @@ local function request_room_refresh()
   gmcp.send("Room.Refresh", { packages = { "Room.Info", "Room.Contents" } })
 end
 
+-- current_target stays the DISPLAY name (see the comment on its declaration):
+-- forget_monster() strikes names out of room_monsters, which is seeded from
+-- Room.Contents display names, not from the keyword vocabulary. What actually
+-- goes out on the wire is resolved separately, below.
 local function do_attack(monster)
   state = "fighting"
   current_target = monster
-  local cmd = config.attack_cmd .. " " .. monster
+
+  -- 1. A configured target keyword that matches this monster wins outright.
+  -- 2. Otherwise, in attack-anything mode with a non-empty target list, guess
+  --    the first entry -- legacy's "unparsed" case: the list is the area's
+  --    monster vocabulary, so it usually resolves, but it IS a guess.
+  -- 3. Otherwise (targets-only with no match, or no target list at all),
+  --    fall back to the display name -- today's behavior.
+  local send_target = sw.match_target(monster)
+  if not send_target then
+    local targets = (not config.targets_only) and sw.get_targets() or {}
+    if #targets > 0 then
+      send_target = targets[1]
+      log("No target keyword matched \"" .. monster .. "\"; guessing \""
+          .. send_target .. "\"")
+    else
+      send_target = monster
+    end
+  end
+
+  local cmd = config.attack_cmd .. " " .. send_target
   log("Attacking: " .. monster)
   notify(on_attack_callbacks, monster, cmd)
   mud.send(cmd)

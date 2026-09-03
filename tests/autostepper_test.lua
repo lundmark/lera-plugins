@@ -159,13 +159,35 @@ local function deliver_contents_frame()
 end
 
 -- speedwalk stand-in: a fixed list of steps the test can count down.
+--
+-- sw_target_list drives get_targets/match_target/is_valid_target together, the
+-- same way the real speedwalk module's is_valid_target now delegates to
+-- match_target: one rule, applied consistently. It defaults empty so every
+-- pre-existing case below (written against "no configured targets ->
+-- attack by display name") keeps meaning what it always meant; a case that
+-- wants keyword-matching or fallback-guess behavior sets it locally and
+-- restores it afterward.
 local sw_steps = {}
 local sw_taken = {}
+local sw_target_list = {}
+local function fake_match_target(name)
+  if type(name) ~= "string" then return nil end
+  local lower = name:lower()
+  for _, t in ipairs(sw_target_list) do
+    if lower:find(t:lower(), 1, true) then return t end
+  end
+  return nil
+end
 local fake_speedwalk = {
   get_current_place = function() return "test place" end,
   load_steps = function() return #sw_steps > 0 end,
-  get_targets = function() return { "orc" } end,
-  is_valid_target = function(name) return name:find("orc", 1, true) ~= nil end,
+  get_targets = function()
+    local out = {}
+    for i, t in ipairs(sw_target_list) do out[i] = t end
+    return out
+  end,
+  match_target = fake_match_target,
+  is_valid_target = function(name) return fake_match_target(name) ~= nil end,
   step_info = function()
     return { current = #sw_taken, total = #sw_taken + #sw_steps,
              remaining = #sw_steps }
@@ -397,18 +419,22 @@ check("player in room steps instead of fighting", count_sent("kill") == 0,
 run_timers()
 sw_steps = { { raw = "n", commands = { "n" } } }
 sw_taken = {}
+sw_target_list = { "orc" }
 arrive(104, "A back alley", { "a harmless kitten", "a scrawny orc" }, {})
 sent = {}
 quiet(function() as.start(true) end)
 sent = {}
 prompt_cycle()
-check("targets-only attacks the listed target",
-  last_sent() == "kill a scrawny orc", table.concat(sent, "|"))
+-- The command is the matched KEYWORD ("orc"), not the display name that
+-- matched it -- monsters do not answer to their full display name.
+check("targets-only attacks the listed target by keyword",
+  last_sent() == "kill orc", table.concat(sent, "|"))
 sent = {}
 quiet(as.prompt)
 prompt_cycle()
 check("non-target left behind does not restart combat",
   count_sent("kill") == 0, table.concat(sent, "|"))
+sw_target_list = {}
 
 quiet(as.on_unload)
 
@@ -1180,6 +1206,95 @@ run_timers()  -- fire the ~1s timeout; no Room.Contents answer ever arrives
 check("no answer within the timeout falls back to prune-and-decide",
   sent[1] == "s", table.concat(sent, "|"))
 
+quiet(as.stop)
+
+-- ---- attack resolves to the target keyword, not the display name (Task T) ---
+-- Legacy sent a keyword from the target list; monsters do not answer to their
+-- full display name. current_target itself must stay the display name --
+-- forget_monster() strikes names out of room_monsters, which is seeded from
+-- Room.Contents display names, not from the keyword vocabulary -- so these
+-- cases pin the wire command and the pruning that depends on current_target
+-- as two separate things.
+run_timers()
+sw_steps = { { raw = "n", commands = { "n" } } }
+sw_taken = {}
+sw_target_list = { "orc" }
+arrive(700, "A sunken crypt", { "a scrawny orc" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+sent = {}
+prompt_cycle()
+check("a matching monster is attacked by its target keyword, not its display name",
+  last_sent() == "kill orc", table.concat(sent, "|"))
+
+local target_status = capture(as.status)
+check("current_target stays the display name after a keyword attack",
+  has_line(target_status, "Target: a scrawny orc"), table.concat(target_status, "|"))
+check("the tracked view still holds the monster under its display name",
+  #tracked() == 1 and tracked()[1] == "a scrawny orc", table.concat(tracked(), ","))
+
+-- Combat ends: pruning must still find and strike the display name. Had
+-- current_target been set to the keyword instead, forget_monster(name) would
+-- search room_monsters (display names) for "orc" and find nothing, leaving
+-- the corpse in the tracked view forever -- the trap this task exists to avoid.
+sent = {}
+quiet(as.prompt)
+check("the finished target is pruned from the tracked view by display name",
+  #tracked() == 0, table.concat(tracked(), ","))
+sw_target_list = {}
+quiet(as.stop)
+
+-- ---- non-matching monster in attack-anything mode: guess the first entry ----
+-- Legacy's "unparsed" case: kill <global_target[1]>. It IS a guess, so it is
+-- logged as one rather than applied silently.
+run_timers()
+sw_steps = { { raw = "e", commands = { "e" } } }
+sw_taken = {}
+sw_target_list = { "gremlin", "goblin" }
+arrive(701, "A dry cistern", { "a large rat" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+sent = {}
+local guess_lines = capture(as.prompt)
+check("a non-matching monster in attack-anything mode is attacked by the first list entry",
+  last_sent() == "kill gremlin", table.concat(sent, "|"))
+check("the fallback guess is logged",
+  has_line(guess_lines, "guess") and has_line(guess_lines, "a large rat")
+    and has_line(guess_lines, "gremlin"),
+  table.concat(guess_lines, "|"))
+sw_target_list = {}
+quiet(as.stop)
+
+-- ---- empty target list: the display name is still the only option -----------
+run_timers()
+sw_steps = { { raw = "s", commands = { "s" } } }
+sw_taken = {}
+arrive(702, "An open courtyard", { "a wandering ghoul" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+sent = {}
+prompt_cycle()
+check("with no configured targets, the display name is used",
+  last_sent() == "kill a wandering ghoul", table.concat(sent, "|"))
+quiet(as.stop)
+
+-- ---- targets-only mode: a non-matching monster is skipped, never guessed ----
+-- The fallback guess is for attack-anything mode only -- reaching for the
+-- first keyword here would attack something the user deliberately excluded.
+run_timers()
+sw_steps = { { raw = "w", commands = { "w" } } }
+sw_taken = {}
+sw_target_list = { "gremlin" }
+arrive(703, "A locked vault", { "a large rat" }, {})
+sent = {}
+quiet(function() as.start(true) end)
+sent = {}
+prompt_cycle()
+check("targets-only mode never attacks a non-matching monster",
+  count_sent("kill") == 0, table.concat(sent, "|"))
+check("targets-only mode steps past the non-matching monster instead",
+  sent[1] == "w", table.concat(sent, "|"))
+sw_target_list = {}
 quiet(as.stop)
 
 if failures > 0 then
