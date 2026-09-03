@@ -62,6 +62,7 @@ LERA_ROOT=$lera_root "$luajit" tests/kill_trigger_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/mxp_links_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/gmcp_state_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/roominfo_test.lua
+LERA_ROOT=$lera_root "$luajit" tests/speedwalk_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/minimap_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/mapper_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/mapview_test.lua

@@ -988,19 +988,28 @@ function M.step_info()
   }
 end
 
--- Check if a monster is in the current place's target list
-function M.is_valid_target(monster_name)
-  if step_targets == "" then return false end
+-- Find the first target keyword (in its authored case) that appears in a
+-- monster's display name, case-insensitively. Returns nil when nothing
+-- matches, including for a non-string/nil argument.
+function M.match_target(monster_name)
+  if type(monster_name) ~= "string" then return nil end
+  if step_targets == "" then return nil end
 
   local monster_lower = monster_name:lower()
   for target in step_targets:gmatch("[^,]+") do
-    target = target:match("^%s*(.-)%s*$"):lower()
-    if target ~= "" and monster_lower:find(target, 1, true) then
-      return true
+    local trimmed = target:match("^%s*(.-)%s*$")
+    local trimmed_lower = trimmed:lower()
+    if trimmed_lower ~= "" and monster_lower:find(trimmed_lower, 1, true) then
+      return trimmed
     end
   end
 
-  return false
+  return nil
+end
+
+-- Check if a monster is in the current place's target list
+function M.is_valid_target(monster_name)
+  return M.match_target(monster_name) ~= nil
 end
 
 -- Get all targets for the current place
