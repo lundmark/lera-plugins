@@ -24,15 +24,21 @@ local sent = {}
 mud = { send = function(cmd) sent[#sent + 1] = tostring(cmd) end }
 
 local timers = {}
+local timer_delays = {}  -- ms each queued timer was armed with, by id
 local next_timer_id = 0
 timer = {
-  after = function(_, fn)
+  after = function(ms, fn)
     next_timer_id = next_timer_id + 1
     timers[next_timer_id] = fn
+    timer_delays[next_timer_id] = ms
     return next_timer_id
   end,
   cancel = function(id)
-    if id and timers[id] then timers[id] = nil return true end
+    if id and timers[id] then
+      timers[id] = nil
+      timer_delays[id] = nil
+      return true
+    end
     return false
   end,
 }
@@ -41,6 +47,19 @@ local function queued_timers()
   local n = 0
   for _ in pairs(timers) do n = n + 1 end
   return n
+end
+
+-- The ms each currently-queued timer was armed with, in id order. run_timers()
+-- fires every queued callback regardless of how long it was armed for -- this
+-- stub has no simulated clock -- so this is the only way a case can pin WHICH
+-- delay the plugin chose to arm (the short settle vs. the prompt fallback).
+local function queued_delays()
+  local ids = {}
+  for id in pairs(timers) do ids[#ids + 1] = id end
+  table.sort(ids)
+  local out = {}
+  for i, id in ipairs(ids) do out[i] = timer_delays[id] end
+  return out
 end
 
 -- Run every timer callback queued so far, in id order.
@@ -313,6 +332,25 @@ end
 local function arrive(id, name, monsters, players)
   ri_state.room_id = id
   ri_state.room = name
+  ri_state.monsters = monsters or {}
+  ri_state.players = players or {}
+end
+
+-- Room entry split into its two halves, for cases that need to land Room.Info
+-- without its room's Room.Contents (or vice versa). This only moves identity
+-- (room_id/room) -- ri.monsters()/players() keep reporting whatever the
+-- PREVIOUS room held, exactly like real roominfo before the new room's own
+-- Room.Contents arrives. Pair with deliver_frame() (Info) and set_contents()
+-- + deliver_contents_frame() (Contents) to drive the two halves independently.
+local function arrive_info_only(id, name)
+  ri_state.room_id = id
+  ri_state.room = name
+end
+
+-- The other half: Room.Contents lands and updates only the occupant lists,
+-- without touching identity (which Room.Info, real or arrive_info_only,
+-- already set).
+local function set_contents(monsters, players)
   ri_state.monsters = monsters or {}
   ri_state.players = players or {}
 end
@@ -637,10 +675,144 @@ check("start succeeds with no prompt pattern configured",
   no_prompt_started == true, tostring(no_prompt_started))
 sent = {}
 deliver_frame()
+check("with no pattern, a frame arms the short settle, exactly as before",
+  queued_delays()[1] == 150, table.concat(queued_delays(), ","))
 run_timers()
 check("the first step arrives via the frame path with no prompt pattern set",
   last_sent() == "n", table.concat(sent, "|"))
 as.set_prompt_pattern("^H:")
+quiet(as.stop)
+
+-- ---- Task P: the prompt is authoritative, the settle is a fallback --------
+-- Task 5 armed the settle from any room frame with one fixed delay, reasoning
+-- only about the prompt going MISSING. It never considered the settle
+-- WINNING when it should not: the burst is not self-describing -- Room.Info,
+-- Room.Contents and Room.Map can each be suppressed, so a burst may begin
+-- with any one of them and the first frame says nothing about whether more
+-- is coming. When a prompt pattern is configured, the prompt -- sent after
+-- the whole burst, by construction -- must be the thing that decides; the
+-- settle only rescues a prompt that never comes.
+run_timers()
+as.set_prompt_pattern("^H:")
+sw_steps = { { raw = "n", commands = { "n" } } }
+sw_taken = {}
+sw_target_list = {}
+arrive(304, "A quiet hall", {}, {})
+sent = {}
+quiet(function() as.start(false) end)
+
+-- A frame burst arms the LONG fallback, not the short settle, once a prompt
+-- pattern is configured.
+deliver_frame()
+check("with a pattern configured, a frame arms the long fallback, not the short settle",
+  queued_delays()[1] == 1500, table.concat(queued_delays(), ","))
+
+-- The prompt lands next: it completes the arrival on its own.
+prompt_cycle()
+check("the prompt completes the arrival",
+  last_sent() == "n", table.concat(sent, "|"))
+quiet(as.stop)
+
+-- The cancel needs its own room WITH a monster: an empty room's arrival
+-- steps again immediately, and do_step()'s own begin_arrival_wait() calls
+-- cancel_settle() a second time -- which would mask complete_arrival()'s
+-- cancel entirely and let this check pass whether or not that call exists.
+-- Attacking, not stepping, is the case that isolates it: do_attack() never
+-- touches the settle timer.
+run_timers()
+sw_steps = { { raw = "n", commands = { "n" } } }  -- never taken: the monster stops us
+sw_taken = {}
+sw_target_list = {}
+arrive(308, "A quiet hall", { "a lazy toad" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+deliver_frame()
+prompt_cycle()
+check("the prompt attacks the monster",
+  last_sent() == "kill toad", table.concat(sent, "|"))
+check("...and cancels the pending fallback timer that would otherwise outlive it",
+  queued_timers() == 0, tostring(queued_timers()))
+quiet(as.stop)
+
+-- If the prompt never comes at all, the fallback still completes the
+-- arrival -- it is a rescue, not dead weight.
+run_timers()
+sw_steps = { { raw = "n", commands = { "n" } } }
+sw_taken = {}
+arrive(305, "A quiet hall", {}, {})
+sent = {}
+quiet(function() as.start(false) end)
+sent = {}
+deliver_frame()
+run_timers()  -- no prompt ever arrives; only the fallback fires
+check("with a pattern configured and no prompt, the fallback still completes the arrival",
+  last_sent() == "n", table.concat(sent, "|"))
+quiet(as.stop)
+
+-- The delay is chosen at ARM time, not cached at load or at M.start: a run
+-- started with no pattern arms the short settle, and a pattern set mid-run
+-- governs the very next frame with no extra bookkeeping.
+run_timers()
+as.set_prompt_pattern(nil)
+sw_steps = { { raw = "n", commands = { "n" } }, { raw = "e", commands = { "e" } } }
+sw_taken = {}
+arrive(306, "A quiet hall", {}, {})
+sent = {}
+quiet(function() as.start(false) end)
+deliver_frame()
+check("with no pattern at arm time, the frame arms the short settle",
+  queued_delays()[1] == 150, table.concat(queued_delays(), ","))
+run_timers()
+check("...and the settle completes that arrival",
+  last_sent() == "n", table.concat(sent, "|"))
+as.set_prompt_pattern("^H:")   -- flipped mid-run, before the next frame arms
+sent = {}
+arrive(307, "A sunny meadow", {}, {})
+deliver_frame()
+check("a pattern set mid-run governs the very next frame's arm delay",
+  queued_delays()[1] == 1500, table.concat(queued_delays(), ","))
+prompt_cycle()
+check("...and the prompt still completes that arrival",
+  last_sent() == "e", table.concat(sent, "|"))
+quiet(as.stop)
+
+-- ---- Task P regression: the owner's live misfire ---------------------------
+-- Reproduced from the owner's transcript: the stepper decided "no monsters"
+-- for a room that held one -- because that room's Room.Info settled before
+-- its own Room.Contents had arrived -- stepped on, and attacked the monster
+-- from the WRONG room a step later ("There is no mutant here."). With a
+-- prompt pattern configured, an Info-only settle must take no decision at
+-- all; only the prompt, once Contents has actually landed, may commit it.
+run_timers()
+sw_steps = { { raw = "w", commands = { "w" } } }
+sw_taken = {}
+sw_target_list = {}
+arrive(1, "vr:0,7,2", {}, {})  -- standing room, empty
+sent = {}
+quiet(function() as.start(false) end)
+prompt_cycle()  -- origin arrival completes; the room is empty, so it steps
+check("regression setup: steps toward the monster's room", last_sent() == "w",
+  table.concat(sent, "|"))
+
+sent = {}
+-- Only Room.Info lands for the next room -- its Room.Contents (the monster)
+-- has not arrived yet. The armed timer must be the long fallback, not the
+-- short settle: even a real 150ms elapsing must not decide this room empty.
+arrive_info_only(2, "vr:1,7,2")
+deliver_frame()
+check("an Info-only frame with a pattern configured arms the fallback, not the settle",
+  queued_delays()[1] == 1500, table.concat(queued_delays(), ","))
+check("...and takes no decision on its own", #sent == 0, table.concat(sent, "|"))
+
+-- The monster's own Room.Contents lands, then the prompt that terminates the
+-- burst by construction.
+set_contents({ "an evolving organism" }, {})
+deliver_contents_frame()
+check("Contents landing still takes no decision before the prompt",
+  #sent == 0, table.concat(sent, "|"))
+prompt_cycle()
+check("the monster IN THIS ROOM is attacked, not the one after it",
+  last_sent() == "kill organism", table.concat(sent, "|"))
 quiet(as.stop)
 
 -- ---- M.start asks the MUD for the current room (Item 1) ---------------------

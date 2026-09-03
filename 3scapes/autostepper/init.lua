@@ -82,7 +82,25 @@ local run_mode = nil
 -- first; the `if settle_timer then return end` dedupe below means only the
 -- first frame in a burst arms anything, and the timer's job is to outlast
 -- the rest.
-local BURST_SETTLE_MS = 150
+--
+-- That reasoning only ever protected against a burst racing an EARLY decision
+-- -- it never protected against the settle deciding TOO SOON on an incomplete
+-- burst. The burst is not self-describing: the server sends Room.Info ->
+-- Room.Contents -> Room.Map, but any of the three can be suppressed, so a
+-- burst may begin with any one of them and the first frame carries no
+-- indication of whether more is coming. A live misfire hit exactly this: a
+-- room's Room.Info settled and decided "no monsters" before that room's
+-- Room.Contents (which held one) had arrived.
+--
+-- The prompt is the one reliable burst terminator -- the MUD sends the
+-- frames, then the room text, then the prompt, after everything, by
+-- construction. So when a prompt pattern is configured, the prompt must be
+-- authoritative and the settle must not race it: arm the long fallback
+-- instead, which only fires if the prompt was lost or the pattern has
+-- drifted. With no pattern configured the settle is the only signal
+-- available, so it keeps arming at the short delay, unchanged.
+local BURST_SETTLE_MS = 150            -- no prompt pattern: the only signal
+local PROMPT_FALLBACK_MS = 1500        -- prompt configured: rescue, not rival
 local settle_timer = nil
 local room_info_sub = nil
 local room_frame_sub = nil   -- roominfo.on_room_frame id, removed on unload
@@ -394,10 +412,19 @@ end
 -- alone, because no single package is guaranteed to arrive (see the comment
 -- on BURST_SETTLE_MS above). Only means anything while a step is outstanding;
 -- the settle_timer guard means only the first frame of a burst arms anything.
+--
+-- The delay is chosen here, at arm time, by reading config.prompt_pattern
+-- fresh rather than caching it anywhere earlier -- so a pattern set mid-run
+-- with '/step set prompt' governs the very next step, with no extra
+-- bookkeeping. A pattern configured means the prompt will normally complete
+-- the arrival long before this fires (see complete_arrival/on_prompt, which
+-- cancels this timer); with none configured this is the only mechanism, so
+-- it keeps the original short delay.
 local function on_room_frame_arrival()
   if not enabled or state ~= "stepping" then return end
   if settle_timer then return end
-  settle_timer = timer.after(BURST_SETTLE_MS, function()
+  local delay = config.prompt_pattern and PROMPT_FALLBACK_MS or BURST_SETTLE_MS
+  settle_timer = timer.after(delay, function()
     settle_timer = nil
     complete_arrival()
   end)
