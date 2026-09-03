@@ -617,6 +617,8 @@ local explore_steps = {}
 local explore_taken = {}
 local explore_state = { active = false, arrivals = 0, coord = 0, frames = 0,
                         stops = 0, resets = 0, reset_reason = nil,
+                        leaves = 0, leave_result = true, stop_reason = nil,
+                        leaving = false,
                         start_policy = nil, attached = nil }
 as.debug_set_explore({
   active = function() return explore_state.active end,
@@ -659,6 +661,16 @@ as.debug_set_explore({
     explore_state.resets = explore_state.resets + 1
     explore_state.reset_reason = reason
   end,
+  leave = function()
+    explore_state.leaves = explore_state.leaves + 1
+    return explore_state.leave_result
+  end,
+  stop_reason = function() return explore_state.stop_reason or "exhausted" end,
+  -- No real public "is a leave in progress" accessor exists (mode.lua keeps
+  -- pending_leave_path private) -- this exists only so the "skip process_room
+  -- while a path is pending" mutant (applied directly to init.lua, never to
+  -- this file) has something to consult.
+  leaving = function() return explore_state.leaving end,
   policy = function() return explore_state.policy or "clear" end,
   set_policy = function(name) explore_state.policy = name return true end,
   stats = function()
@@ -907,6 +919,71 @@ check("'/step explore reset' with explore inactive does not call mode.reset",
   explore_state.resets == 0, tostring(explore_state.resets))
 check("'/step explore reset' with explore inactive does not ask the MUD",
   #gmcp_sent == 0, tostring(#gmcp_sent))
+
+-- ---- /step explore leave (Item 4) --------------------------------------------
+-- M.explore_leave is a thin wrapper: the real routing/precedence/one-hop
+-- logic lives in mode.lua and is pinned in autostepper_explore_test.lua.
+-- This only checks the wiring: the command reaches explore.leave().
+quiet(as.stop)
+explore_state.active = true
+explore_state.leaves = 0
+explore_state.leave_result = true
+quiet(function() step_cmd.handler("explore leave") end)
+check("'/step explore leave' calls explore.leave exactly once",
+  explore_state.leaves == 1, tostring(explore_state.leaves))
+explore_state.active = false
+
+-- do_step must report the RIGHT reason once next_step() runs dry: a
+-- completed leave is "back at the origin", exhausted frontier search is "no
+-- unvisited exits remain" -- do_step's explore.stop_reason() branch is what
+-- tells them apart, so both sides of that branch need a case.
+quiet(as.stop)
+explore_state.active = true
+explore_steps = {}  -- next_step() returns nil immediately either way
+explore_state.stop_reason = "at origin"
+sw_steps = { { raw = "SHOULD-NOT-RUN", commands = { "SHOULD-NOT-RUN" } } }
+arrive(950, "A muddy field", {}, {})
+sent = {}
+quiet(function() as.start(false) end)
+local origin_lines = capture(as.prompt)
+check("do_step reports 'back at the origin' when explore.stop_reason() says so",
+  has_line(origin_lines, "back at the origin"), table.concat(origin_lines, "|"))
+check("completing a leave stops the run", as.is_running() == false,
+  tostring(as.is_running()))
+
+explore_state.active = true
+explore_steps = {}
+explore_state.stop_reason = "exhausted"
+arrive(951, "A muddy field", {}, {})
+sent = {}
+quiet(function() as.start(false) end)
+local exhausted_lines = capture(as.prompt)
+check("do_step still reports 'no unvisited exits remain' for a genuine exhaustion",
+  has_line(exhausted_lines, "no unvisited exits remain"),
+  table.concat(exhausted_lines, "|"))
+quiet(as.stop)
+
+-- A monster met on the way out is still attacked: arrival always runs
+-- process_room() unconditionally, so fighting must not be skippable by any
+-- "mid-leave" signal. There is no real public accessor for "is a leave in
+-- progress" (mode.lua keeps pending_leave_path private) -- explore.leaving()
+-- exists only on this stub, to give the mutant below (applied directly to
+-- init.lua's process_room, never to this file) something to consult.
+explore_state.active = true
+explore_steps = { "n" }
+explore_taken = {}
+explore_state.leaving = false
+sw_steps = { { raw = "SHOULD-NOT-RUN", commands = { "SHOULD-NOT-RUN" } } }
+arrive(960, "A muddy field", { "a stray wolf" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+explore_state.leaving = true
+sent = {}
+arrival_prompt()
+check("a monster met on the way out is still attacked",
+  last_sent() == "kill a stray wolf", table.concat(sent, "|"))
+explore_state.leaving = false
+quiet(as.stop)
 
 -- ---- stopping the stepper stops the explorer ---------------------------------
 -- Explore mode is dead reckoned: it believes it knows where it is only because

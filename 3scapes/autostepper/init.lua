@@ -395,11 +395,18 @@ local function do_step()
     end
     step = explore.next_step()
     if not step then
-      -- Every reachable exit leads somewhere already mapped. The area is fully
-      -- explored and nothing completed the run. It must NOT fall through to
-      -- sw.take_step(): the stepper would silently start walking a stored
-      -- speedwalk path from wherever it happens to be standing in the maze.
-      log("Explored: no unvisited exits remain")
+      -- Every reachable exit leads somewhere already mapped, OR a pending
+      -- leave path just finished draining -- explore.stop_reason() tells
+      -- them apart, since "no unvisited exits remain" is the wrong message
+      -- for a completed leave. It must NOT fall through to sw.take_step():
+      -- the stepper would silently start walking a stored speedwalk path
+      -- from wherever it happens to be standing in the maze.
+      local reason = (explore.stop_reason and explore.stop_reason()) or "exhausted"
+      if reason == "at origin" then
+        log("Explored: back at the origin")
+      else
+        log("Explored: no unvisited exits remain")
+      end
       enabled = false
       state = "idle"
       cancel_settle()
@@ -554,6 +561,8 @@ local function show_help()
   log("  /step explore [area]   - Start explore mode in an area (default: chaossea)")
   log("  /step explore off      - Stop explore mode")
   log("  /step explore reset    - Reset the map to a fresh origin here, keep stepping")
+  log("  /step explore leave    - Walk back to the run's origin, fighting on the way;")
+  log("                           does NOT leave the area -- the last step out is yours")
   log("  /step set prompt <p>   - Set prompt detection pattern")
   log("  /step set attack [on|off] - Toggle auto-attack")
   log("  /step set glance [cmd]    - Set/show glance command")
@@ -707,6 +716,8 @@ local function dispatch(args)
       M.explore_stop()
     elseif arg == "reset" then
       M.explore_reset()
+    elseif arg == "leave" then
+      M.explore_leave()
     else
       local area = (arg ~= "" and arg) or "chaossea"
       if M.explore_start(area) then M.start(config.targets_only) end
@@ -722,17 +733,21 @@ local function register_command()
   local id, err = command.register({
     name = "/step",
     aliases = { "/autostepper" },
-    usage = "/step [start|targets|stop|explore [area]|explore off|explore reset|status|"
-      .. "set <key> [value]]",
+    usage = "/step [start|targets|stop|explore [area]|explore off|explore reset|"
+      .. "explore leave|status|set <key> [value]]",
     summary = "Automatic speedwalk stepping with optional combat",
     description = "Walks a stored step path one room at a time, optionally "
       .. "glancing and attacking on the way. Or, with 'explore [area]', maps an "
       .. "unmapped area room by room, stopping automatically once every reachable "
-      .. "exit leads somewhere already mapped; 'explore off' stops it early, and "
+      .. "exit leads somewhere already mapped; 'explore off' stops it early, "
       .. "'explore reset' resets the map to a fresh origin at the current room and "
-      .. "re-asks the MUD, without stopping the run. The shorthands are '-.' to start "
-      .. "on any mob, '->' to start on targets only, '-!' to stop, and '-' for help. "
-      .. "Settings: status, config, prompt, attack, glance, kill, dive.",
+      .. "re-asks the MUD without stopping the run, and 'explore leave' walks the "
+      .. "shortest recorded route back to the run's origin, fighting anything met on "
+      .. "the way -- this does NOT leave the area itself, since the explorer never "
+      .. "walks an excluded exit, so the final step out is still the player's own. "
+      .. "The shorthands are '-.' to start on any mob, '->' to start on targets only, "
+      .. "'-!' to stop, and '-' for help. Settings: status, config, prompt, attack, "
+      .. "glance, kill, dive.",
     accepts_args = true,
     handler = dispatch,
   })
@@ -994,6 +1009,23 @@ function M.explore_reset()
   request_room_refresh()
   log("Explore map reset; re-asking the MUD for the current room")
   return true
+end
+
+-- Walk back to the run's origin -- the room the explorer started in, which
+-- for the target area is the entry room. Delegates entirely to mode.lua's
+-- M.leave(): it arms a pending path (via Map:path_to) that next_step()
+-- drains one direction per step, ahead of frontier selection, and reports
+-- and changes nothing when explore mode is inactive, the origin is
+-- unreachable, or it is already reached. Arrival still runs process_room()
+-- exactly like any other step, so a monster met on the way out is still
+-- fought -- leaving is not a reason to stop fighting.
+--
+-- Reaching the origin does not leave the area: the explorer never walks an
+-- excluded exit (e.g. 'out' in the Chaos Sea), so the last step out remains
+-- the player's own.
+function M.explore_leave()
+  if not (explore and explore.leave) then return false end
+  return explore.leave()
 end
 
 -- Check if running

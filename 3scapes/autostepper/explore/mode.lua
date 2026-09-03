@@ -29,6 +29,13 @@ local pending_dir = nil   -- direction emitted and not yet committed
 local layer_corrections = 0  -- times the room name overrode a reckoned z
 local desync_count = 0       -- times contradicted topology forced a map reset
 
+-- M.leave()'s walk back to the origin. nil means no leave is in progress;
+-- once armed it is an array of directions (possibly already empty, once the
+-- last one has been popped) -- see next_step() and stop_reason() below for
+-- why the empty-but-armed state has to be distinguishable from nil.
+local pending_leave_path = nil
+local stop_reason_val = "exhausted"  -- "exhausted" | "at origin"
+
 local function log(msg)
   print("[autostepper] " .. msg)
 end
@@ -74,6 +81,8 @@ function M.start(prof, initial_policy)
   policy = initial_policy or prof.default_policy or "clear"
   active = true
   pending_dir = nil
+  pending_leave_path = nil
+  stop_reason_val = "exhausted"
   last_exits = {}
   last_name = nil
   layer_corrections = 0
@@ -99,6 +108,7 @@ function M.stop()
   profile = nil
   map = nil
   pending_dir = nil
+  pending_leave_path = nil
   last_exits = {}
   last_name = nil
 end
@@ -110,6 +120,10 @@ function M.reset(reason)
   if not active then return end
   map = map_mod.new()
   pending_dir = nil
+  -- A pending leave path names directions in the OLD map's coordinate frame;
+  -- left set across a reset, next_step() would keep walking it against a map
+  -- that no longer has those rooms recorded, oblivious to the fresh origin.
+  pending_leave_path = nil
   if reason then
     log("explore: map reset (" .. reason .. ")")
   end
@@ -205,8 +219,63 @@ function M.on_arrival()
   map:record(last_exits)
 end
 
+-- Walk back to the run's origin. Computed once (path_to(0, 0, 0)) and stored
+-- as a pending path that next_step() drains one direction at a time; arrival
+-- still runs process_room() exactly as any other step does, so a monster met
+-- on the way out is still fought -- leaving is not a reason to stop fighting.
+--
+-- Refuses (reports and changes nothing) rather than arming a path when: not
+-- active; the origin is unrecorded or unreachable through recorded rooms (a
+-- desync reset can leave the map disconnected from it); or already at the
+-- origin. path_to's own three-way contract supplies exactly these last two
+-- distinctly, so this reads it rather than re-deriving them.
+function M.leave()
+  if not active or not map then
+    log("explore: leave refused -- explore mode is not active")
+    return false
+  end
+  local path = map:path_to(0, 0, 0)
+  if path == nil then
+    log("explore: leave refused -- the origin is unrecorded or unreachable")
+    return false
+  end
+  if #path == 0 then
+    log("explore: already at the origin")
+    return false
+  end
+  pending_leave_path = path
+  log("explore: leaving -- " .. #path .. " step(s) to the origin")
+  return true
+end
+
+-- Why the run last stopped supplying a step. Read once by do_step() when
+-- next_step() returns nil, so it can log "back at the origin" instead of the
+-- wrong "no unvisited exits remain" for a completed leave.
+function M.stop_reason()
+  return stop_reason_val
+end
+
 function M.next_step()
   if not active or not map then return nil end
+
+  -- A pending leave path takes precedence over frontier selection: once
+  -- M.leave() has armed one, every next_step() call drains it one direction
+  -- at a time until it is empty, honouring the same one-direction-per-call
+  -- contract as frontier stepping. The path is checked whether or not it is
+  -- empty, rather than only when non-empty, because an EMPTY-but-still-armed
+  -- path is what marks "the walk just finished" -- once drained, this run is
+  -- over and must report so, not silently fall through to frontier search.
+  if pending_leave_path then
+    if #pending_leave_path == 0 then
+      stop_reason_val = "at origin"
+      pending_leave_path = nil
+      return nil
+    end
+    local dir = table.remove(pending_leave_path, 1)
+    pending_dir = dir
+    return { raw = dir, commands = { dir } }
+  end
+
   local path = map:next_frontier({
     policy = policy,
     dive_dirs = profile and profile.dive_dirs,

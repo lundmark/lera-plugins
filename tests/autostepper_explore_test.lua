@@ -536,6 +536,128 @@ check("starting again without an intervening stop still gives a fresh map",
   mode.stats().rooms == 0, tostring(mode.stats().rooms))
 mode.stop()
 
+-- ---- M.leave: walking back to the origin --------------------------------------
+-- Reuses hop_profile (in_area always true, layer_of a constant 0) so area
+-- membership and layer correction stay incidental to what this section
+-- tests: leave's refusal cases and next_step's pending-path precedence.
+
+quiet(function() mode.start(hop_profile, "clear") end)
+check("stop_reason defaults to exhausted before any leave",
+  mode.stop_reason() == "exhausted", mode.stop_reason())
+mode.stop()
+
+-- Refuses when explore mode is not active.
+check("leave refuses when explore mode is not active", mode.leave() == false)
+
+-- Refuses when already at the origin: the origin is recorded (path_to's
+-- target-recorded check passes) and we are standing on it, so path_to
+-- returns the empty array, not nil -- the "already there" case, not
+-- "cannot get there".
+quiet(function() mode.start(hop_profile, "clear") end)
+frame({ name = "Leave Origin", exits = { "e" } })
+quiet(mode.on_arrival)
+check("the origin is recorded before testing the already-there refusal",
+  mode.stats().rooms == 1, tostring(mode.stats().rooms))
+check("leave refuses when already at the origin", mode.leave() == false)
+
+-- Refuses when the origin is unreachable: a second, disconnected room (no
+-- exits of its own, and nothing else's exit points at it) with no recorded
+-- path back to (0,0,0) -- the shape a desync reset can leave behind.
+mode.debug_set_position(9, 9, 0)
+frame({ name = "Nowhere near the origin", exits = {} })
+quiet(mode.on_arrival)
+check("a second, disconnected room is recorded",
+  mode.stats().rooms == 2, tostring(mode.stats().rooms))
+check("leave refuses when the origin is unreachable", mode.leave() == false)
+mode.stop()
+
+-- A pending leave path takes precedence over frontier selection, drains one
+-- direction per call, and completing it reports "at origin" rather than a
+-- further step. A THREE-room corridor, not two: a one-hop leave path cannot
+-- distinguish "return one direction" from "return the whole remaining path"
+-- -- both look identical when there is only one direction to return.
+quiet(function() mode.start(hop_profile, "clear") end)
+frame({ name = "Room A", exits = { "e" } })
+quiet(mode.on_arrival)
+step = mode.next_step()
+check("the only frontier from the origin is 'e'", step and step.raw == "e",
+  step and step.raw)
+frame({ name = "Room B", exits = { "w", "e" } })
+quiet(mode.on_arrival)
+check("two rooms are recorded so far", mode.stats().rooms == 2,
+  tostring(mode.stats().rooms))
+
+step = mode.next_step()
+check("the next frontier from Room B is 'e'", step and step.raw == "e",
+  step and step.raw)
+frame({ name = "Room C", exits = { "w", "n" } })
+quiet(mode.on_arrival)
+check("three rooms are recorded before leaving",
+  mode.stats().rooms == 3, tostring(mode.stats().rooms))
+
+local leave_ok = mode.leave()
+check("leave succeeds when the origin is reachable", leave_ok == true,
+  tostring(leave_ok))
+
+-- 'n' is ALSO a frontier from here (Room C's other exit, into unvisited
+-- (2,1,0)) and would be the compass-first choice if leave were not
+-- consulted first -- 'w', the leave path's first hop, is what must win.
+local leave_step1 = mode.next_step()
+check("a pending leave path takes precedence over frontier selection",
+  leave_step1 and leave_step1.raw == "w", leave_step1 and leave_step1.raw)
+check("next_step returns exactly one direction while a leave is pending",
+  leave_step1 and #leave_step1.commands == 1,
+  leave_step1 and leave_step1.commands and #leave_step1.commands)
+
+-- Arrival still runs the normal commit -- pending_dir is honoured exactly
+-- like any other step -- landing on Room B, one hop from the origin, not
+-- all the way home yet.
+frame({ name = "Room B", exits = { "w", "e" } })
+quiet(mode.on_arrival)
+local mid_st = mode.stats()
+check("the first leave hop lands one room short of the origin",
+  mid_st.x == 1 and mid_st.y == 0 and mid_st.z == 0,
+  mid_st.x .. "," .. mid_st.y .. "," .. mid_st.z)
+
+local leave_step2 = mode.next_step()
+check("the second leave hop is also 'w'",
+  leave_step2 and leave_step2.raw == "w", leave_step2 and leave_step2.raw)
+check("next_step still returns exactly one direction on the final hop",
+  leave_step2 and #leave_step2.commands == 1,
+  leave_step2 and leave_step2.commands and #leave_step2.commands)
+
+frame({ name = "Room A", exits = { "e" } })
+quiet(mode.on_arrival)
+local back_st = mode.stats()
+check("the walk back lands exactly on the origin",
+  back_st.x == 0 and back_st.y == 0 and back_st.z == 0,
+  back_st.x .. "," .. back_st.y .. "," .. back_st.z)
+
+check("completing the leave path reports nil, not a further step",
+  mode.next_step() == nil)
+check("completing the leave path reports stop_reason 'at origin'",
+  mode.stop_reason() == "at origin", mode.stop_reason())
+mode.stop()
+
+-- reset discards a pending leave path: armed but not yet drained, then
+-- reset() runs. The fresh map has zero rooms, so if the path really was
+-- discarded, next_step() falls through to frontier search on that empty map
+-- and finds nothing -- nil. Left set (the mutant), next_step() would instead
+-- return the stale leave direction ('w'), oblivious to the map having just
+-- been wiped out from under it.
+quiet(function() mode.start(hop_profile, "clear") end)
+frame({ name = "Room A", exits = { "e" } })
+quiet(mode.on_arrival)
+step = mode.next_step()
+frame({ name = "Room B", exits = { "w", "n" } })
+quiet(mode.on_arrival)
+check("leave arms a pending path before the reset", mode.leave() == true)
+quiet(function() mode.reset("test") end)
+local after_reset_step = mode.next_step()
+check("reset discards a pending leave path",
+  after_reset_step == nil, tostring(after_reset_step))
+mode.stop()
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
