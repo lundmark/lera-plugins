@@ -58,6 +58,30 @@ trigger = {
   remove = function() return true end,
 }
 
+-- gmcp stand-in. gmcp_send_result lets a case simulate a dropped request
+-- (not connected / GMCP off); gmcp_sent records every Room.Refresh call so a
+-- case can pin exactly what was asked for.
+local gmcp_handlers = {}
+local gmcp_removed = {}
+local gmcp_sent = {}
+local gmcp_send_result = true
+gmcp = {
+  on = function(pkg, fn) gmcp_handlers[pkg] = fn; return pkg end,
+  remove = function(id) gmcp_removed[id] = true; return true end,
+  send = function(pkg, data)
+    gmcp_sent[#gmcp_sent + 1] = { pkg = pkg, data = data }
+    return gmcp_send_result
+  end,
+}
+
+-- Deliver a Char.Combat frame the way the C dispatcher does.
+local function deliver_combat(data)
+  local fn = gmcp_handlers["Char.Combat"]
+  if not fn then return false end
+  fn("Char.Combat", data)
+  return true
+end
+
 alias = {
   add = function() return 1 end,
   remove = function() return true end,
@@ -115,6 +139,23 @@ end
 -- Deliver a Room.Info frame the way roominfo would.
 local function deliver_frame()
   for _, fn in pairs(ri_frame_cbs) do fn(fake_roominfo.info()) end
+end
+
+local ri_contents_cbs = {}
+fake_roominfo.on_room_contents = function(fn)
+  ri_contents_cbs[#ri_contents_cbs + 1] = fn
+  return #ri_contents_cbs
+end
+fake_roominfo.off_room_contents = function(id)
+  if ri_contents_cbs[id] then ri_contents_cbs[id] = nil return true end
+  return false
+end
+
+-- Deliver a COMPLETE Room.Contents list the way roominfo's on_room_contents
+-- would, AFTER ri_state.monsters/players already reflect the server's answer
+-- -- exactly like real roominfo, which updates its own state before firing.
+local function deliver_contents_frame()
+  for _, fn in pairs(ri_contents_cbs) do fn(fake_roominfo.info()) end
 end
 
 -- speedwalk stand-in: a fixed list of steps the test can count down.
@@ -683,6 +724,141 @@ check("stopping the stepper deactivates explore mode",
 
 explore_state.active = false
 as.debug_set_explore(nil)
+
+-- ---- Char.Combat drives the combat cycle -------------------------------------
+-- Char.Combat says when a fight ends; Room.Refresh then asks the server what
+-- is actually in the room, so a mob that survives its round is re-attacked
+-- instead of abandoned (the headline fix this task exists for). These cases
+-- pin the cycle end to end, using the fake roominfo/gmcp stubs above.
+quiet(as.stop)
+run_timers()
+gmcp_sent = {}
+gmcp_send_result = true
+sw_steps = { { raw = "n", commands = { "n" } } }
+sw_taken = {}
+arrive(500, "A muddy field", { "an orc" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+sent = {}
+prompt_cycle()
+check("gmcp cycle: attacks the monster", last_sent() == "kill an orc",
+  table.concat(sent, "|"))
+
+-- A Char.Combat frame WITH an attacker just says the fight continues. It must
+-- latch the source (so the prompt path stands down) without ending anything
+-- and without asking for a refresh.
+sent = {}
+quiet(function()
+  deliver_combat({ attacker = "an orc", attacker_hp = 80, rounds = 1, target = "you" })
+end)
+check("an in-progress Char.Combat frame does not end the fight",
+  #sent == 0, table.concat(sent, "|"))
+check("an in-progress frame does not request a refresh",
+  #gmcp_sent == 0, tostring(#gmcp_sent))
+
+-- Kills: removing the latch check from the prompt path. With the source
+-- latched, an ordinary prompt arriving mid-fight (the round's own output, or
+-- anything matching the prompt pattern) must not end the fight, and must not
+-- go around Char.Combat to ask for a refresh either.
+sent = {}
+gmcp_sent = {}
+quiet(as.prompt)
+check("with the latch set, a prompt mid-fight does not end the fight",
+  #sent == 0, table.concat(sent, "|"))
+check("a plain prompt does not trigger a Room.Refresh",
+  #gmcp_sent == 0, tostring(#gmcp_sent))
+check("the tracked view is unchanged while the latch stands the prompt down",
+  #tracked() == 1 and tracked()[1] == "an orc", table.concat(tracked(), ","))
+
+-- Combat actually ends: attacker absent. Kills: sending on every prompt
+-- instead, or asking for more than Room.Contents.
+gmcp_sent = {}
+quiet(function() deliver_combat({ attacker = "", attacker_hp = 0, rounds = 0 }) end)
+check("combat end sends exactly one Room.Refresh", #gmcp_sent == 1, tostring(#gmcp_sent))
+check("the refresh asks only for Room.Contents",
+  gmcp_sent[1] and gmcp_sent[1].pkg == "Room.Refresh"
+    and type(gmcp_sent[1].data) == "table"
+    and #gmcp_sent[1].data.packages == 1
+    and gmcp_sent[1].data.packages[1] == "Room.Contents",
+  gmcp_sent[1] and (gmcp_sent[1].pkg .. ":" .. table.concat(gmcp_sent[1].data.packages or {}, ",")))
+check("a timer is armed while awaiting the answer", queued_timers() == 1,
+  tostring(queued_timers()))
+
+-- Kills: deciding from the pruned view instead of the answer. roominfo still
+-- lists the orc (it survived its round), so the fresh answer must re-attack
+-- it rather than stepping past it.
+sent = {}
+quiet(deliver_contents_frame)
+check("an answer still listing the monster re-attacks it",
+  last_sent() == "kill an orc", table.concat(sent, "|"))
+check("the refresh timer is disarmed once answered", queued_timers() == 0,
+  tostring(queued_timers()))
+
+-- Second fight on the same orc, this time it dies: roominfo's answer no
+-- longer lists it, so the decision must step.
+gmcp_sent = {}
+quiet(function() deliver_combat({ attacker = nil }) end)
+check("a second combat end also sends exactly one Room.Refresh",
+  #gmcp_sent == 1, tostring(#gmcp_sent))
+ri_state.monsters = {}
+sent = {}
+quiet(deliver_contents_frame)
+check("an answer no longer listing it steps", last_sent() == "n",
+  table.concat(sent, "|"))
+
+-- ---- gmcp.send returning false falls back immediately -----------------------
+-- Kills: dropping the return-value check. Waiting out the timeout for a
+-- request that was never sent is a stall with no cause to find later.
+run_timers()
+sw_steps = { { raw = "e", commands = { "e" } } }
+sw_taken = {}
+arrive(501, "A dry wash", { "a jackal" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+sent = {}
+prompt_cycle()
+check("send-false scenario: attacks the monster", last_sent() == "kill a jackal",
+  table.concat(sent, "|"))
+
+gmcp_send_result = false
+gmcp_sent = {}
+sent = {}
+quiet(function() deliver_combat({ attacker = "" }) end)
+check("gmcp.send is still attempted", #gmcp_sent == 1, tostring(#gmcp_sent))
+check("gmcp.send returning false falls back immediately",
+  sent[1] == "e", table.concat(sent, "|"))
+check("no timer is left waiting for a request that was never sent",
+  queued_timers() == 0, tostring(queued_timers()))
+gmcp_send_result = true
+
+-- ---- no answer within the timeout falls back -----------------------------
+-- Kills: dropping the timeout. Over-budget refreshes are dropped silently
+-- with no error payload, so a run that waited forever would be worse than one
+-- that occasionally guesses wrong.
+run_timers()
+sw_steps = { { raw = "s", commands = { "s" } } }
+sw_taken = {}
+arrive(502, "A stone bridge", { "a troll" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+sent = {}
+prompt_cycle()
+check("timeout scenario: attacks the monster", last_sent() == "kill a troll",
+  table.concat(sent, "|"))
+
+gmcp_sent = {}
+quiet(function() deliver_combat({ attacker = nil }) end)
+check("timeout scenario: exactly one Room.Refresh sent",
+  #gmcp_sent == 1, tostring(#gmcp_sent))
+check("a timer is armed while waiting for the answer",
+  queued_timers() == 1, tostring(queued_timers()))
+
+sent = {}
+run_timers()  -- fire the ~1s timeout; no Room.Contents answer ever arrives
+check("no answer within the timeout falls back to prune-and-decide",
+  sent[1] == "s", table.concat(sent, "|"))
+
+quiet(as.stop)
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")

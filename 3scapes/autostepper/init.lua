@@ -79,6 +79,37 @@ local room_monsters = {}    -- monster names still believed to be standing
 local room_players = {}     -- player names seen on arrival
 local current_target = nil  -- monster do_attack() is working on
 
+-- Char.Combat {attacker, attacker_hp, rounds, target} is pushed, delta-cached,
+-- and free (no request, no budget): when a fight ends, query_attack() is nil,
+-- the server sends one zeroed snapshot, and the stream goes quiet. A snapshot
+-- with no attacker means the fight is over. This LATCHES the first time any
+-- Char.Combat frame arrives -- not just an end-of-combat one -- because that
+-- is the signal GMCP is telling us about this connection's combat at all;
+-- from then on the prompt path must stand down from ending fights, or two
+-- writers would own the same transition (the same trap guild_viking's vitals
+-- block and chat_monitor's source both document). It is per-connection and is
+-- checked per callback rather than once at registration, because it flips
+-- mid-connection: the prompt is on screen before the first Char.Combat frame
+-- lands.
+local combat_gmcp_seen = false
+local combat_gmcp_sub = nil     -- gmcp handler id, removed on unload
+local room_contents_sub = nil   -- roominfo.on_room_contents id, removed on unload
+
+-- Once Char.Combat says a fight is over, a stale prompt-driven guess (prune
+-- the last-attacked name from the local view and decide) is no longer good
+-- enough: a mob that survived its round would be abandoned rather than
+-- re-attacked. So instead of deciding immediately, ask the server what is
+-- actually in the room -- one Room.Refresh per fight, not per round -- and
+-- decide from the answer. The guess is DEMOTED to a fallback for when the
+-- question goes unanswered, not deleted: Room.Refresh is budgeted
+-- (PROTOCOL_ROOM_REFRESH_PER_TICK = 2/s) and an over-budget request is
+-- dropped silently with no error payload, so a run that waited forever on an
+-- unanswerable question would be worse than one that occasionally guesses
+-- wrong.
+local REFRESH_TIMEOUT_MS = 1000
+local awaiting_refresh = false   -- true between the request and its answer/timeout
+local refresh_timeout_id = nil
+
 -- Configuration
 local config = {
   -- Disabled by default. Under GMCP a glance buys nothing -- Room.* fires on
@@ -171,6 +202,83 @@ local function forget_monster(name)
 end
 
 local process_room  -- forward declaration: on_prompt calls it, it calls do_step
+
+local function cancel_refresh_wait()
+  if refresh_timeout_id then
+    timer.cancel(refresh_timeout_id)
+    refresh_timeout_id = nil
+  end
+  awaiting_refresh = false
+end
+
+-- The fallback: today's guess, demoted rather than deleted (see the state
+-- comment above for why). Strikes the last-attacked name from the local view
+-- and decides from what remains.
+local function prune_and_decide()
+  cancel_refresh_wait()
+  forget_monster(current_target)
+  current_target = nil
+  state = "idle"
+  process_room()
+end
+
+-- The answer arrived: reseed the local view from roominfo UNCONDITIONALLY,
+-- ignoring the room key. The room has not changed -- we are asking about the
+-- room we are already standing in -- and the whole point of the refresh is to
+-- replace the pruned guess with the server's own answer, so the normal
+-- "only reseed on a new room" gate must not apply here.
+local function reseed_and_decide()
+  cancel_refresh_wait()
+  room_monsters = copy_names(ri and ri.monsters and ri.monsters())
+  room_players = copy_names(ri and ri.players and ri.players())
+  current_target = nil
+  state = "idle"
+  process_room()
+end
+
+-- Char.Combat says the fight just ended. Ask the server what is actually in
+-- the room rather than guessing: one Room.Refresh per fight, not per round.
+local function handle_combat_end()
+  if state ~= "fighting" then return end
+  local sent = gmcp.send("Room.Refresh", { packages = { "Room.Contents" } })
+  if not sent then
+    -- Not connected, or GMCP isn't enabled: the request never went out, so
+    -- there is nothing to wait for. Waiting out the timeout here would be a
+    -- stall with no cause to find later.
+    prune_and_decide()
+    return
+  end
+  awaiting_refresh = true
+  refresh_timeout_id = timer.after(REFRESH_TIMEOUT_MS, function()
+    refresh_timeout_id = nil
+    -- Over-budget refreshes are dropped silently with no error payload, so a
+    -- request that never gets answered looks identical to one still in
+    -- flight. Falling back here is what keeps that case from waiting forever.
+    prune_and_decide()
+  end)
+end
+
+-- gmcp.on("Char.Combat", cb): {attacker, attacker_hp, rounds, target}. Any
+-- frame -- not only an end-of-combat one -- latches combat_gmcp_seen, since
+-- that is what tells the prompt path this connection has a GMCP answer for
+-- combat end and should stand down.
+local function on_char_combat(_, data)
+  if type(data) ~= "table" then return end
+  combat_gmcp_seen = true
+  local attacker = data.attacker
+  local has_attacker = attacker ~= nil and attacker ~= ""
+  if has_attacker then return end
+  handle_combat_end()
+end
+
+-- roominfo.on_room_contents(cb): fires once per COMPLETE Room.Contents list.
+-- Only meaningful while a refresh is outstanding; a list arriving for any
+-- other reason (another plugin's own re-glance, say) must not be mistaken for
+-- our answer.
+local function on_room_contents_frame()
+  if not awaiting_refresh then return end
+  reseed_and_decide()
+end
 
 local function cancel_settle()
   if settle_timer then
@@ -348,9 +456,18 @@ local function on_prompt()
       complete_arrival()
     end
   elseif state == "fighting" then
-    -- Combat ended (or just another prompt). The target is struck from the local
-    -- view here because nothing else will: Room.Contents is not re-sent for a
-    -- mob that died, so without this the next decision would attack the corpse.
+    -- Once any Char.Combat frame has arrived this connection, THAT owns
+    -- deciding when the fight is over (handle_combat_end, driven off the
+    -- attacker field going absent) -- checked per callback, not once at
+    -- registration, because the latch flips mid-connection: the prompt is on
+    -- screen before the first frame lands. Without this check both the
+    -- prompt and Char.Combat would try to end the same fight.
+    if combat_gmcp_seen then return end
+
+    -- Fallback, unchanged from before Char.Combat existed: the target is
+    -- struck from the local view here because nothing else will. Room.Contents
+    -- is not re-sent for a mob that died, so without this the next decision
+    -- would attack the corpse.
     --
     -- It no longer re-glances. The glance never refreshed anything -- that is
     -- the whole reason this local view exists -- so the decision is made
@@ -598,6 +715,12 @@ function M.on_load()
   if ri and ri.on_room_info then
     room_info_sub = ri.on_room_info(on_room_info_frame)
   end
+  if ri and ri.on_room_contents then
+    room_contents_sub = ri.on_room_contents(on_room_contents_frame)
+  end
+  if gmcp and gmcp.on then
+    combat_gmcp_sub = gmcp.on("Char.Combat", on_char_combat)
+  end
 
   -- Register the movement shorthands and the /step command
   register_aliases()
@@ -615,8 +738,26 @@ function M.on_unload()
   end
   room_info_sub = nil
 
+  if room_contents_sub and ri and ri.off_room_contents then
+    ri.off_room_contents(room_contents_sub)
+  end
+  room_contents_sub = nil
+
+  if combat_gmcp_sub and gmcp and gmcp.remove then
+    gmcp.remove(combat_gmcp_sub)
+  end
+  combat_gmcp_sub = nil
+
   M.stop()
   log("Unloaded")
+end
+
+-- A reconnect that never negotiates Char.Combat must fall back to the prompt
+-- guess rather than freeze with the latch still set from the previous
+-- connection.
+function M.on_disconnect()
+  combat_gmcp_seen = false
+  cancel_refresh_wait()
 end
 
 --------------------------------------------------------------------------------
@@ -705,6 +846,10 @@ function M.start(targets_only)
   -- Forget any stale view so the room we are standing in is seeded afresh.
   room_key = nil
   current_target = nil
+  -- Reset the combat-source latch: see the on_disconnect note above for why
+  -- this and on_disconnect both clear it.
+  combat_gmcp_seen = false
+  cancel_refresh_wait()
 
   -- We are standing in a room already, so wait for the next prompt and decide
   -- from it rather than manufacturing one.
@@ -719,6 +864,7 @@ function M.stop()
     log("Stopped")
   end
   cancel_settle()
+  cancel_refresh_wait()
   enabled = false
   state = "idle"
   prompt_count = 0
