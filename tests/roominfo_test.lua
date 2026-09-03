@@ -487,6 +487,97 @@ ri.off_room_contents(rc_id_raise)
 ri.off_room_contents(rc_id_after)
 ri.off_room_contents(rc_id_b)
 
+-- ---- on_room_frame ------------------------------------------------------------
+-- Fires for ANY accepted room frame -- Room.Info, a complete Room.Contents, or
+-- Room.Map -- meaning only "a frame arrived", nothing about which package.
+-- Same registry shape and precedents as on_room_info/on_room_contents
+-- (distinct ids, renumbering-safe removal, a raising handler does not stop
+-- the rest). The callback takes no arguments.
+local rf_a, rf_b, rf_c = 0, 0, 0
+local rf_id_a = ri.on_room_frame(function() rf_a = rf_a + 1 end)
+local rf_id_b = ri.on_room_frame(function() rf_b = rf_b + 1 end)
+local rf_id_c = ri.on_room_frame(function() rf_c = rf_c + 1 end)
+check("on_room_frame returns distinct ids",
+  rf_id_a ~= nil and rf_id_b ~= nil and rf_id_c ~= nil and rf_id_a ~= rf_id_b and rf_id_b ~= rf_id_c,
+  tostring(rf_id_a) .. "/" .. tostring(rf_id_b) .. "/" .. tostring(rf_id_c))
+
+-- Kills: dropping the Room.Info call site.
+deliver("Room.Info", { num = 0, name = "Layer one of the Sea of Chaos",
+                       area = "Unknown", exits = { s = 0 } })
+check("on_room_frame fires for an accepted Room.Info",
+  rf_a == 1 and rf_b == 1 and rf_c == 1,
+  rf_a .. "/" .. rf_b .. "/" .. rf_c)
+
+-- Kills: dropping the Room.Contents call site.
+deliver("Room.Contents", { full = 1, items = { { name = "a lemure", type = "monster", count = 1 } } })
+check("on_room_frame fires for a complete Room.Contents", rf_a == 2, tostring(rf_a))
+
+-- Kills: dropping the Room.Map call site.
+deliver("Room.Map", {
+  kind = "los", w = 3, h = 1, rows = { "O-O" }, legend = {},
+  up = 0, down = 0, enter = 0,
+})
+check("on_room_frame fires for an accepted Room.Map", rf_a == 3, tostring(rf_a))
+
+-- Kills: firing per page from handle_room_contents instead of once, after the
+-- final page, from commit_contents.
+deliver("Room.Contents", { full = 1, page = 1, pages = 2, items = {
+  { name = "a hound", type = "monster", count = 1 },
+} })
+check("intermediate page does not fire on_room_frame", rf_a == 3, tostring(rf_a))
+deliver("Room.Contents", { full = 1, page = 2, pages = 2, items = {
+  { name = "a jackal", type = "monster", count = 1 },
+} })
+check("final page fires on_room_frame exactly once", rf_a == 4, tostring(rf_a))
+
+-- Kills: notifying before validation. An out-of-order Room.Contents page and a
+-- malformed Room.Map must both be rejected without firing.
+deliver("Room.Contents", { full = 1, page = 1, pages = 2, items = {
+  { name = "a stray page", type = "monster", count = 1 },
+} })
+deliver("Room.Contents", { full = 1, page = 5, pages = 2, items = {
+  { name = "a mismatch", type = "monster", count = 1 },
+} })
+check("out-of-order Room.Contents page does not fire on_room_frame", rf_a == 4, tostring(rf_a))
+deliver("Room.Map", { kind = "los", w = 3, h = 1, rows = "not a list", legend = {} })
+check("malformed Room.Map does not fire on_room_frame", rf_a == 4, tostring(rf_a))
+-- The rejections above must not poison later delivery.
+deliver("Room.Contents", { full = 1, items = { { name = "a recovery", type = "monster", count = 1 } } })
+check("on_room_frame recovers after rejected frames", rf_a == 5, tostring(rf_a))
+
+-- Removing the FIRST registration must not renumber the second or third; only
+-- observable after a second removal (same precedent as the other registries).
+check("off_room_frame removes by id", ri.off_room_frame(rf_id_a) == true)
+deliver("Room.Info", { num = 0, name = "Layer one of the Sea of Chaos",
+                       area = "Unknown", exits = { n = 0 } })
+check("removed callback stops firing", rf_a == 5, tostring(rf_a))
+check("survivors still fire after a removal",
+  rf_b == 6 and rf_c == 6, rf_b .. "/" .. rf_c)
+
+check("off_room_frame removes a later id after an earlier removal",
+  ri.off_room_frame(rf_id_c) == true)
+deliver("Room.Info", { num = 0, name = "Layer one of the Sea of Chaos",
+                       area = "Unknown", exits = { s = 0, n = 0 } })
+check("a later id still addresses its own callback after an earlier removal",
+  rf_c == 6, tostring(rf_c))
+check("the untouched registration keeps firing", rf_b == 7, tostring(rf_b))
+check("off_room_frame on an unknown id is false", ri.off_room_frame(rf_id_a) == false)
+
+-- One raising handler must not stop the rest.
+local rf_after = 0
+local rf_id_raise = ri.on_room_frame(function() error("boom") end)
+local rf_id_after = ri.on_room_frame(function() rf_after = rf_after + 1 end)
+print = function() end
+local rf_delivered = pcall(deliver, "Room.Info",
+  { num = 0, name = "Layer one of the Sea of Chaos",
+    area = "Unknown", exits = { s = 0 } })
+print = print_real
+check("a raising handler does not stop the rest",
+  rf_delivered and rf_after == 1, tostring(rf_delivered) .. "/" .. tostring(rf_after))
+ri.off_room_frame(rf_id_raise)
+ri.off_room_frame(rf_id_after)
+ri.off_room_frame(rf_id_b)
+
 -- ---- unload -----------------------------------------------------------------
 ri.on_unload()
 check("unregisters Room.Info", removed["Room.Info"] == true)

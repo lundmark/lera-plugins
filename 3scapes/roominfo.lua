@@ -61,6 +61,20 @@ local next_room_info_id = 0
 local on_room_contents_callbacks = {}   -- array of { id = n, fn = f }
 local next_room_contents_id = 0
 
+-- Same registry shape again. Fires for ANY accepted room frame -- Room.Info,
+-- a complete Room.Contents, or Room.Map -- meaning only "a room frame
+-- arrived", nothing about which package or what it said. This exists because
+-- no single package is a reliable arrival signal: the server suppresses a
+-- resend when a payload repeats the last one it sent, and in an area where
+-- many rooms share a name and exit set, Room.Info -- the package a consumer
+-- would naturally reach for -- is exactly the one most likely to be
+-- suppressed. Room.Map is `@`-centred and changes on virtually every move, so
+-- it is the most reliable of the three, but any of the three arriving is
+-- proof a room frame landed. Consumers that need to know *which* package
+-- arrived, or its payload, keep using on_room_info/on_room_contents.
+local on_room_frame_callbacks = {}   -- array of { id = n, fn = f }
+local next_room_frame_id = 0
+
 --------------------------------------------------------------------------------
 -- Direction Helpers
 --------------------------------------------------------------------------------
@@ -119,6 +133,15 @@ local function notify_room_contents(info)
     local ok, err = pcall(entry.fn, info)
     if not ok then
       print("[roominfo] on_room_contents error: " .. tostring(err))
+    end
+  end
+end
+
+local function notify_room_frame()
+  for _, entry in ipairs(on_room_frame_callbacks) do
+    local ok, err = pcall(entry.fn)
+    if not ok then
+      print("[roominfo] on_room_frame error: " .. tostring(err))
     end
   end
 end
@@ -204,6 +227,7 @@ local function handle_room_info(data)
   -- Unconditional: a frame arrived, whether or not identity changed. In an area
   -- with no room ids and one name per layer, this is the only per-room signal.
   notify_room_info(M.info())
+  notify_room_frame()
 end
 
 local function classify_entry(raw)
@@ -249,6 +273,7 @@ local function commit_contents(items, truncated)
   -- final-page); see the registry comment above for why the notify lives here
   -- and not in handle_room_contents.
   notify_room_contents(M.info())
+  notify_room_frame()
 end
 
 local function handle_room_contents(data)
@@ -325,6 +350,10 @@ local function handle_room_map(data)
     down = data.down ~= nil and data.down ~= 0,
     enter = data.enter ~= nil and data.enter ~= 0,
   }
+
+  -- Placed after map_grid is assigned, so a consumer calling roominfo.map()
+  -- from inside the callback sees the new grid.
+  notify_room_frame()
 end
 
 --------------------------------------------------------------------------------
@@ -356,6 +385,7 @@ function M.on_unload()
   on_room_change_callbacks = {}
   on_room_info_callbacks = {}
   on_room_contents_callbacks = {}
+  on_room_frame_callbacks = {}
   print("[roominfo] Unloaded")
 end
 
@@ -613,6 +643,30 @@ function M.off_room_contents(id)
   for i, entry in ipairs(on_room_contents_callbacks) do
     if entry.id == id then
       table.remove(on_room_contents_callbacks, i)
+      return true
+    end
+  end
+  return false
+end
+
+-- Register a callback for every accepted room frame -- Room.Info, a complete
+-- Room.Contents, or Room.Map. callback() takes no arguments: this signal
+-- means only "a room frame arrived", not which one. See the registry comment
+-- above for why this exists alongside on_room_info/on_room_contents rather
+-- than replacing either.
+function M.on_room_frame(callback)
+  if type(callback) ~= "function" then return nil end
+  next_room_frame_id = next_room_frame_id + 1
+  on_room_frame_callbacks[#on_room_frame_callbacks + 1] =
+    { id = next_room_frame_id, fn = callback }
+  return next_room_frame_id
+end
+
+function M.off_room_frame(id)
+  if id == nil then return false end
+  for i, entry in ipairs(on_room_frame_callbacks) do
+    if entry.id == id then
+      table.remove(on_room_frame_callbacks, i)
       return true
     end
   end
