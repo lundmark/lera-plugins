@@ -806,6 +806,51 @@ quiet(deliver_contents_frame)
 check("an answer no longer listing it steps", last_sent() == "n",
   table.concat(sent, "|"))
 
+-- ---- handle_combat_end is guarded against re-entry (task-12 supplement 1) ---
+-- A second no-attacker Char.Combat frame arriving before the first
+-- Room.Refresh answers or times out must not send a second refresh: doing so
+-- overwrites refresh_timeout_id and orphans the first timer with no
+-- cancel_refresh_wait() ever run on it. The mudlib's "zero snapshot sent
+-- once" guarantee is not load-bearing here -- gmcp_send_combat(1) is forced
+-- from the reconnect/ready path and the subscription-transition path, and a
+-- forced send bypasses the delta cache -- so this is a reachable duplicate,
+-- not a hypothetical one.
+run_timers()
+gmcp_sent = {}
+sw_steps = { { raw = "n", commands = { "n" } } }
+sw_taken = {}
+arrive(600, "A foggy marsh", { "a bog wraith" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+sent = {}
+prompt_cycle()
+check("reentrancy setup: attacks the monster", last_sent() == "kill a bog wraith",
+  table.concat(sent, "|"))
+
+gmcp_sent = {}
+quiet(function() deliver_combat({ attacker = nil }) end)
+check("first no-attacker frame sends exactly one Room.Refresh",
+  #gmcp_sent == 1, tostring(#gmcp_sent))
+check("one timer is queued after the first frame", queued_timers() == 1,
+  tostring(queued_timers()))
+
+-- A second no-attacker frame arrives before the first answers or times out.
+quiet(function() deliver_combat({ attacker = nil }) end)
+check("a second back-to-back no-attacker frame sends no additional refresh",
+  #gmcp_sent == 1, tostring(#gmcp_sent))
+check("exactly one timer remains queued, not two",
+  queued_timers() == 1, tostring(queued_timers()))
+
+-- The answer arrives: it must cancel the (only) outstanding timer, leaving
+-- none behind to later fire prune_and_decide() during an unrelated fight.
+ri_state.monsters = {}
+sent = {}
+quiet(deliver_contents_frame)
+check("the answer steps once the room is empty", last_sent() == "n",
+  table.concat(sent, "|"))
+check("no timer remains after the answer", queued_timers() == 0,
+  tostring(queued_timers()))
+
 -- ---- gmcp.send returning false falls back immediately -----------------------
 -- Kills: dropping the return-value check. Waiting out the timeout for a
 -- request that was never sent is a stall with no cause to find later.

@@ -238,8 +238,22 @@ end
 
 -- Char.Combat says the fight just ended. Ask the server what is actually in
 -- the room rather than guessing: one Room.Refresh per fight, not per round.
+--
+-- The awaiting_refresh guard is load-bearing, not defensive dressing: without
+-- it a second no-attacker frame arriving before the first refresh answers or
+-- times out re-enters this function, sends a second Room.Refresh, and
+-- overwrites refresh_timeout_id -- orphaning the first timer with no
+-- cancel_refresh_wait() ever run on it. That orphan later fires
+-- prune_and_decide() during a subsequent, unrelated fight, pruning the wrong
+-- monster. Do not lean on the mudlib's "the zero snapshot is sent once"
+-- guarantee to argue this guard is unreachable: gmcp_combat_send_step
+-- (secure/protocol/char_combat_impl.h:76) bypasses its delta cache whenever
+-- force is set, and gmcp_send_combat(1) is called forced from both the
+-- reconnect/ready path and the subscription-transition path, so a second
+-- zero snapshot within the ~1s refresh window is a real, reachable case, not
+-- a hypothetical one.
 local function handle_combat_end()
-  if state ~= "fighting" then return end
+  if state ~= "fighting" or awaiting_refresh then return end
   local sent = gmcp.send("Room.Refresh", { packages = { "Room.Contents" } })
   if not sent then
     -- Not connected, or GMCP isn't enabled: the request never went out, so
