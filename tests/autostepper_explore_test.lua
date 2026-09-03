@@ -549,6 +549,41 @@ mode.stop()
 -- Refuses when explore mode is not active.
 check("leave refuses when explore mode is not active", mode.leave() == false)
 
+-- ---- narration goes through the stepper's logger when one is handed over ----
+-- init.lua owns the colour palette, so this module names the KIND of line it
+-- is emitting and lets the logger colour it. Two properties: an installed
+-- logger receives both the message and its kind, and a module with no logger
+-- still narrates on its own through a plain tagged print -- which is what the
+-- rest of this suite relies on.
+local sent_to_logger = {}
+mode.set_logger(function(msg, kind)
+  sent_to_logger[#sent_to_logger + 1] = { msg = msg, kind = kind }
+end)
+check("a refusal reaches an installed logger instead of print",
+  mode.leave() == false and #sent_to_logger == 1,
+  tostring(#sent_to_logger))
+check("the logger is told the message",
+  sent_to_logger[1] and sent_to_logger[1].msg:find("leave refused", 1, true) ~= nil,
+  sent_to_logger[1] and sent_to_logger[1].msg)
+check("the logger is told the kind, not a colour",
+  sent_to_logger[1] and sent_to_logger[1].kind == "warn",
+  sent_to_logger[1] and tostring(sent_to_logger[1].kind))
+
+mode.set_logger(nil)
+local before_printed = #printed
+quiet(function() mode.leave() end)
+check("with no logger the module falls back to a tagged print",
+  #printed == before_printed + 1 and
+    printed[#printed]:find("[autostepper] ", 1, true) == 1,
+  printed[#printed])
+check("a non-function logger is refused rather than called",
+  (function()
+     mode.set_logger("not a function")
+     local n = #printed
+     quiet(function() mode.leave() end)
+     return #printed == n + 1
+   end)(), printed[#printed])
+
 -- Refuses when already at the origin: the origin is recorded (path_to's
 -- target-recorded check passes) and we are standing on it, so path_to
 -- returns the empty array, not nil -- the "already there" case, not

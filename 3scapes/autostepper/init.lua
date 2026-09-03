@@ -11,13 +11,79 @@ M.priority = 40  -- After roominfo (10), before speedwalk (50)
 -- Dependencies
 --------------------------------------------------------------------------------
 
-local function log(msg)
-  print("[autostepper] " .. msg)
+-- Output colours. buffer.color_print takes (bg, fg, text) triplets with fg as
+-- nil, a 0-255 palette index or "RRGGBB" (src/lua/api_buffer.c:461) -- the same
+-- call every other plugin in this tree prints its replies with
+-- (guild_viking/autotrader/tick.lua, mercenary/command_ui.lua). The red is
+-- autotrader's, deliberately: a hard stop should look the same wherever it
+-- comes from.
+--
+-- The TAG is one fixed colour on every line, so the stepper's own narration is
+-- findable in a busy combat scroll. The MESSAGE colour says what kind of line
+-- it is -- the distinction worth having at a glance is "it moved" vs "it
+-- attacked" vs "something needs me" -- and ordinary narration is left at nil,
+-- the buffer's default foreground: repainting every line would make the
+-- colours mean nothing.
+--
+-- Loudness is the organising idea, not prettiness: a step is the line the
+-- stepper emits most, so it is the quietest thing on the list, and the eye
+-- should be pulled by the rare lines instead. Headings are violet rather than
+-- a second amber -- next to COLOR_WARN one more gold would have read as "look
+-- at this" when it only means "a report starts here".
+local COLOR_TAG   = "5FAFD7"   -- steel blue: the [autostepper] tag, always
+local COLOR_INFO  = nil        -- ordinary narration: the default foreground
+local COLOR_HEAD  = "CE93D8"   -- violet: report headings (Status:, Commands:)
+local COLOR_RUN   = "9CCC65"   -- green: start, stop, complete, mode changes
+local COLOR_STEP  = "9E9E9E"   -- grey: movement, the routine line
+local COLOR_FIGHT = "FF8A65"   -- coral: attacking
+local COLOR_WARN  = "FFC107"   -- amber: a guess, a refusal, something to see
+local COLOR_ERROR = "FF4444"   -- red: the run cannot go on (autotrader's red)
+local COLOR_TRACE = "78909C"   -- slate: /step trace, off by default
+
+local function log(msg, color)
+  buffer.color_print(nil, COLOR_TAG, "[autostepper] ",
+                     nil, color or COLOR_INFO, tostring(msg))
+end
+
+-- Narration from a module that does not own the palette: explore/mode.lua
+-- names the KIND of line it is emitting and this maps it, so the colours have
+-- exactly one definition and retuning them stays a one-block edit.
+local COLOR_BY_KIND = {
+  run = COLOR_RUN, step = COLOR_STEP, fight = COLOR_FIGHT,
+  warn = COLOR_WARN, error = COLOR_ERROR, head = COLOR_HEAD,
+}
+
+local function log_kind(msg, kind)
+  log(msg, kind and COLOR_BY_KIND[kind] or COLOR_INFO)
+end
+
+-- /step trace. Off by default and silent when off.
+--
+-- It exists because the events that drive an arrival are INVISIBLE in a
+-- session log: a GMCP frame prints nothing, and neither does a settle timer
+-- firing. A run that stepped twice with no MUD output between the two steps
+-- (seen live in the chaos sea, 2026-09-03) is therefore indistinguishable, from
+-- the outside, between "a stray frame armed the settle" and "a prompt that was
+-- not ours completed the arrival" -- and those want opposite fixes. This turns
+-- the invisible half of the state machine into lines you can paste.
+local tracing = false
+
+local function trace(msg)
+  if not tracing then return end
+  log("trace: " .. msg, COLOR_TRACE)
 end
 
 local sw = nil      -- speedwalk plugin (set in on_load)
 local ri = nil      -- roominfo plugin (set in on_load)
 local explore = require("explore.mode")
+
+-- Hand the explore module our logger, so its narration wears the same tag and
+-- the same palette. Guarded because debug_set_explore installs partial
+-- stand-ins; a module given no logger falls back to a plain tagged print.
+local function wire_explore_logger()
+  if explore and explore.set_logger then explore.set_logger(log_kind) end
+end
+wire_explore_logger()
 
 -- Area profiles, by name. A profile is data plus four predicates; no engine
 -- logic lives in one.
@@ -32,7 +98,7 @@ local function load_area(name)
   if not path then return nil end
   local ok, mod = pcall(require, path)
   if not ok then
-    log("area '" .. name .. "' failed to load: " .. tostring(mod))
+    log("area '" .. name .. "' failed to load: " .. tostring(mod), COLOR_ERROR)
     return nil
   end
   area_cache[name] = mod
@@ -42,6 +108,7 @@ end
 -- Test seam: swap the explore module for a stand-in.
 function M.debug_set_explore(stub)
   explore = stub or require("explore.mode")
+  wire_explore_logger()
 end
 
 --------------------------------------------------------------------------------
@@ -55,6 +122,11 @@ local enabled = false   -- Is autostepper active?
 local prompt_trigger_id = nil  -- Trigger ID for prompt detection
 local no_target_trigger_id = nil  -- Trigger ID for "There is no X here."
 local failed_attacks = 0  -- count of attacks whose keyword never resolved
+-- Refreshes that timed out. A run that decides from a pruned guess instead of
+-- the server's answer used to do it in complete silence; a climbing count here
+-- is the difference between "the plugin is confused" and "the answers are not
+-- arriving", which is the first thing worth knowing.
+local unanswered_refreshes = 0
 
 -- Which source do_step() takes steps from: "explore" or "route". Fixed once,
 -- in M.start, and never re-derived from explore.active() per step. Deciding
@@ -102,6 +174,12 @@ local run_mode = nil
 local BURST_SETTLE_MS = 150            -- no prompt pattern: the only signal
 local PROMPT_FALLBACK_MS = 1500        -- prompt configured: rescue, not rival
 local settle_timer = nil
+-- Every accepted room frame, counted before any state test, plus the count as
+-- it stood when the current step went out. The difference answers the one
+-- question the transcript of a bad run cannot: did anything actually describe
+-- a room to us between the step and the arrival we committed?
+local frames_seen = 0
+local frames_at_step = 0
 local room_info_sub = nil
 local room_frame_sub = nil   -- roominfo.on_room_frame id, removed on unload
 
@@ -187,7 +265,7 @@ local function notify(callbacks, ...)
   for _, cb in ipairs(callbacks) do
     local ok, err = pcall(cb, ...)
     if not ok then
-      log("Callback error: " .. tostring(err))
+      log("Callback error: " .. tostring(err), COLOR_ERROR)
     end
   end
 end
@@ -224,11 +302,19 @@ end
 -- been handled, so a callback would seed the previous room's occupants.
 local function sync_room_view()
   local key = roominfo_room_key()
-  if key == room_key then return end
+  if key == room_key then
+    trace("view kept (key " .. tostring(key) .. ", " .. #room_monsters
+          .. " tracked)")
+    return
+  end
+  local was = room_key
   room_key = key
   room_monsters = copy_names(ri and ri.monsters and ri.monsters())
   room_players = copy_names(ri and ri.players and ri.players())
   current_target = nil
+  trace("view reseeded " .. tostring(was) .. " -> " .. tostring(key)
+        .. " (" .. #room_monsters .. " monsters, " .. #room_players
+        .. " players from roominfo)")
 end
 
 -- Strike one occurrence of a finished target from the local view.
@@ -296,7 +382,7 @@ local function on_attack_no_target(_, name)
   current_target = nil
   state = "idle"
   failed_attacks = failed_attacks + 1
-  log("Attack did not resolve: \"" .. tostring(name) .. "\"")
+  log("Attack did not resolve: \"" .. tostring(name) .. "\"", COLOR_WARN)
   process_room()
 end
 
@@ -341,11 +427,19 @@ local function handle_combat_end()
     return
   end
   awaiting_refresh = true
+  trace("combat ended; Room.Refresh sent, awaiting the answer")
   refresh_timeout_id = timer.after(REFRESH_TIMEOUT_MS, function()
     refresh_timeout_id = nil
     -- Over-budget refreshes are dropped silently with no error payload, so a
     -- request that never gets answered looks identical to one still in
     -- flight. Falling back here is what keeps that case from waiting forever.
+    --
+    -- Said out loud, and counted: this is the plugin acting on a guess where
+    -- it asked for facts, and a run that does it repeatedly is a run whose
+    -- every later decision may be about the wrong room.
+    unanswered_refreshes = unanswered_refreshes + 1
+    log("Room.Refresh went unanswered; deciding from the pruned view",
+        COLOR_WARN)
     prune_and_decide()
   end)
 end
@@ -368,7 +462,11 @@ end
 -- other reason (another plugin's own re-glance, say) must not be mistaken for
 -- our answer.
 local function on_room_contents_frame()
-  if not awaiting_refresh then return end
+  if not awaiting_refresh then
+    trace("contents frame with no refresh outstanding; ignored")
+    return
+  end
+  trace("refresh answered")
   reseed_and_decide()
 end
 
@@ -381,11 +479,17 @@ end
 
 -- The single place an arrival is committed, from either signal. Idempotent:
 -- whichever lands second finds state ~= "stepping" and does nothing.
-local function complete_arrival()
+-- `cause` is trace-only, and names which signal committed the arrival: the
+-- settle timer (a room frame landed) or the prompt. Which one it was is the
+-- first thing to know about an arrival that turns out to have been wrong,
+-- since only one of them is evidence that the MUD moved us.
+local function complete_arrival(cause)
   if not enabled or state ~= "stepping" then return end
   cancel_settle()
   pending_prompts = 0
   state = "idle"
+  trace("arrival committed by " .. tostring(cause) .. "; "
+        .. (frames_seen - frames_at_step) .. " frame(s) since the step")
   if explore and explore.active() then explore.on_arrival() end
   process_room()
 end
@@ -421,12 +525,16 @@ end
 -- cancels this timer); with none configured this is the only mechanism, so
 -- it keeps the original short delay.
 local function on_room_frame_arrival()
+  frames_seen = frames_seen + 1
+  trace("frame #" .. frames_seen .. " (state " .. state .. ", "
+        .. tostring(ri and ri.monster_count and ri.monster_count())
+        .. " monsters in roominfo)")
   if not enabled or state ~= "stepping" then return end
   if settle_timer then return end
   local delay = config.prompt_pattern and PROMPT_FALLBACK_MS or BURST_SETTLE_MS
   settle_timer = timer.after(delay, function()
     settle_timer = nil
-    complete_arrival()
+    complete_arrival("settle")
   end)
 end
 
@@ -435,6 +543,7 @@ end
 local function begin_arrival_wait()
   cancel_settle()
   state = "stepping"
+  frames_at_step = frames_seen
   pending_prompts = 1
   if config.glance_cmd and config.glance_cmd ~= "" then
     mud.send(config.glance_cmd)
@@ -555,14 +664,14 @@ local function do_attack(monster)
     if #targets > 0 then
       send_target = targets[1]
       log("No target keyword matched \"" .. monster .. "\"; guessing \""
-          .. send_target .. "\"")
+          .. send_target .. "\"", COLOR_WARN)
     else
       send_target = head_noun(monster) or monster
     end
   end
 
   local cmd = config.attack_cmd .. " " .. send_target
-  log("Attacking: " .. monster)
+  log("Attacking: " .. monster, COLOR_FIGHT)
   notify(on_attack_callbacks, monster, cmd)
   mud.send(cmd)
   -- After attack, a prompt ends the fight and the next decision follows
@@ -578,7 +687,7 @@ local function do_step()
       -- sw.take_step() here would walk a stored speedwalk path from wherever
       -- we now stand, which is exactly what the exhaustion branch below
       -- refuses to do, reached by a different door.
-      log("Explore mode ended; stopping")
+      log("Explore mode ended; stopping", COLOR_RUN)
       enabled = false
       state = "idle"
       cancel_settle()
@@ -595,9 +704,9 @@ local function do_step()
       -- from wherever it happens to be standing in the maze.
       local reason = (explore.stop_reason and explore.stop_reason()) or "exhausted"
       if reason == "at origin" then
-        log("Explored: back at the origin")
+        log("Explored: back at the origin", COLOR_RUN)
       else
-        log("Explored: no unvisited exits remain")
+        log("Explored: no unvisited exits remain", COLOR_RUN)
       end
       enabled = false
       state = "idle"
@@ -612,7 +721,7 @@ local function do_step()
   else
     step = sw.take_step()
     if not step then
-      log("Route complete!")
+      log("Route complete!", COLOR_RUN)
       enabled = false
       state = "idle"
       cancel_settle()
@@ -621,7 +730,7 @@ local function do_step()
     end
   end
 
-  log("Step: " .. step.raw)
+  log("Step: " .. step.raw, COLOR_STEP)
   notify(on_step_callbacks, step.raw, sw and sw.step_info and sw.step_info())
 
   for _, cmd in ipairs(step.commands) do
@@ -635,7 +744,7 @@ end
 
 function process_room()
   if not ri then
-    log("Error: roominfo plugin not available")
+    log("Error: roominfo plugin not available", COLOR_ERROR)
     M.stop()
     return
   end
@@ -643,20 +752,22 @@ function process_room()
   -- Decisions come from the local per-room view, not from a fresh roominfo
   -- read: the snapshot cannot change while we stand in the room.
   sync_room_view()
+  trace("deciding in state " .. state .. " (run_mode "
+        .. tostring(run_mode) .. ")")
   local players = room_players
   local monsters = room_monsters
   local room = ri.room() or "unknown"
 
   -- Check if player in room
   if #players > 0 and config.step_on_player then
-    log("Player in room (" .. room .. "), stepping...")
+    log("Player in room (" .. room .. "), stepping...", COLOR_STEP)
     do_step()
     return
   end
 
   -- Check if no monsters
   if #monsters == 0 and config.step_on_no_monster then
-    log("No monsters in room (" .. room .. "), stepping...")
+    log("No monsters in room (" .. room .. "), stepping...", COLOR_STEP)
     do_step()
     return
   end
@@ -671,12 +782,14 @@ function process_room()
             do_attack(monster)
             return
           else
-            log("Valid target found but auto_attack disabled: " .. monster)
+            log("Valid target found but auto_attack disabled: " .. monster,
+                COLOR_WARN)
           end
         end
       end
       -- No valid targets - skip and step
-      log("Monster not in target list (" .. monsters[1] .. "), stepping...")
+      log("Monster not in target list (" .. monsters[1] .. "), stepping...",
+          COLOR_STEP)
       notify(on_skip_callbacks, monsters[1], room)
       do_step()
       return
@@ -686,7 +799,8 @@ function process_room()
         do_attack(monsters[1])
         return
       else
-        log("Monster found but auto_attack disabled: " .. monsters[1])
+        log("Monster found but auto_attack disabled: " .. monsters[1],
+            COLOR_WARN)
       end
     end
   end
@@ -702,8 +816,11 @@ local function on_prompt()
 
   if state == "stepping" then
     pending_prompts = pending_prompts - 1
+    trace("prompt #" .. prompt_count .. " while stepping ("
+          .. pending_prompts .. " still owed, "
+          .. (frames_seen - frames_at_step) .. " frame(s) since the step)")
     if pending_prompts <= 0 then
-      complete_arrival()
+      complete_arrival("prompt")
     end
   elseif state == "fighting" then
     -- Once any Char.Combat frame has arrived this connection, THAT owns
@@ -745,11 +862,13 @@ do
 end
 
 local function show_help()
-  log("Commands:")
+  log("Commands:", COLOR_HEAD)
   log("  -.                     - Start stepping, kill any mob")
   log("  ->                     - Start stepping, only kill targets")
   log("  -!                     - Stop stepping")
   log("  /step status           - Show current status")
+  log("  /step trace [on|off]   - Log the invisible half: frames, prompts,")
+  log("                           settles, refreshes and every decision")
   log("  /step explore [area]   - Start explore mode in an area (default: chaossea)")
   log("  /step explore off      - Stop explore mode")
   log("  /step explore reset    - Reset the map to a fresh origin here, keep stepping")
@@ -804,7 +923,7 @@ end
 --------------------------------------------------------------------------------
 
 local function show_config()
-  log("Configuration:")
+  log("Configuration:", COLOR_HEAD)
   log("  glance_cmd: " .. config.glance_cmd)
   log("  attack_cmd: " .. config.attack_cmd)
   log("  prompt_pattern: " .. (config.prompt_pattern or "(not set)"))
@@ -826,7 +945,7 @@ local function dispatch_set(rest)
     show_config()
   elseif key == "prompt" then
     if value == "" then
-      log("Usage: /step set prompt <pattern>")
+      log("Usage: /step set prompt <pattern>", COLOR_WARN)
       log("Current: " .. (config.prompt_pattern or "(not set)"))
     else
       M.set_prompt_pattern(value)
@@ -838,7 +957,7 @@ local function dispatch_set(rest)
       config.auto_attack = (value == "on")
       log("Auto-attack " .. (config.auto_attack and "enabled" or "disabled"))
     else
-      log("Usage: /step set attack [on|off]")
+      log("Usage: /step set attack [on|off]", COLOR_WARN)
     end
   elseif key == "glance" then
     if value == "" then
@@ -878,10 +997,10 @@ local function dispatch_set(rest)
       if explore and explore.active() then explore.set_policy(config.explore_policy) end
       log("dive: " .. (config.explore_policy == "dive" and "on" or "off"))
     else
-      log("Usage: /step set dive [on|off]")
+      log("Usage: /step set dive [on|off]", COLOR_WARN)
     end
   else
-    log("Unknown setting: " .. key)
+    log("Unknown setting: " .. key, COLOR_WARN)
     show_help()
   end
 end
@@ -896,6 +1015,20 @@ local function dispatch(args)
     dispatch_set(rest)
   elseif sub == "status" then
     M.status()
+  elseif sub == "trace" then
+    local arg = rest:match("^(%S*)"):lower()
+    if arg == "on" then
+      tracing = true
+      log("Trace on: every frame, prompt, settle and decision is logged.",
+          COLOR_RUN)
+    elseif arg == "off" then
+      tracing = false
+      log("Trace off", COLOR_RUN)
+    elseif arg == "" then
+      log("trace: " .. (tracing and "on" or "off"))
+    else
+      log("Usage: /step trace [on|off]", COLOR_WARN)
+    end
   elseif sub == "start" then
     M.start(false)
   elseif sub == "targets" then
@@ -915,7 +1048,7 @@ local function dispatch(args)
       if M.explore_start(area) then M.start(config.targets_only) end
     end
   else
-    log("Unknown subcommand: " .. sub)
+    log("Unknown subcommand: " .. sub, COLOR_WARN)
     show_help()
   end
 end
@@ -926,7 +1059,7 @@ local function register_command()
     name = "/step",
     aliases = { "/autostepper" },
     usage = "/step [start|targets|stop|explore [area]|explore off|explore reset|"
-      .. "explore leave|status|set <key> [value]]",
+      .. "explore leave|status|trace [on|off]|set <key> [value]]",
     summary = "Automatic speedwalk stepping with optional combat",
     description = "Walks a stored step path one room at a time, optionally "
       .. "glancing and attacking on the way. Or, with 'explore [area]', maps an "
@@ -946,7 +1079,7 @@ local function register_command()
   if id then
     command_id = id
   else
-    log("command registration failed: " .. tostring(err))
+    log("command registration failed: " .. tostring(err), COLOR_ERROR)
   end
 end
 
@@ -969,10 +1102,10 @@ function M.on_load()
   ri = plugin.get("roominfo")
 
   if not sw then
-    log("Warning: speedwalk plugin not loaded")
+    log("Warning: speedwalk plugin not loaded", COLOR_WARN)
   end
   if not ri then
-    log("Warning: roominfo plugin not loaded")
+    log("Warning: roominfo plugin not loaded", COLOR_WARN)
   end
 
   if ri and ri.on_room_info then
@@ -999,7 +1132,7 @@ function M.on_load()
   register_aliases()
   register_command()
 
-  log("Loaded (use /step help for commands)")
+  log("Loaded (use /step help for commands)", COLOR_RUN)
 end
 
 function M.on_unload()
@@ -1032,7 +1165,7 @@ function M.on_unload()
   no_target_trigger_id = nil
 
   M.stop()
-  log("Unloaded")
+  log("Unloaded", COLOR_RUN)
 end
 
 -- A reconnect that never negotiates Char.Combat must fall back to the prompt
@@ -1065,7 +1198,7 @@ function M.set_prompt_pattern(pattern)
     if prompt_trigger_id then
       log("Prompt pattern set: " .. pattern)
     else
-      log("Failed to compile prompt pattern")
+      log("Failed to compile prompt pattern", COLOR_ERROR)
       config.prompt_pattern = nil
     end
   end
@@ -1077,7 +1210,7 @@ function M.start(targets_only)
   if not sw then
     sw = plugin.get("speedwalk")
     if not sw then
-      log("Error: speedwalk plugin required")
+      log("Error: speedwalk plugin required", COLOR_ERROR)
       return false
     end
   end
@@ -1085,7 +1218,7 @@ function M.start(targets_only)
   if not ri then
     ri = plugin.get("roominfo")
     if not ri then
-      log("Error: roominfo plugin required")
+      log("Error: roominfo plugin required", COLOR_ERROR)
       return false
     end
   end
@@ -1099,7 +1232,7 @@ function M.start(targets_only)
     -- rather than discovering it.
     log("No prompt pattern set: arrivals will rely on the GMCP Room.Info path and "
         .. "combat end on Char.Combat. Set one with '/step set prompt <pattern>' if "
-        .. "either is unavailable.")
+        .. "either is unavailable.", COLOR_WARN)
   end
 
   local exploring = explore and explore.active()
@@ -1110,12 +1243,12 @@ function M.start(targets_only)
   if not exploring then
     local place = sw.get_current_place()
     if not place then
-      log("Error: current place not set (use .set <place>)")
+      log("Error: current place not set (use .set <place>)", COLOR_ERROR)
       return false
     end
 
     if not sw.load_steps() then
-      log("Error: no steps configured for place '" .. place .. "'")
+      log("Error: no steps configured for place '" .. place .. "'", COLOR_ERROR)
       log("Use speedwalk.configure_place('" .. place .. "', 'n|s|e|w', 'target1,target2')")
       return false
     end
@@ -1124,13 +1257,15 @@ function M.start(targets_only)
     local targets = sw.get_targets()
     config.targets_only = targets_only or false
     local mode_label = config.targets_only and "targets only" or "any mob"
-    log("Starting at '" .. place .. "': " .. info.total .. " steps (" .. mode_label .. ")")
+    log("Starting at '" .. place .. "': " .. info.total .. " steps ("
+        .. mode_label .. ")", COLOR_RUN)
     if config.targets_only and #targets > 0 then
       log("Targets: " .. table.concat(targets, ", "))
     end
   else
     config.targets_only = targets_only or false
-    log("Starting explore run (" .. (explore.stats().policy or "clear") .. ")")
+    log("Starting explore run (" .. (explore.stats().policy or "clear") .. ")",
+        COLOR_RUN)
   end
 
   enabled = true
@@ -1159,7 +1294,7 @@ end
 -- Stop autostepping
 function M.stop()
   if enabled then
-    log("Stopped")
+    log("Stopped", COLOR_RUN)
   end
   cancel_settle()
   cancel_refresh_wait()
@@ -1180,22 +1315,22 @@ end
 function M.explore_start(area_name)
   local prof = load_area(area_name)
   if not prof then
-    log("Unknown area '" .. tostring(area_name) .. "'")
+    log("Unknown area '" .. tostring(area_name) .. "'", COLOR_WARN)
     return false
   end
   explore.attach(ri)
   if not explore.start(prof, config.explore_policy) then
-    log("Explore mode failed to start")
+    log("Explore mode failed to start", COLOR_ERROR)
     return false
   end
-  log("Explore mode active: " .. prof.name)
+  log("Explore mode active: " .. prof.name, COLOR_RUN)
   return true
 end
 
 function M.explore_stop()
   if explore and explore.active() then
     explore.stop()
-    log("Explore mode off")
+    log("Explore mode off", COLOR_RUN)
   end
   M.stop()
 end
@@ -1214,12 +1349,12 @@ end
 -- commits the refreshed exits via explore.on_arrival() as it always does.
 function M.explore_reset()
   if not (explore and explore.active()) then
-    log("Explore mode is not active; nothing to reset")
+    log("Explore mode is not active; nothing to reset", COLOR_WARN)
     return false
   end
   explore.reset("manual reset")
   request_room_refresh()
-  log("Explore map reset; re-asking the MUD for the current room")
+  log("Explore map reset; re-asking the MUD for the current room", COLOR_RUN)
   return true
 end
 
@@ -1252,7 +1387,7 @@ end
 
 -- Show status
 function M.status()
-  log("Status:")
+  log("Status:", COLOR_HEAD)
   log("  Running: " .. (enabled and "yes" or "no"))
   log("  State: " .. state)
   log("  Pending prompts: " .. pending_prompts)
@@ -1261,6 +1396,10 @@ function M.status()
   -- A climbing count is the actionable diagnostic: it means the target list
   -- does not match the area, which the user can fix and nothing else says.
   log("  Failed attacks (this session): " .. failed_attacks)
+  -- Both counted for the same reason: each is the run acting on something
+  -- weaker than the server's own answer.
+  log("  Unanswered refreshes (this session): " .. unanswered_refreshes)
+  log("  Trace: " .. (tracing and "on" or "off"))
 
   if explore and explore.active() then
     local s = explore.stats()

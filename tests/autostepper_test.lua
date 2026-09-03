@@ -129,6 +129,33 @@ local function deliver_no_target(name)
   return true
 end
 
+-- The plugin narrates through buffer.color_print now (a coloured
+-- "[autostepper] " tag, then the message in a colour that says what kind of
+-- line it is). Route both segments back through the CURRENT global print --
+-- looked up at call time, so the quiet()/capture() helpers that swap print
+-- still see every line exactly as the player reads it -- and keep the raw
+-- triplets so a case can pin the colours themselves.
+local color_calls = {}
+buffer = {
+  -- select('#', ...), never #{...}: an ordinary line passes fg = nil for the
+  -- message (the buffer's default foreground), and a nil in the middle of a
+  -- packed table leaves a hole whose # is undefined -- LuaJIT reports 3 there,
+  -- so the message segment vanishes and every content assertion in this file
+  -- silently sees a bare tag. The real color_print is a C function counting
+  -- with lua_gettop, which is not fooled.
+  color_print = function(...)
+    local n = select('#', ...)
+    local parts, segments = {}, {}
+    for i = 3, n, 3 do
+      local text = tostring((select(i, ...)))
+      parts[#parts + 1] = text
+      segments[#segments + 1] = { fg = (select(i - 1, ...)), text = text }
+    end
+    color_calls[#color_calls + 1] = segments
+    print(table.concat(parts))
+  end,
+}
+
 alias = {
   add = function() return 1 end,
   remove = function() return true end,
@@ -1537,9 +1564,19 @@ check("a timer is armed while waiting for the answer",
   queued_timers() == 1, tostring(queued_timers()))
 
 sent = {}
-run_timers()  -- fire the ~1s timeout; no Room.Contents answer ever arrives
+local timeout_lines = capture(run_timers)  -- fire the ~1s timeout; no answer
 check("no answer within the timeout falls back to prune-and-decide",
   sent[1] == "s", table.concat(sent, "|"))
+-- The fallback used to be silent, which made "the plugin is confused" and "the
+-- server is not answering" look identical from a session log -- and the run
+-- decides from a guess for every room after it.
+check("an unanswered refresh says so",
+  has_line(timeout_lines, "Room.Refresh went unanswered"),
+  table.concat(timeout_lines, "|"))
+local unanswered_status = capture(as.status)
+check("and is counted in /step status",
+  has_line(unanswered_status, "Unanswered refreshes (this session): 1"),
+  table.concat(unanswered_status, "|"))
 
 quiet(as.stop)
 
@@ -1792,6 +1829,117 @@ check("a room whose every monster fails to resolve ends by stepping, not looping
 check("the tracked view is empty once the step is taken",
   #tracked() == 0, table.concat(tracked(), ","))
 quiet(as.stop)
+
+-- ---- /step trace -------------------------------------------------------------
+-- The arrival machinery is driven by two signals that print nothing at all: a
+-- GMCP room frame and a settle timer. A run that stepped twice with no MUD
+-- output in between therefore cannot be diagnosed from a session log -- which
+-- is what this exists for, and why the trace names the CAUSE of each arrival
+-- rather than just the fact of one.
+run_timers()
+sw_steps = { { raw = "n", commands = { "n" } }, { raw = "e", commands = { "e" } } }
+sw_taken = {}
+sw_target_list = {}
+arrive(730, "A quiet hall", {}, {})
+quiet(function() as.start(false) end)
+
+-- Off by default: the same events, and not a word about them.
+local silent = capture(function()
+  deliver_frame()
+  run_timers()
+end)
+check("trace is off by default",
+  not has_line(silent, "trace:"), table.concat(silent, "|"))
+
+quiet(function() step_cmd.handler("trace on") end)
+local traced = capture(function()
+  arrive(731, "A long gallery", { "a pale newt" }, {})
+  deliver_frame()      -- a room frame: arms the settle
+  run_timers()         -- the settle fires: the arrival is committed
+end)
+check("a frame is traced, with the state it arrived in",
+  has_line(traced, "trace: frame #") and has_line(traced, "state stepping"),
+  table.concat(traced, "|"))
+check("the arrival names the signal that committed it",
+  has_line(traced, "arrival committed by settle"), table.concat(traced, "|"))
+check("the trace says how many frames arrived since the step",
+  has_line(traced, "frame(s) since the step"), table.concat(traced, "|"))
+check("the reseed reports the key it moved to and what it read",
+  has_line(traced, "trace: view reseeded") and has_line(traced, "monsters"),
+  table.concat(traced, "|"))
+
+local trace_status = capture(as.status)
+check("/step status reports the trace state",
+  has_line(trace_status, "Trace: on"), table.concat(trace_status, "|"))
+
+quiet(function() step_cmd.handler("trace off") end)
+local quiet_again = capture(function()
+  deliver_frame()
+  run_timers()
+end)
+check("trace off silences it again",
+  not has_line(quiet_again, "trace:"), table.concat(quiet_again, "|"))
+quiet(as.stop)
+
+-- ---- coloured narration ------------------------------------------------------
+-- Every line is a coloured "[autostepper] " tag plus the message in a colour
+-- that says what KIND of line it is. Pinned as relationships rather than hex
+-- literals: the palette itself is a taste decision and may be retuned, but
+-- "the tag is the same on every line", "the tag does not wear the message's
+-- colour", "moving and attacking do not look alike" and "ordinary narration
+-- keeps the default foreground" are the properties that make it worth having,
+-- and a retune must not quietly cost any of them.
+local function segments_for(needle)
+  for i = #color_calls, 1, -1 do
+    local segs = color_calls[i]
+    if segs[2] and segs[2].text:find(needle, 1, true) then return segs end
+  end
+  return nil
+end
+
+run_timers()
+sw_steps = { { raw = "n", commands = { "n" } } }
+sw_taken = {}
+sw_target_list = {}
+arrive(720, "A slate hall", { "a grey mole" }, {})
+quiet(function() as.start(false) end)
+color_calls = {}
+prompt_cycle()                                    -- "Attacking: a grey mole"
+quiet(function() deliver_no_target("mole") end)   -- warns, prunes, then steps
+capture(as.status)                                -- one report, quietly
+quiet(as.stop)
+
+local attack_segs = segments_for("Attacking:")
+local step_segs = segments_for("Step: n")
+local warn_segs = segments_for("Attack did not resolve")
+local head_segs = segments_for("Status:")
+local plain_segs = segments_for("Running:")
+
+check("a line is a tag segment plus a message segment",
+  attack_segs and #attack_segs == 2, attack_segs and #attack_segs)
+check("the tag segment is the tag, spacing included",
+  attack_segs and attack_segs[1].text == "[autostepper] ",
+  attack_segs and ("\"" .. attack_segs[1].text .. "\""))
+check("the tag colour is the same on an attack line and a step line",
+  attack_segs and step_segs and attack_segs[1].fg == step_segs[1].fg,
+  tostring(attack_segs and attack_segs[1].fg) .. " vs "
+    .. tostring(step_segs and step_segs[1].fg))
+check("the tag does not wear the message colour",
+  attack_segs and attack_segs[1].fg ~= attack_segs[2].fg,
+  tostring(attack_segs and attack_segs[2].fg))
+check("attacking and moving are told apart by colour",
+  attack_segs and step_segs and attack_segs[2].fg ~= step_segs[2].fg,
+  tostring(attack_segs and attack_segs[2].fg) .. " vs "
+    .. tostring(step_segs and step_segs[2].fg))
+check("a line that needs attention is told apart from a step",
+  warn_segs and step_segs and warn_segs[2].fg ~= step_segs[2].fg,
+  tostring(warn_segs and warn_segs[2].fg))
+check("a report heading is coloured",
+  head_segs and head_segs[2].fg ~= nil and head_segs[2].fg ~= head_segs[1].fg,
+  tostring(head_segs and head_segs[2].fg))
+check("ordinary narration keeps the default foreground",
+  plain_segs and plain_segs[2].fg == nil,
+  tostring(plain_segs and plain_segs[2].fg))
 
 if failures > 0 then
   print(failures .. " FAILURE(S)")

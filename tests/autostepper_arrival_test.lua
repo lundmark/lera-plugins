@@ -105,6 +105,32 @@ plugin = {
   end,
 }
 
+-- The plugin narrates through buffer.color_print now (a coloured
+-- "[autostepper] " tag, then the message in a colour that says what kind of
+-- line it is). Route both segments back through the CURRENT global print --
+-- looked up at call time, so the quiet() helper that swaps print
+-- still see every line exactly as the player reads it.
+local color_calls = {}
+buffer = {
+  -- select('#', ...), never #{...}: an ordinary line passes fg = nil for the
+  -- message (the buffer's default foreground), and a nil in the middle of a
+  -- packed table leaves a hole whose # is undefined -- LuaJIT reports 3 there,
+  -- so the message segment vanishes and every content assertion in this file
+  -- silently sees a bare tag. The real color_print is a C function counting
+  -- with lua_gettop, which is not fooled.
+  color_print = function(...)
+    local n = select('#', ...)
+    local parts, segments = {}, {}
+    for i = 3, n, 3 do
+      local text = tostring((select(i, ...)))
+      parts[#parts + 1] = text
+      segments[#segments + 1] = { fg = (select(i - 1, ...)), text = text }
+    end
+    color_calls[#color_calls + 1] = segments
+    print(table.concat(parts))
+  end,
+}
+
 local printed = {}
 local print_real = print
 local function quiet(fn, ...)

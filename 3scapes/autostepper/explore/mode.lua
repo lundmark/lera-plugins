@@ -36,7 +36,19 @@ local desync_count = 0       -- times contradicted topology forced a map reset
 local pending_leave_path = nil
 local stop_reason_val = "exhausted"  -- "exhausted" | "at origin"
 
-local function log(msg)
+-- Narration goes out through the stepper's logger once init.lua has handed one
+-- over (it owns the colour palette; there is no second copy of it here), and
+-- through a plain tagged print otherwise -- which is what keeps this module
+-- usable, and testable, on its own. The second argument names the KIND of
+-- line, never a colour, for the same reason.
+local emit = nil
+
+function M.set_logger(fn)
+  emit = (type(fn) == "function") and fn or nil
+end
+
+local function log(msg, kind)
+  if emit then return emit(msg, kind) end
   print("[autostepper] " .. msg)
 end
 
@@ -134,7 +146,7 @@ function M.reset(reason)
   -- that no longer has those rooms recorded, oblivious to the fresh origin.
   pending_leave_path = nil
   if reason then
-    log("explore: map reset (" .. reason .. ")")
+    log("explore: map reset (" .. reason .. ")", "warn")
   end
 end
 
@@ -154,7 +166,7 @@ function M.on_arrival()
   -- of somewhere else. There is no location event to hang this on -- the room
   -- name is the only signal the protocol carries in an area with no room ids.
   if profile and profile.in_area and last_name and not profile.in_area(last_name) then
-    log("explore: left " .. profile.name .. ", explore mode off")
+    log("explore: left " .. profile.name .. ", explore mode off", "run")
     M.stop()
     return
   end
@@ -187,7 +199,8 @@ function M.on_arrival()
   -- of an unhandled error deep in map.lua. It logs rather than returning
   -- silently, because every other defensive path in this function says why.
   if type(z) ~= "number" then
-    log("explore: refusing a non-numeric layer; position left as reckoned")
+    log("explore: refusing a non-numeric layer; position left as reckoned",
+        "warn")
     return
   end
 
@@ -240,12 +253,13 @@ end
 -- distinctly, so this reads it rather than re-deriving them.
 function M.leave()
   if not active or not map then
-    log("explore: leave refused -- explore mode is not active")
+    log("explore: leave refused -- explore mode is not active", "warn")
     return false
   end
   local path = map:path_to(0, 0, 0)
   if path == nil then
-    log("explore: leave refused -- the origin is unrecorded or unreachable")
+    log("explore: leave refused -- the origin is unrecorded or unreachable",
+        "warn")
     return false
   end
   if #path == 0 then
@@ -253,7 +267,7 @@ function M.leave()
     return false
   end
   pending_leave_path = path
-  log("explore: leaving -- " .. #path .. " step(s) to the origin")
+  log("explore: leaving -- " .. #path .. " step(s) to the origin", "run")
   return true
 end
 
