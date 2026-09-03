@@ -553,6 +553,7 @@ local function show_help()
   log("  /step status           - Show current status")
   log("  /step explore [area]   - Start explore mode in an area (default: chaossea)")
   log("  /step explore off      - Stop explore mode")
+  log("  /step explore reset    - Reset the map to a fresh origin here, keep stepping")
   log("  /step set prompt <p>   - Set prompt detection pattern")
   log("  /step set attack [on|off] - Toggle auto-attack")
   log("  /step set glance [cmd]    - Set/show glance command")
@@ -704,6 +705,8 @@ local function dispatch(args)
     local arg = rest:match("^(%S*)")
     if arg == "off" then
       M.explore_stop()
+    elseif arg == "reset" then
+      M.explore_reset()
     else
       local area = (arg ~= "" and arg) or "chaossea"
       if M.explore_start(area) then M.start(config.targets_only) end
@@ -719,15 +722,17 @@ local function register_command()
   local id, err = command.register({
     name = "/step",
     aliases = { "/autostepper" },
-    usage = "/step [start|targets|stop|explore [area]|explore off|status|set <key> [value]]",
+    usage = "/step [start|targets|stop|explore [area]|explore off|explore reset|status|"
+      .. "set <key> [value]]",
     summary = "Automatic speedwalk stepping with optional combat",
     description = "Walks a stored step path one room at a time, optionally "
       .. "glancing and attacking on the way. Or, with 'explore [area]', maps an "
       .. "unmapped area room by room, stopping automatically once every reachable "
-      .. "exit leads somewhere already mapped; 'explore off' stops it early. The "
-      .. "shorthands are '-.' to start on any mob, '->' to start on targets only, "
-      .. "'-!' to stop, and '-' for help. Settings: status, config, prompt, "
-      .. "attack, glance, kill, dive.",
+      .. "exit leads somewhere already mapped; 'explore off' stops it early, and "
+      .. "'explore reset' resets the map to a fresh origin at the current room and "
+      .. "re-asks the MUD, without stopping the run. The shorthands are '-.' to start "
+      .. "on any mob, '->' to start on targets only, '-!' to stop, and '-' for help. "
+      .. "Settings: status, config, prompt, attack, glance, kill, dive.",
     accepts_args = true,
     handler = dispatch,
   })
@@ -966,6 +971,29 @@ function M.explore_stop()
     log("Explore mode off")
   end
   M.stop()
+end
+
+-- Reset the explore map to a fresh origin at the current room, mid-run:
+-- mid-run is exactly when the map turns out to be wrong (a desync reset that
+-- lands on the wrong layer, a frame missed before the plugin loaded). Keeps
+-- the run going -- this corrects the map, it does not stop the stepper.
+--
+-- After mode.reset() discards the old map, the SAME Room.Refresh Item 1
+-- sends on start re-asks the MUD, so the fresh origin is recorded from an
+-- answer rather than the cache reset just discarded. No extra wiring is
+-- needed for that answer to land: on_room_info_frame's explore.on_frame()
+-- call is unconditional (fires whether or not a step is outstanding), and
+-- this run's own next arrival -- in flight already, or the next step ahead --
+-- commits the refreshed exits via explore.on_arrival() as it always does.
+function M.explore_reset()
+  if not (explore and explore.active()) then
+    log("Explore mode is not active; nothing to reset")
+    return false
+  end
+  explore.reset("manual reset")
+  request_room_refresh()
+  log("Explore map reset; re-asking the MUD for the current room")
+  return true
 end
 
 -- Check if running

@@ -616,7 +616,8 @@ quiet(as.stop)
 local explore_steps = {}
 local explore_taken = {}
 local explore_state = { active = false, arrivals = 0, coord = 0, frames = 0,
-                        stops = 0, start_policy = nil, attached = nil }
+                        stops = 0, resets = 0, reset_reason = nil,
+                        start_policy = nil, attached = nil }
 as.debug_set_explore({
   active = function() return explore_state.active end,
   next_step = function()
@@ -653,6 +654,10 @@ as.debug_set_explore({
   stop = function()
     explore_state.active = false
     explore_state.stops = explore_state.stops + 1
+  end,
+  reset = function(reason)
+    explore_state.resets = explore_state.resets + 1
+    explore_state.reset_reason = reason
   end,
   policy = function() return explore_state.policy or "clear" end,
   set_policy = function(name) explore_state.policy = name return true end,
@@ -859,6 +864,49 @@ explore_state.active = false
 dive_lines = capture(step_cmd.handler, "set dive")
 check("bare 'set dive' reports the user's choice once no run is live",
   has_line(dive_lines, "dive: on"), table.concat(dive_lines, "|"))
+
+-- ---- /step explore reset (Item 2) --------------------------------------------
+-- Mid-run is exactly when the map turns out to be wrong (a desync reset that
+-- lands on the wrong layer, a frame missed before the plugin loaded). Reset
+-- corrects the map in place; it must not stop the run.
+quiet(as.stop)
+explore_state.active = true
+explore_state.resets = 0
+gmcp_sent = {}
+quiet(function() as.start(false) end)
+check("explore reset setup: the run is live and stepping before the reset",
+  as.is_running() == true and as.get_state() == "stepping", as.get_state())
+
+explore_state.resets = 0
+gmcp_sent = {}
+quiet(function() step_cmd.handler("explore reset") end)
+check("'/step explore reset' calls mode.reset exactly once",
+  explore_state.resets == 1, tostring(explore_state.resets))
+check("'/step explore reset' asks the MUD again",
+  #gmcp_sent == 1
+    and gmcp_sent[1].pkg == "Room.Refresh"
+    and type(gmcp_sent[1].data) == "table"
+    and #gmcp_sent[1].data.packages == 2
+    and gmcp_sent[1].data.packages[1] == "Room.Info"
+    and gmcp_sent[1].data.packages[2] == "Room.Contents",
+  gmcp_sent[1] and (gmcp_sent[1].pkg .. ":" .. table.concat(gmcp_sent[1].data.packages or {}, ",")))
+check("'/step explore reset' leaves the run active",
+  as.is_running() == true, tostring(as.is_running()))
+check("'/step explore reset' leaves the run stepping, not stopped",
+  as.get_state() == "stepping", as.get_state())
+quiet(as.stop)
+
+-- Refuse with a message, and change nothing, when explore mode is not active.
+explore_state.active = false
+explore_state.resets = 0
+gmcp_sent = {}
+local inactive_lines = capture(step_cmd.handler, "explore reset")
+check("'/step explore reset' with explore inactive reports a message",
+  #inactive_lines > 0, tostring(#inactive_lines))
+check("'/step explore reset' with explore inactive does not call mode.reset",
+  explore_state.resets == 0, tostring(explore_state.resets))
+check("'/step explore reset' with explore inactive does not ask the MUD",
+  #gmcp_sent == 0, tostring(#gmcp_sent))
 
 -- ---- stopping the stepper stops the explorer ---------------------------------
 -- Explore mode is dead reckoned: it believes it knows where it is only because
