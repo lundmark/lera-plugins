@@ -53,6 +53,8 @@ local prompt_count = 0  -- Count of prompts received (diagnostic only)
 local pending_prompts = 0  -- prompts still owed before the current step arrives
 local enabled = false   -- Is autostepper active?
 local prompt_trigger_id = nil  -- Trigger ID for prompt detection
+local no_target_trigger_id = nil  -- Trigger ID for "There is no X here."
+local failed_attacks = 0  -- count of attacks whose keyword never resolved
 
 -- Which source do_step() takes steps from: "explore" or "route". Fixed once,
 -- in M.start, and never re-derived from explore.active() per step. Deciding
@@ -227,6 +229,43 @@ local function prune_and_decide()
   forget_monster(current_target)
   current_target = nil
   state = "idle"
+  process_room()
+end
+
+-- The keyword guess in do_attack() is exactly that -- a guess -- and can fail
+-- to resolve: "kill <keyword>" against a monster whose vocabulary does not
+-- include it answers "There is no <keyword> here." and starts no fight, so
+-- with nothing watching for that answer the run would wait forever for a
+-- combat-end signal that can never arrive.
+--
+-- The state gate is the actual guard, not the pattern: give.c and other
+-- mudlib commands emit the identical sentence for items, so a player giving
+-- something away would otherwise prune a monster that is genuinely still
+-- standing. Only state == "fighting" with no refresh outstanding identifies
+-- the line as an answer to OUR attack -- outside "fighting" the line belongs
+-- to someone else, and while awaiting_refresh a fight has already ended and
+-- the question this line could be answering was never asked.
+--
+-- Legacy had this trigger, but its handler only counted failures in its
+-- multi-target "dimhall" mode and did nothing for a single failed attack --
+-- this recovery rule is a design decision here, not a port.
+--
+-- Termination: every firing removes one entry from the finite local view via
+-- forget_monster(), so a room is always resolved in a bounded number of
+-- attempts. A later Room.Refresh (only ever sent after a SUCCESSFUL fight)
+-- can re-seed a monster that previously failed, costing one wasted attempt
+-- per refresh, but the sequence still terminates because refreshes are
+-- themselves bounded by successful fights. Without the prune here, the next
+-- decision would pick the same monster, send the same failing keyword, and
+-- fail identically forever.
+local function on_attack_no_target(_, name)
+  if state ~= "fighting" or awaiting_refresh then return end
+  cancel_refresh_wait()  -- defensive; the gate above means there should be none
+  forget_monster(current_target)
+  current_target = nil
+  state = "idle"
+  failed_attacks = failed_attacks + 1
+  log("Attack did not resolve: \"" .. tostring(name) .. "\"")
   process_room()
 end
 
@@ -816,6 +855,13 @@ function M.on_load()
     combat_gmcp_sub = gmcp.on("Char.Combat", on_char_combat)
   end
 
+  -- Unlike the prompt trigger, this one needs no user-supplied pattern, so it
+  -- is created unconditionally on load rather than waiting on a "configured"
+  -- step -- and it is removed on unload below.
+  if trigger and trigger.add then
+    no_target_trigger_id = trigger.add("^There is no (.*?) here\\.$", on_attack_no_target)
+  end
+
   -- Register the movement shorthands and the /step command
   register_aliases()
   register_command()
@@ -841,6 +887,11 @@ function M.on_unload()
     gmcp.remove(combat_gmcp_sub)
   end
   combat_gmcp_sub = nil
+
+  if no_target_trigger_id and trigger and trigger.remove then
+    trigger.remove(no_target_trigger_id)
+  end
+  no_target_trigger_id = nil
 
   M.stop()
   log("Unloaded")
@@ -1069,6 +1120,9 @@ function M.status()
   log("  Pending prompts: " .. pending_prompts)
   log("  Mode: " .. (config.targets_only and "targets only (->)" or "any mob (-.))"))
   log("  Prompt count: " .. prompt_count)
+  -- A climbing count is the actionable diagnostic: it means the target list
+  -- does not match the area, which the user can fix and nothing else says.
+  log("  Failed attacks: " .. failed_attacks)
 
   if explore and explore.active() then
     local s = explore.stats()

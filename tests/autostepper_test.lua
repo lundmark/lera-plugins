@@ -53,9 +53,19 @@ local function run_timers()
   for _, id in ipairs(ids) do queued[id]() end
 end
 
+-- Registered triggers, in add() order, so a case can find the "no target"
+-- trigger by pattern the same way kill_trigger_test.lua does, and call its
+-- fn directly with the line plus captures.
+local triggers = {}
 trigger = {
-  add = function() return 1 end,
-  remove = function() return true end,
+  add = function(pattern, fn)
+    triggers[#triggers + 1] = { pattern = pattern, fn = fn }
+    return #triggers
+  end,
+  remove = function(id)
+    if id and triggers[id] then triggers[id] = nil return true end
+    return false
+  end,
 }
 
 -- gmcp stand-in. gmcp_send_result lets a case simulate a dropped request
@@ -79,6 +89,24 @@ local function deliver_combat(data)
   local fn = gmcp_handlers["Char.Combat"]
   if not fn then return false end
   fn("Char.Combat", data)
+  return true
+end
+
+-- Find the "There is no X here." trigger registered on load and call its fn
+-- the way the C dispatcher would: full line first, then captures. Looked up
+-- fresh on every call, the same way deliver_combat reads gmcp_handlers fresh
+-- -- the trigger is only registered once as.on_load() runs, below.
+local function deliver_no_target(name)
+  local fn = nil
+  -- pairs(), not ipairs(): trigger.remove() leaves a hole (nil) at its slot
+  -- rather than shrinking the array, and this trigger's id is not the first
+  -- ever issued once earlier cases in this file have unloaded and reloaded
+  -- the plugin -- ipairs() would stop at that hole and never reach it.
+  for _, t in pairs(triggers) do
+    if t.pattern:find("There is no", 1, true) then fn = t.fn end
+  end
+  if not fn then return false end
+  fn("There is no " .. name .. " here.", name)
   return true
 end
 
@@ -310,6 +338,18 @@ end
 local function tracked()
   if not as.tracked_monsters then return {} end
   return as.tracked_monsters()
+end
+
+-- Read the failed-attack counter out of a /step status capture. Comparing
+-- this before/after an action (rather than asserting an absolute value) keeps
+-- the gate cases order-independent: the counter is cumulative across the
+-- whole file, not reset per run.
+local function failed_attacks_count(lines)
+  for _, line in ipairs(lines) do
+    local n = line:match("Failed attacks: (%d+)")
+    if n then return tonumber(n) end
+  end
+  return nil
 end
 
 -- ---- one monster, one kill, then step --------------------------------------
@@ -1295,6 +1335,134 @@ check("targets-only mode never attacks a non-matching monster",
 check("targets-only mode steps past the non-matching monster instead",
   sent[1] == "w", table.concat(sent, "|"))
 sw_target_list = {}
+quiet(as.stop)
+
+-- ---- attack recovery: "There is no X here." (Task F) ------------------------
+-- The keyword guess can fail to resolve; the trigger below is what notices
+-- and recovers instead of waiting forever for a fight that never started.
+
+-- A failure while fighting prunes that monster and decides again.
+run_timers()
+sw_steps = { { raw = "n", commands = { "n" } } }
+sw_taken = {}
+sw_target_list = {}
+arrive(800, "A collapsed tunnel", { "a rock lizard" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+sent = {}
+prompt_cycle()
+check("no-target setup: attacks the monster", last_sent() == "kill a rock lizard",
+  table.concat(sent, "|"))
+check("no-target setup: tracked view holds it", #tracked() == 1, tostring(#tracked()))
+
+local before_fail_status = capture(as.status)
+sent = {}
+local fail_lines = capture(function() deliver_no_target("a rock lizard") end)
+check("a failed attack prunes the monster from the tracked view",
+  #tracked() == 0, table.concat(tracked(), ","))
+check("a failed attack decides again: the now-empty room steps",
+  last_sent() == "n", table.concat(sent, "|"))
+check("the failure is logged with the captured name",
+  has_line(fail_lines, "a rock lizard"), table.concat(fail_lines, "|"))
+
+local after_fail_status = capture(as.status)
+check("the failure is counted, and the count appears in /step status",
+  failed_attacks_count(after_fail_status) ==
+    (failed_attacks_count(before_fail_status) or 0) + 1,
+  tostring(failed_attacks_count(before_fail_status)) .. " -> "
+    .. tostring(failed_attacks_count(after_fail_status)))
+quiet(as.stop)
+
+-- It does not fire outside the fighting state: a line arriving while
+-- nothing is being attacked belongs to someone else (an item, an
+-- examine) -- give.c emits the identical sentence for a missing item.
+run_timers()
+sw_steps = { { raw = "e", commands = { "e" } } }
+sw_taken = {}
+sw_target_list = {}
+arrive(801, "A quiet glade", {}, {})
+sent = {}
+quiet(function() as.start(false) end)
+check("outside-fighting setup: state is not fighting", as.get_state() ~= "fighting",
+  tostring(as.get_state()))
+
+local before_idle_status = capture(as.status)
+sent = {}
+quiet(function() deliver_no_target("something unrelated") end)
+check("outside fighting: no additional command is sent",
+  #sent == 0, table.concat(sent, "|"))
+local after_idle_status = capture(as.status)
+check("outside fighting: the failure counter does not move",
+  failed_attacks_count(after_idle_status) == failed_attacks_count(before_idle_status),
+  tostring(failed_attacks_count(before_idle_status)) .. " -> "
+    .. tostring(failed_attacks_count(after_idle_status)))
+quiet(as.stop)
+
+-- It does not fire while a refresh answer is outstanding: Char.Combat has
+-- already said the fight ended and a Room.Refresh is in flight, so the line
+-- cannot be an answer to an attack we just sent.
+run_timers()
+sw_steps = { { raw = "w", commands = { "w" } } }
+sw_taken = {}
+sw_target_list = {}
+arrive(802, "A sunlit clearing", { "a boar" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+sent = {}
+prompt_cycle()
+check("refresh-gate setup: attacks the boar", last_sent() == "kill a boar",
+  table.concat(sent, "|"))
+
+gmcp_sent = {}
+sent = {}
+quiet(function() deliver_combat({ attacker = "" }) end)
+check("refresh-gate setup: a Room.Refresh is outstanding",
+  queued_timers() == 1, tostring(queued_timers()))
+check("refresh-gate setup: state is still fighting while awaiting the refresh",
+  as.get_state() == "fighting", tostring(as.get_state()))
+
+local before_refresh_status = capture(as.status)
+sent = {}
+quiet(function() deliver_no_target("a boar") end)
+check("awaiting refresh: no additional command is sent",
+  #sent == 0, table.concat(sent, "|"))
+local after_refresh_status = capture(as.status)
+check("awaiting refresh: the failure counter does not move",
+  failed_attacks_count(after_refresh_status) == failed_attacks_count(before_refresh_status),
+  tostring(failed_attacks_count(before_refresh_status)) .. " -> "
+    .. tostring(failed_attacks_count(after_refresh_status)))
+check("awaiting refresh: the refresh wait is still outstanding",
+  queued_timers() == 1, tostring(queued_timers()))
+
+run_timers()  -- let the pending refresh timeout fire and clean up
+quiet(as.stop)
+
+-- A room whose every monster fails to resolve ends by stepping, not looping.
+-- Bounded to 5 iterations (the room holds 2 monsters) so a regression that
+-- drops the prune reddens this case instead of hanging the suite.
+run_timers()
+sw_steps = { { raw = "s", commands = { "s" } } }
+sw_taken = {}
+sw_target_list = {}
+arrive(803, "A sunken pit", { "a giant slug", "a cave rat" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+sent = {}
+prompt_cycle()
+
+local stepped = false
+for _ = 1, 5 do
+  local keyword = last_sent() and last_sent():match("^kill (.+)$")
+  if not keyword then
+    stepped = (last_sent() == "s")
+    break
+  end
+  quiet(function() deliver_no_target(keyword) end)
+end
+check("a room whose every monster fails to resolve ends by stepping, not looping",
+  stepped, "sent: " .. table.concat(sent, "|"))
+check("the tracked view is empty once the step is taken",
+  #tracked() == 0, table.concat(tracked(), ","))
 quiet(as.stop)
 
 if failures > 0 then
