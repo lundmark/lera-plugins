@@ -822,8 +822,15 @@ function M.start(targets_only)
   end
 
   if not config.prompt_pattern then
-    log("Error: prompt pattern not set (use -set prompt <pattern>)")
-    return false
+    -- Task 5 made a settled Room.Info burst complete an arrival on its own,
+    -- so a prompt is no longer load-bearing for starting a run. Warn instead
+    -- of refusing, and say what the session is then relying on: arrivals
+    -- come from the GMCP Room.Info path and combat end from Char.Combat. If
+    -- the MUD provides neither, the run stalls -- worth saying out loud
+    -- rather than discovering it.
+    log("No prompt pattern set: arrivals will rely on the GMCP Room.Info path and "
+        .. "combat end on Char.Combat. Set one with '/step set prompt <pattern>' if "
+        .. "either is unavailable.")
   end
 
   local exploring = explore and explore.active()

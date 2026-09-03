@@ -529,6 +529,29 @@ check("a raced settle timer does not re-attack",
 
 quiet(as.stop)
 
+-- ---- M.start no longer refuses without a prompt pattern (task-12 supp. 2) ---
+-- Task 5 made a settled Room.Info burst complete an arrival on its own, so a
+-- prompt is no longer load-bearing for starting a run. Nothing in the area
+-- profile itself sets a pattern, so a refusal here made explore runs
+-- impossible to start with the default configuration.
+run_timers()
+as.set_prompt_pattern(nil)
+sw_steps = { { raw = "n", commands = { "n" } } }
+sw_taken = {}
+arrive(303, "A cold cell", {}, {})
+sent = {}
+local no_prompt_started = nil
+quiet(function() no_prompt_started = as.start(false) end)
+check("start succeeds with no prompt pattern configured",
+  no_prompt_started == true, tostring(no_prompt_started))
+sent = {}
+deliver_frame()
+run_timers()
+check("the first step arrives via the frame path with no prompt pattern set",
+  last_sent() == "n", table.concat(sent, "|"))
+as.set_prompt_pattern("^H:")
+quiet(as.stop)
+
 -- ---- explore mode wiring -----------------------------------------------------
 -- A stand-in explore module: the real one has its own suite, and this pins only
 -- the wiring -- that do_step asks it instead of speedwalk, that exhaustion stops
