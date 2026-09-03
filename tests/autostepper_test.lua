@@ -552,6 +552,63 @@ check("the first step arrives via the frame path with no prompt pattern set",
 as.set_prompt_pattern("^H:")
 quiet(as.stop)
 
+-- ---- M.start asks the MUD for the current room (Item 1) ---------------------
+-- mode.start's cached-roominfo seed was the fix for a review finding at a
+-- time when nothing could force a re-read; Room.Refresh makes ASKING
+-- possible, and the cache is only the FALLBACK for when gmcp.send fails.
+-- Route mode gets the same ask: it reads roominfo for its first decision
+-- too, and with the glance gone nothing else forces a re-read, so '-.' in a
+-- long-occupied room would otherwise decide on stale contents. Explore mode's
+-- own copy of this same property is covered further down, once the stub
+-- explore module is wired in (see "starting an explore run also asks the MUD
+-- for the current room").
+run_timers()
+gmcp_sent = {}
+sw_steps = { { raw = "n", commands = { "n" } } }
+sw_taken = {}
+arrive(800, "A muddy field", {}, {})
+sent = {}
+local route_started = nil
+quiet(function() route_started = as.start(false) end)
+check("starting a route run also asks the MUD for the current room",
+  route_started == true and #gmcp_sent == 1, tostring(#gmcp_sent))
+check("the refresh asks for Room.Info and Room.Contents",
+  gmcp_sent[1] and gmcp_sent[1].pkg == "Room.Refresh"
+    and type(gmcp_sent[1].data) == "table"
+    and #gmcp_sent[1].data.packages == 2
+    and gmcp_sent[1].data.packages[1] == "Room.Info"
+    and gmcp_sent[1].data.packages[2] == "Room.Contents",
+  gmcp_sent[1] and (gmcp_sent[1].pkg .. ":" .. table.concat(gmcp_sent[1].data.packages or {}, ",")))
+
+-- Taking a further step must not send a second refresh: the request is
+-- per-start, not per-step.
+sent = {}
+arrival_prompt()
+check("a further step is taken normally", last_sent() == "n",
+  table.concat(sent, "|"))
+check("the request is sent once per start, not per step",
+  #gmcp_sent == 1, tostring(#gmcp_sent))
+quiet(as.stop)
+
+-- gmcp.send returning false (not connected, or GMCP not negotiated) must not
+-- stop the run from starting -- mode.start's cached-roominfo seed is exactly
+-- the fallback for this case.
+run_timers()
+gmcp_send_result = false
+gmcp_sent = {}
+sw_steps = { { raw = "n", commands = { "n" } } }
+sw_taken = {}
+arrive(801, "A muddy field", {}, {})
+sent = {}
+local refused_started = nil
+quiet(function() refused_started = as.start(false) end)
+check("gmcp.send is still attempted even though it will fail",
+  #gmcp_sent == 1, tostring(#gmcp_sent))
+check("a gmcp.send that returns false still starts the run",
+  refused_started == true, tostring(refused_started))
+gmcp_send_result = true
+quiet(as.stop)
+
 -- ---- explore mode wiring -----------------------------------------------------
 -- A stand-in explore module: the real one has its own suite, and this pins only
 -- the wiring -- that do_step asks it instead of speedwalk, that exhaustion stops
@@ -631,7 +688,22 @@ explore_state.coord = 0
 sw_steps = { { raw = "SHOULD-NOT-RUN", commands = { "SHOULD-NOT-RUN" } } }
 arrive(400, "Layer one of the Sea of Chaos", {}, {})
 sent = {}
+gmcp_sent = {}
 quiet(function() as.start(false) end)
+-- Item 1: both modes get the ask, not just route mode -- this is the explore
+-- side of the "starting a route run also asks the MUD" case above. Checked
+-- here (an explore run) rather than only in route mode so a mutant that
+-- gates the send behind explore.active() still has a case in EACH direction
+-- to redden.
+check("starting an explore run also asks the MUD for the current room, exactly once",
+  #gmcp_sent == 1, tostring(#gmcp_sent))
+check("the explore-mode refresh asks for Room.Info and Room.Contents",
+  gmcp_sent[1] and gmcp_sent[1].pkg == "Room.Refresh"
+    and type(gmcp_sent[1].data) == "table"
+    and #gmcp_sent[1].data.packages == 2
+    and gmcp_sent[1].data.packages[1] == "Room.Info"
+    and gmcp_sent[1].data.packages[2] == "Room.Contents",
+  gmcp_sent[1] and (gmcp_sent[1].pkg .. ":" .. table.concat(gmcp_sent[1].data.packages or {}, ",")))
 arrival_prompt()
 check("explore mode supplies the step", last_sent() == "n", table.concat(sent, "|"))
 check("explore mode is told about the arrival",
@@ -815,6 +887,10 @@ sw_taken = {}
 arrive(500, "A muddy field", { "an orc" }, {})
 sent = {}
 quiet(function() as.start(false) end)
+-- Item 1 makes M.start itself send one Room.Refresh; reset here so the
+-- checks below (which pin the ABSENCE of a refresh mid-fight) are not
+-- reading that start-time send instead of a real regression.
+gmcp_sent = {}
 sent = {}
 prompt_cycle()
 check("gmcp cycle: attacks the monster", last_sent() == "kill an orc",

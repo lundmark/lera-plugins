@@ -350,6 +350,22 @@ local function begin_arrival_wait()
   end
 end
 
+-- Ask, do not assume. roominfo's cached snapshot is whatever the last frame
+-- said, which for a room entered before this command ran may be another room
+-- entirely -- and Room.Contents is suppressed when it would repeat, so the
+-- cache can be silently stale rather than merely old. One forced request
+-- costs the same as one package (the budget is per request), and the answer
+-- lands inside the arrival wait: Room.Info arms the settle timer, and
+-- Room.Contents follows it in the same burst before that timer fires.
+--
+-- Called once per M.start/M.explore_reset -- never from do_step -- and its
+-- result is not fatal: gmcp.send returns false when disconnected or GMCP
+-- isn't negotiated, and mode.start's cached-roominfo seed is the fallback
+-- for exactly that case, so the run must still start either way.
+local function request_room_refresh()
+  gmcp.send("Room.Refresh", { packages = { "Room.Info", "Room.Contents" } })
+end
+
 local function do_attack(monster)
   state = "fighting"
   current_target = monster
@@ -899,6 +915,11 @@ function M.start(targets_only)
   -- We are standing in a room already, so wait for the next prompt and decide
   -- from it rather than manufacturing one.
   begin_arrival_wait()
+
+  -- Both modes, not just explore: route mode reads roominfo for its first
+  -- decision too, and with the glance gone nothing else forces a re-read, so
+  -- '-.' in a long-occupied room would otherwise decide on stale contents.
+  request_room_refresh()
 
   return true
 end
