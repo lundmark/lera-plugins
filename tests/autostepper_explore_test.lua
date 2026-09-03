@@ -241,7 +241,11 @@ local hop_profile = {
   dive_dirs = { "d" },
   defer_dirs = { "u" },
   default_policy = "clear",
-  in_area = profile.in_area,
+  -- Always true, not profile.in_area: this section's room names ("Room A",
+  -- "Room B (dead end)") are deliberately not sea rooms -- area membership is
+  -- incidental to what this section tests (multi-hop routing), and the real
+  -- in_area predicate would deactivate the mode on the very first arrival.
+  in_area = function() return true end,
   -- A real layer, not nil: this section only walks 'e'/'n'/'s', so z stays
   -- reckoned at 0 throughout and a constant-0 layer never disagrees with it
   -- (no correction ever fires here). Layer is incidental to what this section
@@ -335,9 +339,12 @@ check("the map is NOT reset by a layer correction", st.rooms >= 2,
   tostring(st.rooms))
 
 -- An unparseable name leaves the reckoned z alone rather than zeroing it.
+-- Still a sea room (in_area must stay true, or the area-exit check added for
+-- Task 12 deactivates the mode before this reaches the layer_of assertion at
+-- all) -- just not one layer_of's pattern can parse a word out of.
 local z_before = mode.stats().z
 before_desyncs = mode.desyncs()
-frame({ num = 0, area = "Unknown", name = "Somewhere unparseable",
+frame({ num = 0, area = "Unknown", name = "Somewhere in the Sea of Chaos, unparseable",
         exits = { "e", "w" } })
 quiet(mode.on_arrival)
 check("an unparseable layer leaves z as reckoned",
@@ -479,6 +486,54 @@ check("the arrival after a reset lands on the fresh origin, not one step off it"
   pst.x == 0 and pst.y == 0, pst.x .. "," .. pst.y)
 check("the fresh origin holds exactly one room", pst.rooms == 1,
   tostring(pst.rooms))
+mode.stop()
+
+-- ---- area entry and exit -----------------------------------------------------
+-- Entering the area is what resets the map and sets the origin. Legacy needed a
+-- separate location trigger and an explicit '-cs clear' for this.
+quiet(function() mode.start(profile, "clear") end)
+frame(CAPTURE[1])
+quiet(mode.on_arrival)
+step = mode.next_step()
+frame(CAPTURE[2])
+quiet(mode.on_arrival)
+check("two rooms mapped before leaving", mode.stats().rooms == 2,
+  tostring(mode.stats().rooms))
+
+-- Step out into the wider world.
+step = mode.next_step()
+frame({ num = 412, area = "Town", name = "A dusty crossroads", exits = { "n", "s" } })
+quiet(mode.on_arrival)
+check("leaving the area deactivates the mode", mode.active() == false,
+  tostring(mode.active()))
+check("an outside room is not mapped into the area map",
+  mode.stats().rooms == 0, tostring(mode.stats().rooms))
+
+-- Re-entering starts a clean run: a new maze instance is a different lattice,
+-- so anything retained would be contradicted topology from the first frame on.
+quiet(function() mode.start(profile, "clear") end)
+frame(CAPTURE[1])
+quiet(mode.on_arrival)
+check("re-entering starts from one room", mode.stats().rooms == 1,
+  tostring(mode.stats().rooms))
+local rx, ry, rz = mode.stats().x, mode.stats().y, mode.stats().z
+check("re-entering starts at the origin", rx == 0 and ry == 0 and rz == 0,
+  rx .. "," .. ry .. "," .. rz)
+
+-- M.start's fresh map must not depend on M.stop() having run first. Every
+-- path above reaches a fresh start through M.stop() (explicit, or the
+-- in_area check's internal call), which already nils map on its own -- so
+-- none of them can tell "M.start always resets the map" apart from "the map
+-- happened to already be nil". Call start() again directly, with no stop()
+-- in between, while the map still holds the two rooms recorded above.
+step = mode.next_step()
+frame(CAPTURE[2])
+quiet(mode.on_arrival)
+check("a second room is mapped before the direct re-start",
+  mode.stats().rooms == 2, tostring(mode.stats().rooms))
+quiet(function() mode.start(profile, "clear") end)
+check("starting again without an intervening stop still gives a fresh map",
+  mode.stats().rooms == 0, tostring(mode.stats().rooms))
 mode.stop()
 
 if failures > 0 then

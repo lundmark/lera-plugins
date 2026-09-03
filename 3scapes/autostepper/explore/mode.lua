@@ -67,6 +67,9 @@ end
 function M.start(prof, initial_policy)
   if not prof then return false end
   profile = prof
+  -- Always a fresh map. A re-entered area is a NEW maze instance -- the
+  -- mudlib generates one per run -- so anything retained from the last run
+  -- would be contradicted topology from the first frame onward.
   map = map_mod.new()
   policy = initial_policy or prof.default_policy or "clear"
   active = true
@@ -123,6 +126,15 @@ end
 -- position-related happens here and nowhere else.
 function M.on_arrival()
   if not active then return end
+
+  -- Left the area: stop rather than dead-reckon the outside world into a map
+  -- of somewhere else. There is no location event to hang this on -- the room
+  -- name is the only signal the protocol carries in an area with no room ids.
+  if profile and profile.in_area and last_name and not profile.in_area(last_name) then
+    log("explore: left " .. profile.name .. ", explore mode off")
+    M.stop()
+    return
+  end
 
   if pending_dir then
     map:move(pending_dir)
