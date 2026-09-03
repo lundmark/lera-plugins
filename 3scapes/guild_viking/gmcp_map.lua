@@ -129,6 +129,7 @@ M.COMPOSITE = {
 -- case-insensitively, like the guild name in the envelope.
 M.PACKAGE_KEY = {
   war = "BATTLE",
+  tradegoods = "TGOODS",
 }
 
 -- The sub-package a Guild.* package name names, lowercased, or nil.

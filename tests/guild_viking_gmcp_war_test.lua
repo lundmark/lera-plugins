@@ -65,9 +65,11 @@ end
 -- territory map. Guild.War is dispatched as a whole package instead.
 check("Guild.War resolves to a whole-package key",
       gmcp_map.package_key("Guild.War") == "BATTLE")
+check("Guild.TradeGoods resolves to a whole-package key",
+      gmcp_map.package_key("Guild.TradeGoods") == "TGOODS")
 check("the match is case-insensitive on the sub-package",
       gmcp_map.package_key("guild.war") == "BATTLE")
-check("no other package is whole-package routed",
+check("ordinary packages are not whole-package routed",
       gmcp_map.package_key("Guild.Map") == nil
       and gmcp_map.package_key("Guild.Kingdom") == nil
       and gmcp_map.package_key("Char.Combat") == nil)
