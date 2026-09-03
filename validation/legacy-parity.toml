@@ -1,7 +1,7 @@
 [scope]
 revision = 1
 approved_on = "2026-08-10"
-digest = "e1efd19d625709cd8b3e05e8920a0d5114af24a559bf5543a586d66ba029f98f"
+digest = "4d88a24bec6ee821f6226ea53e5df0c130566b04daa51ba158191193f0f7af55"
 
 [[current_plugins]]
 key = "autologin"
@@ -373,9 +373,27 @@ fixtures = []
 
 [[current_plugins]]
 key = "mercenary"
-path = "3scapes/mercenary.lua"
+path = "3scapes/mercenary/init.lua"
 target_keys = ["mercenary"]
 fixtures = ["mercenary-auto-use-config"]
+
+[[current_plugins]]
+key = "mercenary_command_ui"
+path = "3scapes/mercenary/command_ui.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "mercenary_protocol"
+path = "3scapes/mercenary/protocol.lua"
+target_keys = []
+fixtures = []
+
+[[current_plugins]]
+key = "mercenary_state"
+path = "3scapes/mercenary/state.lua"
+target_keys = []
+fixtures = []
 
 [[current_plugins]]
 key = "minimap"
@@ -9584,7 +9602,7 @@ key = "automatic_use_controls"
 category = "callback"
 status = "plugin_gap"
 summary = "Legacy automatic-use control callbacks are not fully reproduced by the current plugin."
-current_refs = ["3scapes/mercenary.lua:448", "3scapes/mercenary.lua:461", "3scapes/mercenary.lua:480", "3scapes/mercenary.lua:492"]
+current_refs = ["3scapes/mercenary/init.lua:151", "3scapes/mercenary/init.lua:158", "3scapes/mercenary/init.lua:171", "3scapes/mercenary/init.lua:181"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9599,7 +9617,7 @@ key = "automatic_use_decisions"
 category = "command"
 status = "plugin_gap"
 summary = "Legacy automatic-use decisions are not fully reproduced by the current plugin."
-current_refs = ["3scapes/mercenary.lua:159", "3scapes/mercenary.lua:188"]
+current_refs = ["3scapes/mercenary/init.lua:53", "3scapes/mercenary/protocol.lua:109"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9689,7 +9707,7 @@ key = "persistence_and_lifecycle"
 category = "persistence"
 status = "plugin_gap"
 summary = "Legacy persistence and lifecycle side effects are not fully reproduced."
-current_refs = ["3scapes/mercenary.lua:527", "3scapes/mercenary.lua:563"]
+current_refs = ["3scapes/mercenary/init.lua:225", "3scapes/mercenary/init.lua:260"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9704,7 +9722,7 @@ key = "protocol_parsing"
 category = "protocol"
 status = "plugin_gap"
 summary = "Legacy mercenary protocol parsing is not completely equivalent."
-current_refs = ["3scapes/mercenary.lua:107", "3scapes/mercenary.lua:188"]
+current_refs = ["3scapes/mercenary/protocol.lua:61", "3scapes/mercenary/protocol.lua:109"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9734,7 +9752,7 @@ key = "rates_and_deltas"
 category = "state"
 status = "plugin_gap"
 summary = "Legacy rate and delta calculations are not completely equivalent."
-current_refs = ["3scapes/mercenary.lua:188", "3scapes/mercenary.lua:414"]
+current_refs = ["3scapes/mercenary/protocol.lua:109", "3scapes/mercenary/init.lua:140"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9749,7 +9767,7 @@ key = "rendering"
 category = "rendering"
 status = "plugin_gap"
 summary = "Legacy interactive stats-window rendering is not reproduced by the current data plugin."
-current_refs = ["3scapes/mercenary.lua:130", "3scapes/mercenary.lua:146"]
+current_refs = ["3scapes/mercenary/init.lua:37", "3scapes/mercenary/init.lua:46"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9764,7 +9782,7 @@ key = "stat_counters"
 category = "state"
 status = "plugin_gap"
 summary = "Legacy mercenary counters and accumulated statistics are not completely equivalent."
-current_refs = ["3scapes/mercenary.lua:188", "3scapes/mercenary.lua:290", "3scapes/mercenary.lua:340"]
+current_refs = ["3scapes/mercenary/protocol.lua:109", "3scapes/mercenary/init.lua:75", "3scapes/mercenary/protocol.lua:45"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9779,7 +9797,7 @@ key = "stats_metadata"
 category = "state"
 status = "plugin_gap"
 summary = "Legacy stats metadata has no complete current semantic equivalent."
-current_refs = ["3scapes/mercenary.lua:6"]
+current_refs = ["3scapes/mercenary/init.lua:11"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9809,7 +9827,7 @@ key = "stats_state_bootstrap"
 category = "state"
 status = "plugin_gap"
 summary = "Legacy stats bootstrap state is not completely reproduced."
-current_refs = ["3scapes/mercenary.lua:14", "3scapes/mercenary.lua:26"]
+current_refs = ["3scapes/mercenary/init.lua:19", "3scapes/mercenary/state.lua:17"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9864,7 +9882,7 @@ key = "display_mode_controls"
 category = "command"
 status = "plugin_gap"
 summary = "Legacy map display-mode controls are not completely equivalent in the current plugin."
-current_refs = ["3scapes/minimap.lua:274", "3scapes/minimap.lua:629"]
+current_refs = ["3scapes/minimap.lua:274", "3scapes/minimap.lua:280"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -10048,7 +10066,7 @@ key = "room_status_api"
 category = "public_api"
 status = "plugin_gap"
 summary = "Legacy predictive room-status APIs and events are not reproduced completely."
-current_refs = ["3scapes/minimap.lua:662", "3scapes/minimap.lua:689"]
+current_refs = ["3scapes/minimap.lua:573", "3scapes/minimap.lua:595"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"

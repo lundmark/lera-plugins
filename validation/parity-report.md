@@ -18,8 +18,18 @@ Not rechecked at the public validation level:
 
 ### `autostepper`
 
-- Path: `3scapes/autostepper.lua`
+- Path: `3scapes/autostepper/init.lua`
 - Approved targets: `autostepper`
+
+### `autostepper_explore_map`
+
+- Path: `3scapes/autostepper/explore/map.lua`
+- Approved targets: None
+
+### `autostepper_explore_mode`
+
+- Path: `3scapes/autostepper/explore/mode.lua`
+- Approved targets: None
 
 ### `chat_monitor`
 
@@ -40,6 +50,11 @@ Not rechecked at the public validation level:
 
 - Path: `3scapes/guild_viking/init.lua`
 - Approved targets: `guild_viking`
+
+### `guild_viking_autoherd`
+
+- Path: `3scapes/guild_viking/autoherd.lua`
+- Approved targets: None
 
 ### `guild_viking_autoraid`
 
@@ -79,6 +94,11 @@ Not rechecked at the public validation level:
 ### `guild_viking_handlers_kingdom`
 
 - Path: `3scapes/guild_viking/handlers/kingdom.lua`
+- Approved targets: None
+
+### `guild_viking_handlers_livestock`
+
+- Path: `3scapes/guild_viking/handlers/livestock.lua`
 - Approved targets: None
 
 ### `guild_viking_handlers_trade`
@@ -159,6 +179,11 @@ Not rechecked at the public validation level:
 ### `guild_viking_pages_goods`
 
 - Path: `3scapes/guild_viking/pages/goods.lua`
+- Approved targets: None
+
+### `guild_viking_pages_livestock`
+
+- Path: `3scapes/guild_viking/pages/livestock.lua`
 - Approved targets: None
 
 ### `guild_viking_pages_people`
@@ -293,8 +318,23 @@ Not rechecked at the public validation level:
 
 ### `mercenary`
 
-- Path: `3scapes/mercenary.lua`
+- Path: `3scapes/mercenary/init.lua`
 - Approved targets: `mercenary`
+
+### `mercenary_command_ui`
+
+- Path: `3scapes/mercenary/command_ui.lua`
+- Approved targets: None
+
+### `mercenary_protocol`
+
+- Path: `3scapes/mercenary/protocol.lua`
+- Approved targets: None
+
+### `mercenary_state`
+
+- Path: `3scapes/mercenary/state.lua`
+- Approved targets: None
 
 ### `minimap`
 
