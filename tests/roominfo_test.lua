@@ -410,6 +410,83 @@ ri.off_room_info(id_raise)
 ri.off_room_info(id_after)
 ri.off_room_info(id_b)
 
+-- ---- on_room_contents --------------------------------------------------------
+-- Mirrors on_room_info's registry exactly (same id shape, same renumbering and
+-- raising-handler precedents), but fires only from commit_contents: once for a
+-- complete single-page list, and once -- after the final page -- for a paged
+-- one. Never from handle_room_contents, which also runs once per intermediate
+-- page and would hand a consumer a partial list.
+local rc_seen_a, rc_seen_b, rc_seen_c = {}, {}, {}
+local rc_id_a = ri.on_room_contents(function(info) rc_seen_a[#rc_seen_a + 1] = info.monster_count end)
+local rc_id_b = ri.on_room_contents(function(info) rc_seen_b[#rc_seen_b + 1] = info.monster_count end)
+local rc_id_c = ri.on_room_contents(function(info) rc_seen_c[#rc_seen_c + 1] = info.monster_count end)
+check("on_room_contents returns distinct ids",
+  rc_id_a ~= nil and rc_id_b ~= nil and rc_id_c ~= nil and rc_id_a ~= rc_id_b and rc_id_b ~= rc_id_c,
+  tostring(rc_id_a) .. "/" .. tostring(rc_id_b) .. "/" .. tostring(rc_id_c))
+
+-- Kills: firing from handle_room_contents instead of commit_contents, which
+-- would notify once per page rather than once per complete list.
+deliver("Room.Contents", { full = 1, items = { { name = "a troll", type = "monster", count = 1 } } })
+check("single-page list notifies once",
+  #rc_seen_a == 1 and #rc_seen_b == 1 and #rc_seen_c == 1,
+  tostring(#rc_seen_a) .. "/" .. tostring(#rc_seen_b) .. "/" .. tostring(#rc_seen_c))
+check("single-page notify carries the committed count", rc_seen_a[1] == 1, tostring(rc_seen_a[1]))
+
+-- Paged list: only the final page notifies, and only once.
+deliver("Room.Contents", { full = 1, page = 1, pages = 2, items = {
+  { name = "a goblin", type = "monster", count = 1 },
+} })
+check("intermediate page does not notify", #rc_seen_a == 1, tostring(#rc_seen_a))
+deliver("Room.Contents", { full = 1, page = 2, pages = 2, items = {
+  { name = "a bandit", type = "monster", count = 1 },
+} })
+check("final page notifies exactly once", #rc_seen_a == 2, tostring(#rc_seen_a))
+check("final-page notify carries both pages' monsters", rc_seen_a[2] == 2, tostring(rc_seen_a[2]))
+
+-- Kills: notifying before the page-order check, which would fire a notify for
+-- a page that then gets discarded as out-of-order/mismatched.
+deliver("Room.Contents", { full = 1, page = 1, pages = 2, items = {
+  { name = "a wight", type = "monster", count = 1 },
+} })
+deliver("Room.Contents", { full = 1, page = 3, pages = 2, items = {
+  { name = "a wraith", type = "monster", count = 1 },
+} })
+check("out-of-order page does not notify", #rc_seen_a == 2, tostring(#rc_seen_a))
+-- The discarded accumulator must not poison the next list.
+deliver("Room.Contents", { full = 1, items = { { name = "a specter", type = "monster", count = 1 } } })
+check("handler recovers after a mismatched page", #rc_seen_a == 3, tostring(#rc_seen_a))
+
+-- Removing the FIRST registration must not renumber the second or third; only
+-- observable after a second removal (same precedent as on_room_info).
+check("off_room_contents removes by id", ri.off_room_contents(rc_id_a) == true)
+deliver("Room.Contents", { full = 1, items = { { name = "a rat", type = "monster", count = 1 } } })
+check("removed callback stops firing", #rc_seen_a == 3, tostring(#rc_seen_a))
+check("survivors still fire after a removal",
+  #rc_seen_b == 4 and #rc_seen_c == 4, tostring(#rc_seen_b) .. "/" .. tostring(#rc_seen_c))
+
+check("off_room_contents removes a later id after an earlier removal",
+  ri.off_room_contents(rc_id_c) == true)
+deliver("Room.Contents", { full = 1, items = { { name = "a rat", type = "monster", count = 1 } } })
+check("a later id still addresses its own callback after an earlier removal",
+  #rc_seen_c == 4, tostring(#rc_seen_c))
+check("the untouched registration keeps firing", #rc_seen_b == 5, tostring(#rc_seen_b))
+check("off_room_contents on an unknown id is false", ri.off_room_contents(rc_id_a) == false)
+
+-- One raising handler must not stop the rest. Wrap delivery in pcall so we can
+-- observe the failure as a named test case rather than aborting the suite.
+local rc_after = 0
+local rc_id_raise = ri.on_room_contents(function() error("boom") end)
+local rc_id_after = ri.on_room_contents(function() rc_after = rc_after + 1 end)
+print = function() end
+local rc_delivered = pcall(deliver, "Room.Contents",
+  { full = 1, items = { { name = "a rat", type = "monster", count = 1 } } })
+print = print_real
+check("a raising handler does not stop the rest",
+  rc_delivered and rc_after == 1, tostring(rc_delivered) .. "/" .. tostring(rc_after))
+ri.off_room_contents(rc_id_raise)
+ri.off_room_contents(rc_id_after)
+ri.off_room_contents(rc_id_b)
+
 -- ---- unload -----------------------------------------------------------------
 ri.on_unload()
 check("unregisters Room.Info", removed["Room.Info"] == true)

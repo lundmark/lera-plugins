@@ -53,6 +53,14 @@ local on_room_change_callbacks = {}
 local on_room_info_callbacks = {}   -- array of { id = n, fn = f }
 local next_room_info_id = 0
 
+-- Same registry shape as on_room_info, for the same reason: removing a handler
+-- must not renumber the survivors. Fired only from commit_contents, the single
+-- point a COMPLETE list (single-page or final-page) is committed -- never from
+-- handle_room_contents, which also runs once per intermediate page of a paged
+-- room and would hand a consumer a partial list.
+local on_room_contents_callbacks = {}   -- array of { id = n, fn = f }
+local next_room_contents_id = 0
+
 --------------------------------------------------------------------------------
 -- Direction Helpers
 --------------------------------------------------------------------------------
@@ -102,6 +110,15 @@ local function notify_room_info(info)
     local ok, err = pcall(entry.fn, info)
     if not ok then
       print("[roominfo] on_room_info error: " .. tostring(err))
+    end
+  end
+end
+
+local function notify_room_contents(info)
+  for _, entry in ipairs(on_room_contents_callbacks) do
+    local ok, err = pcall(entry.fn, info)
+    if not ok then
+      print("[roominfo] on_room_contents error: " .. tostring(err))
     end
   end
 end
@@ -227,6 +244,11 @@ local function commit_contents(items, truncated)
   current.monsters = monsters
   current.items = objects
   current.truncated = truncated and true or false
+
+  -- This is the single point a COMPLETE list is committed (single-page or
+  -- final-page); see the registry comment above for why the notify lives here
+  -- and not in handle_room_contents.
+  notify_room_contents(M.info())
 end
 
 local function handle_room_contents(data)
@@ -333,6 +355,7 @@ function M.on_unload()
   -- registration id and no notifications; reload the subscribers too.
   on_room_change_callbacks = {}
   on_room_info_callbacks = {}
+  on_room_contents_callbacks = {}
   print("[roominfo] Unloaded")
 end
 
@@ -568,6 +591,28 @@ function M.off_room_info(id)
   for i, entry in ipairs(on_room_info_callbacks) do
     if entry.id == id then
       table.remove(on_room_info_callbacks, i)
+      return true
+    end
+  end
+  return false
+end
+
+-- Register a callback for every COMPLETE Room.Contents list (single-page or
+-- the final page of a multi-page one). callback(info) receives the same shape
+-- M.info() returns.
+function M.on_room_contents(callback)
+  if type(callback) ~= "function" then return nil end
+  next_room_contents_id = next_room_contents_id + 1
+  on_room_contents_callbacks[#on_room_contents_callbacks + 1] =
+    { id = next_room_contents_id, fn = callback }
+  return next_room_contents_id
+end
+
+function M.off_room_contents(id)
+  if id == nil then return false end
+  for i, entry in ipairs(on_room_contents_callbacks) do
+    if entry.id == id then
+      table.remove(on_room_contents_callbacks, i)
       return true
     end
   end
