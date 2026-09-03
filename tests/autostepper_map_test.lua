@@ -322,6 +322,74 @@ local dt = defertie:next_frontier({ policy = "clear", defer_dirs = { "u" } })
 check("a deferred direction loses an equal-distance tie",
   table.concat(dt or {}, "") == "n", table.concat(dt or {}, ","))
 
+-- ---- path_to -------------------------------------------------------------
+-- Reuses the shape of the "twoway" fixture above (two routes to one target,
+-- of different lengths), rebuilt fresh so this section does not depend on
+-- anything mutated onto the earlier `twoway` object.
+--
+--   (0,2) T <-w- (1,2)      T = (0,2,0); a RECORDED room, unlike the
+--     ^n           ^n       search_frontier fixture's unrecorded frontier.
+--   (0,1)        (1,1)      short route: n,n      (dist 2)
+--     ^n           ^n       long route:  e,n,n,w  (dist 4)
+--   (0,0) --e---> (1,0)
+local function build_twoway()
+  return build({
+    { 0, 0, 0, { "n", "e" } },
+    { 0, 1, 0, { "s", "n" } },
+    { 0, 2, 0, { "s", "n", "e" } },
+    { 1, 0, 0, { "w", "n" } },
+    { 1, 1, 0, { "s", "n" } },
+    { 1, 2, 0, { "s", "w" } },
+  })
+end
+
+local pt = build_twoway()
+local pt_route = pt:path_to(0, 2, 0)
+check("path_to returns the exact shortest path between two recorded rooms",
+  table.concat(pt_route or {}, "") == "nn", table.concat(pt_route or {}, ","))
+
+check("path_to at the current position returns an empty array, not nil",
+  (function()
+    local here = pt:path_to(0, 0, 0)
+    return here ~= nil and #here == 0
+  end)(),
+  tostring(pt:path_to(0, 0, 0)))
+
+check("path_to to an unrecorded coordinate returns nil",
+  pt:path_to(9, 9, 9) == nil)
+
+-- A second, genuinely disconnected component: an island room with no exits
+-- of its own and nothing else's exit pointing at it.
+local disc = map_mod.new()
+disc:record({ "e" })              -- (0,0,0)
+disc:set_position(1, 0, 0)
+disc:record({ "w" })              -- (1,0,0), connected back to the origin
+disc:set_position(50, 50, 50)
+disc:record({})                   -- an island: recorded, but reachable from nowhere
+disc:set_position(0, 0, 0)
+check("path_to a recorded but unreachable room returns nil",
+  disc:path_to(50, 50, 50) == nil)
+
+-- Two consecutive calls must not interfere with each other. Calling with the
+-- SAME start and target twice cannot discriminate dist/prev hoisted to
+-- module scope: nothing about the search changes between the calls, so
+-- stale leftover state happens to reproduce the same correct answer. The
+-- second call needs a DIFFERENT start and target so a leftover dist/prev
+-- table -- pre-populated with coordinates and distances relative to the
+-- FIRST call's start -- has something to corrupt: with dist/prev hoisted,
+-- the previously-visited nodes never get re-discovered relative to the new
+-- start, and the target (already marked reachable from the earlier call)
+-- reports a path built from the stale prev chain, walking back to the
+-- WRONG start.
+local pt_again = pt:path_to(0, 2, 0)
+check("path_to from the same start to the same target agrees on repeat",
+  table.concat(pt_again or {}, "") == "nn", table.concat(pt_again or {}, ","))
+
+pt:set_position(1, 0, 0)
+local pt_second = pt:path_to(1, 2, 0)
+check("a second path_to call from a different start is not corrupted by the first",
+  table.concat(pt_second or {}, "") == "nn", table.concat(pt_second or {}, ","))
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)

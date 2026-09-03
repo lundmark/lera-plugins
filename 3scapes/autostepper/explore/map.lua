@@ -227,6 +227,75 @@ function Map:search_frontier(opts)
   return path
 end
 
+-- Breadth-first search from the current position to a NAMED recorded
+-- coordinate -- unlike search_frontier, which searches for an unrecorded
+-- frontier, this searches for a specific, already-recorded room. Used by
+-- explore/mode.lua's M.leave() to route back to the run's origin.
+--
+-- Same discipline as search_frontier: FIFO queue, dist/prev scoped to the
+-- call and never written onto room records, DIR_ORDER for determinism.
+--
+-- Three distinct return shapes, on purpose:
+--   * an array of directions, when a route through recorded rooms exists;
+--   * an empty array, when the current position IS the target;
+--   * nil, when the target is not a recorded room, or is recorded but
+--     unreachable through recorded rooms.
+-- A caller has to be able to tell "already there" from "cannot get there",
+-- so the empty-array case must never collapse into nil, and nil must never
+-- collapse into an empty array.
+function Map:path_to(x, y, z)
+  local target = key(x, y, z)
+  if not self.rooms[target] then return nil end
+
+  local sx, sy, sz = self:position()
+  local start = key(sx, sy, sz)
+  if start == target then return {} end
+
+  local start_room = self.rooms[start]
+  if not start_room then return nil end
+
+  -- Search bookkeeping lives here, keyed by coordinate -- never written onto
+  -- the room records, and never shared across calls. See search_frontier's
+  -- comment above for why: state left behind on rooms (or hoisted to module
+  -- scope) is exactly the class of bug this engine was built to avoid.
+  local dist = { [start] = 0 }
+  local prev = {}
+
+  -- FIFO, exactly like search_frontier: dequeue at head, enqueue at tail.
+  local queue = { start_room }
+  local head = 1
+
+  while head <= #queue do
+    local room = queue[head]
+    head = head + 1
+    local rk = key(room.x, room.y, room.z)
+    local d0 = dist[rk]
+
+    for _, dir in ipairs(DIR_ORDER) do
+      if room.exits[dir] then
+        local d = DELTA[dir]
+        local nk = key(room.x + d[1], room.y + d[2], room.z + d[3])
+        if self.rooms[nk] and dist[nk] == nil then
+          dist[nk] = d0 + 1
+          prev[nk] = { from = rk, dir = dir }
+          queue[#queue + 1] = self.rooms[nk]
+        end
+      end
+    end
+  end
+
+  if dist[target] == nil then return nil end
+
+  local path = {}
+  local cur = target
+  while prev[cur] do
+    local p = prev[cur]
+    table.insert(path, 1, p.dir)
+    cur = p.from
+  end
+  return path
+end
+
 -- Policy wrapper over search_frontier.
 --
 -- "clear"  -- nearest frontier; a distance tie breaks by compass order with
