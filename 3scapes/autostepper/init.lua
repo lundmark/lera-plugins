@@ -54,6 +54,14 @@ local pending_prompts = 0  -- prompts still owed before the current step arrives
 local enabled = false   -- Is autostepper active?
 local prompt_trigger_id = nil  -- Trigger ID for prompt detection
 
+-- Which source do_step() takes steps from: "explore" or "route". Fixed once,
+-- in M.start, and never re-derived from explore.active() per step. Deciding
+-- it fresh every step meant that the moment explore mode deactivated itself
+-- mid-run (the in_area check leaving the area, say), the very next do_step()
+-- would take the route branch and call sw.take_step() -- walking a stored
+-- speedwalk path from wherever the player now stands, outside the area.
+local run_mode = nil
+
 -- A Room.Info frame is the semantically exact arrival signal, and it lands
 -- before the room text and therefore before the prompt. It is not acted on
 -- directly, though: Room.Contents arrives AFTER Room.Info in the same burst, so
@@ -355,7 +363,20 @@ end
 
 local function do_step()
   local step
-  if explore and explore.active() then
+  if run_mode == "explore" then
+    if not (explore and explore.active()) then
+      -- The mode deactivated itself mid-run -- today that means it saw the
+      -- room name leave the area (§6.6). The RUN is over. Falling through to
+      -- sw.take_step() here would walk a stored speedwalk path from wherever
+      -- we now stand, which is exactly what the exhaustion branch below
+      -- refuses to do, reached by a different door.
+      log("Explore mode ended; stopping")
+      enabled = false
+      state = "idle"
+      cancel_settle()
+      notify(on_complete_callbacks)
+      return false
+    end
     step = explore.next_step()
     if not step then
       -- Every reachable exit leads somewhere already mapped. The area is fully
@@ -834,6 +855,9 @@ function M.start(targets_only)
   end
 
   local exploring = explore and explore.active()
+  -- Fixed once, here, for the whole run -- see the run_mode declaration for
+  -- why do_step() must not re-derive this from explore.active() per step.
+  run_mode = exploring and "explore" or "route"
 
   if not exploring then
     local place = sw.get_current_place()
@@ -888,6 +912,7 @@ function M.stop()
   cancel_refresh_wait()
   enabled = false
   state = "idle"
+  run_mode = nil
   prompt_count = 0
   pending_prompts = 0
   current_target = nil

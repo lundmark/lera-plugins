@@ -680,6 +680,59 @@ check("a monster in the NEXT sea room is attacked despite the same room name",
   last_sent() == "kill a second organism", table.concat(sent, "|"))
 quiet(as.stop)
 
+-- ---- run_mode is fixed at start, not decided per step (task-12 supp. 3) -----
+-- do_step used to branch on explore.active() every step. The moment the mode
+-- deactivates itself mid-run (the in_area check, once wired), the next
+-- do_step would take the route branch and call sw.take_step() -- walking a
+-- stored speedwalk path from wherever the player now stands, outside the
+-- area. Fixing run_mode at M.start closes that door.
+run_timers()
+explore_state.active = true
+explore_steps = { "n" }
+explore_taken = {}
+explore_state.coord = 0
+explore_state.stops = 0
+sw_steps = { { raw = "SHOULD-NOT-RUN", commands = { "SHOULD-NOT-RUN" } } }
+sw_taken = {}
+arrive(700, "Layer one of the Sea of Chaos", {}, {})
+sent = {}
+quiet(function() as.start(false) end)
+arrival_prompt()
+check("run_mode setup: explore mode supplies the first step",
+  last_sent() == "n", table.concat(sent, "|"))
+
+-- Self-deactivate mid-run, the way the in_area check will: explore.active()
+-- goes false with no explore.stop() call from autostepper's own side.
+explore_state.active = false
+sent = {}
+arrive(701, "A dusty crossroads", {}, {})
+arrival_prompt()
+check("a self-deactivated explore run stops rather than falling through",
+  as.is_running() == false, tostring(as.is_running()))
+check("a self-deactivated explore run never takes a route step",
+  count_sent("SHOULD-NOT-RUN") == 0, table.concat(sent, "|"))
+quiet(as.stop)
+
+-- A route run is unaffected: run_mode is fixed to "route" when explore is not
+-- active at start, and do_step keeps taking route steps regardless of what
+-- explore.active() reports afterward.
+run_timers()
+explore_state.active = false
+sw_steps = { { raw = "n", commands = { "n" } }, { raw = "e", commands = { "e" } } }
+sw_taken = {}
+arrive(702, "A dusty crossroads", {}, {})
+sent = {}
+quiet(function() as.start(false) end)
+arrival_prompt()
+check("a route run still takes its first step when explore is inactive at start",
+  last_sent() == "n", table.concat(sent, "|"))
+sent = {}
+arrive(703, "A dusty crossroads", {}, {})
+arrival_prompt()
+check("a route run takes its second step", last_sent() == "e",
+  table.concat(sent, "|"))
+quiet(as.stop)
+
 -- ---- the area profile defaults the policy ------------------------------------
 -- Spec 5.3: the policy is defaulted by the AREA PROFILE and only overridden by
 -- the user. So init must pass nothing until "/step set dive" has been used --
