@@ -64,15 +64,28 @@ local failed_attacks = 0  -- count of attacks whose keyword never resolved
 -- speedwalk path from wherever the player now stands, outside the area.
 local run_mode = nil
 
--- A Room.Info frame is the semantically exact arrival signal, and it lands
--- before the room text and therefore before the prompt. It is not acted on
--- directly, though: Room.Contents arrives AFTER Room.Info in the same burst, so
--- a decision made in the frame callback would read the previous room's
--- monsters. Settling for a moment lets the whole burst -- including a paged
--- Room.Contents -- land first.
+-- The settle timer is armed from roominfo.on_room_frame -- ANY accepted room
+-- frame, not just Room.Info -- because no single package is a reliable
+-- arrival signal. The server suppresses a resend when a payload repeats the
+-- last one it sent, and in a maze where many rooms share a name and exit set,
+-- Room.Info is exactly the package most likely to be suppressed (the live
+-- stall this fixed: two adjacent rooms with identical name/exits/num, differing
+-- only in contents, left Room.Info silent with no prompt pattern configured to
+-- fall back on). Arming from the generic signal means whichever of
+-- Room.Info/Room.Contents/Room.Map actually arrives starts the settle.
+--
+-- A frame lands before the room text and therefore before the prompt. The
+-- settle is not acted on immediately, though: a burst is up to three separate
+-- frames (Info, then Contents, then Map), so a decision made in the first
+-- frame's callback could read the previous room's monsters. Settling for a
+-- moment lets the whole burst -- including a paged Room.Contents -- land
+-- first; the `if settle_timer then return end` dedupe below means only the
+-- first frame in a burst arms anything, and the timer's job is to outlast
+-- the rest.
 local BURST_SETTLE_MS = 150
 local settle_timer = nil
 local room_info_sub = nil
+local room_frame_sub = nil   -- roominfo.on_room_frame id, removed on unload
 
 -- Per-room view of what the room held on arrival.
 --
@@ -359,16 +372,29 @@ local function complete_arrival()
   process_room()
 end
 
--- Two separate jobs, deliberately gated separately. Feeding the explorer is
--- information: a frame describes the room we are standing in whether or not a
--- step is outstanding, and the frames that arrive while the stepper is idle are
--- the ones that matter most -- the entry room's, seen when the player walks into
--- the area before explore mode is even started. Arming the arrival settle timer
--- is the other job, and that only means anything while a step is outstanding.
+-- Feeding the explorer is information: a frame describes the room we are
+-- standing in whether or not a step is outstanding, and the frames that
+-- arrive while the stepper is idle are the ones that matter most -- the entry
+-- room's, seen when the player walks into the area before explore mode is
+-- even started. This stays on roominfo.on_room_info alone, deliberately not
+-- the generic on_room_frame signal: explore.on_frame records the room's exits
+-- from ri.info(), and if it re-ran on every Contents or Map frame too, a
+-- Room.Map arriving for a room whose Room.Info was suppressed would write the
+-- PREVIOUS room's exits at the new coordinate -- a desync the topology check
+-- would then report as real. See on_room_frame_arrival below for the settle
+-- timer, which is the job that *does* need to run from any frame.
 local function on_room_info_frame()
   if explore and explore.active() and explore.on_frame and ri and ri.info then
     explore.on_frame(ri.info())
   end
+end
+
+-- Arms the arrival settle timer. Subscribed to roominfo.on_room_frame -- any
+-- accepted Room.Info, Room.Contents, or Room.Map -- rather than Room.Info
+-- alone, because no single package is guaranteed to arrive (see the comment
+-- on BURST_SETTLE_MS above). Only means anything while a step is outstanding;
+-- the settle_timer guard means only the first frame of a burst arms anything.
+local function on_room_frame_arrival()
   if not enabled or state ~= "stepping" then return end
   if settle_timer then return end
   settle_timer = timer.after(BURST_SETTLE_MS, function()
@@ -851,6 +877,9 @@ function M.on_load()
   if ri and ri.on_room_contents then
     room_contents_sub = ri.on_room_contents(on_room_contents_frame)
   end
+  if ri and ri.on_room_frame then
+    room_frame_sub = ri.on_room_frame(on_room_frame_arrival)
+  end
   if gmcp and gmcp.on then
     combat_gmcp_sub = gmcp.on("Char.Combat", on_char_combat)
   end
@@ -882,6 +911,11 @@ function M.on_unload()
     ri.off_room_contents(room_contents_sub)
   end
   room_contents_sub = nil
+
+  if room_frame_sub and ri and ri.off_room_frame then
+    ri.off_room_frame(room_frame_sub)
+  end
+  room_frame_sub = nil
 
   if combat_gmcp_sub and gmcp and gmcp.remove then
     gmcp.remove(combat_gmcp_sub)
