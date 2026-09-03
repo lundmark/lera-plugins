@@ -226,8 +226,16 @@ local function handle_room_info(data)
 
   -- Unconditional: a frame arrived, whether or not identity changed. In an area
   -- with no room ids and one name per layer, this is the only per-room signal.
-  notify_room_info(M.info())
+  -- Generic signal FIRST, then the specific one. "A frame arrived" is
+  -- logically prior to "here is what it contained", and the order is
+  -- load-bearing: a specific-signal consumer may change its own state in
+  -- response (autostepper's refresh answer decides and steps), and a generic
+  -- observer must see the frame in the state that preceded that change.
+  -- Reversed, the step taken by a contents handler gets an arrival timer armed
+  -- for it by its own frame, which can fire before the NEXT room's frames land
+  -- and decide on this room's contents.
   notify_room_frame()
+  notify_room_info(M.info())
 end
 
 local function classify_entry(raw)
@@ -272,8 +280,9 @@ local function commit_contents(items, truncated)
   -- This is the single point a COMPLETE list is committed (single-page or
   -- final-page); see the registry comment above for why the notify lives here
   -- and not in handle_room_contents.
-  notify_room_contents(M.info())
+  -- Generic first; see the note in handle_room_info for why the order matters.
   notify_room_frame()
+  notify_room_contents(M.info())
 end
 
 local function handle_room_contents(data)
