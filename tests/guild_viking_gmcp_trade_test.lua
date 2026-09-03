@@ -24,6 +24,7 @@ local protocol = require("protocol")
 local RESERVED_KEYS = { _market_seam = true, _patterns = true, _gmcp = true,
                         _retired_keys = true, _retired_patterns = true }
 local S = require("state").S
+local market = require("market")
 
 local RESERVED = RESERVED_KEYS
 local trade_mod
@@ -259,6 +260,154 @@ local function tradegoods(payload)
   protocol.on_gmcp("Guild.TradeGoods", payload)
 end
 
+local function tgoods_errors()
+  return protocol.gmcp_stats().errors.TGOODS or 0
+end
+
+local function streamed_timber(lin)
+  return S.trade_goods[lin] and S.trade_goods[lin].timber
+end
+
+-- Current servers stream one lineage per frame. Keep the last committed grid
+-- hidden until the complete cycle is present, so auto-trading never observes
+-- a partial or mixed generation.
+local sentinel = { [9] = { sentinel = { buy = 99, sell = 99 } } }
+S.trade_goods = sentinel
+local before_errors = tgoods_errors()
+tradegoods({ lin = 0, goods = { { good = "t", score = -1, sup = 100,
+                                  dem = 0, buy = 10, sell = 0 } } })
+check("a stream without an established lineage count leaves the grid committed",
+      S.trade_goods == sentinel)
+check("a stream without an established lineage count records TGOODS once",
+      tgoods_errors() == before_errors + 1, tgoods_errors())
+
+local before_unknown = protocol.gmcp_stats().unknown
+local unknown_lin = before_unknown.lin or 0
+local unknown_lin_count = before_unknown.lin_count or 0
+local unknown_goods = before_unknown.goods or 0
+tradegoods({ lin = 0, lin_count = 2,
+             goods = { { good = "t", score = -1, sup = 100, dem = 0,
+                         buy = 10, sell = 0 } } })
+check("an incomplete streamed cycle leaves the committed grid untouched",
+      S.trade_goods == sentinel and S.trade_goods[0] == nil)
+check("the tgoods seam waits for a streamed commit", #seam_goods == 0, #seam_goods)
+tradegoods({ lin = 1,
+             goods = { { good = "t", score = 2, sup = 0, dem = 100,
+                         buy = 0, sell = 50 } } })
+check("a complete streamed cycle atomically replaces the committed grid",
+      S.trade_goods ~= sentinel and S.trade_goods[9] == nil
+      and streamed_timber(0) ~= nil and streamed_timber(1) ~= nil)
+check("streamed tgoods maps supply demand buy and sell",
+      streamed_timber(0) and streamed_timber(1)
+      and streamed_timber(0).supply == 100 and streamed_timber(0).demand == 0
+      and streamed_timber(0).buy == 10 and streamed_timber(0).sell == 0
+      and streamed_timber(1).supply == 0 and streamed_timber(1).demand == 100
+      and streamed_timber(1).buy == 0 and streamed_timber(1).sell == 50)
+local after_unknown = protocol.gmcp_stats().unknown
+check("stream envelope fields are not counted unknown",
+      (after_unknown.lin or 0) == unknown_lin
+      and (after_unknown.lin_count or 0) == unknown_lin_count
+      and (after_unknown.goods or 0) == unknown_goods)
+check("the tgoods seam fires only after a streamed commit",
+      #seam_goods == 2 and seam_goods[1].lin == 0 and seam_goods[2].lin == 1,
+      #seam_goods)
+local movers = market.compute_market_movers()
+check("the committed streamed grid produces one timber market mover",
+      #movers == 1 and movers[1].good == "timber"
+      and movers[1].buy_lin == 0 and movers[1].sell_lin == 1, #movers)
+
+tradegoods({ lin = 0,
+             goods = { { good = "t", score = -1, sup = 100, dem = 0,
+                         buy = 12, sell = 0 } } })
+check("a delta-count next cycle stays pending until complete",
+      streamed_timber(0) and streamed_timber(0).buy == 10)
+tradegoods({ lin = 1,
+             goods = { { good = "t", score = 2, sup = 0, dem = 100,
+                         buy = 0, sell = 55 } } })
+check("a delta-count next cycle retains expected lineage count",
+      streamed_timber(0) and streamed_timber(1)
+      and streamed_timber(0).buy == 12 and streamed_timber(1).sell == 55)
+
+-- A non-increasing lineage starts a new generation and abandons stale pending
+-- rows, even when the count itself was delta-suppressed.
+tradegoods({ lin = 0, lin_count = 3,
+             goods = { { good = "t", score = -1, sup = 101, dem = 0,
+                         buy = 20, sell = 0 } } })
+tradegoods({ lin = 1,
+             goods = { { good = "t", score = 2, sup = 0, dem = 101,
+                         buy = 0, sell = 60 } } })
+tradegoods({ lin = 0,
+             goods = { { good = "t", score = -1, sup = 102, dem = 0,
+                         buy = 30, sell = 0 } } })
+tradegoods({ lin = 1,
+             goods = { { good = "t", score = 2, sup = 0, dem = 102,
+                         buy = 0, sell = 70 } } })
+tradegoods({ lin = 2,
+             goods = { { good = "t", score = 0, sup = 102, dem = 102,
+                         buy = 31, sell = 71 } } })
+check("a non-increasing lineage restarts instead of mixing pending generations",
+      streamed_timber(0) and streamed_timber(1) and streamed_timber(2)
+      and streamed_timber(0).buy == 30 and streamed_timber(1).sell == 70
+      and streamed_timber(2).buy == 31 and streamed_timber(2).sell == 71)
+
+tradegoods({ lin = 0,
+             goods = { { good = "t", score = -1, sup = 103, dem = 0,
+                         buy = 40, sell = 0 } } })
+tradegoods({ lin = 1,
+             goods = { { good = "t", score = 2, sup = 0, dem = 103,
+                         buy = 0, sell = 80 } } })
+tradegoods({ full = 1, lin = 2, lin_count = 3,
+             goods = { { good = "t", score = -1, sup = 104, dem = 0,
+                         buy = 50, sell = 0 } } })
+tradegoods({ lin = 3,
+             goods = { { good = "t", score = 2, sup = 0, dem = 104,
+                         buy = 0, sell = 90 } } })
+tradegoods({ lin = 4,
+             goods = { { good = "t", score = 0, sup = 104, dem = 104,
+                         buy = 51, sell = 91 } } })
+check("full starts a fresh streamed cycle even above the interrupted lineage",
+      S.trade_goods[0] == nil and S.trade_goods[1] == nil
+      and streamed_timber(2) and streamed_timber(3) and streamed_timber(4)
+      and streamed_timber(2).buy == 50 and streamed_timber(3).sell == 90
+      and streamed_timber(4).buy == 51 and streamed_timber(4).sell == 91)
+
+tradegoods({ lin = 0, lin_count = 2,
+             goods = { { good = "t", score = -1, sup = 105, dem = 0,
+                         buy = 60, sell = 0 } } })
+tradegoods({ lin = 1,
+             goods = { { good = "t", score = 2, sup = 0, dem = 105,
+                         buy = 0, sell = 100 } } })
+local committed = S.trade_goods
+before_errors = tgoods_errors()
+tradegoods({ lin = 2,
+             goods = { { good = "t", score = 0, sup = 105, dem = 105,
+                         buy = 61, sell = 101 } } })
+check("a higher lineage after completion is excess and leaves the grid committed",
+      tgoods_errors() == before_errors + 1 and S.trade_goods == committed
+      and S.trade_goods[2] == nil, tgoods_errors())
+
+local function invalid_tgoods(name, payload)
+  local grid, errors = S.trade_goods, tgoods_errors()
+  tradegoods(payload)
+  check(name, tgoods_errors() == errors + 1 and S.trade_goods == grid,
+        tgoods_errors())
+end
+invalid_tgoods("an out-of-range streamed lineage is rejected", {
+  lin = 14, goods = {},
+})
+invalid_tgoods("a non-integer streamed lineage count is rejected", {
+  lin = 0, lin_count = 1.5, goods = {},
+})
+invalid_tgoods("an out-of-range streamed lineage count is rejected", {
+  lin = 0, lin_count = 15, goods = {},
+})
+invalid_tgoods("non-table streamed goods are rejected", {
+  lin = 0, goods = "not-a-table",
+})
+
+-- Legacy servers use a per-lineage key shape. Its replacement semantics are
+-- deliberately separate from streamed atomic snapshots.
+seam_goods = {}
 S.trade_goods = {}
 tradegoods({
   tgoods_2 = { { lin = 2, good = "o", score = 1, sup = 0, dem = 1000,

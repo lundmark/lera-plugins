@@ -49,58 +49,146 @@ end
 -- ---------------------------------------------------------------------------
 -- Guild.TradeGoods
 -- ---------------------------------------------------------------------------
--- The per-good, per-lineage price and demand matrix. It arrives as one key per
--- lineage -- tgoods_0, tgoods_1, ... -- rather than as one array, and that
--- split is not cosmetic: a container over PROTOCOL_GUILD_NEST_MAX (128
--- elements) is refused whole during validation and the key dropped with no
--- error and no partial data, and the flat list runs to about 420 records. The
--- same hazard is why Guild.Livestock splits `lmarket`.
---
--- MIP batched six lineages per packet and the client accumulated them behind a
--- two-second window, resetting `trade_goods` when a burst looked new. That
--- guesswork is gone: each lineage is its own key, so a frame replaces exactly
--- the lineages it carries and leaves the rest standing -- which is also the
--- correct reading of a delta transport, where an unchanged lineage simply is
--- not resent.
+-- The current GMCP transport streams one lineage per frame as
+-- `{ lin, lin_count?, goods }`. A complete cycle replaces the grid atomically:
+-- auto-trading reads this state independently of protocol dispatch, so staging
+-- a lineage directly into `S.trade_goods` would expose a partial generation.
+-- `lin_count` is delta-suppressed after it has first been observed. Older
+-- servers use `tgoods_0`, `tgoods_1`, ... instead; those remain independent
+-- per-lineage replacements.
 --
 -- `good` is the one-character abbreviation on the wire; GOOD_SHORT resolves it
 -- to the name the pages index by. `sup`/`dem` are supply/demand.
-local function write_tgoods(parts)
+local TGOODS_MIN_LIN = 0
+local TGOODS_MAX_LIN = 13
+local TGOODS_MAX_COUNT = 14
+local tgoods_stream = {
+  expected = nil,
+  pending = nil,
+  seen = nil,
+  count = 0,
+  last_lin = nil,
+  complete = false,
+}
+
+local function decode_tgoods_records(records)
+  if type(records) ~= "table" then error("TGOODS goods must be a table") end
+  local goods = {}
+  for _, r in ipairs(records) do
+    if type(r) == "table" and r.good ~= nil then
+      local abbr = tostring(r.good)
+      local good = GOOD_SHORT[abbr] or abbr
+      goods[good] = {
+        score  = tonumber(r.score) or 0,
+        supply = tonumber(r.sup) or 0,
+        demand = tonumber(r.dem) or 0,
+        buy    = tonumber(r.buy) or 0,
+        sell   = tonumber(r.sell) or 0,
+      }
+    end
+  end
+  return goods
+end
+
+local function record_tgoods_history(lin, goods)
+  if not M._market_seam.on_tgoods then return end
+  local names = {}
+  for good in pairs(goods) do names[#names + 1] = good end
+  table.sort(names)
+  for _, good in ipairs(names) do
+    local entry = goods[good]
+    if entry.buy > 0 or entry.sell > 0 then
+      M._market_seam.on_tgoods(lin, good, entry.buy, entry.sell)
+    end
+  end
+end
+
+local function record_tgoods_grid_history(grid)
+  local lineages = {}
+  for lin in pairs(grid) do lineages[#lineages + 1] = lin end
+  table.sort(lineages)
+  for _, lin in ipairs(lineages) do
+    record_tgoods_history(lin, grid[lin])
+  end
+end
+
+local function is_tgoods_integer(v)
+  return type(v) == "number" and v == math.floor(v)
+end
+
+local function start_tgoods_stream()
+  tgoods_stream.pending = {}
+  tgoods_stream.seen = {}
+  tgoods_stream.count = 0
+  tgoods_stream.last_lin = nil
+  tgoods_stream.complete = false
+end
+
+local function write_streamed_tgoods(parts, full)
+  local lin = parts.lin
+  local supplied_expected = parts.lin_count
+  if not is_tgoods_integer(lin) or lin < TGOODS_MIN_LIN or lin > TGOODS_MAX_LIN then
+    error("TGOODS lin must be an integer from 0 to 13")
+  end
+  if supplied_expected ~= nil
+      and (not is_tgoods_integer(supplied_expected)
+           or supplied_expected < 1 or supplied_expected > TGOODS_MAX_COUNT) then
+    error("TGOODS lin_count must be an integer from 1 to 14")
+  end
+  local goods = decode_tgoods_records(parts.goods)
+  local expected = supplied_expected or tgoods_stream.expected
+  if not expected then error("TGOODS lin_count is required before the first stream") end
+
+  local fresh = full
+      or supplied_expected ~= nil and supplied_expected ~= tgoods_stream.expected
+      or (not tgoods_stream.pending and not tgoods_stream.complete)
+      or (tgoods_stream.last_lin ~= nil and lin <= tgoods_stream.last_lin)
+  if tgoods_stream.complete and not fresh then
+    error("TGOODS lineage exceeds a completed cycle")
+  end
+  if fresh then start_tgoods_stream() end
+
+  tgoods_stream.expected = expected
+  if not tgoods_stream.seen[lin] then
+    tgoods_stream.pending[lin] = goods
+    tgoods_stream.seen[lin] = true
+    tgoods_stream.count = tgoods_stream.count + 1
+  end
+  tgoods_stream.last_lin = lin
+
+  if tgoods_stream.count == tgoods_stream.expected then
+    S.trade_goods = tgoods_stream.pending
+    record_tgoods_grid_history(S.trade_goods)
+    tgoods_stream.pending = nil
+    tgoods_stream.seen = nil
+    tgoods_stream.count = 0
+    tgoods_stream.complete = true
+  end
+end
+
+local function write_tgoods(parts, full)
   if type(parts) ~= "table" then return end
-  -- Sorted so the market seam's price-history writes land in a stable order
-  -- across lineages; pairs() order is unspecified.
+  if parts.lin ~= nil or parts.lin_count ~= nil or parts.goods ~= nil then
+    write_streamed_tgoods(parts, full)
+    return
+  end
+
+  -- Sorted so legacy per-lineage replacements and their history writes land
+  -- in a stable order; pairs() order is unspecified.
   local keys = {}
   for key in pairs(parts) do
-    if key:match("^tgoods_%d+$") then keys[#keys + 1] = key end
+    if type(key) == "string" and key:match("^tgoods_%d+$") then
+      keys[#keys + 1] = key
+    end
   end
   table.sort(keys)
-
   for _, key in ipairs(keys) do
-    local records = parts[key]
     local lin = tonumber(key:match("^tgoods_(%d+)$"))
+    local records = parts[key]
     if lin and type(records) == "table" then
-      local goods = {}
-      for _, r in ipairs(records) do
-        if type(r) == "table" and r.good ~= nil then
-          local abbr = tostring(r.good)
-          local good = GOOD_SHORT[abbr] or abbr
-          local buy = tonumber(r.buy) or 0
-          local sell = tonumber(r.sell) or 0
-          goods[good] = {
-            score  = tonumber(r.score) or 0,
-            supply = tonumber(r.sup) or 0,
-            demand = tonumber(r.dem) or 0,
-            buy    = buy,
-            sell   = sell,
-          }
-          -- market.lua records price history off this seam, on the same
-          -- "either side is priced" condition the MIP path used.
-          if (buy > 0 or sell > 0) and M._market_seam.on_tgoods then
-            M._market_seam.on_tgoods(lin, good, buy, sell)
-          end
-        end
-      end
+      local goods = decode_tgoods_records(records)
       S.trade_goods[lin] = goods
+      record_tgoods_history(lin, goods)
     end
   end
 end
