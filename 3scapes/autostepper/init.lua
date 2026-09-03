@@ -1122,7 +1122,7 @@ function M.status()
   log("  Prompt count: " .. prompt_count)
   -- A climbing count is the actionable diagnostic: it means the target list
   -- does not match the area, which the user can fix and nothing else says.
-  log("  Failed attacks: " .. failed_attacks)
+  log("  Failed attacks (this session): " .. failed_attacks)
 
   if explore and explore.active() then
     local s = explore.stats()

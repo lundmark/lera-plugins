@@ -346,7 +346,7 @@ end
 -- whole file, not reset per run.
 local function failed_attacks_count(lines)
   for _, line in ipairs(lines) do
-    local n = line:match("Failed attacks: (%d+)")
+    local n = line:match("Failed attacks %(this session%): (%d+)")
     if n then return tonumber(n) end
   end
   return nil
