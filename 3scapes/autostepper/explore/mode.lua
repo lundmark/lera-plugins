@@ -71,6 +71,15 @@ local function filter_exits(exits)
   return out
 end
 
+-- The profile this run was started with, or nil when no run is active. The
+-- stepper reads it for the area's target vocabulary; tying it to `active`
+-- rather than caching a copy at start means it goes away exactly when the run
+-- does, with no second lifetime to keep in step.
+function M.profile()
+  if not active then return nil end
+  return profile
+end
+
 function M.start(prof, initial_policy)
   if not prof then return false end
   profile = prof

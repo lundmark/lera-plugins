@@ -164,8 +164,27 @@ fake_roominfo.info = function()
            exits = ri_state.exits or {} }
 end
 
--- Deliver a Room.Info frame the way roominfo would.
+-- The generic "a room frame arrived" registry. The plugin arms its arrival
+-- settle timer from THIS, not from on_room_info, because Room.Info is the
+-- package most likely to be suppressed: two adjacent rooms sharing a name and
+-- an exit set produce an identical payload and the server sends nothing. A
+-- fixture that offers only on_room_info can therefore never arm an arrival,
+-- and every case that drives one through deliver_frame() hangs in "stepping".
+local ri_room_frame_cbs = {}
+fake_roominfo.on_room_frame = function(fn)
+  ri_room_frame_cbs[#ri_room_frame_cbs + 1] = fn
+  return #ri_room_frame_cbs
+end
+fake_roominfo.off_room_frame = function(id)
+  if ri_room_frame_cbs[id] then ri_room_frame_cbs[id] = nil return true end
+  return false
+end
+
+-- Deliver a Room.Info frame the way roominfo would: the info-specific
+-- subscribers first, then the generic frame signal, matching the real
+-- notify order in roominfo's handle_room_info.
 local function deliver_frame()
+  for _, fn in pairs(ri_room_frame_cbs) do fn() end
   for _, fn in pairs(ri_frame_cbs) do fn(fake_roominfo.info()) end
 end
 
@@ -182,7 +201,13 @@ end
 -- Deliver a COMPLETE Room.Contents list the way roominfo's on_room_contents
 -- would, AFTER ri_state.monsters/players already reflect the server's answer
 -- -- exactly like real roominfo, which updates its own state before firing.
+-- Contents fires the generic frame signal too, in roominfo's own order
+-- (contents-specific subscribers, then the frame signal, both from
+-- commit_contents). Omitting the second half is what let the arrival
+-- regression above hide: a fixture that under-reports which signals a frame
+-- raises will pass while the production path it stands in for cannot arm.
 local function deliver_contents_frame()
+  for _, fn in pairs(ri_room_frame_cbs) do fn() end
   for _, fn in pairs(ri_contents_cbs) do fn(fake_roominfo.info()) end
 end
 
@@ -367,7 +392,7 @@ check("start succeeds", started == true, tostring(started))
 
 sent = {}
 prompt_cycle()
-check("attacks the monster in the room", last_sent() == "kill a scrawny orc",
+check("attacks the monster in the room", last_sent() == "kill orc",
   table.concat(sent, "|"))
 check("tracked view holds the monster", #tracked() == 1,
   #tracked())
@@ -399,7 +424,7 @@ run_timers()  -- drain any pending timer
 arrive(101, "A quiet lane", { "a large rat" }, {})
 sent = {}
 prompt_cycle()
-check("new room's monster is attacked", last_sent() == "kill a large rat",
+check("new room's monster is attacked", last_sent() == "kill rat",
   table.concat(sent, "|"))
 
 sent = {}
@@ -684,7 +709,7 @@ local explore_taken = {}
 local explore_state = { active = false, arrivals = 0, coord = 0, frames = 0,
                         stops = 0, resets = 0, reset_reason = nil,
                         leaves = 0, leave_result = true, stop_reason = nil,
-                        leaving = false,
+                        leaving = false, profile = nil,
                         start_policy = nil, attached = nil }
 as.debug_set_explore({
   active = function() return explore_state.active end,
@@ -739,6 +764,10 @@ as.debug_set_explore({
   leaving = function() return explore_state.leaving end,
   policy = function() return explore_state.policy or "clear" end,
   set_policy = function(name) explore_state.policy = name return true end,
+  -- The real mode.lua hands back the profile it was started with while the run
+  -- is active; nil here means "no area vocabulary", which is what every case
+  -- written before the profile-vocabulary tier expects.
+  profile = function() return explore_state.profile end,
   stats = function()
     return { rooms = 1, x = explore_state.coord, y = 0, z = 0,
              policy = explore_state.policy or "clear" }
@@ -821,18 +850,22 @@ explore_state.active = true
 explore_steps = { "n", "s" }
 explore_taken = {}
 explore_state.coord = 0
+-- The two shorts must differ in their HEAD NOUN, not merely somewhere in the
+-- phrase: with no vocabulary in force the command is built from that noun, so
+-- two "... organism" shorts would both go out as "kill organism" and the
+-- second check would pass whether or not the view reseeded at all.
 arrive(403, "Layer one of the Sea of Chaos", { "a small mutant organism" }, {})
 sent = {}
 quiet(function() as.start(false) end)
 arrival_prompt()
 check("a monster in the first sea room is attacked",
-  last_sent() == "kill a small mutant organism", table.concat(sent, "|"))
+  last_sent() == "kill organism", table.concat(sent, "|"))
 sent = {}
 quiet(as.prompt)     -- combat ends; the mob is struck from the local view
-arrive(403, "Layer one of the Sea of Chaos", { "a second organism" }, {})
+arrive(403, "Layer one of the Sea of Chaos", { "a twisted mutant creature" }, {})
 arrival_prompt()
 check("a monster in the NEXT sea room is attacked despite the same room name",
-  last_sent() == "kill a second organism", table.concat(sent, "|"))
+  last_sent() == "kill creature", table.concat(sent, "|"))
 quiet(as.stop)
 
 -- ---- run_mode is fixed at start, not decided per step (task-12 supp. 3) -----
@@ -1047,7 +1080,7 @@ explore_state.leaving = true
 sent = {}
 arrival_prompt()
 check("a monster met on the way out is still attacked",
-  last_sent() == "kill a stray wolf", table.concat(sent, "|"))
+  last_sent() == "kill wolf", table.concat(sent, "|"))
 explore_state.leaving = false
 quiet(as.stop)
 
@@ -1062,6 +1095,96 @@ check("stopping the stepper deactivates explore mode",
   explore_state.active == false, tostring(explore_state.active))
 
 explore_state.active = false
+-- ---- explore mode: the area profile supplies the target vocabulary ----------
+-- A speedwalk place carries its own target list. An explore run has no place,
+-- so before this the list was empty for the whole run and every attack fell
+-- through to the last resort -- which is how the chaos sea came to send
+-- "kill A growing mutant being" and be told "There is no A growing mutant
+-- being here."
+--
+-- The profile's list stands in. What the chaos sea's list actually contains is
+-- pinned in autostepper_chaossea_test.lua; these cases own the ENGINE tier, so
+-- the vocabulary is declared here rather than required -- the same separation
+-- the package.preload stub above keeps for default_policy, and the reason it
+-- has to be: that preload is still installed, so requiring the module here
+-- would hand back that stub, not the area.
+local sea_profile = { name = "chaossea-engine-stub", targets = { "mutant" } }
+
+quiet(as.stop)
+run_timers()
+explore_state.active = true
+explore_state.profile = sea_profile
+explore_steps = { "s" }
+explore_taken = {}
+explore_state.coord = 0
+arrive(420, "Layer one of the Sea of Chaos", { "A growing mutant being" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+arrival_prompt()
+check("a profile keyword contained in the display name is what goes out",
+  last_sent() == "kill mutant", table.concat(sent, "|"))
+quiet(as.stop)
+
+-- The boss short shares no word with the rest of the maze ("a whirling
+-- monstrosity with ..."), so nothing in the vocabulary is contained in it --
+-- the same no-match tier a place list uses applies, and the first entry is
+-- guessed. Here that guess is exactly right: the boss answers to "mutant" too.
+run_timers()
+explore_state.active = true
+explore_state.profile = sea_profile
+explore_steps = { "s" }
+explore_taken = {}
+explore_state.coord = 0
+arrive(421, "Layer eight of the Sea of Chaos",
+  { "a whirling monstrosity with a thousand mouths" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+local sea_guess_lines = capture(as.prompt)
+check("a monster matching no profile keyword falls back to the first entry",
+  last_sent() == "kill mutant", table.concat(sent, "|"))
+check("that fallback is logged as a guess",
+  has_line(sea_guess_lines, "guess") and has_line(sea_guess_lines, "mutant"),
+  table.concat(sea_guess_lines, "|"))
+quiet(as.stop)
+
+-- A place list left over from an earlier ROUTE run must not outrank the
+-- profile: M.start skips the place path for an explore run, so step_targets is
+-- never cleared on the way in, and the sea would be farmed with a keyword from
+-- whatever route ran last.
+run_timers()
+explore_state.active = true
+explore_state.profile = sea_profile
+explore_steps = { "s" }
+explore_taken = {}
+explore_state.coord = 0
+sw_target_list = { "gremlin" }
+arrive(423, "Layer three of the Sea of Chaos", { "A growing mutant being" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+arrival_prompt()
+check("the area profile outranks a stale speedwalk place list",
+  last_sent() == "kill mutant", table.concat(sent, "|"))
+sw_target_list = {}
+quiet(as.stop)
+
+-- targets-only mode in explore mode: the profile vocabulary decides validity
+-- too, not just the command. With only a place list to consult, "->" in the
+-- sea found no valid target in any room and stepped past every mob.
+run_timers()
+explore_state.active = true
+explore_state.profile = sea_profile
+explore_steps = { "s" }
+explore_taken = {}
+explore_state.coord = 0
+arrive(422, "Layer two of the Sea of Chaos", { "A small mutant being" }, {})
+sent = {}
+quiet(function() as.start(true) end)
+arrival_prompt()
+check("targets-only mode attacks a monster the profile vocabulary matches",
+  last_sent() == "kill mutant", table.concat(sent, "|"))
+quiet(as.stop)
+explore_state.profile = nil
+
 as.debug_set_explore(nil)
 
 -- ---- Char.Combat drives the combat cycle -------------------------------------
@@ -1084,7 +1207,7 @@ quiet(function() as.start(false) end)
 gmcp_sent = {}
 sent = {}
 prompt_cycle()
-check("gmcp cycle: attacks the monster", last_sent() == "kill an orc",
+check("gmcp cycle: attacks the monster", last_sent() == "kill orc",
   table.concat(sent, "|"))
 
 -- A Char.Combat frame WITH an attacker just says the fight continues. It must
@@ -1133,7 +1256,7 @@ check("a timer is armed while awaiting the answer", queued_timers() == 1,
 sent = {}
 quiet(deliver_contents_frame)
 check("an answer still listing the monster re-attacks it",
-  last_sent() == "kill an orc", table.concat(sent, "|"))
+  last_sent() == "kill orc", table.concat(sent, "|"))
 check("the refresh timer is disarmed once answered", queued_timers() == 0,
   tostring(queued_timers()))
 
@@ -1167,7 +1290,7 @@ sent = {}
 quiet(function() as.start(false) end)
 sent = {}
 prompt_cycle()
-check("reentrancy setup: attacks the monster", last_sent() == "kill a bog wraith",
+check("reentrancy setup: attacks the monster", last_sent() == "kill wraith",
   table.concat(sent, "|"))
 
 gmcp_sent = {}
@@ -1205,7 +1328,7 @@ sent = {}
 quiet(function() as.start(false) end)
 sent = {}
 prompt_cycle()
-check("send-false scenario: attacks the monster", last_sent() == "kill a jackal",
+check("send-false scenario: attacks the monster", last_sent() == "kill jackal",
   table.concat(sent, "|"))
 
 gmcp_send_result = false
@@ -1231,7 +1354,7 @@ sent = {}
 quiet(function() as.start(false) end)
 sent = {}
 prompt_cycle()
-check("timeout scenario: attacks the monster", last_sent() == "kill a troll",
+check("timeout scenario: attacks the monster", last_sent() == "kill troll",
   table.concat(sent, "|"))
 
 gmcp_sent = {}
@@ -1305,18 +1428,48 @@ check("the fallback guess is logged",
 sw_target_list = {}
 quiet(as.stop)
 
--- ---- empty target list: the display name is still the only option -----------
-run_timers()
-sw_steps = { { raw = "s", commands = { "s" } } }
-sw_taken = {}
-arrive(702, "An open courtyard", { "a wandering ghoul" }, {})
-sent = {}
-quiet(function() as.start(false) end)
-sent = {}
-prompt_cycle()
-check("with no configured targets, the display name is used",
-  last_sent() == "kill a wandering ghoul", table.concat(sent, "|"))
-quiet(as.stop)
+-- ---- no vocabulary at all: the display name's HEAD NOUN ---------------------
+-- A monster does not answer to its display name. Room.Contents carries
+-- capitalize(no_ansi(short())) (room/room.c:722-734), while obj/monster.c:538
+-- id() matches only the name, an entry in alias, or the race -- so
+-- "kill a wandering ghoul" answers "There is no a wandering ghoul here." and
+-- starts no fight at all. The head noun of a short IS an id by convention
+-- (set_alias is seeded with the noun words of the name -- chaos_corr.c:115),
+-- so that is what goes out when there is no vocabulary to consult: the
+-- article is dropped, a trailing clause is cut at its preposition, and the
+-- last word left standing is sent. Still a guess -- but one that can resolve,
+-- which the bare display name never could.
+local function attacks_as(id, room, monster)
+  run_timers()
+  sw_steps = { { raw = "s", commands = { "s" } } }
+  sw_taken = {}
+  arrive(id, room, { monster }, {})
+  sent = {}
+  quiet(function() as.start(false) end)
+  sent = {}
+  prompt_cycle()
+  local out = last_sent()
+  quiet(as.stop)
+  return out
+end
+
+check("the article is dropped and the noun sent",
+  attacks_as(702, "An open courtyard", "a wandering ghoul") == "kill ghoul")
+check("the chaos sea short from the report resolves to its noun",
+  attacks_as(703, "Layer one of the Sea of Chaos", "A growing mutant being")
+    == "kill being")
+check("a trailing 'with' clause is cut before the noun is taken",
+  attacks_as(704, "A ruined shrine", "a whirling monstrosity with three heads")
+    == "kill monstrosity")
+check("a trailing 'of' clause is cut too",
+  attacks_as(705, "A ruined shrine", "an amalgamation of death")
+    == "kill amalgamation")
+-- Wizard-only entries are query_cap_name() .. " (invis)" (room/room.c:718):
+-- the parenthetical is not part of any id and must not become the noun.
+check("an (invis) suffix is not mistaken for the noun",
+  attacks_as(706, "A dark cell", "Growing being (invis)") == "kill being")
+check("a one-word short is sent as it stands",
+  attacks_as(707, "A wet cave", "slime") == "kill slime")
 
 -- ---- targets-only mode: a non-matching monster is skipped, never guessed ----
 -- The fallback guess is for attack-anything mode only -- reaching for the
@@ -1351,19 +1504,22 @@ sent = {}
 quiet(function() as.start(false) end)
 sent = {}
 prompt_cycle()
-check("no-target setup: attacks the monster", last_sent() == "kill a rock lizard",
+check("no-target setup: attacks the monster", last_sent() == "kill lizard",
   table.concat(sent, "|"))
 check("no-target setup: tracked view holds it", #tracked() == 1, tostring(#tracked()))
 
 local before_fail_status = capture(as.status)
 sent = {}
-local fail_lines = capture(function() deliver_no_target("a rock lizard") end)
+local fail_lines = capture(function() deliver_no_target("lizard") end)
 check("a failed attack prunes the monster from the tracked view",
   #tracked() == 0, table.concat(tracked(), ","))
 check("a failed attack decides again: the now-empty room steps",
   last_sent() == "n", table.concat(sent, "|"))
+-- The captured name is the KEYWORD the mud echoed back, not the display name:
+-- that is what went out on the wire. The pruning below keys off current_target
+-- (the display name) instead, which is why both still line up.
 check("the failure is logged with the captured name",
-  has_line(fail_lines, "a rock lizard"), table.concat(fail_lines, "|"))
+  has_line(fail_lines, "lizard"), table.concat(fail_lines, "|"))
 
 local after_fail_status = capture(as.status)
 check("the failure is counted, and the count appears in /step status",
@@ -1410,7 +1566,7 @@ sent = {}
 quiet(function() as.start(false) end)
 sent = {}
 prompt_cycle()
-check("refresh-gate setup: attacks the boar", last_sent() == "kill a boar",
+check("refresh-gate setup: attacks the boar", last_sent() == "kill boar",
   table.concat(sent, "|"))
 
 gmcp_sent = {}

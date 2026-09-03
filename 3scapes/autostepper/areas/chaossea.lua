@@ -23,6 +23,22 @@ M.dive_dirs = { "d" }
 M.defer_dirs = { "u" }
 M.default_policy = "clear"
 
+-- The target vocabulary for the run. An explore run has no speedwalk place to
+-- carry one, and without it every attack falls back to guessing a keyword out
+-- of the monster's short -- which is how a maze mob came to be attacked as
+-- "kill A growing mutant being" and answered with "There is no A growing
+-- mutant being here."
+--
+-- One word is enough for the whole maze. obj/monster.c:538 id() matches the
+-- name, any alias, or the race, and every mob down here carries "mutant" as
+-- one or the other: chaos_corr sets race "mutant" (:74) and the alias (:115),
+-- chaos_dead (:96), chaos_down (:72) and chaos_boss (:66) all set the alias.
+-- The boss is why the list matters rather than the noun heuristic: its short,
+-- "a whirling monstrosity with ...", shares no word with the rest, so nothing
+-- in this list appears in it and the stepper guesses entry 1 -- which is right
+-- for it too. Order accordingly: entry 1 is the guess.
+M.targets = { "mutant" }
+
 function M.in_area(room_name)
   if type(room_name) ~= "string" then return false end
   return room_name:lower():find("sea of chaos", 1, true) ~= nil

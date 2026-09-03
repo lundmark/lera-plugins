@@ -431,6 +431,82 @@ local function request_room_refresh()
   gmcp.send("Room.Refresh", { packages = { "Room.Info", "Room.Contents" } })
 end
 
+-- The target vocabulary in force: a speedwalk place carries its own list, and
+-- an explore run -- which has no place -- uses the area profile's. Same shape
+-- and same meaning either way, so everything below reads one list and does not
+-- care which supplied it.
+--
+-- The profile is asked FIRST, and the order is load-bearing. M.start skips the
+-- place/load_steps path entirely for an explore run, so speedwalk's target
+-- list is whatever an earlier route run happened to leave behind -- a stale
+-- "gremlin" would otherwise be sent at every mob in the sea, and it is the
+-- profile that describes the ground actually being walked.
+local function vocabulary()
+  -- Guarded rather than assumed: the explore stand-in in the unit tests is a
+  -- partial table, and an area profile need not declare targets at all.
+  local prof = explore and explore.profile and explore.profile()
+  local area = prof and prof.targets
+  if type(area) == "table" and #area > 0 then return area end
+  local place = (sw and sw.get_targets and sw.get_targets()) or {}
+  if #place > 0 then return place end
+  return {}
+end
+
+-- The first vocabulary entry that appears in a monster's display name, in its
+-- authored case -- speedwalk's match_target rule, applied to whichever list is
+-- in force. Used for BOTH the targets-only validity decision and the command,
+-- so "-> in the sea attacks nothing" and "kill sends a word the mob does not
+-- answer to" cannot come apart again.
+local function match_vocabulary(monster)
+  if type(monster) ~= "string" then return nil end
+  local lower = monster:lower()
+  for _, entry in ipairs(vocabulary()) do
+    local trimmed = tostring(entry):match("^%s*(.-)%s*$")
+    if trimmed ~= "" and lower:find(trimmed:lower(), 1, true) then
+      return trimmed
+    end
+  end
+  return nil
+end
+
+-- Words that begin a trailing clause rather than continue the noun phrase. Cut
+-- there and the head noun is the last word before it: "a whirling monstrosity
+-- with three heads" -> monstrosity, "an amalgamation of death" -> amalgamation.
+-- ("in" and "and" need the bracket form; they are Lua keywords.)
+local PHRASE_STOP = {
+  of = true, with = true, ["in"] = true, on = true, at = true, from = true,
+  ["and"] = true, that = true, who = true, which = true,
+  wearing = true, holding = true, carrying = true, wielding = true,
+  covered = true, standing = true, sitting = true, lying = true,
+}
+
+-- Last resort, when there is no vocabulary at all: the head noun of the
+-- display name. A monster does not answer to its short -- Room.Contents
+-- carries capitalize(no_ansi(short())) (room/room.c:722-734) while
+-- obj/monster.c:538 id() matches only the name, an alias, or the race -- so
+-- sending the short verbatim answers "There is no <the whole short> here." and
+-- starts no fight. The head noun IS an id by mudlib convention, because
+-- set_alias is conventionally seeded with the noun words of the name
+-- (example/mobs/chaos_corr.c:115). Still a guess; just one that can resolve.
+local function head_noun(display)
+  if type(display) ~= "string" then return nil end
+  -- A wizard-only entry is query_cap_name() .. " (invis)" (room/room.c:718);
+  -- the parenthetical is no part of any id.
+  local phrase = display:gsub("%s*%b()%s*$", "")
+  local words = {}
+  for word in phrase:lower():gmatch("[%a'%-]+") do
+    if PHRASE_STOP[word] then break end
+    words[#words + 1] = word
+  end
+  if #words > 1 and
+     (words[1] == "a" or words[1] == "an" or words[1] == "the") then
+    table.remove(words, 1)
+  end
+  -- Nothing usable (an all-punctuation short, or a name that is one stop word)
+  -- leaves the caller to send what it has rather than an empty command.
+  return words[#words]
+end
+
 -- current_target stays the DISPLAY name (see the comment on its declaration):
 -- forget_monster() strikes names out of room_monsters, which is seeded from
 -- Room.Contents display names, not from the keyword vocabulary. What actually
@@ -439,21 +515,22 @@ local function do_attack(monster)
   state = "fighting"
   current_target = monster
 
-  -- 1. A configured target keyword that matches this monster wins outright.
-  -- 2. Otherwise, in attack-anything mode with a non-empty target list, guess
+  -- 1. A vocabulary keyword that appears in this monster's name wins outright.
+  -- 2. Otherwise, in attack-anything mode with a non-empty vocabulary, guess
   --    the first entry -- legacy's "unparsed" case: the list is the area's
   --    monster vocabulary, so it usually resolves, but it IS a guess.
-  -- 3. Otherwise (targets-only with no match, or no target list at all),
-  --    fall back to the display name -- today's behavior.
-  local send_target = sw.match_target(monster)
+  -- 3. Otherwise (targets-only with no match, or no vocabulary at all), the
+  --    head noun of the display name. Never the display name itself: that is
+  --    the one string the mob is guaranteed not to answer to.
+  local send_target = match_vocabulary(monster)
   if not send_target then
-    local targets = (not config.targets_only) and sw.get_targets() or {}
+    local targets = (not config.targets_only) and vocabulary() or {}
     if #targets > 0 then
       send_target = targets[1]
       log("No target keyword matched \"" .. monster .. "\"; guessing \""
           .. send_target .. "\"")
     else
-      send_target = monster
+      send_target = head_noun(monster) or monster
     end
   end
 
@@ -562,7 +639,7 @@ function process_room()
     if config.targets_only then
       -- Only attack monsters in target list
       for _, monster in ipairs(monsters) do
-        if sw.is_valid_target(monster) then
+        if match_vocabulary(monster) then
           if config.auto_attack then
             do_attack(monster)
             return

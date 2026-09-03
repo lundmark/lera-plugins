@@ -109,6 +109,32 @@ local bogus = cs.restart({ level = 5, difficulty = "sideways" })
 check("an unknown difficulty falls back to risky",
   bogus[4] == "setsea 5 risky", tostring(bogus[4]))
 
+-- ---- target vocabulary -------------------------------------------------------
+-- An explore run has no speedwalk place, so the profile's list is the only
+-- vocabulary the stepper has: without it the attack falls back to the display
+-- name's head noun, and the boss ("a whirling monstrosity with ...") has no
+-- noun in common with the rest of the maze.
+--
+-- One word covers every mob in the sea. chaos_corr sets race "mutant" (:74)
+-- and alias "mutant" (:115); chaos_dead (:96), chaos_down (:72) and
+-- chaos_boss (:66) all carry the alias too, and obj/monster.c:538 id() matches
+-- name, any alias, or race. Ordered deliberately: entry 1 is what the stepper
+-- guesses when nothing in the list appears in a monster's short.
+check("the profile carries a target vocabulary",
+  type(cs.targets) == "table" and #cs.targets > 0,
+  type(cs.targets) == "table" and tostring(#cs.targets) or type(cs.targets))
+check("mutant is the first entry, so it is also the guess",
+  cs.targets[1] == "mutant", tostring(cs.targets[1]))
+check("every entry is a lowercase single word",
+  (function()
+     for _, t in ipairs(cs.targets or {}) do
+       if type(t) ~= "string" or t:find("%s") or t ~= t:lower() then
+         return false
+       end
+     end
+     return true
+   end)(), table.concat(cs.targets or {}, ","))
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
