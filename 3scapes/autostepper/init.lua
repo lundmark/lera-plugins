@@ -567,6 +567,24 @@ local function request_room_refresh()
   gmcp.send("Room.Refresh", { packages = { "Room.Info", "Room.Contents" } })
 end
 
+-- Attempt to resume a paused, retained explore run in place -- shared by
+-- bare "/step explore" and the "-."/"->" shorthands. Refuses (and changes
+-- nothing) unless explore.retained() says a map and profile are held AND
+-- explore.resume() itself agrees the room the player is standing in now is
+-- still inside the profile's area; either way the caller falls back to
+-- starting fresh. Logging lives here so both callers say "Resuming" rather
+-- than "Starting".
+local function try_resume_explore()
+  if not (explore and explore.retained and explore.retained() and explore.resume) then
+    return false
+  end
+  explore.attach(ri)
+  if not explore.resume() then return false end
+  local rooms = (explore.stats and explore.stats().rooms) or 0
+  log("Resuming explore (" .. rooms .. " rooms)", COLOR_RUN)
+  return true
+end
+
 -- The target vocabulary in force: a speedwalk place carries its own list, and
 -- an explore run -- which has no place -- uses the area profile's. Same shape
 -- and same meaning either way, so everything below reads one list and does not
@@ -1043,9 +1061,18 @@ local function dispatch(args)
       M.explore_reset()
     elseif arg == "leave" then
       M.explore_leave()
+    elseif arg ~= "" then
+      -- Naming an area is a statement of intent: always start fresh, even
+      -- with a paused run's map retained.
+      if M.explore_start(arg) then M.start(config.targets_only) end
     else
-      local area = (arg ~= "" and arg) or "chaossea"
-      if M.explore_start(area) then M.start(config.targets_only) end
+      -- No area named: resume a retained, in-area run when possible; only
+      -- fall back to starting fresh (in the default area) when it is not.
+      if try_resume_explore() then
+        M.start(config.targets_only)
+      elseif M.explore_start("chaossea") then
+        M.start(config.targets_only)
+      end
     end
   else
     log("Unknown subcommand: " .. sub, COLOR_WARN)
@@ -1165,6 +1192,9 @@ function M.on_unload()
   no_target_trigger_id = nil
 
   M.stop()
+  -- Unlike an ordinary stop, unloading the plugin is real teardown: there is
+  -- no later "-." to hand a retained map back to once this instance is gone.
+  if explore and explore.discard then explore.discard() end
   log("Unloaded", COLOR_RUN)
 end
 
@@ -1236,6 +1266,12 @@ function M.start(targets_only)
   end
 
   local exploring = explore and explore.active()
+  -- "-." / "->" call straight in here with no area named -- resuming a
+  -- retained, in-area run is what makes the plain gesture pick a paused
+  -- explore run back up instead of falling through to route mode.
+  if not exploring then
+    exploring = try_resume_explore()
+  end
   -- Fixed once, here, for the whole run -- see the run_mode declaration for
   -- why do_step() must not re-derive this from explore.active() per step.
   run_mode = exploring and "explore" or "route"
@@ -1304,11 +1340,13 @@ function M.stop()
   prompt_count = 0
   pending_prompts = 0
   current_target = nil
-  -- Explore mode does not outlive the stepper. It is dead reckoned: it believes
-  -- it knows where it is only because it emitted every move itself. Left active
-  -- across a stop, the next "-." resumes that reckoning -- and the combat that
-  -- goes with it -- wherever the player is now standing, which after walking
-  -- out of the area is anywhere at all.
+  -- explore.stop() PAUSES rather than discards: it is dead reckoned, so what
+  -- used to be guarded against here -- the next "-." resuming that reckoning,
+  -- and the combat that goes with it, wherever the player is now standing
+  -- after walking out of the area -- is now explore.resume()'s job, which
+  -- checks the CURRENT room against the area before letting a resume
+  -- through. Pausing keeps the map and profile so that check has something
+  -- to resume back into.
   if explore and explore.active() and explore.stop then explore.stop() end
 end
 
@@ -1348,8 +1386,14 @@ end
 -- this run's own next arrival -- in flight already, or the next step ahead --
 -- commits the refreshed exits via explore.on_arrival() as it always does.
 function M.explore_reset()
-  if not (explore and explore.active()) then
-    log("Explore mode is not active; nothing to reset", COLOR_WARN)
+  -- Works whether the run is active or merely retained (paused): resetting a
+  -- stopped run must not start the player walking, so mode.reset() itself
+  -- leaves `active` exactly as it found it -- this only checks that a map
+  -- exists to reset in the first place.
+  local has_map = explore and ((explore.active and explore.active())
+    or (explore.retained and explore.retained()))
+  if not has_map then
+    log("No explore map to reset", COLOR_WARN)
     return false
   end
   explore.reset("manual reset")
@@ -1407,6 +1451,11 @@ function M.status()
         .. "at " .. s.x .. "," .. s.y .. "," .. s.z
         .. (s.layer and (" (layer " .. s.layer .. ")") or ""))
     log("  Desyncs: " .. tostring(explore.desyncs and explore.desyncs() or 0))
+  elseif explore and explore.retained and explore.retained() then
+    local s = explore.stats()
+    log("  Explore: paused, " .. s.rooms .. " rooms retained, "
+        .. "at " .. s.x .. "," .. s.y .. "," .. s.z
+        .. (s.layer and (" (layer " .. s.layer .. ")") or ""))
   end
 
   if sw then

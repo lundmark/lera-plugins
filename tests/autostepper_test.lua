@@ -909,7 +909,16 @@ local explore_state = { active = false, arrivals = 0, coord = 0, frames = 0,
                         stops = 0, resets = 0, reset_reason = nil,
                         leaves = 0, leave_result = true, stop_reason = nil,
                         leaving = false, profile = nil,
-                        start_policy = nil, attached = nil }
+                        start_policy = nil, attached = nil, starts = 0,
+                        -- Task PR (stop pauses / resume): retained, resume
+                        -- and discard are the state-split's dispatch-level
+                        -- seams. resume_result controls what a resume
+                        -- attempt reports; resume_calls/discards count how
+                        -- often each was actually invoked, and rooms feeds
+                        -- stats() so the "Resuming explore (N rooms)" text
+                        -- can be pinned.
+                        retained = false, resume_result = false,
+                        resume_calls = 0, discards = 0, rooms = 1 }
 as.debug_set_explore({
   active = function() return explore_state.active end,
   next_step = function()
@@ -941,11 +950,33 @@ as.debug_set_explore({
     explore_state.start_prof = prof
     explore_state.start_policy = pol
     explore_state.active = true
+    explore_state.starts = explore_state.starts + 1
     return true
   end,
   stop = function()
     explore_state.active = false
     explore_state.stops = explore_state.stops + 1
+  end,
+  -- Real teardown -- distinct from stop() (pause). init.lua's M.on_unload
+  -- must reach this, not stop().
+  discard = function()
+    explore_state.active = false
+    explore_state.retained = false
+    explore_state.discards = explore_state.discards + 1
+  end,
+  -- Paused (stopped) with a map+profile retained -- the wiring under test
+  -- reads this to decide whether to attempt a resume at all.
+  retained = function() return explore_state.retained end,
+  -- The real mode.lua's own in_area/current-room check is pinned in
+  -- autostepper_explore_test.lua; here resume_result stands in for its
+  -- verdict so this file can pin only that init.lua calls it and reacts to
+  -- its answer, both ways.
+  resume = function()
+    explore_state.resume_calls = explore_state.resume_calls + 1
+    if explore_state.resume_result then
+      explore_state.active = true
+    end
+    return explore_state.resume_result
   end,
   reset = function(reason)
     explore_state.resets = explore_state.resets + 1
@@ -968,7 +999,7 @@ as.debug_set_explore({
   -- written before the profile-vocabulary tier expects.
   profile = function() return explore_state.profile end,
   stats = function()
-    return { rooms = 1, x = explore_state.coord, y = 0, z = 0,
+    return { rooms = explore_state.rooms, x = explore_state.coord, y = 0, z = 0,
              policy = explore_state.policy or "clear" }
   end,
 })
@@ -1217,6 +1248,143 @@ check("'/step explore reset' with explore inactive does not call mode.reset",
   explore_state.resets == 0, tostring(explore_state.resets))
 check("'/step explore reset' with explore inactive does not ask the MUD",
   #gmcp_sent == 0, tostring(#gmcp_sent))
+check("'/step explore reset' with nothing retained names the new model, not the old 'not active' wording",
+  has_line(inactive_lines, "No explore map to reset"), table.concat(inactive_lines, "|"))
+
+-- ---- pause/resume (Task PR): stop pauses, resume picks a retained run back
+-- up, discard is real teardown -------------------------------------------------
+-- Wiring only: mode.lua's own retained()/resume()/discard() semantics -- the
+-- in_area check, current room vs. stale last_name -- are pinned in
+-- autostepper_explore_test.lua. This only pins that init.lua asks the right
+-- question at the right time (retained() before resume(), never after an
+-- explicitly named area) and reacts correctly to the answer.
+
+-- "/step explore" reset works on a merely-retained (paused) map, not just an
+-- active one, and leaves the run stopped -- resetting a stopped run must not
+-- start the player walking.
+quiet(as.stop)
+explore_state.active = false
+explore_state.retained = true
+explore_state.resets = 0
+gmcp_sent = {}
+capture(step_cmd.handler, "explore reset")
+check("'/step explore reset' works on a retained (paused) map",
+  explore_state.resets == 1, tostring(explore_state.resets))
+check("'/step explore reset' on a paused map still asks the MUD",
+  #gmcp_sent == 1, tostring(#gmcp_sent))
+check("'/step explore reset' on a paused map leaves the run stopped",
+  as.is_running() == false, tostring(as.is_running()))
+explore_state.retained = false
+
+-- Bare "/step explore" resumes a retained, in-area run instead of starting
+-- fresh, and says so with the room count -- the owner's complaint was
+-- exactly that this used to be invisible.
+explore_state.active = false
+explore_state.retained = true
+explore_state.resume_result = true
+explore_state.resume_calls = 0
+explore_state.starts = 0
+explore_state.rooms = 7
+local bare_resume_lines = capture(step_cmd.handler, "explore")
+check("'/step explore' with a retained, in-area run resumes it",
+  explore_state.resume_calls == 1, tostring(explore_state.resume_calls))
+check("'/step explore' resuming never calls mode.start -- rooms mapped is not reset",
+  explore_state.starts == 0, tostring(explore_state.starts))
+check("'/step explore' resuming says so, with the room count",
+  has_line(bare_resume_lines, "Resuming explore (7 rooms)"),
+  table.concat(bare_resume_lines, "|"))
+check("a resumed explore run is stepping", as.is_running() == true,
+  tostring(as.is_running()))
+quiet(as.stop)
+
+-- Bare "/step explore" falls back to starting fresh when nothing is
+-- retained -- it never even asks to resume.
+explore_state.active = false
+explore_state.retained = false
+explore_state.resume_calls = 0
+explore_state.starts = 0
+quiet(function() step_cmd.handler("explore") end)
+check("'/step explore' with nothing retained never attempts a resume",
+  explore_state.resume_calls == 0, tostring(explore_state.resume_calls))
+check("'/step explore' with nothing retained starts fresh instead",
+  explore_state.starts == 1, tostring(explore_state.starts))
+quiet(as.stop)
+
+-- Naming an area explicitly is a statement of intent: "/step explore <area>"
+-- always starts fresh, even with a resumable run retained.
+explore_state.active = false
+explore_state.retained = true
+explore_state.resume_result = true
+explore_state.resume_calls = 0
+explore_state.starts = 0
+quiet(function() step_cmd.handler("explore chaossea") end)
+check("'/step explore <area>' never attempts a resume, even when one would succeed",
+  explore_state.resume_calls == 0, tostring(explore_state.resume_calls))
+check("'/step explore <area>' always starts fresh",
+  explore_state.starts == 1, tostring(explore_state.starts))
+quiet(as.stop)
+explore_state.retained = false
+
+-- "-."/"->" (as.start) get the same resume-if-retained treatment as bare
+-- "/step explore": the owner's own words were "I should be able to resume
+-- stepping" for the plain gesture, not just the slash command.
+explore_state.active = false
+explore_state.retained = true
+explore_state.resume_result = true
+explore_state.resume_calls = 0
+explore_state.starts = 0
+explore_state.rooms = 4
+local dash_resume_lines = capture(function() as.start(false) end)
+check("'-.' resumes a retained, in-area run instead of falling to route mode",
+  explore_state.resume_calls == 1, tostring(explore_state.resume_calls))
+check("'-.' resuming says so",
+  has_line(dash_resume_lines, "Resuming explore (4 rooms)"),
+  table.concat(dash_resume_lines, "|"))
+check("'-.' resuming is stepping, not asking for a speedwalk place",
+  as.is_running() == true, tostring(as.is_running()))
+quiet(as.stop)
+
+-- With nothing retained, "-." still falls through to an ordinary route run.
+explore_state.active = false
+explore_state.retained = false
+explore_state.resume_calls = 0
+sw_steps = { { raw = "n", commands = { "n" } } }
+sw_taken = {}
+arrive(980, "A muddy field", {}, {})
+sent = {}
+quiet(function() as.start(false) end)
+arrival_prompt()
+check("'-.' with nothing retained still starts an ordinary route run",
+  last_sent() == "n", table.concat(sent, "|"))
+check("'-.' with nothing retained never even asks to resume",
+  explore_state.resume_calls == 0, tostring(explore_state.resume_calls))
+quiet(as.stop)
+
+-- "/step status" shows a paused run with its map retained -- distinct from
+-- no explore state at all, which used to look identical.
+explore_state.active = false
+explore_state.retained = true
+explore_state.rooms = 5
+local status_lines = capture(as.status)
+check("'/step status' reports a paused run with its map retained",
+  has_line(status_lines, "paused") and has_line(status_lines, "5 rooms"),
+  table.concat(status_lines, "|"))
+explore_state.retained = false
+local status_lines2 = capture(as.status)
+check("'/step status' with nothing retained shows no paused-explore line",
+  not has_line(status_lines2, "paused"), table.concat(status_lines2, "|"))
+
+-- M.on_unload is real teardown, not a pause: unloading the plugin must reach
+-- explore.discard(), not merely explore.stop() -- there is no later "-." to
+-- hand a retained map back to once the instance is gone.
+explore_state.active = true
+explore_state.discards = 0
+explore_state.stops = 0
+quiet(as.on_unload)
+check("on_unload discards the explore run rather than merely pausing it",
+  explore_state.discards == 1, tostring(explore_state.discards))
+quiet(as.on_load)
+explore_state.active = false
 
 -- ---- /step explore leave (Item 4) --------------------------------------------
 -- M.explore_leave is a thin wrapper: the real routing/precedence/one-hop
@@ -1284,10 +1452,10 @@ explore_state.leaving = false
 quiet(as.stop)
 
 -- ---- stopping the stepper stops the explorer ---------------------------------
--- Explore mode is dead reckoned: it believes it knows where it is only because
--- it emitted every move itself. Left active across a stop, the next "-."
--- resumes that reckoning -- and the combat that goes with it -- wherever the
--- player is now standing, which after walking out of the area is anywhere.
+-- explore.stop() now PAUSES rather than discards (see the pause/resume
+-- section above): the stepper stopping must still deactivate the explorer,
+-- since a run that thinks it is still active would keep taking steps against
+-- a map nobody asked it to continue.
 explore_state.active = true
 quiet(as.stop)
 check("stopping the stepper deactivates explore mode",
