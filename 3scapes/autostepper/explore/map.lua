@@ -62,8 +62,22 @@ local function key(x, y, z)
   return x .. "," .. y .. "," .. z
 end
 
-function M.new()
-  return setmetatable({ rooms = {}, n = 0, pos = { 0, 0, 0 } }, Map)
+-- opts.vertical -- per-area override of the z component of 'u'/'d', e.g.
+-- { d = 1, u = -1 } for an area whose level-exit pair inverts the ordinary
+-- lattice convention (see areas/chaossea.lua). The delta table this builds is
+-- per-map, never module-level: two maps -- one per area profile in play --
+-- must not be able to see or clobber each other's convention.
+function M.new(opts)
+  opts = opts or {}
+  local delta = {}
+  for dir, v in pairs(DELTA) do delta[dir] = v end
+  if opts.vertical then
+    for dir, z in pairs(opts.vertical) do
+      local base = DELTA[dir] or { 0, 0, 0 }
+      delta[dir] = { base[1], base[2], z }
+    end
+  end
+  return setmetatable({ rooms = {}, n = 0, pos = { 0, 0, 0 }, delta = delta }, Map)
 end
 
 function Map:position()
@@ -104,14 +118,14 @@ function Map:record(exit_list)
     -- Anything without a delta is not walkable in the lattice: 'out' and
     -- 'enter' leave the area, and walking one would take the explorer out of
     -- the map it was asked to build.
-    if DELTA[dir] then set[dir] = true end
+    if self.delta[dir] then set[dir] = true end
   end
   room.exits = set
   return room
 end
 
 function Map:move(dir)
-  local d = DELTA[dir]
+  local d = self.delta[dir]
   if not d then return false end
   self.pos = { self.pos[1] + d[1], self.pos[2] + d[2], self.pos[3] + d[3] }
   return true
@@ -123,7 +137,7 @@ function Map:frontier_dirs(room)
   if not room then return out end
   for _, dir in ipairs(DIR_ORDER) do
     if room.exits[dir] then
-      local d = DELTA[dir]
+      local d = self.delta[dir]
       if not self:visited(room.x + d[1], room.y + d[2], room.z + d[3]) then
         out[#out + 1] = dir
       end
@@ -203,7 +217,7 @@ function Map:search_frontier(opts)
 
     for _, dir in ipairs(DIR_ORDER) do
       if room.exits[dir] then
-        local d = DELTA[dir]
+        local d = self.delta[dir]
         local nk = key(room.x + d[1], room.y + d[2], room.z + d[3])
         if self.rooms[nk] and dist[nk] == nil then
           dist[nk] = d0 + 1
@@ -273,7 +287,7 @@ function Map:path_to(x, y, z)
 
     for _, dir in ipairs(DIR_ORDER) do
       if room.exits[dir] then
-        local d = DELTA[dir]
+        local d = self.delta[dir]
         local nk = key(room.x + d[1], room.y + d[2], room.z + d[3])
         if self.rooms[nk] and dist[nk] == nil then
           dist[nk] = d0 + 1

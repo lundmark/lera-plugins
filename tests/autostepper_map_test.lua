@@ -390,6 +390,115 @@ local pt_second = pt:path_to(1, 2, 0)
 check("a second path_to call from a different start is not corrupted by the first",
   table.concat(pt_second or {}, "") == "nn", table.concat(pt_second or {}, ","))
 
+-- ---- per-map vertical convention (Task V) ------------------------------------
+-- The Chaos Sea capture (sea.log) proved that 'd' increases z there instead of
+-- decreasing it -- the ordinary lattice convention DELTA declares is not
+-- universal. M.new(opts.vertical) lets an area profile override the z
+-- component of 'u'/'d' per map, so a vertical exit predicts the coordinate the
+-- area actually generates instead of a permanent phantom frontier.
+
+-- M.new with no opts, and M.new({}), must both keep today's ordinary
+-- convention: an area that declares nothing is unaffected.
+local ordinary = map_mod.new()
+check("a map with no vertical option moves 'd' the ordinary way (z-1)",
+  (function()
+     ordinary:move("d")
+     local _, _, oz = ordinary:position()
+     return oz == -1
+   end)())
+local ordinary_empty = map_mod.new({})
+check("a map with an empty opts table also keeps the ordinary convention",
+  (function()
+     ordinary_empty:move("d")
+     local _, _, oz = ordinary_empty:position()
+     return oz == -1
+   end)())
+
+-- Property: move() follows the declared direction. Sea of Chaos convention:
+-- 'd' is z+1, 'u' is z-1.
+local inverted = map_mod.new({ vertical = { d = 1, u = -1 } })
+inverted:move("d")
+local ix, iy, iz = inverted:position()
+check("move follows the declared vertical convention ('d' is z+1)",
+  ix == 0 and iy == 0 and iz == 1, ix .. "," .. iy .. "," .. iz)
+inverted:move("u")
+ix, iy, iz = inverted:position()
+check("move follows the declared vertical convention ('u' is z-1)",
+  ix == 0 and iy == 0 and iz == 0, ix .. "," .. iy .. "," .. iz)
+
+-- Property: with vertical declared, 'd' from z=1 predicts z=2 -- so a vertical
+-- exit into an already-visited room is NOT a frontier. This is the owner's
+-- capture in miniature: Layer two (z=1) and Layer three (z=2), joined by d/u,
+-- both mapped.
+local capture = map_mod.new({ vertical = { d = 1, u = -1 } })
+capture:set_position(8, 6, 1)
+capture:record({ "d" })
+capture:set_position(8, 6, 2)
+capture:record({ "u" })
+capture:set_position(8, 6, 1)
+local capture_frontier = capture:frontier_dirs(capture:room(8, 6, 1))
+check("a vertical exit to a visited room is not a frontier once vertical is declared",
+  #capture_frontier == 0, table.concat(capture_frontier, ","))
+-- Reverse view: from the deeper room, 'u' back to the shallower one is
+-- likewise not a frontier.
+capture:set_position(8, 6, 2)
+local capture_frontier2 = capture:frontier_dirs(capture:room(8, 6, 2))
+check("the reverse vertical exit is not a frontier either",
+  #capture_frontier2 == 0, table.concat(capture_frontier2, ","))
+
+-- Ignoring opts.vertical in M.new is the mutant for the two properties above:
+-- with the ordinary convention, 'd' from z=1 predicts z=0 (never recorded),
+-- so it would stay a permanent frontier and frontier_dirs would return {"d"}
+-- instead of {}. Confirmed by hand against the ordinary map built earlier:
+check("ordinary convention: a fresh map's 'd' from a recorded room IS still a frontier",
+  (function()
+     local plain = map_mod.new()
+     plain:set_position(8, 6, 1)
+     plain:record({ "d" })
+     local f = plain:frontier_dirs(plain:room(8, 6, 1))
+     return #f == 1 and f[1] == "d"
+   end)())
+
+-- Property: search_frontier (and therefore next_frontier/the traversal it
+-- shares with path_to) crosses the declared vertical edge to reach a frontier
+-- recorded on the OTHER side of it. A(8,6,1) --d--> B(8,6,2), and B has an
+-- unexplored 'e'. If only frontier_dirs honoured the declared convention (and
+-- the BFS traversal loop that discovers B still used the ordinary DELTA), the
+-- BFS would compute A's 'd' neighbour as (8,6,0) -- unrecorded -- so it would
+-- never enqueue B at all, and the frontier at B's 'e' would never be found.
+local cross = map_mod.new({ vertical = { d = 1, u = -1 } })
+cross:set_position(8, 6, 1)
+cross:record({ "d" })
+cross:set_position(8, 6, 2)
+cross:record({ "u", "e" })
+cross:set_position(8, 6, 1)
+local cross_path = cross:search_frontier({})
+check("search_frontier crosses the declared vertical edge to a farther frontier",
+  table.concat(cross_path or {}, "") == "de", table.concat(cross_path or {}, ","))
+
+-- Property: two maps with different vertical conventions do not share state.
+-- Built in an order chosen to catch a module-level (rather than per-instance)
+-- delta table: the SECOND map's construction must not retroactively change
+-- the FIRST map's already-built delta.
+local map_a = map_mod.new({ vertical = { d = 1, u = -1 } })
+local map_b = map_mod.new()  -- ordinary convention, built after map_a
+map_a:move("d")
+map_b:move("d")
+local ax, ay, az = map_a:position()
+local bx, by, bz = map_b:position()
+check("two maps built with different vertical options move independently",
+  az == 1 and bz == -1, "a=" .. az .. " b=" .. bz)
+-- And the reverse construction order, so this cannot pass by accident of
+-- which map happened to be built first.
+local map_c = map_mod.new()  -- ordinary convention, built first this time
+local map_d = map_mod.new({ vertical = { d = 1, u = -1 } })
+map_c:move("d")
+map_d:move("d")
+local cx, cy, cz = map_c:position()
+local dx, dy, dz = map_d:position()
+check("construction order does not matter -- neither map leaks into the other",
+  cz == -1 and dz == 1, "c=" .. cz .. " d=" .. dz)
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
