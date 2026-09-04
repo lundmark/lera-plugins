@@ -590,12 +590,27 @@ end
 -- and same meaning either way, so everything below reads one list and does not
 -- care which supplied it.
 --
--- The profile is asked FIRST, and the order is load-bearing. M.start skips the
--- place/load_steps path entirely for an explore run, so speedwalk's target
--- list is whatever an earlier route run happened to leave behind -- a stale
--- "gremlin" would otherwise be sent at every mob in the sea, and it is the
--- profile that describes the ground actually being walked.
+-- The profile is asked FIRST, and the order is load-bearing -- but only
+-- WITHIN an explore run. M.start skips the place/load_steps path entirely for
+-- an explore run, so speedwalk's target list is whatever an earlier route run
+-- happened to leave behind -- a stale "gremlin" would otherwise be sent at
+-- every mob in the sea, and it is the profile that describes the ground
+-- actually being walked.
+--
+-- The other half, now that M.stop() pauses instead of discarding: a paused
+-- explore run's profile is retained, so it must not reach a route run at
+-- all, or the sequence "explore the sea, -!, .someplace, -." would run the
+-- route with the sea's vocabulary -- the same stale-target defect the
+-- paragraph above exists to prevent, just pointing the other way. Gated on
+-- run_mode, not explore.active(): run_mode is fixed once per run in M.start
+-- for exactly this reason (see its declaration), and re-deriving "is this an
+-- explore run" from explore.active() here would reopen the same
+-- per-step-drift hole that fixing run_mode was for.
 local function vocabulary()
+  if run_mode ~= "explore" then
+    local place = (sw and sw.get_targets and sw.get_targets()) or {}
+    return place
+  end
   -- Guarded rather than assumed: the explore stand-in in the unit tests is a
   -- partial table, and an area profile need not declare targets at all.
   local prof = explore and explore.profile and explore.profile()

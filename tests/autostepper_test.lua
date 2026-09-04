@@ -1552,6 +1552,37 @@ check("targets-only mode attacks a monster the profile vocabulary matches",
 quiet(as.stop)
 explore_state.profile = nil
 
+-- ---- fix round 1: a paused explore profile must not leak into a route run --
+-- Task PR follow-up (regression the owner caught): M.stop() now pauses
+-- (keeps explore.profile()) instead of discarding, so vocabulary() must gate
+-- the profile branch on run_mode, not merely on the profile being non-nil.
+-- Reproduces the owner's own sequence -- explore the sea, stop (pause, not
+-- discard), start a route elsewhere with its own targets, attack -- rather
+-- than asserting on vocabulary() in isolation, so it holds against the call
+-- path actually walked.
+run_timers()
+explore_state.active = true
+explore_state.profile = sea_profile
+explore_steps = { "s" }
+explore_taken = {}
+arrive(424, "Layer four of the Sea of Chaos", {}, {})
+quiet(function() as.start(false) end)
+quiet(as.stop)
+
+explore_state.active = false
+sw_target_list = { "orc" }
+sw_steps = { { raw = "n", commands = { "n" } } }
+sw_taken = {}
+arrive(425, "A dusty crossroads", { "a hulking orc" }, {})
+sent = {}
+quiet(function() as.start(false) end)
+arrival_prompt()
+check("a route run started after a paused explore run uses the route's targets, not the retained area's",
+  last_sent() == "kill orc", table.concat(sent, "|"))
+sw_target_list = {}
+quiet(as.stop)
+explore_state.profile = nil
+
 as.debug_set_explore(nil)
 
 -- ---- Char.Combat drives the combat cycle -------------------------------------
