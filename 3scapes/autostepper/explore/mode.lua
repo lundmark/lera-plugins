@@ -83,21 +83,15 @@ local function filter_exits(exits)
   return out
 end
 
--- The profile this run was started with, or nil when no run is active. The
--- stepper reads it for the area's target vocabulary; tying it to `active`
--- rather than caching a copy at start means it goes away exactly when the run
--- does, with no second lifetime to keep in step.
-function M.profile()
-  if not active then return nil end
-  return profile
-end
-
 function M.start(prof, initial_policy)
   if not prof then return false end
   profile = prof
   -- Always a fresh map. A re-entered area is a NEW maze instance -- the
-  -- mudlib generates one per run -- so anything retained from the last run
-  -- would be contradicted topology from the first frame onward.
+  -- mudlib generates one per run -- so anything retained from a PRIOR run
+  -- would be contradicted topology from the first frame onward. That is what
+  -- keeps an explicitly named "/step explore <area>" fresh even when a
+  -- paused run's map is retained. M.resume() is the separate path that
+  -- deliberately keeps the map instead of calling this.
   map = map_mod.new()
   policy = initial_policy or prof.default_policy or "clear"
   active = true
@@ -124,7 +118,21 @@ function M.start(prof, initial_policy)
   return true
 end
 
+-- Pause: a half-emitted move and a partly-walked leave route must not
+-- survive it, since the player may move by hand before resuming -- but the
+-- map, profile and last-known room are kept, so M.resume() can pick the run
+-- back up without remapping from scratch. M.discard() is the real teardown.
 function M.stop()
+  active = false
+  pending_dir = nil
+  pending_leave_path = nil
+end
+
+-- The real teardown: nils the map and profile along with everything else, so
+-- nothing is left for M.resume() to pick up. Called from M.on_unload and
+-- from on_arrival when in_area reports the player has left the area -- the
+-- one place a retained map would actually be wrong to hand back later.
+function M.discard()
   active = false
   profile = nil
   map = nil
@@ -134,11 +142,42 @@ function M.stop()
   last_name = nil
 end
 
--- Reset the map and start over from a fresh origin, keeping the mode active.
+-- True when a paused run's map and profile are held (M.stop() left them
+-- behind) but no run is currently active -- distinguishes "paused with a
+-- map" from "never started" for callers like /step status and /step explore.
+function M.retained()
+  return (not active) and map ~= nil and profile ~= nil
+end
+
+-- Resume a paused run in place. Refuses (and changes nothing) unless a map
+-- and profile are retained, and unless the room the player is standing in
+-- RIGHT NOW -- read fresh from roominfo, never the retained last_name, which
+-- is where they were when the run stopped -- is still within the profile's
+-- area. That check is the whole point: it is what makes resuming safe where
+-- the old "stop discards everything" guard used to be the only defense.
+-- Only sets `active`; the caller re-asks the MUD (the same Room.Refresh a
+-- start sends) so the reckoning re-anchors on the current room rather than
+-- trusting where it left off.
+function M.resume()
+  if active or not map or not profile then return false end
+  if not profile.in_area then return false end
+  local info = ri and ri.info and ri.info()
+  local current = type(info) == "table" and info.room or nil
+  if not current or not profile.in_area(current) then return false end
+  -- Only sets `active`. pending_dir and pending_leave_path are M.stop()'s
+  -- job -- not repeated here -- so a stale one surviving a stop stays
+  -- observable through a resume rather than being silently mopped up here.
+  active = true
+  return true
+end
+
+-- Reset the map and start over from a fresh origin. Works whether the run is
+-- active or merely retained (paused) -- and leaves that state exactly as it
+-- found it, since resetting a stopped run must not start the player walking.
 -- A desynced map is worse than no map: every later decision is made against
 -- coordinates that do not correspond to rooms.
 function M.reset(reason)
-  if not active then return end
+  if not map then return end
   map = map_mod.new()
   pending_dir = nil
   -- A pending leave path names directions in the OLD map's coordinate frame;
@@ -162,12 +201,14 @@ end
 function M.on_arrival()
   if not active then return end
 
-  -- Left the area: stop rather than dead-reckon the outside world into a map
-  -- of somewhere else. There is no location event to hang this on -- the room
+  -- Left the area: discard rather than dead-reckon the outside world into a
+  -- map of somewhere else, and rather than merely pausing -- a map of an
+  -- area the player is no longer in is not something a later resume should
+  -- be handed back. There is no location event to hang this on -- the room
   -- name is the only signal the protocol carries in an area with no room ids.
   if profile and profile.in_area and last_name and not profile.in_area(last_name) then
     log("explore: left " .. profile.name .. ", explore mode off", "run")
-    M.stop()
+    M.discard()
     return
   end
 
@@ -311,7 +352,7 @@ function M.next_step()
 end
 
 function M.stats()
-  if not active or not map then
+  if not map then
     return { rooms = 0, x = 0, y = 0, z = 0, layer = nil, policy = policy }
   end
   local x, y, z = map:position()
@@ -333,7 +374,13 @@ function M.debug_set_position(x, y, z)
   if map then map:set_position(x, y, z) end
 end
 
--- Exposed for the area profile and the farm loop.
+-- The profile the current or paused run holds, or nil once neither a run nor
+-- a retained map exists. Lifetime follows the MAP, not `active`: the stepper
+-- reads this for the area's target vocabulary, and a paused run inside the
+-- area still has to answer with its own targets rather than nil -- falling
+-- through to vocabulary()'s speedwalk fallback would send a stale place's
+-- targets at a mob in an area they have nothing to do with. M.discard() is
+-- what clears it; M.stop() (pause) deliberately does not.
 function M.profile()
   return profile
 end

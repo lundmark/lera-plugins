@@ -693,6 +693,146 @@ check("reset discards a pending leave path",
   after_reset_step == nil, tostring(after_reset_step))
 mode.stop()
 
+-- ---- stop pauses, discard tears down, resume picks a paused run back up ----
+-- Task PR: stopping used to throw the map away outright (M.stop nilled map
+-- and profile), so there was no way to pause a run and resume it. M.stop()
+-- now PAUSES -- keeps map, profile, last_exits, last_name; clears active,
+-- pending_dir and pending_leave_path -- and M.discard() is the real teardown.
+quiet(function() mode.start(profile, "clear") end)
+frame(CAPTURE[1])
+quiet(mode.on_arrival)
+step = mode.next_step()
+frame(CAPTURE[2])
+quiet(mode.on_arrival)
+check("two rooms are mapped before stopping", mode.stats().rooms == 2,
+  tostring(mode.stats().rooms))
+
+mode.stop()
+check("-! keeps the map: rooms mapped is unchanged after a stop",
+  mode.stats().rooms == 2, tostring(mode.stats().rooms))
+check("stop leaves a retained map and profile", mode.retained() == true)
+check("a paused run still reports its area profile, not nil",
+  mode.profile() == profile, tostring(mode.profile()))
+check("next_step is nil while paused", mode.next_step() == nil)
+
+-- resume() must read the CURRENT room from roominfo, not the retained
+-- last_name: the run paused while last_name was a sea room (the frame
+-- above), but the player has since walked out by hand.
+ri_info = { room = "A dusty crossroads", room_id = nil, exits = {} }
+check("resume refuses when the CURRENT room is outside the area",
+  mode.resume() == false)
+check("a refused resume leaves the mode inactive", mode.active() == false)
+check("a refused resume keeps the map retained for a later try",
+  mode.retained() == true and mode.stats().rooms == 2,
+  tostring(mode.stats().rooms))
+
+-- Walk back inside by hand (no frame is delivered -- the run is paused, so
+-- nothing would record one) and resume again.
+ri_info = { room = "Layer one of the Sea of Chaos", room_id = nil, exits = {} }
+check("resume succeeds once the current room is back in the area",
+  mode.resume() == true)
+check("resume reactivates the mode", mode.active() == true)
+check("resume does not reset the map", mode.stats().rooms == 2,
+  tostring(mode.stats().rooms))
+mode.stop()
+
+-- The opposite direction of the same property, so a mutant that reads
+-- in_area(last_name) instead of the current room cannot pass by accident:
+-- stopped with last_name OUTSIDE the area, but currently standing back
+-- inside it. on_frame() only requires the mode to be active, not in_area, so
+-- last_name can be set to a non-sea room without on_arrival ever running (no
+-- on_arrival call here means the leave-area gate never fires and the run
+-- stays active until the explicit stop below).
+quiet(function() mode.start(profile, "clear") end)
+frame({ name = "A dusty crossroads", exits = { "n" } })
+mode.stop()
+ri_info = { room = "Layer one of the Sea of Chaos", room_id = nil, exits = {} }
+check("resume reads the CURRENT room, not the stale last_name",
+  mode.resume() == true)
+mode.stop()
+
+-- resume refuses outright once nothing is retained.
+mode.discard()
+check("discard clears the map", mode.stats().rooms == 0,
+  tostring(mode.stats().rooms))
+check("a discarded run reports no profile", mode.profile() == nil,
+  tostring(mode.profile()))
+check("discard clears retained()", mode.retained() == false)
+check("resume refuses with nothing retained", mode.resume() == false)
+
+-- resume refuses while a run is already active -- nothing to resume.
+quiet(function() mode.start(profile, "clear") end)
+frame(CAPTURE[1])
+quiet(mode.on_arrival)
+check("resume refuses while already active", mode.resume() == false)
+mode.stop()
+mode.discard()
+
+-- ---- a pending leave path does not survive a stop ---------------------------
+-- M.resume() deliberately does not re-clear pending_dir/pending_leave_path --
+-- that is M.stop()'s job -- so if a stop ever left one behind, a resume would
+-- hand it straight back to next_step() instead of falling through to
+-- frontier search.
+quiet(function() mode.start(hop_profile, "clear") end)
+frame({ name = "Room A", exits = { "e" } })
+quiet(mode.on_arrival)
+step = mode.next_step()
+frame({ name = "Room B", exits = { "w", "n" } })
+quiet(mode.on_arrival)
+check("leave arms a pending path before the stop", mode.leave() == true)
+mode.stop()
+check("resume succeeds back into the same room", mode.resume() == true)
+local after_stop_step = mode.next_step()
+check("a pending leave path does not survive a stop -- frontier search runs instead",
+  after_stop_step and after_stop_step.raw == "n",
+  after_stop_step and after_stop_step.raw)
+mode.stop()
+mode.discard()
+
+-- ---- reset works while paused, and leaves the run stopped -------------------
+quiet(function() mode.start(profile, "clear") end)
+frame(CAPTURE[1])
+quiet(mode.on_arrival)
+step = mode.next_step()
+frame(CAPTURE[2])
+quiet(mode.on_arrival)
+check("two rooms are mapped before a paused reset", mode.stats().rooms == 2,
+  tostring(mode.stats().rooms))
+mode.stop()
+quiet(function() mode.reset("paused reset") end)
+check("reset works on a paused (retained) map", mode.stats().rooms == 0,
+  tostring(mode.stats().rooms))
+check("reset while paused leaves the run stopped, not started",
+  mode.active() == false)
+mode.discard()
+
+-- reset while running leaves the run running.
+quiet(function() mode.start(profile, "clear") end)
+frame(CAPTURE[1])
+quiet(mode.on_arrival)
+check("one room is mapped before a running reset", mode.stats().rooms == 1,
+  tostring(mode.stats().rooms))
+quiet(function() mode.reset("running reset") end)
+check("reset while running leaves the run active", mode.active() == true)
+check("reset while running still gives a fresh map", mode.stats().rooms == 0,
+  tostring(mode.stats().rooms))
+mode.stop()
+mode.discard()
+
+-- ---- an arrival outside the area discards, not merely deactivates ----------
+-- Task 12's in_area check was already covered for deactivation; this pins
+-- that it is a full teardown now, so a later resume has nothing to work with.
+quiet(function() mode.start(profile, "clear") end)
+frame(CAPTURE[1])
+quiet(mode.on_arrival)
+step = mode.next_step()
+frame({ num = 412, area = "Town", name = "A dusty crossroads", exits = { "n" } })
+quiet(mode.on_arrival)
+check("leaving the area deactivates the mode", mode.active() == false)
+check("an arrival outside the area discards the map, not just pauses it",
+  mode.retained() == false, tostring(mode.retained()))
+check("a later resume finds nothing to resume", mode.resume() == false)
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
