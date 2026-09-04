@@ -92,7 +92,7 @@ function M.start(prof, initial_policy)
   -- keeps an explicitly named "/step explore <area>" fresh even when a
   -- paused run's map is retained. M.resume() is the separate path that
   -- deliberately keeps the map instead of calling this.
-  map = map_mod.new()
+  map = map_mod.new({ vertical = prof and prof.vertical })
   policy = initial_policy or prof.default_policy or "clear"
   active = true
   pending_dir = nil
@@ -178,7 +178,7 @@ end
 -- coordinates that do not correspond to rooms.
 function M.reset(reason)
   if not map then return end
-  map = map_mod.new()
+  map = map_mod.new({ vertical = profile and profile.vertical })
   pending_dir = nil
   -- A pending leave path names directions in the OLD map's coordinate frame;
   -- left set across a reset, next_step() would keep walking it against a map
@@ -230,6 +230,20 @@ function M.on_arrival()
     local layer = profile.layer_of(last_name)
     if type(layer) == "number" and layer ~= z then
       layer_corrections = layer_corrections + 1
+      -- With the area's vertical convention declared (see areas/chaossea.lua),
+      -- this should now never fire -- the reckoned z and the name's layer
+      -- should already agree. It stays as the safety net, but it used to fire
+      -- on EVERY vertical move, silently, which is how the inverted-delta bug
+      -- survived: nobody noticed because nothing said so. So it speaks now --
+      -- every correction reaches the session capture, and the first one in a
+      -- run also reaches the screen, since an unconditional print would be the
+      -- same flood that hid the original bug.
+      local msg = "explore: layer correction -- reckoned z=" .. z .. ", "
+        .. tostring(last_name) .. " is layer " .. layer
+      -- Guarded: mode.lua runs under plain LuaJIT in the unit tests, where
+      -- there is no lera table at all.
+      if lera and lera.log then lera.log(msg) end
+      if layer_corrections == 1 then log(msg, "warn") end
       map:set_position(x, y, layer)
       z = layer
     end

@@ -23,6 +23,12 @@ M.dive_dirs = { "d" }
 M.defer_dirs = { "u" }
 M.default_policy = "clear"
 
+-- The Sea of Chaos inverts the ordinary lattice convention: its level-exit pair
+-- makes "down" the level-UP direction, so d increases the layer number and the
+-- z coordinate with it. Declared here rather than assumed in map.lua, which has
+-- no way to know and got it wrong in both directions before.
+M.vertical = { d = 1, u = -1 }
+
 -- The target vocabulary for the run. An explore run has no speedwalk place to
 -- carry one, and without it every attack falls back to guessing a keyword out
 -- of the monster's short -- which is how a maze mob came to be attacked as

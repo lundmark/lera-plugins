@@ -833,6 +833,140 @@ check("an arrival outside the area discards the map, not just pauses it",
   mode.retained() == false, tostring(mode.retained()))
 check("a later resume finds nothing to resume", mode.resume() == false)
 
+-- ---- Task V: the area declares its vertical geometry -------------------------
+-- Root cause, from sea.log (the owner's `/log start` capture, line ~5300 on):
+-- 'd' increases the layer in this area (set_level_exit_pairs makes "down" the
+-- level-UP direction), but map.lua's DELTA used the ordinary lattice
+-- convention for every area. A vertical exit's destination therefore never
+-- matched a recorded coordinate, so it stayed a frontier forever, and the
+-- explorer ping-ponged between two rooms once the horizontal frontier ran out:
+--   trace: view reseeded xyz:8,6,1 -> xyz:8,6,2 / Step: u
+--   trace: view reseeded xyz:8,6,2 -> xyz:8,6,1 / Step: d
+-- A profile that declares M.vertical (areas/chaossea.lua) is how the area
+-- fixes this for map.lua, which has no way to know its own convention.
+local vertical_profile = {
+  name = "test-vertical",
+  exclude_exits = { out = true, enter = true, ["in"] = true },
+  dive_dirs = { "d" },
+  defer_dirs = { "u" },
+  default_policy = "clear",
+  vertical = { d = 1, u = -1 },
+  in_area = profile.in_area,
+  layer_of = profile.layer_of,
+  complete = function() return false end,
+}
+
+-- The regression test that matters: the owner's shape in miniature. Two
+-- rooms at the same x,y on adjacent layers, joined by d/u, with layer_of
+-- supplying z exactly as the real profile does. A step cap keeps a
+-- regression here a red case rather than a hung suite -- verified for real
+-- below, not just asserted: with M.new ignoring opts.vertical, this loop
+-- does not terminate within the cap (both "d" and "u" stay permanent
+-- frontiers, exactly as in the capture), which is how this case was
+-- confirmed to actually kill that mutant rather than passing by accident.
+quiet(function() mode.start(vertical_profile, "clear") end)
+frame({ name = "Layer two of the Sea of Chaos", exits = { "d" } })
+quiet(mode.on_arrival)
+check("the first room (layer two) is recorded", mode.stats().rooms == 1,
+  tostring(mode.stats().rooms))
+
+local STEP_CAP = 6
+local terminated = false
+for _ = 1, STEP_CAP do
+  local s = mode.next_step()
+  if not s then
+    terminated = true
+    break
+  end
+  if s.raw == "d" then
+    frame({ name = "Layer three of the Sea of Chaos", exits = { "u" } })
+  else
+    frame({ name = "Layer two of the Sea of Chaos", exits = { "d" } })
+  end
+  quiet(mode.on_arrival)
+end
+check("the owner's loop terminates within " .. STEP_CAP ..
+  " steps -- reports exhausted rather than stepping forever",
+  terminated, "still stepping after " .. STEP_CAP .. " calls")
+check("both rooms are mapped, and only both -- the map stopped growing",
+  mode.stats().rooms == 2, tostring(mode.stats().rooms))
+check("the run stops with stop_reason 'exhausted', not a completed leave",
+  mode.stop_reason() == "exhausted", mode.stop_reason())
+check("no spurious desync was raised along the way -- u/d stayed walkable "
+  .. "in the topology check throughout",
+  mode.desyncs() == 0, tostring(mode.desyncs()))
+mode.stop()
+mode.discard()
+
+-- The direction pinned against the capture, named explicitly so a future
+-- reader cannot re-derive the sign from first principles and get it wrong a
+-- third time (this is the second time it was gotten wrong: once in
+-- map.lua's DELTA, once more nearly shipped in the frontier prediction this
+-- task fixes). From "Layer two" (z=1), stepping 'd' must arrive at "Layer
+-- three" (z=2) -- sea.log's xyz:8,6,1 -> xyz:8,6,2.
+quiet(function() mode.start(vertical_profile, "clear") end)
+frame({ name = "Layer two of the Sea of Chaos", exits = { "d" } })
+quiet(mode.on_arrival)
+check("pinned to sea.log: standing on layer two (z=1)", mode.stats().z == 1,
+  tostring(mode.stats().z))
+local pin_step = mode.next_step()
+check("the only exit -- 'd' -- is the one taken", pin_step and pin_step.raw == "d",
+  pin_step and pin_step.raw)
+frame({ name = "Layer three of the Sea of Chaos", exits = { "u" } })
+quiet(mode.on_arrival)
+check("pinned to sea.log: stepping 'd' from layer two arrives at layer three (z=2)",
+  mode.stats().z == 2, tostring(mode.stats().z))
+mode.stop()
+mode.discard()
+
+-- ---- the tripwire speaks: every correction reaches the capture, only the
+-- first reaches the screen ------------------------------------------------
+-- Before this task the layer-correction override fired on EVERY vertical
+-- move, completely silently -- which is how the inverted-delta bug survived
+-- undetected in the first place. It still fires (the safety net is not
+-- removed), but now LOUDLY: lera.log() every time, and a screen line only
+-- the first time per run, since an unconditional print would be the same
+-- flood that hid the bug in the owner's capture.
+local logged = {}
+_G.lera = { log = function(msg) logged[#logged + 1] = msg end }
+local screen_logged = {}
+mode.set_logger(function(msg, kind)
+  screen_logged[#screen_logged + 1] = { msg = msg, kind = kind }
+end)
+
+quiet(function() mode.start(vertical_profile, "clear") end)
+-- The origin's reckoned z (0) already disagrees with "Layer two" (z = 1), so
+-- this first arrival alone forces a correction.
+frame({ name = "Layer two of the Sea of Chaos", exits = { "d" } })
+quiet(mode.on_arrival)
+check("a correction is counted", mode.stats().layer_corrections == 1,
+  tostring(mode.stats().layer_corrections))
+check("the correction reaches lera.log", #logged == 1, tostring(#logged))
+check("lera.log's message names the reckoned z, the name's layer, and the room",
+  logged[1] and logged[1]:find("z=0", 1, true) ~= nil
+    and logged[1]:find("layer 1", 1, true) ~= nil
+    and logged[1]:find("Layer two of the Sea of Chaos", 1, true) ~= nil,
+  logged[1])
+check("the first correction also reaches the screen", #screen_logged == 1,
+  tostring(#screen_logged))
+
+-- Force a second correction: jump the reckoned position somewhere never
+-- recorded (so there is no prior exit set to contradict -- no desync) that
+-- disagrees with the next frame's named layer.
+mode.debug_set_position(50, 50, 0)
+frame({ name = "Layer three of the Sea of Chaos", exits = { "u" } })
+quiet(mode.on_arrival)
+check("a second correction is counted", mode.stats().layer_corrections == 2,
+  tostring(mode.stats().layer_corrections))
+check("the second correction also reaches lera.log", #logged == 2, tostring(#logged))
+check("the second correction does NOT reach the screen -- only the first per run",
+  #screen_logged == 1, tostring(#screen_logged))
+
+mode.stop()
+mode.discard()
+mode.set_logger(nil)
+_G.lera = nil
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
