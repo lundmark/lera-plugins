@@ -579,6 +579,8 @@ assert_trigger("push_cart_return", "Cart returned from Aldby.", nil,
   "Cart returned from trade route.")
 assert_trigger("push_longship_return", "The longship returned from the island.", nil,
   "Longship returned from island with thralls.")
+assert_trigger("push_longship_return", "The longship docks safely and the secured voyage spoils are brought home.", nil,
+  "Longship returned from island with thralls.")
 assert_trigger("push_longship_saved", "The Northwind was saved from the deep by the Iron Hull perk.", nil,
   "Longship saved by Iron Hull perk.")
 assert_trigger("push_longship_tattoo", "The Northwind returned with a foreign tattoo pattern.", nil,
@@ -587,6 +589,10 @@ assert_trigger("push_longship_thralls", "The Northwind returned with 3 thralls."
   "Longship returned with thralls.")
 assert_trigger("push_voyage_node", "A hidden harbor rises off the port bow.", "hidden harbor",
   "Voyage: hidden harbor reached - resolve needed.")
+assert_trigger("push_voyage_node", "A harbor rises off B12.", "harbor",
+  "Voyage: harbor reached - resolve needed.")
+assert_trigger("push_voyage_node", "An island rises off C03.", "island",
+  "Voyage: island reached - resolve needed.")
 assert_trigger("push_voyage_pause", "[Viking-Voyage] Spoiled casks are found below deck.",
   "Spoiled casks are found below deck.",
   "Voyage: Spoiled casks are found below deck.")
@@ -599,6 +605,8 @@ assert_trigger("push_war_declared", "Ivar declares war and gathers a host.", "Iv
 assert_trigger("push_realm_sacked", "A raiding party sacks your holdings.", nil,
   "War: your holdings were sacked -- you left an incoming war unanswered.")
 assert_trigger("push_battle_lost", "[War] Defeat. Your host was routed.", nil,
+  "Battle: your host was defeated.")
+assert_trigger("push_battle_lost", "Defeat. Your host is broken; the fielded companies are lost.", nil,
   "Battle: your host was defeated.")
 assert_trigger("push_recruit_found", "A wanderer is looking for a hall to serve.", nil,
   "Kaupstefna: a specialist wanderer is available to hire (vfind).")

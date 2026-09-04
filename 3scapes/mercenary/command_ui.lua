@@ -105,20 +105,82 @@ local function show_status()
   end
 end
 
+local function show_auto_use()
+  local c = api.get_auto_use_config()
+  head("Auto-use " .. (c.enabled and "ON" or "off"))
+  line(string.format("ability=%s  stam>=%d%%  ap>=%d%%  cooldown=%ss",
+    c.ability, c.stamina_threshold, c.ap_threshold, c.cooldown_seconds))
+end
+
+local function show_help()
+  head("Mercenary commands")
+  line("/merc                         Show mercenary summary")
+  line("/merc skills | talents | status")
+  line("/merc omit on|off             Hide/show legacy three-line status output")
+  line("/merc auto on|off")
+  line("/merc auto ability <name>     none, bandage, mend, sustain, fortify, amplify,")
+  line("                               critical, frenzy, rend, combo, aegis, hamstring,")
+  line("                               intervene, cover")
+  line("/merc auto stam|ap <0-100>    Set required resource percentages")
+  line("/merc auto cooldown <seconds>")
+  show_auto_use()
+end
+
 local function dispatch(args)
-  local word = tostring(args or ""):match("^%s*(%S*)"):lower()
-  if word == "" then
+  local sub, rest = tostring(args or ""):match("^%s*(%S*)%s*(.-)%s*$")
+  sub, rest = (sub or ""):lower(), rest or ""
+
+  if sub == "" then
     show_summary()
-  elseif word == "skills" then
+    show_help()
+  elseif sub == "skills" then
     local records, meta = api.skills()
     show_records("Skills", records, meta, { "raw", "eff" }, "Skills")
-  elseif word == "talents" then
+  elseif sub == "talents" then
     local records, meta = api.talents()
     show_records("Talents", records, meta, { "points", "eff", "min_level" }, "Talents")
-  elseif word == "status" then
+  elseif sub == "status" then
     show_status()
+  elseif sub == "omit" then
+    local setting = rest:lower()
+    if setting ~= "on" and setting ~= "off" then
+      warn("Usage: /merc omit on|off")
+      return
+    end
+    api.set_omit_status_lines(setting == "on")
+    line("Merc status output omission " .. setting:upper())
+  elseif sub == "auto" then
+    local action, value = rest:match("^(%S*)%s*(.-)%s*$")
+    action, value = (action or ""):lower(), value or ""
+    if action == "" then
+      show_auto_use()
+    elseif action == "on" or action == "off" then
+      api.set_auto_use_enabled(action == "on")
+      show_auto_use()
+    elseif action == "ability" then
+      value = value:lower()
+      if not api.set_auto_use_ability(value) then
+        warn("Unknown mercenary ability: " .. (value ~= "" and value or "(none)"))
+        return
+      end
+      show_auto_use()
+    elseif action == "stam" or action == "ap" or action == "cooldown" then
+      local number = tonumber(value)
+      local ok
+      if action == "stam" then ok = number and api.set_auto_use_stamina_threshold(number)
+      elseif action == "ap" then ok = number and api.set_auto_use_ap_threshold(number)
+      else ok = number and api.set_auto_use_cooldown(number) end
+      if not ok then
+        local range = action == "cooldown" and "a non-negative number" or "a number from 0 to 100"
+        warn("/merc auto " .. action .. " requires " .. range)
+        return
+      end
+      show_auto_use()
+    else
+      warn("Usage: /merc auto [on|off|ability <name>|stam <0-100>|ap <0-100>|cooldown <seconds>]")
+    end
   else
-    warn("Usage: /merc [skills | talents | status]")
+    warn("Usage: /merc [skills|talents|status|omit on|off|auto ...]")
   end
 end
 
@@ -127,12 +189,12 @@ function M.install(plugin_api)
   local command = require("command")
   local id, err = command.register({
     name = "/merc",
-    usage = "/merc [skills | talents | status]",
+    usage = "/merc [skills | talents | status | omit on|off | auto ...]",
     summary = "Mercenary state from the Merc.* GMCP namespace",
     description = "Shows the active mercenary's vitals, progression and "
       .. "economy. 'skills' lists trained skill points raw and effective, "
       .. "'talents' the ability specializations, and 'status' reports which "
-      .. "Merc.* packages have arrived this connection.",
+      .. "Merc.* packages have arrived this connection. Omit can hide or show the three legacy status lines, and auto configures automatic ability use.",
     accepts_args = true,
     handler = function(args) dispatch(args) end,
   })

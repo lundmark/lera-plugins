@@ -72,6 +72,7 @@ local court_page = require("pages.court")
 local army_page = require("pages.army")
 local war_page = require("pages.war")
 local livestock_page = require("pages.livestock")
+local sea_page = require("popups.sea")
 
 window.PAGES = {
   { key = "stats",  label = "Stats",  mod = stats_page },
@@ -97,6 +98,9 @@ window.PAGES = {
   -- reflowed the 30-wide wrap points and cascaded into ~10 unrelated
   -- failures, appending here reflowed nothing before it.
   { key = "stock",  label = "Stock",  mod = livestock_page },
+  -- Sea is also available as `/vik sea`; in the main Viking window it is a
+  -- normal pane page, alongside Builds, People, Goods and Bonds.
+  { key = "sea",    label = "Sea",    mod = sea_page },
 }
 
 local pages_by_key = {}
@@ -193,7 +197,8 @@ local function render_tabbar(rect)
     end
     row_texts[row + 1] = row_texts[row + 1] .. draw_text
     col = col + seg_len
-    spans[#spans + 1] = { key = p.key, row = row, col_start = start_col, col_end = col }
+    spans[#spans + 1] = { key = p.key, popup = p.popup, row = row,
+      col_start = start_col, col_end = col }
     if col < w then
       row_texts[row + 1] = row_texts[row + 1] .. SEPARATOR
       col = col + 1

@@ -21,6 +21,17 @@ mud = { send = function(text) sent[#sent + 1] = tostring(text) end }
 
 buffer = { color_print = function() end }
 
+local added_triggers = {}
+local removed_triggers = {}
+trigger = {
+  add = function(pattern, _, opts)
+    local id = #added_triggers + 1
+    added_triggers[#added_triggers + 1] = { id = id, pattern = pattern, opts = opts }
+    return id
+  end,
+  remove = function(id) removed_triggers[#removed_triggers + 1] = id; return true end,
+}
+
 local saved
 store = {
   load = function() end,
@@ -76,6 +87,19 @@ local function ready_vitals(merc)
            stam = 90, stam_max = 100, ap = 85, ap_max = 100,
            target = "Orc", target_hp = 60 }
 end
+
+-- ---- legacy status omission -----------------------------------------------
+check("legacy mercenary status lines are omitted by default",
+  #added_triggers == 3
+    and added_triggers[1].opts.omit_from_output == true
+    and added_triggers[1].pattern:find("HP:", 1, true) ~= nil,
+  "triggers=" .. #added_triggers)
+M.set_omit_status_lines(false)
+check("disabling omission unregisters every status trigger",
+  #removed_triggers == 3, "removed=" .. #removed_triggers)
+M.set_omit_status_lines(true)
+check("enabling omission restores all three status triggers",
+  #added_triggers == 6, "triggers=" .. #added_triggers)
 
 -- ---- auto-use -------------------------------------------------------------
 -- Kills: dropping the auto_use_enabled guard. The ability is deliberately set

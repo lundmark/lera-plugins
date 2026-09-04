@@ -42,6 +42,7 @@ local M = {}
 local function ar_module() return require("autoraid") end
 local function av_module() return require("autovoyage") end
 local function ah_module() return require("autoherd") end
+local function aw_module() return require("autowar") end
 
 function M.save()
   local opts = {}
@@ -56,6 +57,7 @@ function M.save()
     autoraid = ar_module().snapshot().autoraid,
     autovoyage = av_module().snapshot().autovoyage,
     autoherd = ah_module().snapshot().autoherd,
+    autowar = aw_module().snapshot().autowar,
   })
   store.save()
 end
@@ -94,6 +96,9 @@ function M.load()
   end
   if data.autoherd then
     ah_module().restore({ autoherd = data.autoherd })
+  end
+  if data.autowar then
+    aw_module().restore({ autowar = data.autowar })
   end
 end
 

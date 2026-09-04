@@ -207,6 +207,9 @@ function popups.open_page(page_key)
     buffer.color_print(nil, "DAA520", "Viking: no such page '" .. tostring(page_key) .. "'")
     return false
   end
+  if page.popup then
+    return popups.toggle(page.popup)
+  end
 
   open_wrapper(page.label, page.mod.lines, nil, function()
     shown_name = nil

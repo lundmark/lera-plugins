@@ -118,6 +118,11 @@ local autovoyage = require("autovoyage")
 -- default and sends nothing until explicitly enabled.
 local autoherd = require("autoherd")
 
+-- Client-side Viking Auto-War planner. It is deliberately OFF by default;
+-- notify.lua owns its paced tick and this module only provides configuration
+-- and status here.
+local autowar = require("autowar")
+
 local S = state_mod.S
 
 local M = {}
@@ -245,6 +250,13 @@ local function print_automation_status()
     "  Auto-Herd: %s | last: %s | next: %s",
     page_opts.get("auto_herd") and "ON" or "off", herd_last,
     fmt_next((ah.last or 0) + autoherd.AH_INTERVAL)))
+
+  local aw = autowar.settings()
+  buffer.color_print(nil, "DAA520", string.format(
+    "  Auto-War: %s | phase=%s | last: %s | next: %s",
+    page_opts.get("auto_battle") and "ON" or "off", autowar.status().phase,
+    aw.status ~= "" and aw.status or "none",
+    fmt_next((aw.last or 0) + (autowar.AW_INTERVAL or 4))))
 end
 
 -- The keys GMCP has fed this connection, sorted. The single extraction both
@@ -415,6 +427,8 @@ function M.vik_command(args)
     autoraid.raid_command(rest)
   elseif sub_lower == "herd" then
     autoherd.herd_command(rest)
+  elseif sub_lower == "awar" or sub_lower == "autowar" then
+    autowar.config(rest)
   elseif sub_lower == "voyage" and rest:sub(1, 4):lower() == "auto"
       and (#rest == 4 or rest:sub(5, 5):match("%s")) then
     -- "/vik voyage auto [<sub>]" -- strip the "auto" token (case-
@@ -445,7 +459,7 @@ function M.vik_command(args)
       "Usage: /vik [status | trace | save | source [mip|gmcp|auto] | resetxp | "
       .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
       .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | raid [<sub>] | "
-      .. "voyage auto [<sub>] | herd [<sub>]]")
+      .. "voyage auto [<sub>] | herd [<sub>] | awar [<sub>]]")
   end
 end
 
@@ -503,7 +517,7 @@ function M.on_load()
     usage = "/vik [status | trace | save | source [mip|gmcp|auto] | resetxp | "
       .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
       .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | raid [<sub>] | "
-      .. "voyage auto [<sub>] | herd [<sub>]]",
+      .. "voyage auto [<sub>] | herd [<sub>] | awar [<sub>]]",
     summary = "Viking guild data, pane, and controls",
     description = "Ingestion status and counters, plus each automation's "
       .. "on/off state and last-action/next-eligible summary (status), message tracing "

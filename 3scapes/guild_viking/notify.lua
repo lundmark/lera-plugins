@@ -34,6 +34,7 @@ local autotrade_tick = require("autotrader.tick")
 local autoraid = require("autoraid")
 local autovoyage = require("autovoyage")
 local autoherd = require("autoherd")
+local autowar = require("autowar")
 
 local M = {}
 
@@ -122,7 +123,7 @@ end
 M.triggers = {
   { name = "push_cart_return",      pattern = "Cart returned from",
     fn = push_cart_return },
-  { name = "push_longship_return",  pattern = "The longship returned from the island",
+  { name = "push_longship_return",  pattern = "(?:The longship returned from the island|The longship docks safely and the secured voyage spoils are brought home)",
     fn = push_longship_return },
   { name = "push_longship_saved",   pattern = "was saved from the deep by the Iron Hull perk",
     fn = push_longship_saved },
@@ -131,7 +132,7 @@ M.triggers = {
   { name = "push_longship_thralls", pattern = "returned.*thrall",
     fn = push_longship_thralls },
   { name = "push_voyage_node",
-    pattern = "A (hidden harbor|island|wreck|great discovery|unknown site) rises off",
+    pattern = "(?:A|An) ((?:harbor|hidden harbor|island|wreck|great discovery|unknown site)) rises off",
     fn = push_voyage_node },
   { name = "push_voyage_pause",     pattern = "^\\[Viking-Voyage\\] (.*)$",
     fn = push_voyage_pause },
@@ -143,7 +144,7 @@ M.triggers = {
     fn = push_war_declared },
   { name = "push_realm_sacked",     pattern = "sacks your holdings",
     fn = push_realm_sacked },
-  { name = "push_battle_lost",      pattern = "\\] Defeat\\. Your",
+  { name = "push_battle_lost",      pattern = "(?:\\] )?Defeat\\. Your",
     fn = push_battle_lost },
   { name = "push_recruit_found",    pattern = "is looking for a hall to serve",
     fn = push_recruit_found },
@@ -373,6 +374,7 @@ function M.countdown_tick()
   autoraid.tick()
   autovoyage.tick()
   autoherd.tick()
+  autowar.tick()
 end
 
 return M
