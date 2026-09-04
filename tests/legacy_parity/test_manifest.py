@@ -1,7 +1,17 @@
+import builtins
+import importlib
+import types
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
+try:
+    import tomllib as stdlib_tomllib
+except ModuleNotFoundError:
+    stdlib_tomllib = None
+
+import tools.legacy_parity.manifest as manifest_module
 from tools.legacy_parity.manifest import (
     load_manifest,
     render_manifest,
@@ -92,6 +102,62 @@ class ManifestTests(unittest.TestCase):
         self.assertIn(
             "parity_without_passing_evidence", validate_manifest(changed)
         )
+
+
+class ManifestImportCompatibilityTests(unittest.TestCase):
+    def test_falls_back_to_tomli_when_tomllib_is_unavailable(self):
+        real_import = builtins.__import__
+        fallback = types.ModuleType("tomli")
+        fallback.loads = lambda content: {"content": content}
+        fallback.TOMLDecodeError = ValueError
+
+        def import_without_tomllib(name, globals=None, locals=None,
+                                   fromlist=(), level=0):
+            if name == "tomllib":
+                raise ModuleNotFoundError(
+                    "No module named 'tomllib'", name="tomllib"
+                )
+            if name == "tomli":
+                return fallback
+            return real_import(name, globals, locals, fromlist, level)
+
+        selected = None
+        import_error = None
+        try:
+            with mock.patch.object(
+                builtins, "__import__", side_effect=import_without_tomllib
+            ):
+                try:
+                    selected = importlib.reload(manifest_module).tomllib
+                except ModuleNotFoundError as error:
+                    import_error = error
+        finally:
+            importlib.reload(manifest_module)
+
+        self.assertIsNone(import_error)
+        self.assertIs(selected, fallback)
+
+    @unittest.skipIf(stdlib_tomllib is None, "stdlib tomllib requires Python 3.11+")
+    def test_prefers_stdlib_tomllib_when_available(self):
+        real_import = builtins.__import__
+        tomli_requests = []
+
+        def record_tomli_import(name, globals=None, locals=None,
+                                fromlist=(), level=0):
+            if name == "tomli":
+                tomli_requests.append(name)
+            return real_import(name, globals, locals, fromlist, level)
+
+        try:
+            with mock.patch.object(
+                builtins, "__import__", side_effect=record_tomli_import
+            ):
+                selected = importlib.reload(manifest_module).tomllib
+        finally:
+            importlib.reload(manifest_module)
+
+        self.assertIs(selected, stdlib_tomllib)
+        self.assertEqual(tomli_requests, [])
 
 
 if __name__ == "__main__":

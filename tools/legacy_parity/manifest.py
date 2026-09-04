@@ -1,6 +1,9 @@
 import json
 import re
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 from datetime import date
 from pathlib import Path
 
