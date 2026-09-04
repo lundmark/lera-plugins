@@ -135,6 +135,46 @@ check("every entry is a lowercase single word",
      return true
    end)(), table.concat(cs.targets or {}, ","))
 
+-- ---- instance_reset (Task RD) --------------------------------------------------
+-- unsetsea, setsea <n> <diff> and enter sea start a NEW maze instance while
+-- the sea's rooms stay virtual and reuse every room name -- init.lua's
+-- on_input/on_send watch for these on their way out to invalidate a retained
+-- explore map (see init.lua's check_instance_reset). Pinned here as data:
+-- exactly the three commands that end an instance match, and nothing an
+-- ordinary player types along the way -- including the two M.restart entries
+-- ("open cask", "enter portal") that must NOT invalidate anything, since
+-- entering the portal leaves the area, which the in_area discard already
+-- handles by room name.
+check("instance_reset declares exactly three patterns",
+  type(cs.instance_reset) == "table" and #cs.instance_reset == 3,
+  type(cs.instance_reset) == "table" and tostring(#cs.instance_reset) or type(cs.instance_reset))
+
+local function matches_any(patterns, text)
+  for _, pattern in ipairs(patterns or {}) do
+    if text:find(pattern) then return true end
+  end
+  return false
+end
+
+for _, cmd in ipairs({ "unsetsea", "setsea 5 deadly", "setsea 0 risky", "enter sea" }) do
+  check("instance_reset matches \"" .. cmd .. "\"",
+    matches_any(cs.instance_reset, cmd), cmd)
+end
+
+for _, cmd in ipairs({ "enter portal", "open cask", "look", "settle" }) do
+  check("instance_reset does not match \"" .. cmd .. "\"",
+    not matches_any(cs.instance_reset, cmd), cmd)
+end
+
+-- setsea is anchored with a frontier, not a bare prefix, so a command that
+-- merely STARTS WITH "setsea" followed by more letters (not whitespace or end
+-- of string) must not match -- and neither should a line that only contains
+-- "sea" or "setsea" somewhere other than the start.
+check("instance_reset does not match \"setseasons change\"",
+  not matches_any(cs.instance_reset, "setseasons change"))
+check("instance_reset does not match \"reset seascape\"",
+  not matches_any(cs.instance_reset, "reset seascape"))
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)

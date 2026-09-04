@@ -101,4 +101,24 @@ function M.restart(opts)
   }
 end
 
+-- Commands that end this instance and start a different one. Watched for on
+-- their way out, because the sea's rooms are virtual: a fresh sea reuses every
+-- room name, so nothing in a room frame distinguishes instances and a retained
+-- map would be reckoned against the wrong maze.
+--
+-- Deliberately NOT derived from M.restart above, even though it names the
+-- same three commands: restart is the sequence to PERFORM, and it also
+-- contains "open cask" and "enter portal", which must not invalidate
+-- anything -- entering the portal leaves the area, which the in_area discard
+-- in explore/mode.lua already handles by room name.
+--
+-- The frontier's class is written %z, not a literal \0: this LuaJIT build's
+-- pattern engine rejects an embedded NUL byte inside a [...] class outright
+-- ("malformed pattern (missing ']')", reproduced with
+-- string.find("a b", "%f[%s\0]")) even though \0 is a normal Lua string
+-- escape and PUC Lua's pattern library is documented as binary-safe. %z --
+-- Lua 5.1's own pattern class for "the character with representation 0" --
+-- is the working equivalent and is what LuaJIT actually accepts.
+M.instance_reset = { "^unsetsea", "^setsea%f[%s%z]", "^enter%s+sea$" }
+
 return M
