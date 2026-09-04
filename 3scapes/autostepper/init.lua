@@ -1221,6 +1221,58 @@ function M.on_disconnect()
   cancel_refresh_wait()
 end
 
+-- A re-dive invalidates a retained map. Pause/resume keeps the map across a
+-- stop, guarded by profile.in_area(<current room>) -- but that guard cannot
+-- tell one Chaos Sea instance from the next: a fresh sea reuses every room
+-- name, so resuming into a NEW sea reckons against the OLD sea's map until
+-- contradicted topology eventually forces a reset. The client is the one
+-- asking for the new instance, though, so watching commands on their way out
+-- turns "might be a different instance" into "is one".
+--
+-- The patterns come from the area profile (M.instance_reset), never
+-- hardcoded here: explore mode is area-agnostic by design, and the Chaos Sea
+-- is meant to be data only. Read with explore.profile(), not vocabulary() --
+-- a re-dive normally happens while the stepper is stopped, and vocabulary()
+-- is gated on run_mode == "explore"; explore.profile() answers from the
+-- retained profile, which is exactly why it stays ungated.
+--
+-- Residual: a re-dive the client never sees -- typed in another session, or
+-- sent by an alias through some other path -- still slips through. The
+-- topology-contradiction reset in explore/mode.lua remains the backstop
+-- there. The real fix is a maze_id in Room.Info, which the owner has
+-- deferred.
+local function check_instance_reset(text)
+  if type(text) ~= "string" then return end
+  local prof = explore and explore.profile and explore.profile()
+  local patterns = prof and prof.instance_reset
+  if type(patterns) ~= "table" then return end
+  local held = explore and ((explore.retained and explore.retained())
+    or (explore.active and explore.active()))
+  if not held then return end
+  local trimmed = text:match("^%s*(.-)%s*$"):lower()
+  for _, pattern in ipairs(patterns) do
+    if trimmed:find(pattern) then
+      log("explore: \"" .. trimmed .. "\" starts a new instance; discarding the retained map",
+          COLOR_RUN)
+      explore.discard()
+      return
+    end
+  end
+end
+
+-- Both are filter hooks and must return their text unchanged -- returning nil
+-- or false here would silently eat the very command (setsea, unsetsea, enter
+-- sea) the player or a script just issued.
+function M.on_input(text)
+  check_instance_reset(text)
+  return text
+end
+
+function M.on_send(text)
+  check_instance_reset(text)
+  return text
+end
+
 --------------------------------------------------------------------------------
 -- Public API
 --------------------------------------------------------------------------------

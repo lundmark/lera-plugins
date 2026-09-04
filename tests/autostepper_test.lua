@@ -1583,6 +1583,140 @@ sw_target_list = {}
 quiet(as.stop)
 explore_state.profile = nil
 
+-- ---- Task RD: a re-dive invalidates the retained map -------------------------
+-- unsetsea/setsea/enter sea start a NEW maze instance while the sea's rooms
+-- stay virtual and reuse every room name, so a resumed run reckoned against a
+-- retained map would be wrong until contradicted topology eventually forces a
+-- reset. on_input/on_send watch for the area profile's own M.instance_reset
+-- patterns on the way out and discard() the retained map.
+--
+-- Written against a profile stand-in, not chaossea.lua -- that keeps "the
+-- patterns come from the profile" provable independently of what the sea
+-- itself declares (which autostepper_chaossea_test.lua pins on its own). A
+-- copy of the sea's three patterns is close enough to real usage for the
+-- positive/negative cases below; the "profile-driven" case further down uses
+-- a deliberately different pattern to prove the point.
+local function call_hook(name, text)
+  local fn = as[name]
+  if type(fn) ~= "function" then return nil, "no " .. tostring(name) end
+  local ok, result = pcall(fn, text)
+  if not ok then return nil, result end
+  return result
+end
+
+local redive_profile = {
+  name = "redive-stub",
+  instance_reset = { "^unsetsea", "^setsea%f[%s%z]", "^enter%s+sea$" },
+}
+
+-- Paused: retained() true, active() false -- the ordinary "stop the stepper,
+-- re-dive by hand, come back later" sequence this task exists for.
+explore_state.active = false
+explore_state.retained = true
+explore_state.profile = redive_profile
+explore_state.discards = 0
+local rd1 = call_hook("on_input", "setsea 5 deadly")
+check("setsea typed while paused discards the retained map",
+  explore_state.discards == 1, tostring(explore_state.discards))
+check("on_input returns the setsea command unchanged",
+  rd1 == "setsea 5 deadly", tostring(rd1))
+
+explore_state.retained = true
+explore_state.discards = 0
+local rd2 = call_hook("on_input", "unsetsea")
+check("unsetsea discards the retained map",
+  explore_state.discards == 1, tostring(explore_state.discards))
+check("on_input returns unsetsea unchanged", rd2 == "unsetsea", tostring(rd2))
+
+explore_state.retained = true
+explore_state.discards = 0
+local rd3 = call_hook("on_input", "enter sea")
+check("enter sea discards the retained map",
+  explore_state.discards == 1, tostring(explore_state.discards))
+check("on_input returns enter sea unchanged", rd3 == "enter sea", tostring(rd3))
+
+-- A scripted mud.send() (a trigger, an alias) must be caught too -- if only
+-- on_input watched for it, an automated re-dive would slip past unnoticed.
+explore_state.retained = true
+explore_state.discards = 0
+local rd4 = call_hook("on_send", "setsea 5 deadly")
+check("a scripted mud.send(\"setsea ...\") discards too",
+  explore_state.discards == 1, tostring(explore_state.discards))
+check("on_send returns the scripted setsea unchanged",
+  rd4 == "setsea 5 deadly", tostring(rd4))
+
+-- Ordinary play must not discard: leaving the area (handled by in_area, not
+-- this mechanism) and two everyday commands that share no instance-reset
+-- pattern.
+for _, text in ipairs({ "enter portal", "look", "settle" }) do
+  explore_state.retained = true
+  explore_state.discards = 0
+  call_hook("on_input", text)
+  check("\"" .. text .. "\" does not discard the retained map",
+    explore_state.discards == 0, tostring(explore_state.discards))
+end
+
+-- Profile-driven, not hardcoded in init.lua: a stand-in profile naming a
+-- completely different command discards on ITS pattern, and the sea's own
+-- "setsea" does nothing against a profile that never declared it.
+local flush_profile = { name = "flush-stub", instance_reset = { "^flush$" } }
+explore_state.retained = true
+explore_state.profile = flush_profile
+explore_state.discards = 0
+call_hook("on_input", "flush")
+check("a profile-declared pattern discards on its own command",
+  explore_state.discards == 1, tostring(explore_state.discards))
+explore_state.discards = 0
+call_hook("on_input", "setsea 5 deadly")
+check("a profile that never declared setsea does not discard on it",
+  explore_state.discards == 0, tostring(explore_state.discards))
+explore_state.profile = redive_profile
+
+-- A matching command with no map held at all (neither active nor retained)
+-- is a silent no-op -- there is nothing to discard.
+explore_state.active = false
+explore_state.retained = false
+explore_state.discards = 0
+call_hook("on_input", "unsetsea")
+check("a matching command with no map held does not call discard",
+  explore_state.discards == 0, tostring(explore_state.discards))
+
+-- Discarding mid-run needs no second ending path: do_step's explore branch
+-- already detects explore.active() going false under it and ends the run
+-- through "Explore mode ended; stopping" -- the same door the run_mode
+-- section above exercises for a self-deactivation with no cause named. This
+-- reuses that same SHOULD-NOT-RUN trick to prove a re-dive discard ends the
+-- run through that branch too, rather than falling through to a route step.
+run_timers()
+explore_state.active = true
+explore_state.retained = false
+explore_state.profile = redive_profile
+explore_steps = { "n" }
+explore_taken = {}
+explore_state.coord = 0
+sw_steps = { { raw = "SHOULD-NOT-RUN", commands = { "SHOULD-NOT-RUN" } } }
+sw_taken = {}
+arrive(710, "Layer one of the Sea of Chaos", {}, {})
+sent = {}
+quiet(function() as.start(false) end)
+arrival_prompt()
+check("explore run supplies a step before the re-dive",
+  last_sent() == "n", table.concat(sent, "|"))
+
+explore_state.discards = 0
+call_hook("on_input", "unsetsea")
+check("mid-run unsetsea calls discard",
+  explore_state.discards == 1, tostring(explore_state.discards))
+sent = {}
+arrive(711, "Layer one of the Sea of Chaos", {}, {})
+arrival_prompt()
+check("a mid-run discard ends the run through the explore-inactive branch",
+  as.is_running() == false, tostring(as.is_running()))
+check("a mid-run discard never falls through to a route step",
+  count_sent("SHOULD-NOT-RUN") == 0, table.concat(sent, "|"))
+quiet(as.stop)
+explore_state.profile = nil
+
 as.debug_set_explore(nil)
 
 -- ---- Char.Combat drives the combat cycle -------------------------------------
