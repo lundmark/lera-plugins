@@ -151,7 +151,7 @@ function M.open()
   local wm = require("wm")
   if popup_open and wm.popup.is_open() then return end
   wm.popup.open(window, {
-    title = "Plugin Manager", width = 0.72, height = 0.62,
+    title = "Plugin Manager", width = 0.52, height = 0.62,
     on_close = function() popup_open = false; hits = {} end,
   })
   popup_open = true
