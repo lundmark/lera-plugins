@@ -930,6 +930,8 @@ local function show_help()
   log("  /step trace [on|off]   - Log the invisible half: frames, prompts,")
   log("                           settles, refreshes and every decision")
   log("  /step explore [area]   - Start explore mode in an area (default: chaossea)")
+  log("  /explore seafarm <level> [difficulty] - Enable repeatable Chaos Sea farm")
+  log("  /explore seafarm off   - Disable Chaos Sea farm and stop exploring")
   log("  /step explore off      - Stop explore mode")
   log("  /step explore reset    - Reset the map to a fresh origin here, keep stepping")
   log("  /step explore leave    - Walk back to the run's origin, fighting on the way;")
@@ -1124,7 +1126,19 @@ local function dispatch(args)
     end
   elseif sub == "explore" then
     local arg = rest:match("^(%S*)")
-    if arg == "off" then
+    if arg == "seafarm" then
+      local farm_rest = rest:sub(#arg + 1):match("^%s*(.*)$") or ""
+      if farm_rest == "off" then
+        M.explore_stop()
+      else
+        local level_s, difficulty = farm_rest:match("^(%d+)%s*(%a*)$")
+        if not level_s then
+          log("Usage: /explore seafarm <level> [risky|alarming|deadly]", COLOR_WARN)
+          return
+        end
+        M.chaossea_farm_start(tonumber(level_s), difficulty ~= "" and difficulty or "risky")
+      end
+    elseif arg == "off" then
       M.explore_stop()
     elseif arg == "reset" then
       M.explore_reset()
@@ -1153,10 +1167,10 @@ local function register_command()
   if not command then return end
   local id, err = command.register({
     name = "/step",
-    aliases = { "/autostepper" },
+    aliases = { "/autostepper", "/explore" },
     usage = "/step [start|targets|stop|explore [area]|explore off|explore reset|"
       .. "explore leave|chaossea [farm] [level] [difficulty]|chaossea off|"
-      .. "status|trace [on|off]|set <key> [value]]",
+      .. "status|trace [on|off]|set <key> [value]] or /explore seafarm <level> [difficulty]",
     summary = "Automatic speedwalk stepping with optional combat",
     description = "Walks a stored step path one room at a time, optionally "
       .. "glancing and attacking on the way. Or, with 'explore [area]', maps an "
