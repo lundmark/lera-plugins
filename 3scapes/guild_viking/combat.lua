@@ -24,7 +24,10 @@ local STFX_META = {
   skad = { cat="Def",  cs="#00CCCC", ci=0xCCCC00 },
   vkj  = { cat="Def",  cs="#00CCCC", ci=0xCCCC00 },
   ram  = { cat="Def",  cs="#00CCCC", ci=0xCCCC00 },
-  gul  = { cat="Def",  cs="#00CCCC", ci=0xCCCC00 },
+  -- Heimdall's vital-sight enchantments are purple effects, not defensive
+  -- wards: the STFX feed uses `bro`/`gul` for Broddsjón/Gullsjón.
+  bro  = { cat="Off",  cs="#DD44DD", ci=0xDD44DD },
+  gul  = { cat="Off",  cs="#DD44DD", ci=0xDD44DD },
   tvi  = { cat="Def",  cs="#00CCCC", ci=0xCCCC00 },
   nau  = { cat="Def",  cs="#00CCCC", ci=0xCCCC00 },
   valg = { cat="Def",  cs="#00CCCC", ci=0xCCCC00 },

@@ -230,21 +230,18 @@ check("available_ships: only docked AND not-held ships qualify",
       end)())
 
 -- Merge dedup: a ship present in BOTH LONGSHIP and SHIPS is one entry, and
--- (LEGACY quirk, ported verbatim -- see module header) the merge does NOT
--- copy `.held` onto an already-found voyage_longships record -- only a ship
--- absent from LONGSHIP keeps its own SHIPS `.held`.
+-- the SHIPS-side held flag is preserved so a reserved ship cannot be raided.
 reset_all()
 set_longships({ longship_entry({ sid = "1", name = "Drakkar", state = "docked" }) })
 set_ships({ ship_entry({ name = "Drakkar", state = "docked", held = "1" }),
             ship_entry({ name = "Solo", state = "docked", held = "1" }) })
 check("merged_ships: dedups by name across LONGSHIP+SHIPS (2 entries, not 3)",
       #ar.merged_ships() == 2)
-check("available_ships: Drakkar's SHIPS-side held=1 is dropped by the merge -- "
-      .. "counted available (LEGACY quirk, ported verbatim)",
+check("available_ships: Drakkar's SHIPS-side held=1 is preserved by the merge",
       (function()
         local avail = ar.available_ships()
-        for _, sh in ipairs(avail) do if sh.name == "Drakkar" then return true end end
-        return false
+        for _, sh in ipairs(avail) do if sh.name == "Drakkar" then return false end end
+        return true
       end)())
 check("available_ships: Solo (SHIPS-only, held=1 intact) is correctly excluded",
       (function()

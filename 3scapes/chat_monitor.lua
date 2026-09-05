@@ -133,6 +133,7 @@ local colors = {
 -- Each entry: { type = "type_id", sender = "name", text = "message", seq = N }
 local messages = {}
 local message_seq = 0  -- Sequence number for ordering
+local listeners = {}
 
 -- Protocol handler refs for cleanup
 local mip_handlers = {}
@@ -294,6 +295,23 @@ local function add_message(msg_type, sender, text, opts)
   for _, pattern in ipairs(type_cfg.gags or {}) do
     if text:match(pattern) or (sender and sender:match(pattern)) then
       return false  -- Gagged
+    end
+  end
+
+  -- Notify optional consumers (for example chat relay) after local filtering.
+  if not (opts and opts.remote) then
+    local listener_opts = opts or {}
+    if listener_opts.prefix == nil then
+      listener_opts = {}
+      for key, value in pairs(opts or {}) do listener_opts[key] = value end
+      listener_opts.prefix = resolve_prefix(type_cfg, {
+        type = msg_type, sender = sender, structured = structured,
+        prefix = prefix_text, prefix_from_server = prefix_from_server,
+      })
+    end
+    for _, listener in ipairs(listeners) do
+      local ok, err = pcall(listener, msg_type, sender, text, listener_opts)
+      if not ok then print("[chat_monitor] listener error: " .. tostring(err)) end
     end
   end
 
@@ -695,6 +713,21 @@ end
 
 local function invalidate_wrapped_formatting()
   wrapped.width = nil
+end
+
+function M.on_message(callback)
+  if type(callback) ~= "function" then return false end
+  listeners[#listeners + 1] = callback
+  return true
+end
+
+function M.receive(msg_type, sender, text, prefix)
+  return add_message(msg_type, sender, text, {
+    remote = true,
+    structured = true,
+    prefix = prefix or "",
+    prefix_from_server = true,
+  })
 end
 
 -- Configure any line type (built-in or chat)

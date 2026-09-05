@@ -374,10 +374,14 @@ local function write_army(parts)
     end
   end
   S.army = {
-    conscripts = tonumber(rec.conscripts) or 0,
-    cap        = tonumber(rec.unit_cap) or 0,
-    used       = tonumber(rec.unit_count) or 0,
-    units      = units,
+    conscripts    = tonumber(rec.conscripts) or 0,
+    -- Keep both capacities: `cap`/`used` describe army unit slots for the
+    -- Army page, while Auto-War needs the conscript pool capacity separately.
+    conscript_cap = tonumber(rec.cap) or 0,
+    levy_rate     = tonumber(rec.levy_rate) or 0,
+    cap           = tonumber(rec.unit_cap) or 0,
+    used          = tonumber(rec.unit_count) or 0,
+    units         = units,
   }
 end
 

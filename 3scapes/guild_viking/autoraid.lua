@@ -182,14 +182,10 @@ end
 
 -- LEGACY:4150-4197 (ar_merged_ships). Build merged ship list from both data
 -- sources (like the Sea page does). voyage_longships has ship_id and
--- detailed state; ships has convoy info AND the `held` flag -- note that a
--- ship present in BOTH feeds keeps whatever `.held` its voyage_longships
--- record had (always nil/false: the LONGSHIP wire packet has no held
--- field, see handlers/voyage.lua's M.LONGSHIP) because this merge, exactly
--- like LEGACY's own, never copies `sh.held` onto an already-found `vsh`.
--- Only a ship absent from voyage_longships (found solely via S.ships) keeps
--- its own `.held` intact. Ported as-is: not this module's place to "fix" a
--- LEGACY merge that happens to drop a field.
+-- detailed state; ships has convoy info and the authoritative `held` flag.
+-- When a ship is present in both feeds, preserve that reservation flag while
+-- combining the rest of the records so auto-raid can never dispatch a ship
+-- the player has marked to keep.
 function M.merged_ships()
   local merged = {}
   local seen = {}
@@ -213,6 +209,9 @@ function M.merged_ships()
             vsh.convoy_bonus = sh.convoy_bonus
           end
           vsh.durability = sh.durability
+          if sh.held then
+            vsh.held = true
+          end
           if sh.state and sh.state ~= "" then
             vsh.state = sh.state
           end
