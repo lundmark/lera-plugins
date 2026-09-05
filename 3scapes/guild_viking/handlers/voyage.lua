@@ -359,13 +359,16 @@ local function parse_mip_voffers(value)
   S.mip_voyage_seen = true
   if type(value) ~= "string" or value == "" then
     S.voyage_offers = nil
+    S.voyage_offers_ship = nil
     return
   end
   local ship, rest = value:match("^([^|]*)|(.*)$")
   if not ship then
     S.voyage_offers = nil
+    S.voyage_offers_ship = nil
     return
   end
+  S.voyage_offers_ship = ship
   local list = {}
   for entry in rest:gmatch("[^;]+") do
     if #list >= 10 then break end
@@ -395,13 +398,15 @@ local function write_voffers(parts)
   -- arrival of `voffers` itself may clear the list: a frame carrying just a
   -- changed ship name must not be read as "no offers".
   if parts.voffers == nil then
-    if parts.voffers_ship ~= nil and S.voyage_offers then
-      S.voyage_offers.ship = tostring(parts.voffers_ship)
+    if parts.voffers_ship ~= nil then
+      S.voyage_offers_ship = tostring(parts.voffers_ship)
+      if S.voyage_offers then S.voyage_offers.ship = S.voyage_offers_ship end
     end
     return
   end
   if type(parts.voffers) ~= "table" or #parts.voffers == 0 then
     S.voyage_offers = nil
+    S.voyage_offers_ship = nil
     return
   end
   local list = {}
@@ -418,7 +423,11 @@ local function write_voffers(parts)
     end
   end
   local ship = parts.voffers_ship
-  if ship == nil then ship = S.voyage_offers and S.voyage_offers.ship end
+  if ship ~= nil then
+    S.voyage_offers_ship = tostring(ship)
+  else
+    ship = S.voyage_offers_ship or (S.voyage_offers and S.voyage_offers.ship)
+  end
   S.voyage_offers = { ship = tostring(ship or ""), list = list }
 end
 
