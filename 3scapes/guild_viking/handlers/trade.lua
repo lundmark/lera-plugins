@@ -417,22 +417,29 @@ local function leg_records(rows)
   return legs
 end
 
--- carts + cart_legs. `secs` -> return_in and `half_in` -> halfway_in are the
--- renames. `grade`/`value`/`cur_leg` are server-computed (query_quality_label,
--- query_effective_sell_price, and the dispatch/return travel-window bucket
--- respectively -- see client.h's _v_carts()) so the client shows the exact
--- same numbers vtrade.c's own text display does, rather than re-deriving
--- pricing/grade-name logic here.
+-- carts + cart_legs + cart_extra. `secs` -> return_in and `half_in` ->
+-- halfway_in are the renames. `cart_extra` (fk "cart") carries
+-- grade/value/cur_leg split out of the main cart record: adding those 3
+-- fields there pushed a cart record from 14 to 17 fields, over the
+-- protocol's 16-field-per-record cap, so every active cart was silently
+-- refused whole (see client.h's _v_cart_extra() comment) -- the split fixes
+-- that the same way legs already avoid the container-depth limit. All three
+-- are server-computed (query_quality_label, query_effective_sell_price, and
+-- the dispatch/return travel-window bucket respectively) so the client shows
+-- the exact same numbers vtrade.c's own text display does, rather than
+-- re-deriving pricing/grade-name logic here.
 local function write_carts(parts)
   if type(parts) ~= "table" then return end
   if type(parts.carts) ~= "table" then return end
   local legs_by_cart = group_by(parts.cart_legs, "cart")
+  local extra_by_cart = group_by(parts.cart_extra, "cart")
   S.carts = {}
   for _, r in ipairs(parts.carts) do
     if #S.carts >= 30 then break end
     if type(r) == "table" then
       local refit = tostring(r.refit or "")
       if refit == "" then refit = "standard" end
+      local extra = (extra_by_cart[r.cart_id] or {})[1] or {}
       table.insert(S.carts, {
         mode        = tostring(r.mode or ""),
         good        = tostring(r.good or ""),
@@ -441,9 +448,9 @@ local function write_carts(parts)
         amount      = tonumber(r.amount) or 0,
         halfway_in  = tonumber(r.half_in) or 0,
         quality_pct = tonumber(r.quality_pct) or 100,
-        grade       = tostring(r.grade or ""),
-        value       = tonumber(r.value) or 0,
-        cur_leg     = tonumber(r.cur_leg) or -1,
+        grade       = tostring(extra.grade or ""),
+        value       = tonumber(extra.value) or 0,
+        cur_leg     = tonumber(extra.cur_leg) or -1,
         cart_id     = tonumber(r.cart_id) or 0,
         tier        = tonumber(r.tier) or 1,
         durability  = tonumber(r.durability) or 100,

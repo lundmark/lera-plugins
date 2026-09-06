@@ -64,14 +64,18 @@ trade({
   carts = {
     { mode = "sell", good = "timber", village = "Havn", secs = 240, amount = 30,
       half_in = 120, quality_pct = 85, cart_id = 4, tier = 2, durability = 70,
-      cap = 50, escort = 2, refit = "reinforced", horses = 3,
-      grade = "well-aged", value = 4200, cur_leg = -1 },
+      cap = 50, escort = 2, refit = "reinforced", horses = 3 },
     { mode = "buy", good = "iron", village = "Birka", cart_id = 9 },
   },
   cart_legs = {
     { cart = 9, seq = 1, mode = "buy", good = "iron", amount = 10, village = "Birka", value = 500 },
     { cart = 4, seq = 2, mode = "sell", good = "mead", amount = 5, village = "Jorvik", value = 900 },
     { cart = 4, seq = 1, mode = "sell", good = "timber", amount = 30, village = "Havn", value = 1500 },
+  },
+  -- Split from `carts` itself (see write_carts's comment): a 17-field cart
+  -- record would exceed the protocol's 16-field-per-record cap.
+  cart_extra = {
+    { cart = 4, grade = "well-aged", value = 4200, cur_leg = -1 },
   },
 })
 check("carts count", #S.carts == 2, #S.carts)
