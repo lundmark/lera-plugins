@@ -463,6 +463,43 @@ check("tgoods scalar fields", S.trade_goods[2].ore.score == 1
       and S.trade_goods[2].timber.buy == 12)
 check("a lineage key becomes its own numeric index",
       S.trade_goods[5] ~= nil and S.trade_goods[5].zz ~= nil)
+
+-- Regression: GOOD_SHORT was missing the 11 husbandry/refined-husbandry
+-- abbreviations entirely (a bare letter decoded to itself, matching no good
+-- id best_sell_of()/the stock-sell scanner could ever look up), and `a` was
+-- mapped to the good's pre-rename id "amber" instead of "sunstone" (which is
+-- what market.lua's own GOODS_ALL, and the warehouse, actually key on).
+-- Both silently made the affected goods unsellable via auto-trade
+-- regardless of stock or demand -- see client.h's _v_tgoods() _abbrevs
+-- array for the server's authoritative letter-to-good mapping.
+S.trade_goods = {}
+tradegoods({
+  tgoods_3 = {
+    { lin = 3, good = "a", score = 0, sup = 10, dem = 0, buy = 5, sell = 0 },
+    { lin = 3, good = "c", score = 0, sup = 0, dem = 20, buy = 0, sell = 8 },
+    { lin = 3, good = "d", score = 0, sup = 0, dem = 5, buy = 0, sell = 3 },
+    { lin = 3, good = "p", score = 0, sup = 0, dem = 5, buy = 0, sell = 3 },
+    { lin = 3, good = "q", score = 0, sup = 0, dem = 5, buy = 0, sell = 3 },
+    { lin = 3, good = "v", score = 0, sup = 0, dem = 5, buy = 0, sell = 3 },
+    { lin = 3, good = "x", score = 0, sup = 0, dem = 5, buy = 0, sell = 3 },
+    { lin = 3, good = "mi", score = 0, sup = 0, dem = 5, buy = 0, sell = 3 },
+    { lin = 3, good = "hm", score = 0, sup = 0, dem = 5, buy = 0, sell = 3 },
+    { lin = 3, good = "z", score = 0, sup = 0, dem = 40, buy = 0, sell = 12 },
+    { lin = 3, good = "sm", score = 0, sup = 0, dem = 15, buy = 0, sell = 20 },
+    { lin = 3, good = "cs", score = 0, sup = 0, dem = 25, buy = 0, sell = 30 },
+  },
+})
+check("`a` resolves to sunstone, not the pre-rename `amber`",
+      S.trade_goods[3].sunstone ~= nil and S.trade_goods[3].amber == nil)
+check("husbandry abbreviations resolve to their good names",
+      S.trade_goods[3].wool ~= nil and S.trade_goods[3].eggs ~= nil
+      and S.trade_goods[3].pork ~= nil and S.trade_goods[3].mutton ~= nil
+      and S.trade_goods[3].poultry ~= nil and S.trade_goods[3].beef ~= nil
+      and S.trade_goods[3].milk ~= nil and S.trade_goods[3].horsemeat ~= nil)
+check("refined-husbandry abbreviations (the reported goods) resolve correctly",
+      S.trade_goods[3].cloth ~= nil and S.trade_goods[3].cloth.demand == 40
+      and S.trade_goods[3].smoked_meat ~= nil and S.trade_goods[3].smoked_meat.sell == 20
+      and S.trade_goods[3].cheese ~= nil and S.trade_goods[3].cheese.sell == 30)
 -- An abbreviation with no entry in the table stays as itself rather than
 -- becoming nil and dropping the good.
 check("an unknown abbreviation is kept verbatim",

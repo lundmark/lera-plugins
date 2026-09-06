@@ -13,13 +13,31 @@ local M = {}
 -- tracking). nil until Task 7 sets it; parsers call through only when set.
 M._market_seam = { on_market = nil, on_tgoods = nil }
 
--- 1-char good abbreviations used by TGOODS (LEGACY guild_viking.lua:41-47).
+-- Good abbreviations used by TGOODS, index-matched to the server's own
+-- _abbrevs/ALL_GOODS pair (players/viking/obj/include/client.h's
+-- _v_tgoods()). Two confirmed bugs fixed here:
+--   * `a` was mapped to "amber" -- the good's OLD id, before the server
+--     renamed it to "sunstone" (GOOD_AMBER is now a #define alias for
+--     GOOD_SUNSTONE server-side, kept only so old references still
+--     resolve). market.lua's own GOODS_ALL already uses "sunstone", so
+--     Sunstone trade-goods data landed under a key nothing else read.
+--   * The 11 husbandry/refined-husbandry goods (appended to ALL_GOODS
+--     "LAST" per that file's own comment, to keep earlier abbrev indices
+--     stable) had no entries here AT ALL -- c/d/p/q/v/x/mi/hm/z/sm/cs
+--     decoded to themselves as bare letters instead of to a good id
+--     best_sell_of()/the stock-sell scanner could ever match, so Wool,
+--     Eggs, Pork, Mutton, Poultry, Beef, Milk, Horsemeat, Cloth, Smoked
+--     Meat and Cheese were silently unsellable via auto-trade regardless
+--     of stock, demand, or blocks.
 local GOOD_SHORT = {
   t = "timber", o = "ore",   i = "iron",  f = "furs",  h = "fish",
-  g = "grain",  m = "mead",  a = "amber", r = "runestones",
+  g = "grain",  m = "mead",  a = "sunstone", r = "runestones",
   s = "spoils", k = "salted_fish", b = "bread", e = "fine_furs",
   l = "tools",  j = "gemstones", y = "honey",
   w = "weapons", u = "armour", n = "finery",
+  c = "wool", d = "eggs", p = "pork", q = "mutton", v = "poultry",
+  x = "beef", mi = "milk", hm = "horsemeat",
+  z = "cloth", sm = "smoked_meat", cs = "cheese",
 }
 
 -- STAFF stat-slot order (LEGACY guild_viking.lua:2348).
