@@ -160,10 +160,17 @@ end
 
 -- LEGACY:111-123 (at_warehouse_pct). Warehouse fullness 0-100, from the
 -- building tier's capacity table and the summed WSTOCK amounts.
+--
+-- S.wh_cap (from WSTOCK's cap field) is the server's real capacity,
+-- including steward/lager/star bonuses the static per-tier table below
+-- knows nothing about -- pages/city.lua prefers it the same way, for the
+-- same reason (a warehouse with any such bonus was reported "over 100%
+-- full" here using a cap lower than its actual one, which could only ever
+-- make wh_full trigger too early, never too late).
 function M.warehouse_pct()
   local WH_CAP_BY_TIER = { [1] = 400, [2] = 1000, [3] = 1750, [4] = 3000, [5] = 5250 }
   local wh_tier = (S.buildings and S.buildings.warehouse) or 0
-  local cap = WH_CAP_BY_TIER[wh_tier] or 0
+  local cap = S.wh_cap or WH_CAP_BY_TIER[wh_tier] or 0
   if cap <= 0 then return 0 end
   local used = 0
   for _, ws in ipairs(S.wstock or {}) do used = used + (ws.amount or 0) end
