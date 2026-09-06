@@ -99,6 +99,29 @@ check("carts defaults", S.carts[2].tier == 1 and S.carts[2].durability == 100
       and S.carts[2].quality_pct == 100 and S.carts[2].refit == "standard"
       and S.carts[2].return_in == 0 and S.carts[2].horses == 0
       and S.carts[2].grade == "" and S.carts[2].value == 0 and S.carts[2].cur_leg == -1)
+
+-- A delta push resending only `carts` (secs ticked down) with cart_legs/
+-- cart_extra OMITTED (protocol.lua: absence on a delta means unchanged, not
+-- gone) must NOT wipe the route/grade/value data that arrived in the
+-- previous full push -- this is exactly the bug that made a route cart's
+-- stops and a sell cart's grade/value vanish moments after first appearing.
+trade({
+  carts = {
+    { mode = "sell", good = "timber", village = "Havn", secs = 239, amount = 30,
+      half_in = 119, quality_pct = 85, cart_id = 4, tier = 2, durability = 70,
+      cap = 50, escort = 2, refit = "reinforced", horses = 3 },
+    { mode = "buy", good = "iron", village = "Birka", cart_id = 9 },
+  },
+})
+check("a carts-only delta preserves the cart's own new fields",
+      S.carts[1].return_in == 239 and S.carts[1].halfway_in == 119)
+check("a carts-only delta preserves previously-known legs (not wiped)",
+      #S.carts[1].legs == 2 and S.carts[1].legs[1].good == "timber"
+      and #S.carts[2].legs == 1 and S.carts[2].legs[1].good == "iron")
+check("a carts-only delta preserves previously-known grade/value/cur_leg",
+      S.carts[1].grade == "well-aged" and S.carts[1].value == 4200
+      and S.carts[1].cur_leg == -1)
+
 local many = {}
 for i = 1, 40 do many[i] = { mode = "sell", cart_id = i } end
 trade({ carts = many })

@@ -428,18 +428,65 @@ end
 -- the dispatch/return travel-window bucket respectively) so the client shows
 -- the exact same numbers vtrade.c's own text display does, rather than
 -- re-deriving pricing/grade-name logic here.
+--
+-- DELTA-SAFE like write_lmarket: cart_legs/cart_extra rarely change once a
+-- cart is dispatched (a route's legs and a sell cart's grade/value are fixed
+-- at dispatch), while `carts` itself changes almost every push (its secs/
+-- half_in countdowns tick every beat) -- so a typical delta after the first
+-- full frame carries `carts` but OMITS cart_legs/cart_extra entirely
+-- (protocol.lua's DELTA SEMANTICS: absence on a delta means unchanged, not
+-- gone). Rebuilding legs/grade/value from an absent key every time silently
+-- erased a route's stops and a cart's estimated value moments after they
+-- first appeared -- carry the previous cart's values forward by cart_id
+-- when the corresponding key is missing from THIS push, matching the old
+-- S.carts entry rather than defaulting to empty.
+--
+-- No `full` parameter needed here, unlike write_lmarket: cart_legs/
+-- cart_extra are always-emitted keys in send_gmcp_trade()'s payload (never
+-- conditionally built), so their only omission mechanism is the delta
+-- layer's "unchanged" compression -- there is no "key vanished on a full
+-- frame with a different meaning" case to distinguish, the way a genuinely
+-- variable-arity key set (lmarket_1..13) has.
 local function write_carts(parts)
   if type(parts) ~= "table" then return end
   if type(parts.carts) ~= "table" then return end
-  local legs_by_cart = group_by(parts.cart_legs, "cart")
-  local extra_by_cart = group_by(parts.cart_extra, "cart")
+
+  local old_by_id = {}
+  for _, c in ipairs(S.carts or {}) do old_by_id[c.cart_id] = c end
+
+  local legs_present = type(parts.cart_legs) == "table"
+  local extra_present = type(parts.cart_extra) == "table"
+  local legs_by_cart = legs_present and group_by(parts.cart_legs, "cart") or nil
+  local extra_by_cart = extra_present and group_by(parts.cart_extra, "cart") or nil
+
   S.carts = {}
   for _, r in ipairs(parts.carts) do
     if #S.carts >= 30 then break end
     if type(r) == "table" then
+      local cart_id = tonumber(r.cart_id) or 0
+      local old = old_by_id[cart_id]
       local refit = tostring(r.refit or "")
       if refit == "" then refit = "standard" end
-      local extra = (extra_by_cart[r.cart_id] or {})[1] or {}
+
+      local legs
+      if legs_present then
+        legs = leg_records(legs_by_cart[cart_id])
+      elseif old then
+        legs = old.legs
+      else
+        legs = {}
+      end
+
+      local grade, value, cur_leg
+      if extra_present then
+        local extra = (extra_by_cart[cart_id] or {})[1] or {}
+        grade, value, cur_leg = tostring(extra.grade or ""), tonumber(extra.value) or 0, tonumber(extra.cur_leg) or -1
+      elseif old then
+        grade, value, cur_leg = old.grade, old.value, old.cur_leg
+      else
+        grade, value, cur_leg = "", 0, -1
+      end
+
       table.insert(S.carts, {
         mode        = tostring(r.mode or ""),
         good        = tostring(r.good or ""),
@@ -448,17 +495,17 @@ local function write_carts(parts)
         amount      = tonumber(r.amount) or 0,
         halfway_in  = tonumber(r.half_in) or 0,
         quality_pct = tonumber(r.quality_pct) or 100,
-        grade       = tostring(extra.grade or ""),
-        value       = tonumber(extra.value) or 0,
-        cur_leg     = tonumber(extra.cur_leg) or -1,
-        cart_id     = tonumber(r.cart_id) or 0,
+        grade       = grade,
+        value       = value,
+        cur_leg     = cur_leg,
+        cart_id     = cart_id,
         tier        = tonumber(r.tier) or 1,
         durability  = tonumber(r.durability) or 100,
         cap         = tonumber(r.cap) or 0,
         escort      = tonumber(r.escort) or 0,
         horses      = tonumber(r.horses) or 0,
         refit       = refit,
-        legs        = leg_records(legs_by_cart[r.cart_id]),
+        legs        = legs,
       })
     end
   end
