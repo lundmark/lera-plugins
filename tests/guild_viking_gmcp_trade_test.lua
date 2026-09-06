@@ -64,13 +64,14 @@ trade({
   carts = {
     { mode = "sell", good = "timber", village = "Havn", secs = 240, amount = 30,
       half_in = 120, quality_pct = 85, cart_id = 4, tier = 2, durability = 70,
-      cap = 50, escort = 2, refit = "reinforced", horses = 3 },
+      cap = 50, escort = 2, refit = "reinforced", horses = 3,
+      grade = "well-aged", value = 4200, cur_leg = -1 },
     { mode = "buy", good = "iron", village = "Birka", cart_id = 9 },
   },
   cart_legs = {
-    { cart = 9, seq = 1, mode = "buy", good = "iron", amount = 10, village = "Birka" },
-    { cart = 4, seq = 2, mode = "sell", good = "mead", amount = 5, village = "Jorvik" },
-    { cart = 4, seq = 1, mode = "sell", good = "timber", amount = 30, village = "Havn" },
+    { cart = 9, seq = 1, mode = "buy", good = "iron", amount = 10, village = "Birka", value = 500 },
+    { cart = 4, seq = 2, mode = "sell", good = "mead", amount = 5, village = "Jorvik", value = 900 },
+    { cart = 4, seq = 1, mode = "sell", good = "timber", amount = 30, village = "Havn", value = 1500 },
   },
 })
 check("carts count", #S.carts == 2, #S.carts)
@@ -81,14 +82,19 @@ check("carts scalar fields", c.mode == "sell" and c.good == "timber"
       and c.village == "Havn" and c.amount == 30 and c.quality_pct == 85
       and c.cart_id == 4 and c.tier == 2 and c.durability == 70 and c.cap == 50
       and c.escort == 2 and c.refit == "reinforced")
+check("carts horses/grade/value/cur_leg", c.horses == 3 and c.grade == "well-aged"
+      and c.value == 4200 and c.cur_leg == -1)
 check("cart legs group on their own cart, ordered by seq",
       #c.legs == 2 and c.legs[1].good == "timber" and c.legs[1].amount == 30
       and c.legs[2].good == "mead" and c.legs[2].village == "Jorvik"
       and #S.carts[2].legs == 1 and S.carts[2].legs[1].good == "iron",
       #c.legs .. "/" .. tostring((c.legs[1] or {}).good))
+check("cart leg value", c.legs[1].value == 1500 and c.legs[2].value == 900
+      and S.carts[2].legs[1].value == 500)
 check("carts defaults", S.carts[2].tier == 1 and S.carts[2].durability == 100
       and S.carts[2].quality_pct == 100 and S.carts[2].refit == "standard"
-      and S.carts[2].return_in == 0)
+      and S.carts[2].return_in == 0 and S.carts[2].horses == 0
+      and S.carts[2].grade == "" and S.carts[2].value == 0 and S.carts[2].cur_leg == -1)
 local many = {}
 for i = 1, 40 do many[i] = { mode = "sell", cart_id = i } end
 trade({ carts = many })

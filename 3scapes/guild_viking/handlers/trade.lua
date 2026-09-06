@@ -411,14 +411,18 @@ local function leg_records(rows)
   for _, l in ipairs(rows or {}) do
     legs[#legs + 1] = { mode = tostring(l.mode or ""), good = tostring(l.good or ""),
                         amount = tonumber(l.amount) or 0,
-                        village = tostring(l.village or "") }
+                        village = tostring(l.village or ""),
+                        value = tonumber(l.value) or 0 }
   end
   return legs
 end
 
 -- carts + cart_legs. `secs` -> return_in and `half_in` -> halfway_in are the
--- renames; `horses` is carried by the record but has no consumer, so it is
--- ignored rather than stored.
+-- renames. `grade`/`value`/`cur_leg` are server-computed (query_quality_label,
+-- query_effective_sell_price, and the dispatch/return travel-window bucket
+-- respectively -- see client.h's _v_carts()) so the client shows the exact
+-- same numbers vtrade.c's own text display does, rather than re-deriving
+-- pricing/grade-name logic here.
 local function write_carts(parts)
   if type(parts) ~= "table" then return end
   if type(parts.carts) ~= "table" then return end
@@ -437,11 +441,15 @@ local function write_carts(parts)
         amount      = tonumber(r.amount) or 0,
         halfway_in  = tonumber(r.half_in) or 0,
         quality_pct = tonumber(r.quality_pct) or 100,
+        grade       = tostring(r.grade or ""),
+        value       = tonumber(r.value) or 0,
+        cur_leg     = tonumber(r.cur_leg) or -1,
         cart_id     = tonumber(r.cart_id) or 0,
         tier        = tonumber(r.tier) or 1,
         durability  = tonumber(r.durability) or 100,
         cap         = tonumber(r.cap) or 0,
         escort      = tonumber(r.escort) or 0,
+        horses      = tonumber(r.horses) or 0,
         refit       = refit,
         legs        = leg_records(legs_by_cart[r.cart_id]),
       })
