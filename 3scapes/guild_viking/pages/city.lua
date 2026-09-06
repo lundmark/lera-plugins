@@ -243,7 +243,11 @@ end
 
 local function warehouse_lines(add, width)
   local wh_tier = S.buildings and S.buildings["warehouse"] or 0
-  local wh_cap = WH_CAP[wh_tier] or 0
+  -- S.wh_cap (from WSTOCK's cap field) is the server's real capacity,
+  -- including steward/lager/star bonuses the static per-tier table below
+  -- knows nothing about -- LEGACY prefers it the same way
+  -- (guild_viking.lua:9626).
+  local wh_cap = S.wh_cap or WH_CAP[wh_tier] or 0
   local wh_used = 0
   for _, ws in ipairs(S.wstock or {}) do wh_used = wh_used + (ws.amount or 0) end
   if wh_cap > 0 then
