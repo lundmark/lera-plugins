@@ -1448,6 +1448,28 @@ fake_now = fake_now + 1
 tick.tick()
 check("tick/gate (no candidates): a later tick retries planning, still nothing sent", #sent == 0)
 
+-- ---------------------------------------------------------------------------
+-- "atrade debug on" (at.debug) was previously write-only: nothing read it,
+-- so the command's own promise ("each idle tick will print why nothing was
+-- sent") never happened. do_plan() now prints plan.build()'s own status
+-- string via note() when debug is on and the planner actually ran (not on
+-- every throttled AT_INTERVAL no-op).
+-- ---------------------------------------------------------------------------
+at_core.settings().debug = true
+printed = {}
+fake_now = fake_now + 10000
+tick.tick()
+check("tick/debug on: an idle tick with nothing to do prints the planner's status",
+      #printed == 1 and printed[1]:find("idle tick:", 1, true) ~= nil
+      and printed[1]:find("no profitable deals", 1, true) ~= nil,
+      printed[1])
+printed = {}
+fake_now = fake_now + 1
+tick.tick()
+check("tick/debug on: a throttled (no-op) call in between prints nothing new",
+      #printed == 0, #printed)
+at_core.settings().debug = false
+
 -- ===========================================================================
 -- AT_INTERVAL (30s) boundary walked end-to-end through the tick, not just
 -- plan.build() directly (already covered in the Task 2 section above): 29s

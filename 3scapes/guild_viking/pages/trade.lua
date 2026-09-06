@@ -61,20 +61,25 @@ end
 
 local function cart_row(width, ct)
   local arrow, acolor = cart_arrow(ct)
-  local quality = ""
-  if ct.mode == "sell" and ct.quality_pct and cc.is_perishable(ct.good) then
-    local show = (ct.good == "mead") or (ct.quality_pct < 100)
-    if show then
-      local label, qcolor = cc.quality_label(ct.good, ct.quality_pct)
-      quality = string.format("  %s[%s %d%%]%s", qcolor, label, ct.quality_pct, pagelib.RESET)
-    end
+  -- The grade TEXT ("regalia", "well-aged", ...) comes straight from the
+  -- server (client.h's _v_carts(), which calls the same query_quality_label
+  -- the text command does) -- it is not a fixed function of good+pct the way
+  -- the color banding below still is, so it can't be derived locally the
+  -- way cc.quality_label() used to try to for every good. Server only sends
+  -- it once quality_pct != 100, matching vtrade.c's own display gate exactly
+  -- (no is_perishable check there either -- crafted-good cure grades like
+  -- Finery/Armour use this same field, not a separate system).
+  local grade_tag = ""
+  if ct.mode == "sell" and ct.grade and ct.grade ~= "" then
+    local _, gcolor = cc.quality_label(ct.good, ct.quality_pct or 100)
+    grade_tag = string.format("  %s[%s %d%%]%s", gcolor, ct.grade, ct.quality_pct or 100, pagelib.RESET)
   end
   local cd = cc.fmt_time(ct.return_in)
   local cd_color = ((ct.return_in or 0) <= 0) and C.bright_green or C.white
   return pagelib.trunc(string.format("Cart #%-3d: %s%s%s %5dx %s%-12s%s %-14s%s %s%s%s",
     ct.cart_id or 0, acolor, arrow, pagelib.RESET, ct.amount or 0,
     cc.good_color(ct.good), cc.good_label(ct.good), pagelib.RESET,
-    ct.village or "", quality, cd_color, cd, pagelib.RESET), width)
+    ct.village or "", grade_tag, cd_color, cd, pagelib.RESET), width)
 end
 
 local function cart_sub_row(width, ct)
@@ -89,6 +94,9 @@ local function cart_sub_row(width, ct)
   if ct.cap and ct.cap > 0 then
     parts[#parts + 1] = "Cap:" .. ct.cap
   end
+  local max_horses = cc.CART_MAX_HORSES[ct.tier] or 1
+  parts[#parts + 1] = string.format("%s[%d/%d horses]%s",
+    C.bright_green, ct.horses or 0, max_horses, pagelib.RESET)
   if ct.escort and ct.escort > 0 then
     parts[#parts + 1] = ct.escort .. " escort" .. ((ct.escort ~= 1) and "s" or "")
   end
@@ -157,12 +165,40 @@ local function carts_lines(add, width)
     for _, ct in ipairs(S.carts) do
       add(cart_row(width, ct))
       add(cart_sub_row(width, ct))
-      if ct.mode == "route" and ct.legs and #ct.legs > 0 then
+      if ct.mode ~= "route" then
+        -- Buy/player-sell carts have their exact figure locked in at
+        -- dispatch (server folds that into `value` the same way); a
+        -- village-sell cart settles on arrival, so its number is a live
+        -- estimate at today's price until then -- same distinction
+        -- vtrade.c's own "Cost"/"Sale value"/"Est. value" labels draw.
+        local vlabel = (ct.mode == "buy") and "Cost"
+          or (ct.mode == "player_sell") and "Sale value" or "Est. value"
+        if ct.value and ct.value > 0 then
+          add(pagelib.trunc(string.format("  %s%s:%s %s%d daler%s",
+            C.dim, vlabel, pagelib.RESET, C.yellow, ct.value, pagelib.RESET), width))
+        end
+      elseif ct.legs and #ct.legs > 0 then
         add(pagelib.trunc(C.dim .. "Route stops:" .. pagelib.RESET, width))
+        local net = 0
         for idx, leg in ipairs(ct.legs) do
-          local larrow = (leg.mode == "buy") and "<<" or ">>"
-          add(pagelib.trunc(string.format("  %d %s %dx %s -> %s",
-            idx, larrow, leg.amount or 0, cc.good_label(leg.good), leg.village or ""), width))
+          local is_buy = (leg.mode == "buy")
+          local larrow = is_buy and "<<" or ">>"
+          local lact = is_buy and "BUY" or "SELL"
+          net = net + (is_buy and -(leg.value or 0) or (leg.value or 0))
+          add(pagelib.trunc(string.format("  %d %s %s %dx %s -> %s",
+            idx, larrow, lact, leg.amount or 0, cc.good_label(leg.good), leg.village or ""), width))
+          local vtag = is_buy and "" or " (est.)"
+          add(pagelib.trunc(string.format("     ~ %s%d daler%s%s",
+            C.yellow, leg.value or 0, pagelib.RESET, vtag), width))
+          if (ct.cur_leg or -1) == (idx - 1) then
+            add(pagelib.trunc(C.white .. "     << " .. C.dim .. "cart is here" .. pagelib.RESET, width))
+          end
+        end
+        if #ct.legs > 1 then
+          local ncolor = (net >= 0) and C.bright_green or C.bright_red
+          local nsign = (net >= 0) and "+" or ""
+          add(pagelib.trunc(string.format("  %sRoute net:%s %s%s%d daler%s",
+            C.dim, pagelib.RESET, ncolor, nsign, net, pagelib.RESET), width))
         end
       end
     end

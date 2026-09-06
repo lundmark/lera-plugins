@@ -98,6 +98,13 @@ function M.cart_tier_color(tier)
   return CART_TIER_ANSI[tier] or C.dim
 end
 
+-- Max horses per cart tier -- ported from world/trade_goods.h's
+-- CART_MAX_HORSES_T1..T5 (1/2/3/4/6). A pure function of tier, unlike cap
+-- (which also folds in Kartfar skill and per-cart cargo multipliers), so
+-- there's no need for the server to send it over GMCP -- tier is already
+-- part of every cart record.
+M.CART_MAX_HORSES = { [1] = 1, [2] = 2, [3] = 3, [4] = 4, [5] = 6 }
+
 -- Ported from LEGACY's CREW_MAX / SHIP_TIER_NAMES (guild_viking.lua:7542-7545).
 M.CREW_MAX = { [1] = 5, [2] = 10, [3] = 20, [4] = 35, [5] = 60 }
 M.SHIP_TIER_NAMES = { [1] = "Longship", [2] = "Dragonship", [3] = "Drakkar", [4] = "Skeid", [5] = "Busse" }

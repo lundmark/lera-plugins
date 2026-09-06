@@ -35,7 +35,7 @@ M.COMPOSITE = {
   -- so each travels as its own top-level array foreign-keyed back to its
   -- parent. MIP packed all three INSIDE their parent key, and the Trade pages
   -- render them, so they are rejoined here rather than dropped.
-  CARTS     = { "carts", "cart_legs" },
+  CARTS     = { "carts", "cart_legs", "cart_extra" },
   TQUEUE    = { "queue", "queue_legs" },
   REFINERY  = { "refinery", "refinery_grades" },
   WSTOCK    = { "wstock", "wstock_cap" },
@@ -237,7 +237,7 @@ local MAP = {
   south = "VMAP", landmarks = "VMAP",
 
   -- Guild.Trade
-  carts = "CARTS", cart_legs = "CARTS",
+  carts = "CARTS", cart_legs = "CARTS", cart_extra = "CARTS",
   queue = "TQUEUE", queue_legs = "TQUEUE",
   refinery = "REFINERY", refinery_grades = "REFINERY",
   wstock = "WSTOCK", wstock_cap = "WSTOCK",

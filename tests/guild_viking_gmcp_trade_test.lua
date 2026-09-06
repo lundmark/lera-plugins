@@ -68,9 +68,14 @@ trade({
     { mode = "buy", good = "iron", village = "Birka", cart_id = 9 },
   },
   cart_legs = {
-    { cart = 9, seq = 1, mode = "buy", good = "iron", amount = 10, village = "Birka" },
-    { cart = 4, seq = 2, mode = "sell", good = "mead", amount = 5, village = "Jorvik" },
-    { cart = 4, seq = 1, mode = "sell", good = "timber", amount = 30, village = "Havn" },
+    { cart = 9, seq = 1, mode = "buy", good = "iron", amount = 10, village = "Birka", value = 500 },
+    { cart = 4, seq = 2, mode = "sell", good = "mead", amount = 5, village = "Jorvik", value = 900 },
+    { cart = 4, seq = 1, mode = "sell", good = "timber", amount = 30, village = "Havn", value = 1500 },
+  },
+  -- Split from `carts` itself (see write_carts's comment): a 17-field cart
+  -- record would exceed the protocol's 16-field-per-record cap.
+  cart_extra = {
+    { cart = 4, grade = "well-aged", value = 4200, cur_leg = -1 },
   },
 })
 check("carts count", #S.carts == 2, #S.carts)
@@ -81,14 +86,42 @@ check("carts scalar fields", c.mode == "sell" and c.good == "timber"
       and c.village == "Havn" and c.amount == 30 and c.quality_pct == 85
       and c.cart_id == 4 and c.tier == 2 and c.durability == 70 and c.cap == 50
       and c.escort == 2 and c.refit == "reinforced")
+check("carts horses/grade/value/cur_leg", c.horses == 3 and c.grade == "well-aged"
+      and c.value == 4200 and c.cur_leg == -1)
 check("cart legs group on their own cart, ordered by seq",
       #c.legs == 2 and c.legs[1].good == "timber" and c.legs[1].amount == 30
       and c.legs[2].good == "mead" and c.legs[2].village == "Jorvik"
       and #S.carts[2].legs == 1 and S.carts[2].legs[1].good == "iron",
       #c.legs .. "/" .. tostring((c.legs[1] or {}).good))
+check("cart leg value", c.legs[1].value == 1500 and c.legs[2].value == 900
+      and S.carts[2].legs[1].value == 500)
 check("carts defaults", S.carts[2].tier == 1 and S.carts[2].durability == 100
       and S.carts[2].quality_pct == 100 and S.carts[2].refit == "standard"
-      and S.carts[2].return_in == 0)
+      and S.carts[2].return_in == 0 and S.carts[2].horses == 0
+      and S.carts[2].grade == "" and S.carts[2].value == 0 and S.carts[2].cur_leg == -1)
+
+-- A delta push resending only `carts` (secs ticked down) with cart_legs/
+-- cart_extra OMITTED (protocol.lua: absence on a delta means unchanged, not
+-- gone) must NOT wipe the route/grade/value data that arrived in the
+-- previous full push -- this is exactly the bug that made a route cart's
+-- stops and a sell cart's grade/value vanish moments after first appearing.
+trade({
+  carts = {
+    { mode = "sell", good = "timber", village = "Havn", secs = 239, amount = 30,
+      half_in = 119, quality_pct = 85, cart_id = 4, tier = 2, durability = 70,
+      cap = 50, escort = 2, refit = "reinforced", horses = 3 },
+    { mode = "buy", good = "iron", village = "Birka", cart_id = 9 },
+  },
+})
+check("a carts-only delta preserves the cart's own new fields",
+      S.carts[1].return_in == 239 and S.carts[1].halfway_in == 119)
+check("a carts-only delta preserves previously-known legs (not wiped)",
+      #S.carts[1].legs == 2 and S.carts[1].legs[1].good == "timber"
+      and #S.carts[2].legs == 1 and S.carts[2].legs[1].good == "iron")
+check("a carts-only delta preserves previously-known grade/value/cur_leg",
+      S.carts[1].grade == "well-aged" and S.carts[1].value == 4200
+      and S.carts[1].cur_leg == -1)
+
 local many = {}
 for i = 1, 40 do many[i] = { mode = "sell", cart_id = i } end
 trade({ carts = many })
@@ -430,6 +463,43 @@ check("tgoods scalar fields", S.trade_goods[2].ore.score == 1
       and S.trade_goods[2].timber.buy == 12)
 check("a lineage key becomes its own numeric index",
       S.trade_goods[5] ~= nil and S.trade_goods[5].zz ~= nil)
+
+-- Regression: GOOD_SHORT was missing the 11 husbandry/refined-husbandry
+-- abbreviations entirely (a bare letter decoded to itself, matching no good
+-- id best_sell_of()/the stock-sell scanner could ever look up), and `a` was
+-- mapped to the good's pre-rename id "amber" instead of "sunstone" (which is
+-- what market.lua's own GOODS_ALL, and the warehouse, actually key on).
+-- Both silently made the affected goods unsellable via auto-trade
+-- regardless of stock or demand -- see client.h's _v_tgoods() _abbrevs
+-- array for the server's authoritative letter-to-good mapping.
+S.trade_goods = {}
+tradegoods({
+  tgoods_3 = {
+    { lin = 3, good = "a", score = 0, sup = 10, dem = 0, buy = 5, sell = 0 },
+    { lin = 3, good = "c", score = 0, sup = 0, dem = 20, buy = 0, sell = 8 },
+    { lin = 3, good = "d", score = 0, sup = 0, dem = 5, buy = 0, sell = 3 },
+    { lin = 3, good = "p", score = 0, sup = 0, dem = 5, buy = 0, sell = 3 },
+    { lin = 3, good = "q", score = 0, sup = 0, dem = 5, buy = 0, sell = 3 },
+    { lin = 3, good = "v", score = 0, sup = 0, dem = 5, buy = 0, sell = 3 },
+    { lin = 3, good = "x", score = 0, sup = 0, dem = 5, buy = 0, sell = 3 },
+    { lin = 3, good = "mi", score = 0, sup = 0, dem = 5, buy = 0, sell = 3 },
+    { lin = 3, good = "hm", score = 0, sup = 0, dem = 5, buy = 0, sell = 3 },
+    { lin = 3, good = "z", score = 0, sup = 0, dem = 40, buy = 0, sell = 12 },
+    { lin = 3, good = "sm", score = 0, sup = 0, dem = 15, buy = 0, sell = 20 },
+    { lin = 3, good = "cs", score = 0, sup = 0, dem = 25, buy = 0, sell = 30 },
+  },
+})
+check("`a` resolves to sunstone, not the pre-rename `amber`",
+      S.trade_goods[3].sunstone ~= nil and S.trade_goods[3].amber == nil)
+check("husbandry abbreviations resolve to their good names",
+      S.trade_goods[3].wool ~= nil and S.trade_goods[3].eggs ~= nil
+      and S.trade_goods[3].pork ~= nil and S.trade_goods[3].mutton ~= nil
+      and S.trade_goods[3].poultry ~= nil and S.trade_goods[3].beef ~= nil
+      and S.trade_goods[3].milk ~= nil and S.trade_goods[3].horsemeat ~= nil)
+check("refined-husbandry abbreviations (the reported goods) resolve correctly",
+      S.trade_goods[3].cloth ~= nil and S.trade_goods[3].cloth.demand == 40
+      and S.trade_goods[3].smoked_meat ~= nil and S.trade_goods[3].smoked_meat.sell == 20
+      and S.trade_goods[3].cheese ~= nil and S.trade_goods[3].cheese.sell == 30)
 -- An abbreviation with no entry in the table stays as itself rather than
 -- becoming nil and dropping the good.
 check("an unknown abbreviation is kept verbatim",
