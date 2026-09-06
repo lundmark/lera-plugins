@@ -43,6 +43,7 @@ local stats_window = load_plugin("stats_window")
 local merc         = load_plugin("mercenary")
 local kill_trigger = load_plugin("kill_trigger")
 local guild_druid  = load_plugin("guild_druid")
+local plugin_manager = load_plugin("plugin_manager")
 
 --------------------------------------------------------------------------------
 -- Autologin Setup
