@@ -97,6 +97,11 @@ local SP_ANSI = { sheepfold = C.green, byre = C.cyan, stable = C.bright_cyan,
 -- byte-faithful rather than reconciled.
 local SP_DISP = { sheep = "Sheep", chicken = "Chickens", pig = "Pigs",
                   cow = "Cattle", horse = "Horses" }
+-- Species colours for those same species-keyed rows -- LEGACY's own SP_COL2
+-- (guild_viking.lua:10265), mirroring SP_ANSI above (which is keyed by
+-- building id) under species ids instead, mapped to the same pagelib.C hues.
+local SP_ANSI2 = { sheep = C.green, cow = C.cyan, horse = C.bright_cyan,
+                   pig = C.magenta, chicken = C.bright_cyan }
 
 local BR_DISP = {
   spelsau = "Spelsau", soay = "Soay", manx = "Manx Loaghtan",
@@ -344,8 +349,12 @@ local function find_lines(add, width)
       add(pagelib.trunc(string.format("#%-3d %dx %-14s Q%d  %dd  %s%s",
         o.id or 0, o.count or 0, breed_name(o.breed), o.quality or 0, o.price or 0,
         cc.fmt_time(o.secs), trait_tag(o.trait)), width))
-      add(pagelib.trunc(string.format("   H:%d F:%d Y:%d V:%d C:%d",
-        o.hard or 0, o.fert or 0, o.yield or 0, o.vigor or 0, o.con or 0), width))
+      -- LEGACY draws this row in one flat dim colour (0x888888), unlike the
+      -- per-letter rainbow used for My Herds and Market -- kept byte-faithful
+      -- rather than upgraded to match those.
+      add(pagelib.trunc(string.format("   %sH:%d F:%d Y:%d V:%d C:%d%s",
+        C.dim, o.hard or 0, o.fert or 0, o.yield or 0, o.vigor or 0, o.con or 0,
+        pagelib.RESET), width))
     end
   end
 
@@ -377,11 +386,18 @@ local function market_lines(add, width)
     if listings and #listings > 0 then
       add(pagelib.trunc(C.yellow .. (LIN_NAMES[lin] or ("Lineage " .. lin)) .. pagelib.RESET, width))
       for _, m in ipairs(listings) do
-        add(pagelib.trunc(string.format("#%-3d %-10s %-14s x%-2d  %dd%s",
-          (m.idx or 0) + 1, SP_DISP[m.species] or m.species or "?", breed_name(m.breed),
+        add(pagelib.trunc(string.format("%s#%-3d%s %s%-10s%s %s%-14s%s x%-2d  %dd%s",
+          C.dim, (m.idx or 0) + 1, pagelib.RESET,
+          SP_ANSI2[m.species] or C.white, SP_DISP[m.species] or m.species or "?", pagelib.RESET,
+          C.green, breed_name(m.breed), pagelib.RESET,
           m.count or 0, m.price or 0, trait_tag(m.trait)), width))
-        add(pagelib.trunc(string.format("   H:%d F:%d Y:%d V:%d C:%d",
-          m.hard or 0, m.fert or 0, m.yield or 0, m.vigor or 0, m.con or 0), width))
+        add(pagelib.trunc(string.format(
+          "   %sH:%d%s %sF:%d%s %sY:%d%s %sV:%d%s %sC:%d%s",
+          C.green, m.hard or 0, pagelib.RESET,
+          C.magenta, m.fert or 0, pagelib.RESET,
+          C.yellow, m.yield or 0, pagelib.RESET,
+          C.cyan, m.vigor or 0, pagelib.RESET,
+          C.red, m.con or 0, pagelib.RESET), width))
       end
     end
   end
