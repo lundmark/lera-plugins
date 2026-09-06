@@ -80,6 +80,8 @@ check("an unrelated item in the portal room does not complete a run",
   } }) == false)
 check("matching tolerates surrounding text",
   cs.complete({ items = { "there is a glowing portal here somehow" } }) == true)
+check("completion accepts Room.Contents item records",
+  cs.complete({ items = { { name = "A glowing portal (swirling chaotically)" } } }) == true)
 check("an ordinary room does not complete a run",
   cs.complete({ items = { "a rusty sword", "a small mutant organism" } }) == false)
 check("an empty room does not complete a run", cs.complete({ items = {} }) == false)

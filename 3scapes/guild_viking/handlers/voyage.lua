@@ -351,22 +351,62 @@ local function string_list_writer(field, cap, seen)
   end
 end
 
--- voffers + voffers_ship. MIP packed the ship name and the offer list into one
--- value; the two are separate keys here. `fit_code` -> fit, and a missing fit
--- defaults to 3 ("ready"), matching the MIP handler.
+-- MIP VOFFERS packs the ship name and offer list into one value. This exact
+-- parser is needed in addition to the GMCP writer below: the server sends the
+-- human-readable contract board and the MIP snapshot together, and auto-voyage
+-- must see the offers before its next tick or it will request the board again.
+local function parse_mip_voffers(value)
+  S.mip_voyage_seen = true
+  if type(value) ~= "string" or value == "" then
+    S.voyage_offers = nil
+    S.voyage_offers_ship = nil
+    return
+  end
+  local ship, rest = value:match("^([^|]*)|(.*)$")
+  if not ship then
+    S.voyage_offers = nil
+    S.voyage_offers_ship = nil
+    return
+  end
+  S.voyage_offers_ship = ship
+  local list = {}
+  for entry in rest:gmatch("[^;]+") do
+    if #list >= 10 then break end
+    local idx, typ, name, danger, difficulty, fit =
+      entry:match("^(%d+):([^:]*):([^:]*):(%d+):([^:]*):(%d+)$")
+    if not idx then
+      idx, typ, name, danger, difficulty =
+        entry:match("^(%d+):([^:]*):([^:]*):(%d+):(.*)$")
+    end
+    if idx then
+      list[#list + 1] = {
+        index = tonumber(idx), type = typ, name = name,
+        danger = tonumber(danger) or 0, difficulty = difficulty,
+        fit = tonumber(fit) or 3,
+      }
+    end
+  end
+  S.voyage_offers = #list > 0 and { ship = ship, list = list } or nil
+end
+
+M.VOFFERS = parse_mip_voffers
+
+-- GMCP voffers + voffers_ship. The two halves are separate keys there.
 local function write_voffers(parts)
   if type(parts) ~= "table" then return end
   -- The two halves are independent keys over a delta transport. Only the
   -- arrival of `voffers` itself may clear the list: a frame carrying just a
   -- changed ship name must not be read as "no offers".
   if parts.voffers == nil then
-    if parts.voffers_ship ~= nil and S.voyage_offers then
-      S.voyage_offers.ship = tostring(parts.voffers_ship)
+    if parts.voffers_ship ~= nil then
+      S.voyage_offers_ship = tostring(parts.voffers_ship)
+      if S.voyage_offers then S.voyage_offers.ship = S.voyage_offers_ship end
     end
     return
   end
   if type(parts.voffers) ~= "table" or #parts.voffers == 0 then
     S.voyage_offers = nil
+    S.voyage_offers_ship = nil
     return
   end
   local list = {}
@@ -383,7 +423,11 @@ local function write_voffers(parts)
     end
   end
   local ship = parts.voffers_ship
-  if ship == nil then ship = S.voyage_offers and S.voyage_offers.ship end
+  if ship ~= nil then
+    S.voyage_offers_ship = tostring(ship)
+  else
+    ship = S.voyage_offers_ship or (S.voyage_offers and S.voyage_offers.ship)
+  end
   S.voyage_offers = { ship = tostring(ship or ""), list = list }
 end
 
