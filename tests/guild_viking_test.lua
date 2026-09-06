@@ -1237,7 +1237,7 @@ printed = {}
 local ok_bad_raid = pcall(registered_vik.handler, "raid bogus", "/vik")
 check("/vik raid bogus: does not error", ok_bad_raid)
 check("/vik raid bogus: usage message verbatim",
-      printed[1] == "[Auto-Raid] usage: araid on|off | convoy on|off | ships <n>|all | target <name>"
+      printed[1] == "[Auto-Raid] usage: araid on|off | convoy on|off | ships <n>|all | target <name> | mode fixed|rotate"
         and #printed == 1, printed[1])
 
 -- ---- /vik raid (bare): opens the settings menu -----------------------------
@@ -1247,8 +1247,8 @@ last_menu_open = nil
 registered_vik.handler("raid", "/vik")
 check("/vik raid (bare): opens a menu", last_menu_open ~= nil)
 check("/vik raid (bare): menu title", last_menu_open and last_menu_open.title == "Auto-Raid Settings")
-check("/vik raid (bare): 5 items, LEGACY's araid_menu_build order",
-      last_menu_open and #last_menu_open.items == 5, last_menu_open and #last_menu_open.items)
+check("/vik raid (bare): 6 items, LEGACY's araid_menu_build order plus the Mode entry",
+      last_menu_open and #last_menu_open.items == 6, last_menu_open and #last_menu_open.items)
 
 last_menu_open.on_select("on")
 check("/vik raid menu: selecting 'on' flips auto_raid", page_opts.get("auto_raid") == true)

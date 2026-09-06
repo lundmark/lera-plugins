@@ -172,10 +172,65 @@ local function note(hex, text)
   buffer.color_print(nil, hex, text)
 end
 
+-- The 13 lineage-city raid targets, index-matched to the server's own
+-- query_raid_targets_lineage() (players/viking/obj/include/raid.h): that
+-- function's own comment states its 0-based array is "the 13 holds in
+-- lineage order (index i -> lineage i+1)", so index 0 = lineage 1, etc.
+-- Hardcoded here (rather than parsed from S.raid_targets_lin's name/g1/g2
+-- strings) the same way autotrader/plan.lua hardcodes AT_TOWN/LIN_NAMES
+-- instead of deriving them from wire data -- these are political-lineage
+-- city names, distinct from LIN_NAMES' dynasty-house names (e.g. lineage 2
+-- is "Eiriksby" here but "Eiriksson Hold" there); S.heat is indexed by
+-- lineage id 1..13 (client.h's _v_heat(): out[_hl-1] for _hl = 1..13), so
+-- this table is exactly the name <-> lineage-id bridge rotate mode needs.
+local RAID_LIN_TOWNS = {
+  [1] = "Lodbrok's Hold", [2] = "Eiriksby", [3] = "Imaird", [4] = "Holmgard",
+  [5] = "Hafrfjord", [6] = "Uppsala", [7] = "Borgarfjord", [8] = "Vestergotland",
+  [9] = "Sverkersby", [10] = "Ericsgard", [11] = "Birka", [12] = "Lejre",
+  [13] = "Nidaros",
+}
+
+-- Rotate mode's "how close counts as equally cold" tolerance. Picking the
+-- single coldest target every cycle would camp whichever one happens to sit
+-- at the historical minimum; widening the pool to everything within this
+-- many heat points of the minimum, then excluding the immediately-previous
+-- pick when an alternative exists, gives real rotation while still strongly
+-- favoring low heat over high.
+local AR_ROTATE_HEAT_BAND = 5
+
+-- Picks a target for rotate mode: the lowest-heat lineage city, with ties
+-- (or near-ties, within AR_ROTATE_HEAT_BAND) broken randomly rather than
+-- deterministically, and the immediately-previous pick excluded from that
+-- pool whenever a different option exists -- so the same coldest target is
+-- not hit two cycles in a row just because it is still coldest.
+local function pick_rotate_target(ar)
+  local candidates = {}
+  for lin, name in pairs(RAID_LIN_TOWNS) do
+    candidates[#candidates + 1] = { name = name, lin = lin,
+      heat = (S.heat and S.heat[lin]) or 0 }
+  end
+  if #candidates == 0 then return nil end
+  table.sort(candidates, function(a, b) return a.heat < b.heat end)
+  local min_heat = candidates[1].heat
+  local pool = {}
+  for _, c in ipairs(candidates) do
+    if c.heat <= min_heat + AR_ROTATE_HEAT_BAND then pool[#pool + 1] = c end
+  end
+  if ar.last_rotate and #pool > 1 then
+    local filtered = {}
+    for _, c in ipairs(pool) do
+      if c.name ~= ar.last_rotate then filtered[#filtered + 1] = c end
+    end
+    if #filtered > 0 then pool = filtered end
+  end
+  return pool[math.random(#pool)]
+end
+
 -- LEGACY:4143-4148 (ar_settings).
 function M.settings()
   if not S.autoraid then
-    S.autoraid = { convoy = false, ships = 2, target = "", last = 0, last_dispatch = nil }
+    S.autoraid = { convoy = false, ships = 2, target = "", last = 0, last_dispatch = nil,
+                   mode = "fixed", last_rotate = nil }
   end
   return S.autoraid
 end
@@ -295,7 +350,8 @@ function M.tick()
   if not page_opts.get("auto_raid") then return end
   if not mud.connected() then return end
   local ar = M.settings()
-  if not ar.target or ar.target == "" then return end
+  local rotate = ar.mode == "rotate"
+  if not rotate and (not ar.target or ar.target == "") then return end
   local now = os.time()
   if ar.last and (now - ar.last) < AR_INTERVAL then return end
   ar.last = now
@@ -307,7 +363,16 @@ function M.tick()
   -- The number the player wants per dispatch, clamped to the dock/fleet cap.
   local target_n = (want == "all") and mx or math.min(tonumber(want) or 2, mx)
   if target_n < 1 then return end   -- also redundant with the n<1/n<2 checks below
-  local tgt = ar.target
+
+  local tgt
+  if rotate then
+    local picked = pick_rotate_target(ar)
+    if not picked then return end
+    tgt = picked.name
+    ar.last_rotate = picked.name
+  else
+    tgt = ar.target
+  end
   local n, convoy
 
   if ar.convoy and target_n >= 2 then
@@ -360,6 +425,10 @@ function M.config(rest)
     ar.convoy = false; note("FFA500", "[Auto-Raid] convoy OFF.")
   elseif low == "all" then
     ar.ships = "all"; note("FFA500", "[Auto-Raid] ships = all.")
+  elseif low == "mode fixed" then
+    ar.mode = "fixed"; note("FFA500", "[Auto-Raid] mode = fixed.")
+  elseif low == "mode rotate" then
+    ar.mode = "rotate"; note("FFA500", "[Auto-Raid] mode = rotate.")
   else
     local key, val = low:match("^(%a+)%s+(%d+)$")
     if key == "ships" then
@@ -367,13 +436,13 @@ function M.config(rest)
     elseif rest:match("^target%s+") then
       ar.target = rest:gsub("^%S+%s+", ""); note("FFA500", "[Auto-Raid] target = " .. ar.target)
     elseif rest ~= "" and low ~= "status" then
-      note("FF0000", "[Auto-Raid] usage: araid on|off | convoy on|off | ships <n>|all | target <name>")
+      note("FF0000", "[Auto-Raid] usage: araid on|off | convoy on|off | ships <n>|all | target <name> | mode fixed|rotate")
       return
     end
   end
   save()   -- persist auto_raid on/off + settings immediately
-  note("FFA500", string.format("[Auto-Raid] %s | ships %s | convoy %s | target %s",
-    page_opts.get("auto_raid") and "ON" or "OFF", tostring(ar.ships or 2),
+  note("FFA500", string.format("[Auto-Raid] %s | mode %s | ships %s | convoy %s | target %s",
+    page_opts.get("auto_raid") and "ON" or "OFF", ar.mode or "fixed", tostring(ar.ships or 2),
     ar.convoy and "yes" or "no", (ar.target ~= "" and ar.target) or "(none)"))
 end
 
@@ -388,7 +457,9 @@ local function menu_items()
     { label = "Ships to send (max " .. M.max_ships() .. "): "
         .. ((ar.ships == "all") and "all" or tostring(math.min(tonumber(ar.ships) or 2, M.max_ships()))),
       value = "ships" },
-    { label = "Target: " .. ((ar.target ~= "" and ar.target) or "(pick)"), value = "target" },
+    { label = "Mode: " .. ((ar.mode == "rotate") and "rotate (lowest heat)" or "fixed"), value = "mode" },
+    { label = "Target: " .. ((ar.mode == "rotate") and (ar.last_rotate and ("auto (last: " .. ar.last_rotate .. ")") or "auto (rotating)")
+        or ((ar.target ~= "" and ar.target) or "(pick)")), value = "target" },
     { label = "Show raid log: " .. (page_opts.get("show_city_raidlog") and "yes" or "no"), value = "log" },
   }
 end
@@ -451,8 +522,10 @@ local function target_pick(value)
   if grp == "lin" then e = (S.raid_targets_lin or {})[idx]
   elseif grp == "hist" then e = (S.raid_targets_hist or {})[idx] end
   if e and e.name then
-    M.settings().target = e.name
-    note("FFA500", "[Auto-Raid] target = " .. e.name)
+    local ar = M.settings()
+    ar.target = e.name
+    ar.mode = "fixed"   -- picking an explicit target implies fixed mode
+    note("FFA500", "[Auto-Raid] target = " .. e.name .. " (mode = fixed)")
   end
   M.open_menu()
 end
@@ -484,6 +557,8 @@ local function menu_pick(id)
     page_opts.set("show_city_raidlog", not page_opts.get("show_city_raidlog"))
   elseif id == "ships" then
     cycle_ships(ar)
+  elseif id == "mode" then
+    ar.mode = (ar.mode == "rotate") and "fixed" or "rotate"
   elseif id == "target" then
     -- Early return, same as LEGACY:11566-11567 -- no persist.save(), no
     -- settings-menu reopen here (see module header's quirk note).
