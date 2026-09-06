@@ -267,6 +267,7 @@ check("wstock pct lands on freshness_pct",
       and S.wstock[1].amount == 120)
 check("wstock is also indexed by good",
       S.wstock_by_good.mead == S.wstock[2] and S.wstock_by_good.timber.amount == 120)
+check("wstock_cap lands on S.wh_cap", S.wh_cap == 500, S.wh_cap)
 -- The pages test the grade for presence, so an absent or empty label must be
 -- nil rather than the empty string.
 check("an absent or empty grade stays nil",

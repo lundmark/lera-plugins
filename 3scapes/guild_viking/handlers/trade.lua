@@ -687,12 +687,15 @@ local function write_incoming(records)
 end
 
 -- wstock + wstock_cap. The server splits its one mapping into the entry array
--- and its cap; only the entries have a consumer here, so the cap is accepted
--- and ignored rather than stored unread. `pct` -> freshness_pct, and an empty
--- grade label stays nil so the pages can test it for presence.
+-- and its cap -- LEGACY's own WSTOCK handler (guild_viking.lua:1491-1494)
+-- stores this same value as state.wh_cap ("incl. steward/lager/star bonuses
+-- from query_warehouse_capacity()"), which pages/city.lua prefers over its
+-- static per-tier table for exactly that reason. `pct` -> freshness_pct, and
+-- an empty grade label stays nil so the pages can test it for presence.
 local function write_wstock(parts)
   if type(parts) ~= "table" then return end
   if type(parts.wstock) ~= "table" then return end
+  S.wh_cap = tonumber(parts.wstock_cap)
   S.wstock = {}
   S.wstock_by_good = {}
   for _, r in ipairs(parts.wstock) do
