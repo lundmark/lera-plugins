@@ -326,20 +326,17 @@ local function mercenary_stat_lines(w)
   local pl_cap = stats.pl_max_level or 150
   local il_cap = stats.il_max_level or 30
   if stats.pl_level < pl_cap or stats.il_level < il_cap then
-    local pl_pct = stats.pl_needed > 0
-      and math.floor(stats.pl_xp / stats.pl_needed * 100) or 100
-    local il_pct = stats.il_needed > 0
-      and math.floor(stats.il_xp / stats.il_needed * 100) or 100
-
-    table.insert(lines, string.format("%sPL%s %s %d %s%d%%%s",
+    -- ONE row, not two. This pane is height-clipped -- render() draws only
+    -- lines[scroll_offset+1 .. +h] -- and PL/IL sit at the bottom of the
+    -- mercenary block, so spending a second row here pushed them off the
+    -- visible area entirely on a short pane. Two 4-cell bars plus both levels
+    -- fit the width the single text line already used.
+    local bw = (w >= 30) and 6 or 4
+    table.insert(lines, string.format("%sPL%s%s%d %sIL%s%s%d",
       colors.cyan, colors.reset,
-      draw_mini_bar(stats.pl_xp, stats.pl_needed, 6, dim),
-      stats.pl_level, colors.dim, pl_pct, colors.reset))
-
-    table.insert(lines, string.format("%sIL%s %s %d %s%d%%%s",
+      draw_mini_bar(stats.pl_xp, stats.pl_needed, bw, dim), stats.pl_level,
       colors.yellow, colors.reset,
-      draw_mini_bar(stats.il_xp, stats.il_needed, 6, dim),
-      stats.il_level, colors.dim, il_pct, colors.reset))
+      draw_mini_bar(stats.il_xp, stats.il_needed, bw, dim), stats.il_level))
   end
 
   return lines
