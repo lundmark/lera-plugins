@@ -40,6 +40,10 @@ local last_kill = {
 local trigger_ids = {}
 local command_id = nil
 
+-- Only desktop composition opts in. Presence is captured during on_load so an
+-- empty saved object still belongs to the user and hosted defaults stay intact.
+local local_defaults_pending = false
+
 -- Cross-plugin kill feed (the Portal killtrigger.monster_died event).
 -- Listeners are registration-ordered and die with this plugin's unload;
 -- consumers re-register in their on_setup.
@@ -187,6 +191,17 @@ end
 --------------------------------------------------------------------------------
 -- Public API
 --------------------------------------------------------------------------------
+
+function M.initialize_local_defaults()
+  if not local_defaults_pending then return false end
+  data.killers = {}
+  data.commands = {}
+  data.other_commands = {}
+  data.enabled = false
+  save_data()
+  local_defaults_pending = false
+  return true
+end
 
 -- Enable/disable the trigger system
 function M.enable()
@@ -666,6 +681,7 @@ function M.on_load()
   -- Load saved data
   store.load()
   local saved = store.get()
+  local_defaults_pending = saved == nil
   if saved then
     if saved.killers then
       data.killers = saved.killers
