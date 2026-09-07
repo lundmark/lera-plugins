@@ -186,7 +186,9 @@ local function carts_lines(add, width)
           local lact = is_buy and "BUY" or "SELL"
           net = net + (is_buy and -(leg.value or 0) or (leg.value or 0))
           add(pagelib.trunc(string.format("  %d %s %s %dx %s -> %s",
-            idx, larrow, lact, leg.amount or 0, cc.good_label(leg.good), leg.village or ""), width))
+            idx, larrow, lact, leg.amount or 0,
+            cc.good_color(leg.good) .. cc.good_label(leg.good) .. pagelib.RESET,
+            leg.village or ""), width))
           local vtag = is_buy and "" or " (est.)"
           add(pagelib.trunc(string.format("     ~ %s%d daler%s%s",
             C.yellow, leg.value or 0, pagelib.RESET, vtag), width))

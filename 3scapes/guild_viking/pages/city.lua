@@ -199,7 +199,10 @@ local function raids_lines(add, width)
     else
       local goods_parts = {}
       for _, g in ipairs(r.goods or {}) do
-        goods_parts[#goods_parts + 1] = string.format("%d %s", g.qty or 0, cc.good_label(g.good))
+        -- LEGACY colours each cargo entry by its good (guild_viking.lua:8957);
+        -- the port printed the label plain, so every raid haul rendered white.
+        goods_parts[#goods_parts + 1] = string.format("%d %s%s%s",
+          g.qty or 0, cc.good_color(g.good), cc.good_label(g.good), pagelib.RESET)
       end
       local goods_txt = (#goods_parts > 0) and ("  " .. table.concat(goods_parts, "  ")) or ""
       local thralls_txt = ((r.thralls or 0) > 0)
