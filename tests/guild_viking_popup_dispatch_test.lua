@@ -13,13 +13,16 @@
 -- event, as every per-popup suite does, bypasses popup.lua's capture logic
 -- entirely and cannot see either one.
 --
--- Run from the lera-plugins repo root (plugins/, matching run_tests.sh's
--- cwd) with LERA_ROOT pointing at a built Lera checkout. The path below
--- reaches scripts/default/popup.lua at "../scripts/default" relative to
--- that cwd -- see tests/popup_test.lua (run from the LERA repo root
--- instead, hence its own "scripts/default/?.lua" prefix with no "..") for
--- the same module loaded the other way.
-package.path = "3scapes/guild_viking/?.lua;../scripts/default/?.lua;" .. package.path
+-- Run from the lera-plugins repo root with LERA_ROOT pointing at a built Lera
+-- checkout. scripts/default/popup.lua is reached through LERA_ROOT rather than
+-- a path relative to the cwd: run_tests.sh resolves the Lera checkout as a
+-- SIBLING of lera-plugins, so the "../scripts/default" this once used only
+-- resolved when the repo sat inside Lera as plugins/ -- see tests/popup_test.lua
+-- (run from the Lera repo root instead) for the same module loaded the other way.
+local lera_root = assert(os.getenv("LERA_ROOT"), "LERA_ROOT is required")
+lera_root = lera_root:gsub("/+$", "")
+package.path = "3scapes/guild_viking/?.lua;" .. lera_root
+  .. "/scripts/default/?.lua;" .. package.path
 
 local failures = 0
 local function check(name, ok, detail)
@@ -110,7 +113,7 @@ end
 -- Sandboxed/trusted composition code (popups.lua) reaches the popup surface
 -- through require("wm").popup.{open,close,is_open} (CLAUDE.md "Popup
 -- Overlay"); this delegates every one of those three straight to the real
--- module loaded from ../scripts/default/popup.lua, so popups.lua's own
+-- module loaded from LERA_ROOT/scripts/default/popup.lua, so popups.lua's own
 -- open_wrapper/toggle call the REAL open()/close()/is_open() -- the one
 -- thing every other guild_viking popup test suite stubs away.
 local real_popup = require("popup")

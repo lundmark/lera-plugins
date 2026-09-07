@@ -1647,6 +1647,9 @@ voyage2.settings().last = 0
 local herd2 = require("autoherd")
 herd2.settings().log = { { t = "11:45", desc = "stock sheep into sheepfold" } }
 herd2.settings().last = 0
+local war2 = require("autowar")
+war2.settings().status = "battle live (auto-fight off)"
+war2.settings().last = 0
 
 printed = {}
 registered_vik.handler("status", "/vik")
@@ -1664,8 +1667,14 @@ check("/vik status: Auto-Voyage line reports ON + the last log entry + ready",
 check("/vik status: Auto-Herd line reports off + the last log entry + ready",
       printed[7] == "  Auto-Herd: off | last: 11:45 stock sheep into sheepfold | next: ready",
       printed[7])
-check("/vik status: exactly 7 lines printed (3 ingestion + 4 automation)",
-      #printed == 7, #printed)
+-- Auto-War is the fifth automation, and /vik help makes the same promise for
+-- it as for the other four, so status has to account for its line too.
+check("/vik status: Auto-War line reports off + phase + the last action + ready",
+      printed[8] == "  Auto-War: off | phase=idle"
+        .. " | last: battle live (auto-fight off) | next: ready",
+      printed[8])
+check("/vik status: exactly 8 lines printed (3 ingestion + 5 automation)",
+      #printed == 8, #printed)
 
 -- "next: Ns" -- not yet ready -- when a real dispatch happened recently.
 raid2.settings().last = os.time()
