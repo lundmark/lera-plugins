@@ -33,7 +33,7 @@ Not rechecked at the public validation level:
 
 ### `chat_monitor`
 
-- Path: `3scapes/chat_monitor.lua`
+- Path: `3scapes/chat_monitor/init.lua`
 - Approved targets: `chat_monitor`
 
 ### `deadmans`
@@ -405,7 +405,7 @@ Not rechecked at the public validation level:
 - `host_lifecycle` (callback): plugin_gap — Legacy host, plugin-list, connection, and enablement lifecycle behavior remains incomplete.
 - `interactive_channel_configuration` (rendering): lera_blocker — Interactive channel configuration requires pointer click callbacks not exposed to Lua. — [Lera issue #15](https://github.com/lundmark/lera/issues/15)
 - `interactive_color_picker` (rendering): lera_blocker — The interactive color picker requires pointer click and drag callbacks not exposed to Lua. — [Lera issue #16](https://github.com/lundmark/lera/issues/16)
-- `link_detection` (rendering): plugin_gap — Legacy URL detection and styled link extraction remain missing.
+- `link_detection` (rendering): implemented — URL detection, highlighting and pointer-driven activation, via the plugin-local `url_links` module (`3scapes/chat_monitor/url_links.lua`).
 - `logging_and_export` (persistence): lera_blocker — Timestamped logs, queue files, and message export require an arbitrary file-write API not exposed to plugins. — [Lera issue #8](https://github.com/lundmark/lera/issues/8)
 - `message_capture_dispatch` (protocol): plugin_gap — Current MIP capture covers useful subsets but not the complete legacy dispatch contract.
 - `message_wrapping_buffering` (state): plugin_gap — Character wrapping and bounded history do not reproduce legacy styled pixel-width buffering.

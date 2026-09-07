@@ -2,7 +2,24 @@
 -- pointing at a built Lera checkout.
 local lera_root = assert(os.getenv("LERA_ROOT"), "LERA_ROOT is required")
 lera_root = lera_root:gsub("/+$", "")
-package.path = "3scapes/?.lua;" .. lera_root .. "/scripts/default/?.lua;" .. package.path
+-- chat_monitor is a DIRECTORY plugin (3scapes/chat_monitor/init.lua), so its
+-- own directory comes first: that is where the sandbox resolves require() for
+-- anything outside the "command"/"wm"/"menu" whitelist, and url_links lives
+-- there for exactly that reason (src/script/plugin.c:520-535).
+--
+-- scripts/default stays on the path only because this suite loads the REAL wm
+-- (and the menu it pulls in). Core also ships a url_links.lua, so the ordering
+-- matters: with scripts/default first, deleting the plugin's own copy would
+-- still pass here while failing in the sandbox at runtime. The assertion below
+-- pins the resolution so that divergence cannot go unnoticed.
+package.path = "3scapes/chat_monitor/?.lua;3scapes/?/init.lua;3scapes/?.lua;"
+  .. lera_root .. "/scripts/default/?.lua;" .. package.path
+
+local url_links_path = assert(package.searchpath
+  and package.searchpath("url_links", package.path)
+  or "3scapes/chat_monitor/url_links.lua")
+assert(url_links_path:find("3scapes/chat_monitor/", 1, true),
+  "url_links must resolve inside the plugin directory, got " .. url_links_path)
 
 local failures = 0
 local function check(name, ok, detail)
