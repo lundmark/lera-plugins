@@ -219,7 +219,12 @@ local function refsell_row(width, rank, r)
   local demand = string.format("%sDemand: %d%s", C.dim, r.demand or 0, pagelib.RESET)
   local blocked = (r.blocked or 0) > 0
     and string.format("  %s%d blocked%s", C.cyan, r.blocked, pagelib.RESET) or ""
-  return pagelib.trunc(left .. "  " .. stock .. "  " .. demand .. blocked, width)
+  -- The good and town are already %-padded above, but stock is not, so the
+  -- Demand column used to slide left and right with "have 12 (~340d)" vs
+  -- "no stock". Pad it to a fixed cell so Demand stacks down the page.
+  local REF_STOCK_W = 22
+  return pagelib.trunc(left .. "  " .. pagelib.trunc(stock, REF_STOCK_W)
+    .. demand .. blocked, width)
 end
 
 -- Auto-Trade status / log (guild_viking.lua:3376-3437's at_line part;
