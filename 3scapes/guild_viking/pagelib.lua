@@ -17,6 +17,15 @@ pagelib.C = {
   white        = "\27[37m",
   dim          = "\27[90m",
   magenta      = "\27[35m",
+  -- Added so the goods table can separate colours that previously had to
+  -- share a slot (six meats collapsing onto two reds, most notably). Plain
+  -- SGR 3x/9x codes, same family as the ten above -- nothing here needs
+  -- 256-colour or truecolour support.
+  bright_yellow  = "\27[93m",
+  bright_magenta = "\27[95m",
+  bright_white   = "\27[97m",
+  blue           = "\27[34m",
+  bright_blue    = "\27[94m",
 }
 
 -- Strip SGR escapes and measure what's left. Simpler than the trunc walker

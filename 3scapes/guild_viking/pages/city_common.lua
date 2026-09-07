@@ -67,14 +67,56 @@ end
 -- Final-review BGR decode workbook (guild_viking.lua:301, 0xBBGGRR):
 --   finery 0x44DDFF -> R=FF/G=DD/B=44 -> gold, mapped to yellow (nearest
 --     pagelib.C hue) -- was guessed at bright_cyan by variable-name alone.
+-- Ported from LEGACY's GOOD_COLORS (guild_viking.lua:8542), but ALLOCATED
+-- rather than transcribed. Two reasons the literal hex values could not be
+-- used: pagelib's ANSI table has 15 colours for 32 goods, and LEGACY itself
+-- was ambiguous (beef and mutton shared 0x4444AA, and seven goods sat in one
+-- yellow band) which made the Warehouse unreadable at a glance.
+--
+-- Allocation rule: each good keeps its hue family, and within a family the
+-- shades are spread so no colour carries more than three goods. The six meats
+-- are guaranteed mutually distinct -- they are the set most often read side by
+-- side in the Warehouse and livestock lists.
+--
+-- If you add a good, pick the free shade in its hue family; do not collapse it
+-- onto a neighbour just because the hex looked close in LEGACY.
 local GOOD_COLORS = {
-  timber = C.green, ore = C.dim, iron = C.cyan, grain = C.yellow,
-  furs = C.red, fish = C.bright_cyan, mead = C.magenta, sunstone = C.yellow,
-  runestones = C.white, spoils = C.red,
-  salted_fish = C.bright_cyan, bread = C.yellow, fine_furs = C.bright_red,
-  tools = C.dim, gemstones = C.magenta, honey = C.yellow, weapons = C.red,
-  armour = C.bright_cyan, finery = C.yellow,
-  food = C.yellow, water = C.cyan,
+  -- Raw goods
+  timber = C.green,
+  ore = C.dim,
+  iron = C.cyan,
+  grain = C.yellow,
+  furs = C.red,
+  fish = C.bright_cyan,
+  mead = C.magenta,
+  sunstone = C.bright_yellow,
+  runestones = C.white,
+  spoils = C.red,
+  honey = C.bright_yellow,
+  -- Refined goods
+  salted_fish = C.bright_blue,
+  bread = C.yellow,
+  fine_furs = C.bright_red,
+  tools = C.dim,
+  gemstones = C.bright_magenta,
+  weapons = C.bright_white,
+  armour = C.bright_cyan,
+  finery = C.bright_yellow,
+  -- Husbandry / animal products (mutually distinct)
+  wool = C.bright_blue,
+  eggs = C.bright_white,
+  milk = C.white,
+  cheese = C.yellow,
+  cloth = C.cyan,
+  pork = C.bright_red,
+  beef = C.red,
+  mutton = C.magenta,
+  horsemeat = C.bright_magenta,
+  poultry = C.bright_white,
+  smoked_meat = C.dim,
+  -- Generic
+  food = C.bright_green,
+  water = C.blue,
 }
 function M.good_color(g)
   return GOOD_COLORS[g] or C.white
