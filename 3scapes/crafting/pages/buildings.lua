@@ -46,25 +46,23 @@ function M.lines(width)
     add(colors[i - 1] .. cols[i] .. pagelib.RESET)
   end
 
+  -- Refineries have their own tab now. This used to inline every allocation
+  -- here, which was reasonable while the server sent only the stages that had
+  -- one; it now sends the whole ten-stage chain per refinery, so reproducing
+  -- it here would bury the building list under sixty mostly-empty rows.
+  -- A one-line summary keeps the cross-reference without the noise.
   if #s.refineries > 0 then
-    local groups, order = {}, {}
+    local seen, count, allocated = {}, 0, 0
     for _, r in ipairs(s.refineries) do
       local k = r.building or "?"
-      if not groups[k] then groups[k] = {}; order[#order + 1] = k end
-      table.insert(groups[k], r)
+      if not seen[k] then seen[k] = true; count = count + 1 end
+      if (r.percent or 0) > 0 then allocated = allocated + 1 end
     end
-    table.sort(order)
     add("")
-    add(pagelib.header(width, "Refinery Allocation"))
-    for _, name in ipairs(order) do
-      add(pagelib.trunc(C.bright_cyan .. name .. pagelib.RESET, width))
-      local rows2 = groups[name]
-      table.sort(rows2, function(a, b) return (a.tier or 0) < (b.tier or 0) end)
-      for _, r in ipairs(rows2) do
-        add(pagelib.trunc(string.format("  %s: %s%d%%%s",
-          pagelib.title(r.material or ("t" .. tostring(r.tier))), C.yellow, r.percent or 0, pagelib.RESET), width))
-      end
-    end
+    add(pagelib.trunc(string.format(
+      "%s%d refiner%s, %d allocated stage%s -- see the Refinery tab%s",
+      C.dim, count, count == 1 and "y" or "ies",
+      allocated, allocated == 1 and "" or "s", pagelib.RESET), width))
   end
 
   return lines

@@ -13,6 +13,7 @@ local info_page = require("pages.info")
 local inventory_page = require("pages.inventory")
 local skills_page = require("pages.skills")
 local buildings_page = require("pages.buildings")
+local refinery_page = require("pages.refinery")
 local jobs_page = require("pages.jobs")
 local recipes_page = require("pages.recipes")
 local market_page = require("pages.market")
@@ -22,6 +23,7 @@ window.PAGES = {
   { key = "inventory", label = "Inventory", mod = inventory_page },
   { key = "skills",    label = "Skills",    mod = skills_page },
   { key = "buildings", label = "Buildings", mod = buildings_page },
+  { key = "refinery",  label = "Refinery",  mod = refinery_page },
   { key = "jobs",       label = "Jobs",      mod = jobs_page },
   { key = "recipes",   label = "Recipes",   mod = recipes_page },
   { key = "market",    label = "Market",    mod = market_page },
