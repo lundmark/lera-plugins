@@ -74,18 +74,29 @@ local M = {}
 -- Units (guild_viking.lua:13316-13350, gated show_army_units)
 -- ---------------------------------------------------------------------------
 
+-- Fixed columns. Both rows previously concatenated variable-width values with
+-- literal gaps, so nothing lined up between units: the status slid with the
+-- unit type and its size digits, and -- the visible one -- the veterancy bar
+-- slid with the length of each leader's name, so the bars never stacked.
+local UNIT_TYPE_W   = 14
+local UNIT_SIZE_W   = 6    -- "x1000"
+local UNIT_LEADER_W = 16
+
 local function unit_lines(add, width, u)
   local ready = u.ready
   local status_text = ready and "ready" or "training"
   local status_color = ready and C.bright_green or C.yellow
 
-  add(pagelib.trunc(string.format("%s%s x%d%s  %s%s%s",
-    C.white, u.type or "?", u.size or 0, pagelib.RESET,
-    status_color, status_text, pagelib.RESET), width))
+  add(pagelib.trunc(
+    pagelib.trunc(C.white .. (u.type or "?") .. pagelib.RESET, UNIT_TYPE_W)
+    .. string.format("%-" .. UNIT_SIZE_W .. "s", "x" .. tostring(u.size or 0))
+    .. status_color .. status_text .. pagelib.RESET, width))
 
-  add(pagelib.trunc(string.format("  %sled by %s%s  %s %d%%",
-    C.dim, u.leader or "-", pagelib.RESET,
-    pagelib.bar(20, u.vet or 0, 100, pagelib.pct_color(u.vet or 0, 100)), u.vet or 0), width))
+  add(pagelib.trunc(
+    "  " .. C.dim .. "led by " .. pagelib.RESET
+    .. pagelib.trunc(C.dim .. (u.leader or "-") .. pagelib.RESET, UNIT_LEADER_W)
+    .. pagelib.bar(20, u.vet or 0, 100, pagelib.pct_color(u.vet or 0, 100))
+    .. string.format(" %3d%%", u.vet or 0), width))
 
   if u.traits and #u.traits > 0 then
     add(pagelib.trunc("  " .. C.yellow .. table.concat(u.traits, "  ") .. pagelib.RESET, width))
