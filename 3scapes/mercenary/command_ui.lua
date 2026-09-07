@@ -13,6 +13,42 @@ local function line(text) buffer.color_print(nil, nil, text) end
 local function head(text) buffer.color_print(nil, "FFAA00", text) end
 local function warn(text) buffer.color_print(nil, 1, text) end
 
+-- Progress bars, ported from mercenary_stats.xml's DrawBar (:438-449). LEGACY
+-- drew a filled rectangle; the text equivalent is a two-tone run, which
+-- buffer.color_print supports directly -- it takes REPEATED (bg, fg, text)
+-- triplets, so the filled and empty halves land on one line rather than two.
+--
+-- Colours are LEGACY's, decoded from MUSHclient BGR (0xBBGGRR) to the RRGGBB
+-- strings color_print wants:
+--   COLOR_PL 0x00FFFF -> R=FF G=FF B=00 -> yellow "FFFF00"
+--   COLOR_IL 0xFFFF00 -> R=00 G=FF B=FF -> cyan   "00FFFF"
+local BAR_W = 20
+local DIM = "444444"
+
+local function bar_cells(cur, max)
+  if not max or max <= 0 then return 0 end
+  local n = math.floor((cur / max) * BAR_W)
+  if n < 0 then n = 0 end
+  if n > BAR_W then n = BAR_W end
+  return n
+end
+
+-- label  value [pct%] [########------] cur/max  rate
+--
+-- `ratio_text` is separate from cur/max because a capped level draws a FULL
+-- bar but prints "0/0" (LEGACY :599-601): the fill and the printed ratio
+-- genuinely disagree there, so one pair of numbers cannot drive both.
+local function bar_line(label, cur, max, hex, value_text, tail, ratio_text)
+  local n = bar_cells(cur, max)
+  buffer.color_print(
+    nil, hex,  string.format("%-4s%12s ", label, value_text or ""),
+    nil, DIM,  "[",
+    nil, hex,  string.rep("#", n),
+    nil, DIM,  string.rep("-", BAR_W - n) .. "] ",
+    nil, hex,  ratio_text or string.format("%s/%s", tostring(cur), tostring(max)),
+    nil, DIM,  tail and ("  " .. tail) or "")
+end
+
 local function fmt_seconds(secs)
   local m = math.floor(secs / 60)
   return string.format("%d:%02d", m, secs - m * 60)
@@ -35,18 +71,39 @@ local function show_summary()
   end
   local s = state.get()
   head(s.name .. "  (" .. s.class .. "/" .. s.theme .. ", " .. s.status_name .. ")")
-  line(string.format("HP %d/%d (%d%%)   ST %d/%d +%d   AP %d/%d +%d",
-    s.hp_current, s.hp_max, s.hp_percent,
-    s.stamina_current, s.stamina_max, s.stamina_regen,
-    s.ap_current, s.ap_max, s.ap_regen))
   if s.is_dormant then
     warn("DORMANT - recovering, " .. fmt_seconds(s.dormant) .. " remaining")
   elseif s.target ~= "" and s.target ~= "None" then
     line(string.format("Target: %s (%d%%)", s.target, s.target_pct))
   end
-  line(string.format("PL %d/%d  %d/%d xp    IL %d/%d  %d/%d xp    effective %d",
-    s.pl_level, s.pl_max_level, s.pl_xp, s.pl_needed,
-    s.il_level, s.il_max_level, s.il_xp, s.il_needed, s.eff_level))
+  -- HP/Stamina/AP and the two XP tracks all get bars, matching which stats
+  -- LEGACY drew bars for (mercenary_stats.xml:505/521/536 and :607/646).
+  bar_line("HP", s.hp_current, s.hp_max, "FF4444",
+           string.format("%d%%", s.hp_percent))
+  bar_line("ST", s.stamina_current, s.stamina_max, "44FF44",
+           string.format("+%d", s.stamina_regen))
+  bar_line("AP", s.ap_current, s.ap_max, "44AAFF",
+           string.format("+%d", s.ap_regen))
+
+  -- At max level LEGACY shows a full bar and 0/0 rather than a stale ratio
+  -- (:599-601 for PL, :638-640 for IL).
+  local pl_capped = s.pl_level >= s.pl_max_level
+  bar_line("PL", pl_capped and 1 or s.pl_xp, pl_capped and 1 or s.pl_needed, "FFFF00",
+           string.format("%d [%.1f%%]", s.pl_level,
+             pl_capped and 100 or ((s.pl_needed > 0) and (s.pl_xp / s.pl_needed * 100) or 0)),
+           (not pl_capped and s.pl_xp_per_hour > 0)
+             and string.format("%.0f/hr", s.pl_xp_per_hour) or nil,
+           pl_capped and "0/0" or nil)
+
+  local il_capped = s.il_level >= s.il_max_level
+  bar_line("IL", il_capped and 1 or s.il_xp, il_capped and 1 or s.il_needed, "00FFFF",
+           string.format("%d [%.1f%%]", s.il_level,
+             il_capped and 100 or ((s.il_needed > 0) and (s.il_xp / s.il_needed * 100) or 0)),
+           (not il_capped and s.il_xp_per_hour > 0)
+             and string.format("%.0f/hr", s.il_xp_per_hour) or nil,
+           il_capped and "0/0" or nil)
+
+  line(string.format("Effective level %d", s.eff_level))
   line(string.format("Cost %d/round  %s  %s   fund %d  spent %d (boot %d, skills %d, spec %d)",
     s.cost, s.damage_type, s.following and "following" or "not following",
     s.fund, s.spent, s.spent_boot, s.spent_skills, s.spent_spec))
