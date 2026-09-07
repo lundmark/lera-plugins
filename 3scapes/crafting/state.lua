@@ -67,6 +67,9 @@ function M.reset()
     recipes_known = {}, recipes_catalogue = {},
 
     orders = {}, material_orders = {}, exchanges = {}, auctions = {},
+    -- Recipe scroll auctions are their own book server-side; scroll_outbox
+    -- is the list of recipe names this player has waiting to collect.
+    scroll_auctions = {}, scroll_orders = {}, scroll_outbox = {},
 
     last_update = 0,
   }
@@ -177,10 +180,72 @@ local function parse_owned_row(s)
   return { name = name, tier = tonumber(tier) }
 end
 
+-- Refinery rows carry the WHOLE chain now, one row per stage, not just the
+-- stages that happen to have an allocation:
+--   building | stage | material | percent | bldg_tier | max_tier | min_rank
+-- bldg_tier 0 means not built; a stage is locked when stage > max_tier, a rule
+-- the server computes so the two sides cannot disagree about it.
+--
+-- The four-field form is still accepted so a client running against a server
+-- that has not picked up the wider payload yet degrades to what it used to
+-- show (allocations only) instead of rendering an empty tab.
+-- query_progression_min_rank()'s ladder, mirrored from the daemon. It is keyed
+-- only by stage index and never varies, so the rank is derived here rather than
+-- repeated on all sixty wire rows.
+local STAGE_MIN_RANK = { 1, 12, 23, 34, 45, 56, 67, 78, 89, 100 }
+
+-- Split on the delimiter and dispatch on FIELD COUNT, rather than trying one
+-- anchored pattern after another.
+--
+-- The pattern-chain version was actively dangerous: the four-field fallback
+-- (`^(.-)|(%d+)|(.-)|(%d+)$`) matches a SEVEN-field row perfectly well, because
+-- `.-` spans delimiters -- "Distilling Font|1|Fantasy Essence|0|0|0|1" came out
+-- as material "Fantasy Essence|0|0|0" with percent 1. So a client running
+-- against a server whose payload width had not been updated in lockstep
+-- silently rendered mangled material names and invented allocations, rather
+-- than failing visibly. Counting fields makes every width unambiguous.
+--
+--   7  building|stage|material|percent|bldg_tier|max_tier|min_rank
+--   6  building|stage|material|percent|bldg_tier|max_tier   (rank derived)
+--   4  building|stage|material|percent                      (allocations only)
 local function parse_refinery_row(s)
-  local building, tier, material, percent = s:match("^(.-)|(%-?%d+)|(.-)|(%-?%d+)$")
-  if not building then return nil end
-  return { building = building, tier = tonumber(tier), material = material, percent = tonumber(percent) }
+  -- Explicit scan rather than gmatch: a star-quantified character class emits
+  -- spurious empty matches, and an EMPTY FIELD is meaningful here (a material
+  -- with no name still occupies its slot), so the split has to preserve them
+  -- exactly to keep the field count trustworthy.
+  local str = tostring(s)
+  local fields, from = {}, 1
+  while true do
+    local i = str:find("|", from, true)
+    if not i then
+      fields[#fields + 1] = str:sub(from)
+      break
+    end
+    fields[#fields + 1] = str:sub(from, i - 1)
+    from = i + 1
+  end
+
+  local n = #fields
+  if n ~= 4 and n ~= 6 and n ~= 7 then return nil end
+
+  local building = fields[1]
+  local stage = tonumber(fields[2])
+  local material = fields[3]
+  local percent = tonumber(fields[4])
+  if building == nil or building == "" or stage == nil or percent == nil then
+    return nil
+  end
+
+  local row = { building = building, tier = stage, material = material,
+                percent = percent }
+  if n >= 6 then
+    row.bldg_tier = tonumber(fields[5])
+    row.max_tier = tonumber(fields[6])
+    -- Prefer the server's rank when it sends one; otherwise derive it from the
+    -- fixed ladder, which is keyed only by stage index and never varies.
+    row.min_rank = (n == 7 and tonumber(fields[7])) or STAGE_MIN_RANK[stage] or 100
+  end
+  return row
 end
 
 local function apply_buildings(m)
@@ -222,6 +287,9 @@ local function apply_market(m)
   rec.material_orders = m.material_orders or {}
   rec.exchanges = m.exchanges or {}
   rec.auctions = m.auctions or {}
+  rec.scroll_auctions = m.scroll_auctions or {}
+  rec.scroll_orders = m.scroll_orders or {}
+  rec.scroll_outbox = m.scroll_outbox or {}
 end
 
 local APPLY = {

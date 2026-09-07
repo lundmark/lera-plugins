@@ -202,7 +202,30 @@ local function uninstall_command()
   command_id = nil
 end
 
+-- Recipe scroll drops are announced in plain output, not over GMCP, so they
+-- are caught with a trigger. The server line (crafting_daemon.c's
+-- check_recipe_drop) is:
+--
+--   Something glints among the remains -- a <Recipe Name> recipe scroll!
+--
+-- Re-announced here rather than merely echoed, so the notice reads the same as
+-- the plugin's other output and is easy to spot in a busy combat scroll. The
+-- original line is left alone (not gagged): gagging server text to replace it
+-- with a near-identical line would only risk hiding the drop entirely if the
+-- wording ever changes.
+local scroll_trigger_id
+
+local function on_scroll_drop(line, name)
+  buffer.color_print(nil, "FFFFFF",
+    "[Crafting] Recipe scroll dropped: " .. tostring(name or "unknown")
+    .. " -- pick it up.")
+end
+
 function M.on_load()
+  scroll_trigger_id = trigger.add(
+    "Something glints among the remains -- an? (.+) recipe scroll!",
+    function(line, c1) on_scroll_drop(line, c1) end)
+
   protocol.on_apply(function(sub, mirror)
     state.apply(sub, mirror)
     if popup_open then ui.dirty() end
@@ -227,6 +250,7 @@ function M.on_disconnect()
 end
 
 function M.on_unload()
+  if scroll_trigger_id then trigger.remove(scroll_trigger_id); scroll_trigger_id = nil end
   if timer_id then timer.cancel(timer_id); timer_id = nil end
   close_popup()
   uninstall_command()
