@@ -464,6 +464,32 @@ check("tgoods scalar fields", S.trade_goods[2].ore.score == 1
 check("a lineage key becomes its own numeric index",
       S.trade_goods[5] ~= nil and S.trade_goods[5].zz ~= nil)
 
+-- An abbreviation with no entry in the table stays as itself rather than
+-- becoming nil and dropping the good.
+check("an unknown abbreviation is kept verbatim",
+      S.trade_goods[5].zz.sell == 4)
+-- market.lua records price history off this seam, only when either side is
+-- priced.
+check("the market seam fires for priced goods only", #seam_goods == 3,
+      #seam_goods)
+check("the seam carries the lineage it came from",
+      seam_goods[1].lin == 2 and seam_goods[3].lin == 5)
+
+-- Frames are deltas and each lineage is its own key, so a frame replaces
+-- exactly the lineages it carries. MIP had to guess at this with a
+-- two-second burst window; the split removes the guess.
+tradegoods({ tgoods_2 = { { lin = 2, good = "o", score = 3, sup = 0,
+                            dem = 1, buy = 0, sell = 7 } } })
+check("a lineage key replaces that lineage outright",
+      S.trade_goods[2].ore.sell == 7 and S.trade_goods[2].timber == nil)
+check("a lineage the frame did not carry is left standing",
+      S.trade_goods[5] ~= nil and S.trade_goods[5].zz.sell == 4)
+trade_mod._market_seam.on_tgoods = nil
+
+-- ---- abbreviation mapping -------------------------------------------------
+-- Its own section, and last: it resets S.trade_goods, so run inside the
+-- per-lineage block above it wiped the lineages those cases still assert on
+-- and added its twelve goods to seam_goods's expected three.
 -- Regression: GOOD_SHORT was missing the 11 husbandry/refined-husbandry
 -- abbreviations entirely (a bare letter decoded to itself, matching no good
 -- id best_sell_of()/the stock-sell scanner could ever look up), and `a` was
@@ -500,27 +526,6 @@ check("refined-husbandry abbreviations (the reported goods) resolve correctly",
       S.trade_goods[3].cloth ~= nil and S.trade_goods[3].cloth.demand == 40
       and S.trade_goods[3].smoked_meat ~= nil and S.trade_goods[3].smoked_meat.sell == 20
       and S.trade_goods[3].cheese ~= nil and S.trade_goods[3].cheese.sell == 30)
--- An abbreviation with no entry in the table stays as itself rather than
--- becoming nil and dropping the good.
-check("an unknown abbreviation is kept verbatim",
-      S.trade_goods[5].zz.sell == 4)
--- market.lua records price history off this seam, only when either side is
--- priced.
-check("the market seam fires for priced goods only", #seam_goods == 3,
-      #seam_goods)
-check("the seam carries the lineage it came from",
-      seam_goods[1].lin == 2 and seam_goods[3].lin == 5)
-
--- Frames are deltas and each lineage is its own key, so a frame replaces
--- exactly the lineages it carries. MIP had to guess at this with a
--- two-second burst window; the split removes the guess.
-tradegoods({ tgoods_2 = { { lin = 2, good = "o", score = 3, sup = 0,
-                            dem = 1, buy = 0, sell = 7 } } })
-check("a lineage key replaces that lineage outright",
-      S.trade_goods[2].ore.sell == 7 and S.trade_goods[2].timber == nil)
-check("a lineage the frame did not carry is left standing",
-      S.trade_goods[5] ~= nil and S.trade_goods[5].zz.sell == 4)
-trade_mod._market_seam.on_tgoods = nil
 
 
 -- ---- unmapped and foreign --------------------------------------------------
