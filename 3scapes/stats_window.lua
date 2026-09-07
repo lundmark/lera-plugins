@@ -310,17 +310,33 @@ local function mercenary_stat_lines(w)
     table.insert(lines, tgt_text)
   end
 
-  -- PL/IL line (compact)
-  local pl_pct = stats.pl_needed > 0 and math.floor(stats.pl_xp / stats.pl_needed * 100) or 100
-  local il_pct = stats.il_needed > 0 and math.floor(stats.il_xp / stats.il_needed * 100) or 100
-  if stats.pl_level < (stats.pl_max_level or 150)
-     or stats.il_level < (stats.il_max_level or 30) then
-    local lvl_text = string.format("%sPL%s%d %s%d%% %sIL%s%d %s%d%%",
-      colors.cyan, colors.reset, stats.pl_level,
-      colors.dim, pl_pct,
-      colors.yellow, colors.reset, stats.il_level,
-      colors.dim, il_pct)
-    table.insert(lines, lvl_text)
+  -- PL/IL progress.
+  --
+  -- These were the only mercenary stats in this pane WITHOUT a bar -- HP,
+  -- Stamina and AP all draw one above, and LEGACY (mercenary_stats.xml:607,
+  -- :646) drew one for both XP tracks too. A bare "PL87 45%" makes the reader
+  -- do the comparison the bar exists to do, which is the whole point of the
+  -- pane.
+  --
+  -- One row per track rather than the old single compact line: two 6-cell
+  -- bars plus both levels do not fit a sidebar width, and squeezing them
+  -- would truncate exactly when a bar is nearly full and most worth reading.
+  -- The overall skip is kept -- a fully capped mercenary still spends no rows
+  -- here at all.
+  local pl_cap = stats.pl_max_level or 150
+  local il_cap = stats.il_max_level or 30
+  if stats.pl_level < pl_cap or stats.il_level < il_cap then
+    -- ONE row, not two. This pane is height-clipped -- render() draws only
+    -- lines[scroll_offset+1 .. +h] -- and PL/IL sit at the bottom of the
+    -- mercenary block, so spending a second row here pushed them off the
+    -- visible area entirely on a short pane. Two 4-cell bars plus both levels
+    -- fit the width the single text line already used.
+    local bw = (w >= 30) and 6 or 4
+    table.insert(lines, string.format("%sPL%s%s%d %sIL%s%s%d",
+      colors.cyan, colors.reset,
+      draw_mini_bar(stats.pl_xp, stats.pl_needed, bw, dim), stats.pl_level,
+      colors.yellow, colors.reset,
+      draw_mini_bar(stats.il_xp, stats.il_needed, bw, dim), stats.il_level))
   end
 
   return lines
