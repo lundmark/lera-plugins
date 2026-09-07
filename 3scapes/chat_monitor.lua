@@ -13,7 +13,6 @@ M.version = "1.2"
 M.priority = 50  -- Run before most plugins
 
 local wm = require("wm")
-local url_links = require("url_links")
 
 -- Configuration
 local config = {
@@ -389,16 +388,40 @@ end
 -- each line consumed. They differ whenever a break space is dropped, and colour
 -- spans are mapped back onto the wrapped output by source offset, so the count
 -- has to be exact rather than inferred from the line lengths.
+-- One entry per visible cell, `last` being the byte the cell ends on. SGR
+-- escapes occupy no cell but their bytes belong to the cell that follows, so
+-- breaking at cells[n].last can never split a colour code; UTF-8 continuation
+-- bytes fold into the cell they continue. word_wrap needs cell positions
+-- rather than byte offsets because a message may carry inline colour.
+local function visible_cells(text)
+  local cells, i, n = {}, 1, #text
+  while i <= n do
+    local _, esc = text:find("^\27%[[0-9;]*m", i)
+    if esc then
+      i = esc + 1
+    else
+      local b = text:byte(i)
+      if b >= 0x80 and b < 0xC0 and #cells > 0 then
+        cells[#cells].last = i
+      else
+        cells[#cells + 1] = { last = i }
+      end
+      i = i + 1
+    end
+  end
+  return cells
+end
+
 local function word_wrap(text, width)
   if width <= 0 then return { text }, { #text } end
-  if #url_links.cells(text) <= width then return { text }, { #text } end
+  if #visible_cells(text) <= width then return { text }, { #text } end
 
   local lines = {}
   local consumed = {}
   local remaining = text
 
   while #remaining > 0 do
-    local cells = url_links.cells(remaining)
+    local cells = visible_cells(remaining)
     local row_width = math.max(1, width - (#lines > 0 and math.min(2, width-1) or 0))
     if #cells <= row_width then
       table.insert(lines, remaining)
@@ -521,43 +544,22 @@ local function wrap_msg(msg, width)
   local lead = stamp .. body:sub(1, #body - #msg.text)
   local source = stamp .. body
   local lines, consumed = word_wrap(source, width)
-  local detected, row_links, offset = url_links.find(source), {}, 0
-  for i, line in ipairs(lines) do
-    row_links[i] = {}
-    for _, link in ipairs(detected) do
-      local first = math.max(link.byte_start, offset + 1)
-      local last = math.min(link.byte_end, offset + #line)
-      if first <= last then
-        row_links[i][#row_links[i]+1] = {
-          value = link.value, message = msg, source_start = link.byte_start,
-          col_start = #url_links.cells(line:sub(1, first-offset-1)),
-          col_end = #url_links.cells(line:sub(1, last-offset)),
-        }
-      end
-    end
-    offset = offset + consumed[i]
-  end
 
-  local painted = paint_spans(lines, consumed, {
+  return color_code, paint_spans(lines, consumed, {
     { len = #stamp, code = get_color(config.timestamp_color) },
     { len = #lead - #stamp, code = color_code },
     { len = #msg.text, code = body_code },
   }, source)
-  for i, line in ipairs(painted) do
-    painted[i] = url_links.highlight(line, nil, row_links[i])
-  end
-  return color_code, painted, row_links
 end
 
 -- Wrap one message and append its rows to the cache. Returns the row count,
 -- which is also recorded on the message for trim accounting.
 function wrapped_append(msg, width)
-  local color_code, lines, row_links = wrap_msg(msg, width)
+  local color_code, lines = wrap_msg(msg, width)
   for j = 1, #lines do
     wrapped.last = wrapped.last + 1
     wrapped.lines[wrapped.last] = {
       text = lines[j],
-      links = row_links[j],
       color_code = color_code,
       is_continuation = (j > 1),
     }
@@ -917,17 +919,12 @@ function M.count()
   return #messages
 end
 
-local link_capture
-local pointer_border = 1
-
 -- Scroll the chat pane by wrapped rows. delta < 0 = up/older.
 function M.scroll(delta)
-  link_capture = nil
   sc.scroll(delta)
 end
 
 function M.scroll_to_bottom()
-  link_capture = nil
   sc.scroll_to_bottom()
 end
 
@@ -1029,88 +1026,12 @@ local function build_transient(width, need_rows)
   return list
 end
 
--- wm supplies zero-based pane-local coordinates, including the border.
-local function link_at(event)
-  local trace = event.url_trace
-  if event.inside == false then return nil end
-  local border = pointer_border
-  local w, h = event.width - 2*border, event.height - 2*border
-  local x, y = event.x - border, event.y - border
-  if w <= 0 or h <= 0 or x < 0 or x >= w or y < 0 or y >= h then return nil end
-  wrapped_ensure(w)
-  local offset = sc.offset()
-  if trace then
-    trace.pane, trace.width, trace.height, trace.offset = "chat", w, h, offset
-  end
-  if offset > 0 and y == h-1 then
-    local length = #string.format(" [+%d] ", offset)
-    if x >= w-length-1 and x < w-1 then return nil end
-  end
-  local index = wrapped.last - offset - (h-1-y)
-  local row = index >= wrapped.first and wrapped.lines[index]
-  if not row then return nil end
-  x = x - (row.is_continuation and math.min(2, w-1) or 0)
-  if trace then
-    local _, plain = url_links.cells(row.text)
-    local _, www = plain:lower():gsub("www%.", "")
-    local _, controls = plain:gsub("%c", "")
-    trace.cell, trace.plain, trace.www, trace.controls = x, #(row.links or {}), www, controls
-  end
-  for _, link in ipairs(row.links or {}) do
-    if x >= link.col_start and x < link.col_end then
-      if trace then trace.hit = "plain-url" end
-      return link
-    end
-  end
-end
-
-function M.on_pointer(event)
-  if event.kind == "cancel" then link_capture = nil; return false end
-  if event.kind == "move" then
-    if link_capture and (event.x ~= link_capture.x or event.y ~= link_capture.y) then
-      link_capture.cancelled = true
-    end
-    return false
-  end
-  if event.kind == "down" then
-    link_capture = nil
-    if event.button ~= "left" then return false end
-    local link = link_at(event)
-    if not link then return false end
-    link_capture = { link=link, x=event.x, y=event.y,
-      width=event.width, height=event.height }
-    return true
-  end
-  if event.kind == "up" then
-    local capture = link_capture
-    link_capture = nil
-    if event.url_trace then
-      event.url_trace.activation = not capture and "no-capture"
-        or (capture.cancelled and "drag-cancelled" or "not-matched")
-    end
-    if not capture or capture.cancelled or event.button ~= "left" then return false end
-    if event.width ~= capture.width or event.height ~= capture.height then
-      if event.url_trace then event.url_trace.activation = "geometry-changed" end
-      return false
-    end
-    local link = link_at(event)
-    if link and link.message == capture.link.message
-       and link.source_start == capture.link.source_start and link.value == capture.link.value then
-      local ok, err = mxp.open_url(link.value)
-      if event.url_trace then event.url_trace.activation = ok and "opened" or "opener-failed" end
-      if not ok then print("[chat] " .. (err or "could not open URL")) end
-    end
-  end
-  return false
-end
-
 -- Render the chat monitor in a given rect
 -- rect: { x, y, w, h } or rect object with :x(), :y(), :w(), :h() methods
 -- opts: { show_border = true, title = "Chat" }
 function M.render(rect, opts)
   opts = opts or {}
   local show_border = opts.show_border ~= false
-  if lera.render_pass() ~= "remote" then pointer_border = show_border and 1 or 0 end
   local title = opts.title or "Chat"
 
   -- Get rect dimensions
