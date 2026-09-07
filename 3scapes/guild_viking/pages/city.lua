@@ -108,9 +108,15 @@ local function longship_lines(add, width)
     if sh.target and sh.target ~= "" and sh.state ~= "docked" then
       target = " -> " .. sh.target .. ((sh.convoy == 1) and " (convoy)" or "")
     end
-    add(pagelib.trunc(string.format("%-12s %-10s %s%s%s%s  Crew:%s%d/%d%s",
-      sh.name or "?", tier_name, state_color, sh.state or "docked", pagelib.RESET, target,
-      crew_color, crew, crew_max, pagelib.RESET), width))
+    -- Name and tier were already %-padded, but the state was not -- so
+    -- "Crew:" slid with the length of "docked"/"returning"/"upgrading", and
+    -- the trailing target pushed it further. State now has its own column and
+    -- the variable-length target moves to the END of the row, after Crew, so
+    -- every fixed field stacks down the page.
+    add(pagelib.trunc(string.format("%-12s %-10s %s%-10s%s  Crew:%s%d/%d%s%s",
+      sh.name or "?", tier_name,
+      state_color, sh.state or "docked", pagelib.RESET,
+      crew_color, crew, crew_max, pagelib.RESET, target), width))
     if sh.return_in and sh.return_in > 0 then
       add(pagelib.trunc("  " .. cc.fmt_time(sh.return_in), width))
     elseif sh.state == "upgrading" then
@@ -207,8 +213,12 @@ local function raids_lines(add, width)
       local goods_txt = (#goods_parts > 0) and ("  " .. table.concat(goods_parts, "  ")) or ""
       local thralls_txt = ((r.thralls or 0) > 0)
         and string.format("  %d thrall%s", r.thralls, (r.thralls == 1) and "" or "s") or ""
-      add(pagelib.trunc(string.format("%s @%s  %s+%dd%s%s%s",
-        r.ship, cc.tcase(r.target or "?"), C.yellow, r.daler or 0, pagelib.RESET,
+      -- Ship and target were unpadded, so the daler figure and the whole
+      -- cargo list slid with the length of each name. Both get a column, and
+      -- the daler is right-aligned so the digits stack.
+      add(pagelib.trunc(string.format("%-12s %-18s %s%6s%s%s%s",
+        r.ship or "?", "@" .. cc.tcase(r.target or "?"),
+        C.yellow, "+" .. tostring(r.daler or 0) .. "d", pagelib.RESET,
         goods_txt, thralls_txt), width))
     end
   end
