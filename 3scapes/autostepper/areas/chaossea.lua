@@ -79,7 +79,8 @@ local COMPLETION_ITEMS = {
 
 function M.complete(ctx)
   for _, item in ipairs((ctx and ctx.items) or {}) do
-    local low = tostring(item):lower()
+    local item_name = type(item) == "table" and item.name or item
+    local low = tostring(item_name or ""):lower()
     for _, needle in ipairs(COMPLETION_ITEMS) do
       if low:find(needle, 1, true) then return true end
     end

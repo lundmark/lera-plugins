@@ -136,6 +136,16 @@ local unanswered_refreshes = 0
 -- speedwalk path from wherever the player now stands, outside the area.
 local run_mode = nil
 
+-- Chaos Sea farm mode keeps starting fresh instances only after the current
+-- explore run reaches the profile's completion room. It is deliberately
+-- separate from ordinary explore mode so `/step explore` remains one-shot.
+local chaossea_farm = {
+  active = false,
+  level = 0,
+  difficulty = "risky",
+  restart_timer = nil,
+}
+
 -- The settle timer is armed from roominfo.on_room_frame -- ANY accepted room
 -- frame, not just Room.Info -- because no single package is a reliable
 -- arrival signal. The server suppresses a resend when a payload repeats the
@@ -744,6 +754,23 @@ local function do_step()
       enabled = false
       state = "idle"
       cancel_settle()
+      local prof = explore.profile and explore.profile()
+      local at_completion = prof and prof.name == "chaossea"
+        and prof.complete and ri and ri.items
+        and prof.complete({ items = ri.items() })
+      if chaossea_farm.active and at_completion then
+        log("Chaos Sea farm: completion reached; preparing the next instance",
+            COLOR_RUN)
+        if explore.stop then explore.stop() end
+        local next_level, next_difficulty = chaossea_farm.level, chaossea_farm.difficulty
+        chaossea_farm.restart_timer = timer.after(1000, function()
+          chaossea_farm.restart_timer = nil
+          if chaossea_farm.active then
+            M.chaossea_setup(next_level, next_difficulty, true)
+          end
+        end)
+        return false
+      end
       -- Exhaustion ends the RUN, not just the stepping (6.5). Left active, the
       -- next "-." would re-enter explore mode, instantly re-exhaust the same
       -- map and never reach route mode at all.
@@ -907,6 +934,10 @@ local function show_help()
   log("  /step explore reset    - Reset the map to a fresh origin here, keep stepping")
   log("  /step explore leave    - Walk back to the run's origin, fighting on the way;")
   log("                           does NOT leave the area -- the last step out is yours")
+  log("  /step chaossea [level] [difficulty] - Set up Chaos Sea and explore it")
+  log("  /step chaossea farm [level] [difficulty] - Repeat completed Sea runs")
+  log("                           difficulty: risky, alarming or deadly")
+  log("  /step chaossea off     - Stop Chaos Sea exploration/farming")
   log("  /step set prompt <p>   - Set prompt detection pattern")
   log("  /step set attack [on|off] - Toggle auto-attack")
   log("  /step set glance [cmd]    - Set/show glance command")
@@ -1068,6 +1099,29 @@ local function dispatch(args)
     M.start(true)
   elseif sub == "stop" then
     M.stop()
+  elseif sub == "chaossea" or sub == "cs" then
+    local arg = rest:match("^(%S*)")
+    if arg == "off" then
+      M.explore_stop()
+    else
+      local farm = arg == "farm"
+      if arg == "setup" or farm then
+        rest = rest:sub(#arg + 1):match("^%s*(.*)$") or ""
+      end
+      local level_s, difficulty = rest:match("^(%d+)%s*(%a*)$")
+      if rest == "" then
+        level_s, difficulty = "0", "risky"
+      elseif not level_s then
+        log("Usage: /step chaossea [farm] [level] [risky|alarming|deadly]", COLOR_WARN)
+        return
+      end
+      if difficulty == "" then difficulty = "risky" end
+      if farm then
+        M.chaossea_farm_start(tonumber(level_s), difficulty)
+      else
+        M.chaossea_setup(tonumber(level_s), difficulty)
+      end
+    end
   elseif sub == "explore" then
     local arg = rest:match("^(%S*)")
     if arg == "off" then
@@ -1101,7 +1155,8 @@ local function register_command()
     name = "/step",
     aliases = { "/autostepper" },
     usage = "/step [start|targets|stop|explore [area]|explore off|explore reset|"
-      .. "explore leave|status|trace [on|off]|set <key> [value]]",
+      .. "explore leave|chaossea [farm] [level] [difficulty]|chaossea off|"
+      .. "status|trace [on|off]|set <key> [value]]",
     summary = "Automatic speedwalk stepping with optional combat",
     description = "Walks a stored step path one room at a time, optionally "
       .. "glancing and attacking on the way. Or, with 'explore [area]', maps an "
@@ -1395,7 +1450,14 @@ function M.start(targets_only)
 end
 
 -- Stop autostepping
-function M.stop()
+function M.stop(keep_farm)
+  if not keep_farm then
+    chaossea_farm.active = false
+    if chaossea_farm.restart_timer then
+      timer.cancel(chaossea_farm.restart_timer)
+      chaossea_farm.restart_timer = nil
+    end
+  end
   if enabled then
     log("Stopped", COLOR_RUN)
   end
@@ -1430,6 +1492,39 @@ function M.explore_start(area_name)
   end
   log("Explore mode active: " .. prof.name, COLOR_RUN)
   return true
+end
+
+-- Set up a fresh Chaos Sea instance using the same sequence as the legacy
+-- `-cs` helper, then hand control to the existing area-aware explorer. Keeping
+-- this here (rather than in the area profile) makes the profile data-only while
+-- ensuring the setup commands are sent before Room.Refresh is requested.
+function M.chaossea_setup(level, difficulty, preserve_farm)
+  local prof = load_area("chaossea")
+  if not prof or type(prof.restart) ~= "function" then
+    log("Chaos Sea setup is unavailable", COLOR_ERROR)
+    return false
+  end
+  if not preserve_farm then chaossea_farm.active = false end
+  if enabled then M.stop(preserve_farm) end
+  local chosen_level = tonumber(level) or 0
+  local chosen_difficulty = difficulty or "risky"
+  local commands = prof.restart({ level = chosen_level, difficulty = chosen_difficulty })
+  for _, cmd in ipairs(commands) do mud.send(cmd) end
+  log(string.format("Chaos Sea setup sent (level %d, %s)",
+    chosen_level, chosen_difficulty), COLOR_RUN)
+  if not M.explore_start("chaossea") then return false end
+  return M.start(config.targets_only)
+end
+
+function M.chaossea_farm_start(level, difficulty)
+  chaossea_farm.active = true
+  chaossea_farm.level = tonumber(level) or 0
+  chaossea_farm.difficulty = difficulty or "risky"
+  if chaossea_farm.restart_timer then
+    timer.cancel(chaossea_farm.restart_timer)
+    chaossea_farm.restart_timer = nil
+  end
+  return M.chaossea_setup(chaossea_farm.level, chaossea_farm.difficulty, true)
 end
 
 function M.explore_stop()
