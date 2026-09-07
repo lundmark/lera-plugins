@@ -166,6 +166,14 @@ check("a ship-only delta renames without clearing the offers",
       and #S.voyage_offers.list == 1)
 voy({ voffers = {} })
 check("an empty offer list clears the offers", S.voyage_offers == nil)
+-- GMCP deltas may deliver the ship name before the offer list. Keep that
+-- sibling value so the auto-voyage tick can match contracts to its ship.
+voy({ voffers_ship = "Sverige" })
+voy({ voffers = { { index = 2, type = "hunt", name = "Sea Hunt",
+                   danger = 9, difficulty = "legendary", fit_code = 3 } } })
+check("voffers list reuses a ship-only delta",
+      S.voyage_offers ~= nil and S.voyage_offers.ship == "Sverige"
+      and S.voyage_offers.list[1].index == 2)
 
 -- ---- string lists ----------------------------------------------------------
 voy({ vresolve = { "fight", "flee", "parley" } })
