@@ -510,6 +510,14 @@ function M.on_load()
   for _, t in ipairs(notify.triggers) do
     notify_trigger_ids[#notify_trigger_ids + 1] = trigger.add(t.pattern, t.fn)
   end
+  -- autoherd's own server-refusal trigger (the pen-full latch) rides the same
+  -- list: it is registered unconditionally like notify's, and torn down by the
+  -- same loop in on_unload. Not gated on page_opts.auto_herd -- the latch is a
+  -- fact about the world worth recording even while the automation is off, and
+  -- the planner is what consults it.
+  for _, t in ipairs(autoherd.triggers or {}) do
+    notify_trigger_ids[#notify_trigger_ids + 1] = trigger.add(t.pattern, t.fn)
+  end
   countdown_id = timer.every(1000, function() notify.countdown_tick() end)
 
   local id, err = command.register({

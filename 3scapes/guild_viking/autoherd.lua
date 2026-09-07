@@ -390,6 +390,58 @@ local function pending_head(bid)
   return n
 end
 
+-- PEN-FULL LATCH (not in LEGACY). The planner's own space check is
+-- `head + pending_head(b) < cap`, computed from S.herds/S.lpending -- both of
+-- which arrive on Guild.Livestock's SLOW round-robin cadence. Between a
+-- delivery landing (or a herd breeding, which the server does on its own
+-- tick without any client action) and the next Livestock push, the client's
+-- head is stale-low while the server's is at cap, so the check passes and a
+-- buy goes out into a pen the server knows is full. The server answers with
+-- "Your <bldg> is full (counting animals already in transit)." and refuses
+-- (vlivestock.c:334, when set.h's add_pending_livestock returns 0 because
+-- `cap - head - pending <= 0`).
+--
+-- Without this latch the only backstop is the confirm-window timeout in
+-- M.tick, which costs a full AH_CONFIRM_SECS of silence and then prints the
+-- generic "no confirmation for last action" -- and, because state genuinely
+-- did not move, the very same buy is eligible again as soon as the cooldown
+-- lapses. So the refusal repeats on a loop, spamming the pen-full banner.
+--
+-- Latching the building on the server's own message is authoritative in a
+-- way the client's arithmetic can't be: the server just told us there is no
+-- space. It is cleared as soon as fresh data shows real room (see
+-- pen_full below), so an upgrade, a slaughter or a delivery arriving all
+-- release it on the next Livestock push -- it is a suppression of REPEATED
+-- futile buys, never a permanent block.
+local ah_full = {}
+
+-- Marks a building refused-for-space. Called from M.on_pen_full (the
+-- trigger) -- keyed by building, so a full sheepfold never blocks the byre.
+function M.mark_pen_full(bldg)
+  if not bldg or bldg == "" then return end
+  ah_full[bldg] = true
+end
+
+-- True while `bldg` is latched full. Self-clearing: once head + pending is
+-- genuinely below cap in the data we now hold, the latch is dropped and the
+-- normal planner checks take over again. That read is the same one the
+-- planner itself uses, so the latch can only outlive the condition by one
+-- Livestock push.
+local function pen_full(bldg)
+  if not ah_full[bldg] then return false end
+  local herd = S.herds and S.herds[bldg]
+  local head = (herd and num(herd.head)) or 0
+  if head + pending_head(bldg) < cap_for(bldg, bldg_tier(bldg)) then
+    ah_full[bldg] = nil
+    return false
+  end
+  return true
+end
+
+-- Test seam: lets the suite assert the latch clears rather than reaching
+-- into the upvalue. Not used by the module itself.
+function M.pen_full(bldg) return pen_full(bldg) end
+
 -- LEGACY:139 (warehouse_amount). CORRECTION TO LEGACY (c), stated where it
 -- bites: the feed guard compares the herds' per-tick draw against the
 -- WAREHOUSE grain stock, NOT against S.lfeed.grain. S.lfeed.grain is not a
@@ -638,7 +690,7 @@ function M.plan()
       -- grows the herd the rest of the way.
       local target  = (num(bc.target) > 0) and num(bc.target) or nil
       local desired = target or math.min(cap, math.max(1, num(ah.keep)))
-      if head < desired and head < cap then
+      if head < desired and head < cap and not pen_full(b) then
         local species = BLDG_SPECIES[b]
         local m = best_listing(ah, species, budget, nil, nil)
         if m then
@@ -666,7 +718,8 @@ function M.plan()
       local herd = S.herds and S.herds[b]
       local cap  = cap_for(b, bldg_tier(b))
       -- Access checks 3 + 4.
-      if herd and num(herd.head) > 0 and (num(herd.head) + pending_head(b)) < cap then
+      if herd and num(herd.head) > 0 and (num(herd.head) + pending_head(b)) < cap
+         and not pen_full(b) then
         local thresh = (num(ah.gen_refresh) > 0) and num(ah.gen_refresh)
                         or inbreed_threshold(herd)
         local age_thresh = (num(ah.age_refresh) > 0) and num(ah.age_refresh) or nil
@@ -712,7 +765,7 @@ function M.plan()
       local cap  = cap_for(b, bldg_tier(b))
       -- Access checks 3 + 4. (LEGACY does not require head > 0 in this
       -- branch, unlike branch 3 -- ported as written.)
-      if herd and (num(herd.head) + pending_head(b)) < cap then
+      if herd and (num(herd.head) + pending_head(b)) < cap and not pen_full(b) then
         local species = BLDG_SPECIES[b]
         -- Only buy if a listing beats the herd's weighted average by the
         -- configured margin -- best_listing's min_score does the rejecting.
@@ -959,6 +1012,48 @@ function M.tick()
     ah_sm.next_at = now + AH_INTERVAL
   end
 end
+
+-- Trigger handler for the server's pen-full refusal (vlivestock.c:334),
+-- registered from init.lua via M.triggers below. See the PEN-FULL LATCH note
+-- beside ah_full for why the client's own space arithmetic is not enough on
+-- its own.
+--
+-- Two jobs, and the second matters as much as the first:
+--   1. Latch the building, so the planner stops choosing it (mark_pen_full).
+--   2. Abandon the in-flight confirm IMMEDIATELY. The refused buy moved no
+--      state, so ah_state_sig() will not change and the confirm phase would
+--      otherwise sit until AH_CONFIRM_TIMEOUT and then report the misleading
+--      "no confirmation for last action" -- when in fact we know exactly what
+--      happened and can say so. Dropping straight to a cooldown also keeps
+--      the ordinary refusal bookkeeping (ah_sm.refused) intact.
+--
+-- Fires whether or not the buy came from Auto-Herd: a manual `vlivestock buy`
+-- into a full pen is the same fact about the world, and latching on it only
+-- makes the planner agree with what the player was just told.
+function M.on_pen_full(line, c1)
+  local bldg = c1 and c1:lower() or nil
+  if not bldg then return end
+  M.mark_pen_full(bldg)
+  local ah = M.settings()
+  ah.status = bldg .. " is full -- skipping until there is room"
+  if ah_sm.phase == "confirming" then
+    drop_listing(ah_sm.lin, ah_sm.idx)
+    ah_sm.refused = ah_sm.cmd
+    ah_sm.phase, ah_sm.next_at = "cooldown", os.time() + AH_COOLDOWN
+  end
+  note("FFA500", string.format(
+    "[Auto-Herd] %s is full -- no more buys into it until it has room "
+    .. "(slaughter, upgrade, or wait for a delivery).", bldg))
+end
+
+-- Registered by init.lua alongside notify.triggers. The pattern matches the
+-- server's exact wording at vlivestock.c:334, capturing the building name so
+-- one full pen never blocks the other four.
+M.triggers = {
+  { name = "autoherd_pen_full",
+    pattern = "Your (\\w+) is full \\(counting animals already in transit\\)",
+    fn = function(line, c1) M.on_pen_full(line, c1) end },
+}
 
 -- ---------------------------------------------------------------------------
 -- Control surface: /vik herd <sub> (the LEGACY:476-544 ah_config port, wired
