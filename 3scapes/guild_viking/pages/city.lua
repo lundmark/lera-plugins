@@ -520,10 +520,16 @@ function M.lines(width)
     monuments_lines(add, width)
   end
 
-  -- City Plan grid: excluded per the task brief, replaced with one placeholder
-  -- line, gated the same as LEGACY (show_city_plan).
+  -- City Plan grid, inline -- where LEGACY drew it (guild_viking.lua:10338).
+  -- This page used to print a one-line pointer to the popup instead; the grid
+  -- itself lives in popups/cityplan.lua and is reused through inline_lines()
+  -- so the two views cannot drift apart. Gated the same as LEGACY
+  -- (show_city_plan), and pre_grid_lines() inside it emits its own header and
+  -- the "No data" line, so nothing extra is needed here.
   if page_opts.get("show_city_plan") then
-    add(pagelib.trunc("City plan: /vik cityplan", width))
+    for _, l in ipairs(require("popups.cityplan").inline_lines(width)) do
+      add(l)
+    end
   end
 
   return lines

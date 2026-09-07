@@ -377,6 +377,28 @@ local function pre_grid_lines(width)
   return out, true
 end
 
+-- Inline rendering for the City page (pages/city.lua). Same grid, footer and
+-- legend as the popup, minus the two things that only make sense in a popup:
+-- the hover line (there is no pointer tracking on a page) and the blank line
+-- that reserves room for it.
+--
+-- Deliberately shares make_grid()/footer_lines()/legend_entries() rather than
+-- reimplementing them on the page: the palette, the tile table and the
+-- castle/overlay precedence are all LEGACY-derived and documented above, and
+-- a second copy would drift from this one.
+function M.inline_lines(width)
+  local out, has_grid = pre_grid_lines(width)
+  if not has_grid then return out end
+
+  local cp = S.city_plan
+  for _, l in ipairs(maplib.render(make_grid(cp), GRID_OPTS)) do out[#out + 1] = l end
+  for _, l in ipairs(footer_lines(width, cp)) do out[#out + 1] = l end
+  if page_opts.get("show_city_plan_legend") then
+    for _, l in ipairs(maplib.legend(width, legend_entries())) do out[#out + 1] = l end
+  end
+  return out
+end
+
 function M.lines(width)
   local out, has_grid = pre_grid_lines(width)
   if not has_grid then return out end
