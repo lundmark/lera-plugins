@@ -308,11 +308,24 @@ local function heat_lines(add, width)
   end
 end
 
+-- pagelib.kv right-pads the LABEL to the window, so a label that embeds the
+-- town name made every "fades in ..." land in a different column. Fixed town
+-- column instead, with the risk colour-graded by how long the grudge has left
+-- to run -- a grudge about to lapse is not the same warning as a fresh one.
+local GRUDGE_TOWN_W = 20
+
 local function grudges_lines(add, width)
   add(pagelib.header(width, "Reprisal Grudges"))
   for _, g in ipairs(S.grudges) do
-    add(pagelib.kv(width, g.town .. " reprisal risk:",
-      "fades in " .. cc.fmt_time(g.secs or 0), C.red))
+    local secs = g.secs or 0
+    local col = C.bright_red
+    if secs < 600 then col = C.yellow          -- under 10 minutes: nearly gone
+    elseif secs < 3600 then col = C.red end    -- under an hour
+    add(pagelib.trunc(
+      pagelib.trunc(C.white .. (g.town or "?") .. pagelib.RESET, GRUDGE_TOWN_W)
+      .. col .. "reprisal risk" .. pagelib.RESET
+      .. C.dim .. "  fades in " .. pagelib.RESET
+      .. col .. cc.fmt_time(secs) .. pagelib.RESET, width))
   end
 end
 

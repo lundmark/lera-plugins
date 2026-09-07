@@ -82,13 +82,22 @@ local UNIT_TYPE_W   = 14
 local UNIT_SIZE_W   = 6    -- "x1000"
 local UNIT_LEADER_W = 16
 
+-- Unit types arrive lower-cased and underscored off the wire ("shieldwall",
+-- "shield_maidens"), which reads as a raw field rather than a name. Title-case
+-- each word; cc.cap_first only touches the first letter of the whole string,
+-- so a compound type would still come out "Shield_maidens".
+local function unit_label(t)
+  t = tostring(t or "?"):gsub("_", " ")
+  return (t:gsub("(%a)([%w']*)", function(a, b) return a:upper() .. b:lower() end))
+end
+
 local function unit_lines(add, width, u)
   local ready = u.ready
   local status_text = ready and "ready" or "training"
   local status_color = ready and C.bright_green or C.yellow
 
   add(pagelib.trunc(
-    pagelib.trunc(C.white .. (u.type or "?") .. pagelib.RESET, UNIT_TYPE_W)
+    pagelib.trunc(C.white .. unit_label(u.type) .. pagelib.RESET, UNIT_TYPE_W)
     .. string.format("%-" .. UNIT_SIZE_W .. "s", "x" .. tostring(u.size or 0))
     .. status_color .. status_text .. pagelib.RESET, width))
 
