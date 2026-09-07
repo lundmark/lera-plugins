@@ -180,6 +180,14 @@ check("rejected_value_does_not_save", saves == 0 and stored_data == nil, "saves=
 run("warning 5")
 run("set 20")
 
+-- ---- activity hooks ---------------------------------------------------------
+now = 6000
+dm.on_user_input("/reconnect")
+check("local_command_counts_as_activity", dm.get_idle_time() == 0, dm.get_idle_time())
+now = 6001
+dm.on_user_input("")
+check("empty_enter_counts_as_activity", dm.get_idle_time() == 0, dm.get_idle_time())
+
 -- ---- reset ------------------------------------------------------------------
 now = 5000
 out = run("reset")

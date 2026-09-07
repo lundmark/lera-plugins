@@ -194,8 +194,7 @@ end
 -- Plugin Hooks
 --------------------------------------------------------------------------------
 
-function M.on_input(text)
-  -- Reset the idle timer on any user input (even empty)
+local function note_user_input()
   local was_active = is_active()
   last_user_input = get_time()
 
@@ -206,7 +205,17 @@ function M.on_input(text)
       blocked_count = 0
     end
   end
-  -- Return the text unchanged to allow it through
+end
+
+-- This runs before aliases, so Enter and local commands such as /reconnect
+-- count as activity even though they never reach the normal on_input path.
+function M.on_user_input(_)
+  note_user_input()
+end
+
+-- Compatibility with older Lera releases that do not dispatch on_user_input.
+function M.on_input(text)
+  note_user_input()
   return text
 end
 
