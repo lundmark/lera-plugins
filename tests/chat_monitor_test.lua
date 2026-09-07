@@ -817,5 +817,25 @@ reloaded.set_source("auto")
 check("auto_returns_to_remembered_gmcp", reloaded.source().active == "gmcp",
       reloaded.source().active)
 
+-- Mobile reads the same accepted logical records and prefix decisions.
+check("mobile_history_provider_exists", type(reloaded.companion_source) == "function")
+if reloaded.companion_source then
+  reloaded.clear()
+  reloaded.set_timestamps(false)
+  local provider = reloaded.companion_source()
+  local empty = provider.page({epoch="",after="",before="",limit=2})
+  gmcp_handlers["Comm"]("Comm.Channel.Text", {channel="tell",talker="Simon",targets={"Alice","Bob"},text="hello",prefix="Simon tells Alice and Bob:"})
+  gmcp_handlers["Comm"]("Comm.Channel.Text", {channel="wiz",talker="Simon",text="world"})
+  local page = provider.page({epoch="",after="",before="",limit=1})
+  check("mobile_history_pages_one_record", #page.records == 1 and page.more)
+  local older = provider.page({epoch=page.epoch,after="",before=page.records[1].id,limit=2})
+  check("mobile_history_keeps_server_tell_targets", #older.records == 1 and older.records[1].text:find("Simon tells Alice and Bob:",1,true))
+  local after = provider.page({epoch=page.epoch,after=older.records[1].id,before="",limit=2})
+  check("mobile_history_after_is_exclusive", #after.records == 1 and after.records[1].id == page.records[1].id)
+  reloaded.clear()
+  local cleared = provider.page({epoch=page.epoch,after=page.records[1].id,before="",limit=2})
+  check("mobile_history_clear_resets_epoch", cleared.reset and cleared.epoch ~= page.epoch and #cleared.records == 0)
+end
+
 print(failures == 0 and "ALL PASS" or (failures .. " FAILURES"))
 os.exit(failures == 0 and 0 or 1)

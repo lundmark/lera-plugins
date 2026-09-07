@@ -8,8 +8,9 @@
 -- every message. See the "Source selection" section below.
 
 local M = {}
+local companion_epoch = 1
 M.name = "chat_monitor"
-M.version = "1.2"
+M.version = "1.3"
 M.priority = 50  -- Run before most plugins
 
 local wm = require("wm")
@@ -473,7 +474,7 @@ local function paint_spans(lines, consumed, spans)
   return painted
 end
 
-local function wrap_msg(msg, width)
+local function logical_message(msg)
   local type_cfg = line_types[msg.type] or { color = config.default_color }
   local prefix = resolve_prefix(type_cfg, msg)
   local stamp = ""
@@ -492,13 +493,17 @@ local function wrap_msg(msg, width)
 
   local body = join_prefix(prefix, msg.text)
   local lead = stamp .. body:sub(1, #body - #msg.text)
-  local lines, consumed = word_wrap(stamp .. body, width)
-
-  return color_code, paint_spans(lines, consumed, {
+  return color_code, stamp .. body, {
     { len = #stamp, code = get_color(config.timestamp_color) },
     { len = #lead - #stamp, code = color_code },
     { len = #msg.text, code = body_code },
-  })
+  }
+end
+
+local function wrap_msg(msg, width)
+  local color_code, plain, spans = logical_message(msg)
+  local lines, consumed = word_wrap(plain, width)
+  return color_code, paint_spans(lines, consumed, spans)
 end
 
 -- Wrap one message and append its rows to the cache. Returns the row count,
@@ -694,6 +699,7 @@ local function formatting_options_changed(opts)
 end
 
 local function invalidate_wrapped_formatting()
+  companion_epoch = companion_epoch + 1
   wrapped.width = nil
 end
 
@@ -843,6 +849,7 @@ end
 
 -- Clear all messages
 function M.clear()
+  companion_epoch = companion_epoch + 1
   messages = {}
   wrapped_reset()
   sc.scroll_to_bottom()
@@ -895,12 +902,7 @@ function M.get_messages(limit)
     local msg = messages[i]
     if msg then
       local type_cfg = line_types[msg.type] or { color = config.default_color }
-      local prefix_text
-      if type_cfg.prefix then
-        prefix_text = type_cfg.prefix(type_cfg, msg.sender)
-      else
-        prefix_text = "[" .. (msg.sender or msg.type) .. "] "
-      end
+      local prefix_text = resolve_prefix(type_cfg, msg)
       table.insert(result, {
         type = msg.type,
         sender = msg.sender,
@@ -916,6 +918,56 @@ function M.get_messages(limit)
 
   return result
 end
+
+-- Indexed logical history for the mobile companion. Binary search touches
+-- only log(N) retained entries; a live poll never copies the entire history.
+local companion_provider = {}
+local function companion_id(msg) return msg and string.format("%.0f", msg.seq) or "" end
+local function companion_find(id)
+  local value = tonumber(id)
+  if not value or value < 1 or value % 1 ~= 0 or string.format("%.0f",value) ~= id then return nil end
+  local low, high = 1, #messages
+  while low <= high do
+    local mid = math.floor((low + high) / 2)
+    if messages[mid].seq == value then return mid end
+    if messages[mid].seq < value then low = mid + 1 else high = mid - 1 end
+  end
+  return nil, low
+end
+function companion_provider.page(req)
+  local epoch = tostring(companion_epoch)
+  local reset = req.epoch ~= "" and req.epoch ~= epoch
+  local after, before = reset and "" or req.after, reset and "" or req.before
+  local gap, more, first, last = false, false, 1, #messages
+  if after ~= "" or before ~= "" then
+    local cursor = after ~= "" and after or before
+    local at, insertion = companion_find(cursor)
+    if not at then
+      gap = true
+      if not insertion then error("Invalid Chat cursor") end
+      at = after ~= "" and insertion - 1 or insertion
+    end
+    if after ~= "" then first = at + 1 else last = at - 1 end
+  end
+  if after ~= "" then
+    more = last - first + 1 > req.limit
+    last = math.min(last, first + req.limit - 1)
+  else
+    more = last - first + 1 > req.limit
+    first = math.max(first, last - req.limit + 1)
+  end
+  local records = {}
+  for i = first, last do
+    local msg = messages[i]
+    if msg then
+      local _, plain, spans = logical_message(msg)
+      records[#records+1] = {id=companion_id(msg),text=paint_spans({plain},{#plain},spans)[1]}
+    end
+  end
+  return {epoch=epoch,records=records,oldest=companion_id(messages[1]),latest=companion_id(messages[#messages]),
+    more=more,gap=gap,reset=reset,cursor=#records > 0 and (after ~= "" and records[#records].id or records[1].id) or after ~= "" and after or before}
+end
+function M.companion_source() return companion_provider end
 
 -- Draw one already-wrapped row (or nothing, if line is nil) at screen row y.
 -- Shared by the local (cached) and remote (transient) render paths so the
