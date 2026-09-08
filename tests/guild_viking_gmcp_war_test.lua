@@ -110,7 +110,7 @@ check("war_points is set from the frame", S.war_points == 12)
 war({ active = 1, phase = "melee", w = 2, h = 1, terrain = { ".." },
       units = {
         { side = "Y", label = "Hird", size = 20, coord = "A1", morale = 80,
-          type = "hird", leader = "Bjorn", bid = 3, ord = 1 },
+          type = "hird", leader = "Bjorn", bid = 3, ord = 1, g = "a" },
         { side = "Y", label = "Aid", size = 10, coord = "B1", morale = 60,
           type = "foe_hird", leader = "", bid = 0, ord = 2 },
         { side = "F", label = "Raiders", size = 30, coord = "A2", morale = 50,
@@ -123,7 +123,9 @@ check("unit side Y is yours and anything else is the foe",
 check("unit fields", S.battle.units[1].label == "Hird"
       and S.battle.units[1].size == 20 and S.battle.units[1].coord == "A1"
       and S.battle.units[1].morale == 80 and S.battle.units[1].leader == "Bjorn"
-      and S.battle.units[1].bid == 3 and S.battle.units[1].ord == 1)
+      and S.battle.units[1].bid == 3 and S.battle.units[1].ord == 1
+      -- the per-battle letter handle rides through to the board
+      and S.battle.units[1].g == "a" and S.battle.units[2].g == "")
 -- The server reuses foe_hird for allied aid because it has no you-side icon of
 -- its own; the client renames it so it loads the green-tinted art. Ported from
 -- the MIP handler, and it applies only on your side.

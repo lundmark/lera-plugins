@@ -682,6 +682,10 @@ local function write_battle(rec)
         utype = utype,
         leader = (leader ~= "") and leader or nil,
         bid = tonumber(u.bid) or 0,
+        -- Per-battle letter handle: lowercase yours, uppercase the foe's, one
+        -- per unit. Empty from servers older than the letter change, which is
+        -- what keeps `ord` around as the fallback.
+        g = tostring(u.g or ""),
         ord = tonumber(u.ord) or 0,
       }
     end

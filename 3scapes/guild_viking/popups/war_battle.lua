@@ -55,10 +55,11 @@ local track = require("popups.pointer_track").tracker()
 -- and a reserved wall slot. `compact` drops both.
 --
 -- The one cost (see maplib's COMPACT note): a glyph longer than one char
--- truncates to its first. Every UGLYPH entry is a single letter; the only
--- computed glyph is a duplicate unit's ordinal, `tostring(u.ord)`, which
--- would truncate at ord >= 10 -- far past the handful of same-type units a
--- board carries.
+-- truncates to its first. Every UGLYPH entry is a single letter, and so is
+-- the server's per-unit letter (`u.g`), which is checked for length before
+-- it is used. The legacy fallback is a duplicate unit's ordinal,
+-- `tostring(u.ord)`, which would truncate at ord >= 10 -- far past the
+-- handful of same-type units a board carries.
 local GRID_OPTS = { compact = true }
 
 local S = state.S
@@ -82,6 +83,14 @@ local UGLYPH = {
 }
 
 -- BTERR_NAME (guild_viking.lua:14157-14158), ported verbatim.
+-- Short type names for the generated letter key, matching UNIT_LEGEND's.
+local ULABEL = {
+  skirmishers = "skirm", bogmenn = "bows", shieldwall = "wall",
+  huscarls = "huscarl", berserkir = "berserk", moose = "moose",
+  ally_levy = "allies", siege = "siege",
+  foe_raiders = "raiders", foe_levy = "levy", foe_hird = "hird",
+}
+
 local BTERR_NAME = {
   ["."] = "plains", ["^"] = "hills", ["*"] = "forest",
   w = "marsh", ["="] = "fjord", x = "chokepoint", ["#"] = "rampart",
@@ -155,8 +164,15 @@ local function make_grid(b)
       local u = unit_at(b, coord)
       local cell
       if u then
-        local g = UGLYPH[u.utype or ""] or "*"
-        if (u.ord or 0) > 0 then g = tostring(u.ord) end
+        -- The server hands every unit its own letter for the battle, so the
+        -- glyph names exactly one unit and is the same thing you type at
+        -- `vbattle order`. Older servers send no letter; fall back to the
+        -- shared type glyph plus the duplicate ordinal they do send.
+        local g = u.g
+        if not g or #g ~= 1 then
+          g = UGLYPH[u.utype or ""] or "*"
+          if (u.ord or 0) > 0 then g = tostring(u.ord) end
+        end
         cell = { glyph = g, color = (u.side == "you") and C.bright_green or C.bright_red }
       else
         local rowstr = (b.terrain_rows and b.terrain_rows[r_game]) or string.rep(".", w)
@@ -195,13 +211,42 @@ local TERRAIN_LEGEND = {
   { glyph = "v", color = C.yellow, label = "stakes" }, { glyph = "u", color = C.white, label = "dugout" },
 }
 
+-- The board draws each unit with its own letter, so the type-letter key above
+-- no longer describes it. Build the key from the units actually on the board
+-- instead -- letter, then what that letter is -- which makes it a one-line
+-- roster as well as a key. Servers that send no letters fall back to
+-- UNIT_LEGEND, which still matches what those boards draw.
+local function unit_legend_for(b)
+  local entries, seen = {}, {}
+  for _, u in ipairs(b.units or {}) do
+    local g = u.g
+    if not g or #g ~= 1 then return UNIT_LEGEND end
+    if not seen[g] then
+      seen[g] = true
+      entries[#entries + 1] = {
+        glyph = g,
+        color = (u.side == "you") and C.bright_green or C.bright_red,
+        label = ULABEL[u.utype or ""] or "unit",
+      }
+    end
+  end
+  if #entries == 0 then return UNIT_LEGEND end
+  table.sort(entries, function(x, y)
+    -- Yours (lowercase) first, then the foe's, each alphabetically.
+    local xl, yl = x.glyph:match("%l") ~= nil, y.glyph:match("%l") ~= nil
+    if xl ~= yl then return xl end
+    return x.glyph < y.glyph
+  end)
+  return entries
+end
+
 local function legend_lines(width, b)
   local deploying = (b.phase == "deploy")
   local out = {}
   local side_line = C.bright_green .. "green = you" .. RESET .. "  " .. C.bright_red .. "red = foe" .. RESET
   if deploying then side_line = side_line .. "  " .. C.bright_cyan .. "+ deploy" .. RESET end
   out[#out + 1] = pagelib.trunc(side_line, width)
-  for _, l in ipairs(maplib.legend(width, UNIT_LEGEND)) do out[#out + 1] = l end
+  for _, l in ipairs(maplib.legend(width, unit_legend_for(b))) do out[#out + 1] = l end
   for _, l in ipairs(maplib.legend(width, TERRAIN_LEGEND)) do out[#out + 1] = l end
   return out
 end
