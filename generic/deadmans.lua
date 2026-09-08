@@ -10,6 +10,7 @@ M.priority = 1  -- Run first to intercept automated sends
 -- Configuration
 local config = {
   warning_time = 10 * 60,  -- 10 minutes: start showing yellow warning
+  antiidle_time = 5 * 60,
   block_time = 15 * 60,    -- 15 minutes: activate deadmans (block sends)
   overlay_width_pct = 0.80,  -- 80% of screen width
   overlay_height_pct = 0.40, -- 40% of screen height
@@ -27,6 +28,9 @@ end
 local last_user_input = 0  -- Timestamp of last user input
 local blocked_count = 0     -- Number of sends blocked this session
 local update_timer = nil    -- Timer for updating the display
+local antiidle_enabled = false -- Arm after login; never send into a password prompt.
+local antiidle_last = 0
+local antiidle_sent = 0
 local command_id = nil      -- Registered command ID for cleanup
 
 -- ANSI 256 color palette indices
@@ -44,6 +48,7 @@ local function save_config()
     config = {
       warning_time = config.warning_time,
       block_time = config.block_time,
+      antiidle_time = config.antiidle_time,
     }
   })
   store.save()
@@ -94,6 +99,7 @@ local function show_help()
   print("[deadmans] Commands:")
   print("  /deadmans               - Show status and help")
   print("  /deadmans status        - Show current status")
+  print("  /deadmans antiidle on|off|status|<minutes> - Post-login keepalive")
   print("  /deadmans reset         - Reset idle timer (re-enable sends)")
   print("  /deadmans warning <min> - Set warning time (minutes)")
   print("  /deadmans set <min>     - Set block time (minutes)")
@@ -148,6 +154,28 @@ local function dispatch(args)
     show_help()
   elseif sub == "status" then
     show_status()
+  elseif sub == "antiidle" then
+    local value = rest:lower()
+    local minutes = tonumber(value:match("^%d+$"))
+    if value == "off" then
+      antiidle_enabled = false
+    elseif value == "on" then
+      if mud.state() ~= "connected" then
+        print("[antiidle] Connect and log in before enabling anti-idle.")
+        return
+      end
+      antiidle_enabled = true
+      antiidle_last = get_time()
+    elseif minutes and minutes >= 1 and minutes <= 60 then
+      config.antiidle_time = minutes * 60
+      antiidle_last = get_time()
+      save_config()
+    elseif value ~= "status" and value ~= "" then
+      print("Usage: /deadmans antiidle on|off|status|<1-60 minutes>")
+      return
+    end
+    print(string.format("[antiidle] %s; interval %d minutes; sent %d blank lines. Enable only after login. Disarms on disconnect.",
+      antiidle_enabled and "ON" or "OFF", config.antiidle_time / 60, antiidle_sent))
   elseif sub == "reset" then
     M.reset()
   elseif sub == "warning" or sub == "set" or sub == "block" then
@@ -163,7 +191,7 @@ local function register_command()
   if not command then return end
   local id, err = command.register({
     name = "/deadmans",
-    usage = "/deadmans [status|reset|warning <min>|set <min>]",
+    usage = "/deadmans [status|reset|warning <min>|set <min>|antiidle on|off|status|<min>]",
     summary = "Idle detection and automated-send blocking",
     description = "Tracks how long it has been since you last typed something. "
       .. "After the warning time an overlay appears; after the block time "
@@ -194,8 +222,7 @@ end
 -- Plugin Hooks
 --------------------------------------------------------------------------------
 
-function M.on_input(text)
-  -- Reset the idle timer on any user input (even empty)
+local function note_user_input()
   local was_active = is_active()
   last_user_input = get_time()
 
@@ -206,7 +233,17 @@ function M.on_input(text)
       blocked_count = 0
     end
   end
-  -- Return the text unchanged to allow it through
+end
+
+-- This runs before aliases, so Enter and local commands such as /reconnect
+-- count as activity even though they never reach the normal on_input path.
+function M.on_user_input(_)
+  note_user_input()
+end
+
+-- Compatibility with older Lera releases that do not dispatch on_user_input.
+function M.on_input(text)
+  note_user_input()
   return text
 end
 
@@ -286,7 +323,23 @@ function M.on_render()
 end
 
 -- Timer callback to refresh display when idle
+function M.on_disconnect()
+  antiidle_enabled = false
+end
+
 local function update_display()
+  if antiidle_enabled then
+    if mud.state() ~= "connected" then
+      antiidle_enabled = false
+    elseif get_time() - math.max(antiidle_last, last_user_input) >= config.antiidle_time then
+      antiidle_last = get_time()
+      -- Only this fixed blank line bypasses deadmans. It must never count as
+      -- human input or permit triggers/timers to resume while unattended.
+      if mud.send_raw("") then
+        antiidle_sent = antiidle_sent + 1
+      end
+    end
+  end
   if is_warning() or is_active() then
     -- Force screen redraw to update the overlay
     lera.dirty()
@@ -303,6 +356,10 @@ function M.on_load()
   if data and data.config then
     if data.config.warning_time then config.warning_time = data.config.warning_time end
     if data.config.block_time then config.block_time = data.config.block_time end
+    local interval = tonumber(data.config.antiidle_time)
+    if interval and interval >= 60 and interval <= 3600 and interval == math.floor(interval) then
+      config.antiidle_time = interval
+    end
   end
 
   register_command()
