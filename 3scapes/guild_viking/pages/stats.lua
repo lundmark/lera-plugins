@@ -221,18 +221,25 @@ function M.lines(width)
       add(pagelib.trunc(fmt_session(elapsed), width))
     end
 
+    -- One hue per track so the four are distinguishable at a glance -- the
+    -- whole block rendered flat before, which made a wall of near-identical
+    -- numbers. A gain is the part worth noticing, so it is the brightest
+    -- thing on the row; the label carries the track's colour and the total
+    -- stays white so the figure itself never fights the hue for attention.
     local half = math.floor(width / 2)
     local xp_data = {
-      { label = "Vis:", val = S.vis, gain = S.vis_gain },
-      { label = "Kap:", val = S.kap, gain = S.kap_gain },
-      { label = "Soe:", val = S.soe, gain = S.soe_gain },
-      { label = "Aud:", val = S.aud, gain = S.aud_gain },
+      { label = "Vis:", val = S.vis, gain = S.vis_gain, col = C.cyan },
+      { label = "Kap:", val = S.kap, gain = S.kap_gain, col = C.yellow },
+      { label = "Soe:", val = S.soe, gain = S.soe_gain, col = C.magenta },
+      { label = "Aud:", val = S.aud, gain = S.aud_gain, col = C.green },
     }
     for i = 1, #xp_data, 2 do
       local function cell(d)
-        local s = string.format("%s%d", d.label, d.val)
+        local s = d.col .. d.label .. pagelib.RESET
+          .. C.white .. pagelib.fmt_num(d.val or 0) .. pagelib.RESET
         if d.gain and d.gain > 0 then
-          s = s .. string.format(" (+%d)", d.gain)
+          s = s .. C.bright_green .. string.format(" (+%s)",
+                pagelib.fmt_num(d.gain)) .. pagelib.RESET
         end
         return s
       end
@@ -242,18 +249,23 @@ function M.lines(width)
     end
 
     add(pagelib.trunc(C.dim .. "Session gained:" .. pagelib.RESET, width))
+    -- Same hues as the totals above, so a track keeps its colour between the
+    -- two blocks. Session figures are themselves gains, hence bright green.
     local sess_data = {
-      { label = "Vis:", val = S.vis_session },
-      { label = "Kap:", val = S.kap_session },
-      { label = "Soe:", val = S.soe_session },
-      { label = "Aud:", val = S.aud_session },
+      { label = "Vis:", val = S.vis_session, col = C.cyan },
+      { label = "Kap:", val = S.kap_session, col = C.yellow },
+      { label = "Soe:", val = S.soe_session, col = C.magenta },
+      { label = "Aud:", val = S.aud_session, col = C.green },
     }
+    local function scell(d)
+      if not d then return "" end
+      return d.col .. d.label .. pagelib.RESET
+        .. ((d.val or 0) > 0 and C.bright_green or C.dim)
+        .. pagelib.fmt_num(d.val or 0) .. pagelib.RESET
+    end
     for i = 1, #sess_data, 2 do
-      local left = pagelib.trunc(
-        string.format("%s%d", sess_data[i].label, sess_data[i].val), half)
-      local right_d = sess_data[i + 1]
-      local right = right_d and string.format("%s%d", right_d.label, right_d.val) or ""
-      add(pagelib.trunc(left .. " " .. right, width))
+      add(pagelib.trunc(pagelib.trunc(scell(sess_data[i]), half)
+        .. " " .. scell(sess_data[i + 1]), width))
     end
   end
 
