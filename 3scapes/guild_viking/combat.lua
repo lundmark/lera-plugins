@@ -52,6 +52,10 @@ local STFX_META = {
   bles = { cat="Heal", cs="#33CC33", ci=0x33CC33 },
   gro  = { cat="Heal", cs="#33CC33", ci=0x33CC33 },
   jor  = { cat="Heal", cs="#33CC33", ci=0x33CC33 },
+  -- Baldr's lingering regen (ljosbylgja_regen). Emitted green by the server
+  -- like every other regen, but it was absent from this table, so it landed
+  -- in STFX_DEFAULT's "DoT" bucket -- a heal displayed as damage-over-time.
+  ljos = { cat="Heal", cs="#33CC33", ci=0x33CC33 },
   van  = { cat="Heal", cs="#33CC33", ci=0x33CC33 },
   frey = { cat="Heal", cs="#33CC33", ci=0x33CC33 },
   gald = { cat="Off",  cs="#DD44DD", ci=0xDD44DD },
