@@ -248,6 +248,15 @@ local function legend_lines(width, b)
   out[#out + 1] = pagelib.trunc(side_line, width)
   for _, l in ipairs(maplib.legend(width, unit_legend_for(b))) do out[#out + 1] = l end
   for _, l in ipairs(maplib.legend(width, TERRAIN_LEGEND)) do out[#out + 1] = l end
+  -- Turn order is a tactical lever now: the server steps your companies in the
+  -- order you order them, one enemy company moving between each, and two
+  -- companies cannot share a square. Worth saying on the board itself, since
+  -- it is the kind of rule nobody discovers by playing.
+  if not deploying then
+    out[#out + 1] = pagelib.trunc(
+      C.dim .. "Ordered first moves first -- command what matters most first." ..
+      RESET, width)
+  end
   return out
 end
 

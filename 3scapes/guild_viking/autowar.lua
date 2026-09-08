@@ -565,7 +565,31 @@ local function aw_plan_orders(aw, b)
   local on_target = 0
   local per_target = 2
 
-  for _, m in ipairs(mine) do
+  -- The server moves your companies in the order the orders arrive, with an
+  -- enemy company stepping between each of yours, so the sequence below is a
+  -- real tactical choice rather than bookkeeping: whoever is ordered first
+  -- takes contested ground. Lead with the moves that lose the most by being
+  -- blocked -- engines, whose positioning IS the plan in an assault, then the
+  -- companies about to make contact, then the rest.
+  local function order_priority(m)
+    local role = aw_role(m.u.utype)
+    if role == "siege" then return 1 end
+    local _, d = nearest_foe(foe, m.c, m.r)
+    if d and d <= 2 then return 2 end        -- closing to contact this turn
+    if role == "ranged" then return 4 end    -- repositioning, least urgent
+    return 3
+  end
+  local seq = {}
+  for i, m in ipairs(mine) do
+    seq[i] = { m = m, i = i, p = order_priority(m) }
+  end
+  table.sort(seq, function(x, y)
+    if x.p ~= y.p then return x.p < y.p end
+    return x.i < y.i                         -- stable: keep the server's order
+  end)
+
+  for _, e in ipairs(seq) do
+    local m = e.m
     local u = m.u
     local role = aw_role(u.utype)
     local rng = aw_range(u.utype)
