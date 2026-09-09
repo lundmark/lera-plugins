@@ -234,6 +234,20 @@ events or payloads for a plugin to consume.
 | `speedwalk` | `/speedwalk`, `.` `..` `.,` `.place` | Speedwalk path management |
 | `stats_window` | *(none)* | Statistics window UI |
 
+### Upcoming directions in the map pane
+
+`/minimap next on` shows up to five upcoming parsed speedwalk commands as
+`Next: n, e, ...` in both the direct minimap and the hybrid `mapview` pane.
+Use `/minimap next off` to hide it, or `/minimap next` to toggle. The setting
+is saved immediately and defaults to off; `/minimap status` reports it.
+It is independent of `/minimap steps` (the direct minimap counter/path).
+The preview is clipped to the pane and takes no extra row when disabled or
+when no known steps remain. It does not advance or wrap the route, and does
+not predict directions for dynamic Chaos Sea exploration. Known loaded steps
+can still be shown without map data. Lua plugin changes need no deploy/rebuild;
+reload the affected plugins in an already-running session.
+
+
 ### Chat sources: MIP and GMCP
 
 `chat_monitor` can take chat from either protocol. 3K sends the same lines over
