@@ -2274,6 +2274,135 @@ check("ordinary narration keeps the default foreground",
   plain_segs and plain_segs[2].fg == nil,
   tostring(plain_segs and plain_segs[2].fg))
 
+-- Named ignores share the route/explorer decision path, including refreshed
+-- contents after combat. Storage is isolated just as Lera isolates profiles.
+do
+  quiet(as.stop)
+  explore_state.active = false
+  local disk, memory, saves = {}, nil, 0
+  local profile = "one"
+  local function clone(data)
+    local out = { unrelated = data and data.unrelated }
+    out.ignored_monsters = {}
+    for k, v in pairs(data and data.ignored_monsters or {}) do out.ignored_monsters[k] = v end
+    return out
+  end
+  store = {
+    load = function() memory = clone(disk[profile]); return true end,
+    get = function() return memory end,
+    set = function(data) memory = data; return true end,
+    save = function() disk[profile] = clone(memory); saves = saves + 1; return true end,
+  }
+  quiet(as.on_unload)
+  quiet(as.on_load)
+  memory.unrelated = "preserved"
+  local function cmd(s) return capture(step_cmd.handler, "mobignore " .. s) end
+  cmd("add   A   Gentle\tGuide  ")
+  check("mobignore saves normalized full names immediately",
+    disk.one.ignored_monsters["a gentle guide"] and saves == 1
+      and disk.one.unrelated == "preserved")
+  cmd("add a gentle guide")
+  check("duplicate ignore is idempotent", saves == 1)
+  for _, s in ipairs({ "add", "remove", "clear extra", "list extra", "oops guide", "add bad\27name" }) do
+    check("invalid mobignore input: " .. s, has_line(cmd(s), "Usage:"))
+  end
+  check("invalid inputs do not save", saves == 1)
+  cmd("add z guide")
+  local lines = cmd("list")
+  check("ignore listing includes both names", has_line(lines, "a gentle guide") and has_line(lines, "z guide"))
+  cmd("remove Z GUIDE")
+  check("remove normalizes names", not disk.one.ignored_monsters["z guide"])
+  check("missing remove is reported", has_line(cmd("remove absent"), "not in ignore list"))
+  quiet(as.on_unload)
+  quiet(as.on_load)
+  check("ignore survives reload", has_line(cmd("list"), "a gentle guide"))
+  profile = "two"
+  quiet(as.on_unload)
+  quiet(as.on_load)
+  check("another profile starts empty", has_line(cmd("list"), "names): 0"))
+  profile = "one"
+  quiet(as.on_unload)
+  quiet(as.on_load)
+
+  local function start_room(mobs, players, targets)
+    quiet(as.stop)
+    sent = {}
+    sw_steps = { { raw = "n", commands = { "n" } } }
+    arrive(9900, "Ignore test room", mobs, players or {})
+    quiet(as.start, targets or false)
+    arrival_prompt()
+  end
+  start_room({ "A gentle guide", "a scrawny orc" })
+  check("ignored first target does not hide a real hostile", last_sent() == "kill orc")
+  quiet(deliver_combat, { attacker = "orc", attacker_hp = 50, rounds = 1 })
+  quiet(deliver_combat, { attacker = "", attacker_hp = 0, rounds = 0 })
+  set_contents({ "A gentle guide" })
+  quiet(deliver_contents_frame)
+  check("combat refresh with only ignored mobs moves", last_sent() == "n")
+  start_room({ "  A  GENTLE guide " })
+  check("all ignored moves without attacking", last_sent() == "n" and count_sent("kill ") == 0)
+  start_room({ "a gentle guide captain" })
+  check("ignore does not match substrings", count_sent("kill ") == 1)
+  cmd("add a guide.*")
+  start_room({ "a guide captain" })
+  check("ignore is not a Lua pattern", count_sent("kill ") == 1)
+  start_room({ "A gentle guide", "a scrawny orc" }, { "Otherplayer" })
+  check("player skip still wins", last_sent() == "n" and count_sent("kill ") == 0)
+  sw_target_list = { "guide", "orc" }
+  start_room({ "A gentle guide", "a scrawny orc" }, {}, true)
+  check("targets-only respects ignore before vocabulary", last_sent() == "kill orc")
+  sw_target_list = {}
+  start_room({ "A gentle guide" }) -- restore any-mob mode before explorer commands
+
+  quiet(as.stop)
+  local real_explore = require("explore.mode")
+  sent = {}
+  ri_state.exits = { "n" }
+  arrive(9900, "Layer one of the Sea of Chaos", { "A gentle guide", "a scrawny orc" }, {})
+  quiet(step_cmd.handler, "set dive off")
+  quiet(step_cmd.handler, "xplore chaossea")
+  arrival_prompt()
+  check("xplore uses the real clear explorer", real_explore.active() and real_explore.policy() == "clear")
+  check("clear explorer attacks real hostile after ignored first", count_sent("kill ") == 1 and not last_sent():find("guide", 1, true), table.concat(sent, "|"))
+  quiet(deliver_no_target, "orc")
+  check("clear explorer moves past only ignored mobs", last_sent() == "n")
+  arrive_info_only(9901, "Layer one of the Sea of Chaos")
+  quiet(deliver_frame)
+  set_contents({ "A gentle guide", "a fierce troll" })
+  quiet(deliver_contents_frame)
+  run_timers()
+  check("split Room.Info/Contents filters new occupants", count_sent("kill ") == 2, table.concat(sent, "|"))
+  quiet(as.stop)
+  explore_state.active = false
+  cmd("clear")
+  start_room({ "A gentle guide" })
+  check("empty ignore retains ordinary attack behavior", count_sent("kill ") == 1)
+  quiet(as.stop)
+  quiet(as.on_unload)
+  quiet(as.on_load)
+  check("clear persists across reload", has_line(cmd("list"), "names): 0"))
+  arrive(9902, "Layer one of the Sea of Chaos", {}, {})
+  quiet(step_cmd.handler, "xplore chaossea")
+  check("xplore starts same explorer", real_explore.active())
+  quiet(step_cmd.handler, "xplore off")
+  check("xplore off stops explorer", not real_explore.active())
+  cmd("add a gentle guide")
+  arrive(9903, "Layer one of the Sea of Chaos", { "A gentle guide" }, {})
+  sent = {}
+  -- Earlier policy tests installed a minimal area profile without restart.
+  local area = require("areas.chaossea")
+  local old_restart = area.restart
+  area.restart = function() return { "test-sea-setup" } end
+  quiet(step_cmd.handler, "chaossea farm 0 risky")
+  arrival_prompt()
+  check("farm moves past ignored mobs without attacking", real_explore.active() and last_sent() == "n" and count_sent("kill ") == 0, table.concat(sent, "|"))
+  quiet(step_cmd.handler, "chaossea off")
+  area.restart = old_restart
+  store.save = function() return false end
+  check("save failure is visible", has_line(cmd("add a guide"), "could not save"))
+  quiet(as.stop)
+end
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
