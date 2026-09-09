@@ -39,6 +39,19 @@ local last_kill = {
 -- Trigger and alias IDs for cleanup
 local trigger_ids = {}
 local command_id = nil
+local pushn
+
+-- Do not retain a consumer that has been unloaded or replaced.
+local function get_push_notify()
+  local current = plugin and plugin.get("push_notify")
+  if current ~= pushn then
+    pushn = current
+    if pushn and pushn.register_channel then
+      pushn.register_channel("killingblow")
+    end
+  end
+  return pushn
+end
 
 -- Cross-plugin kill feed (the Portal killtrigger.monster_died event).
 -- Listeners are registration-ordered and die with this plugin's unload;
@@ -181,6 +194,10 @@ local function on_killing_blow(line, killer, victim)
     send_all_commands()
   else
     send_all_other_commands()
+    local sink = get_push_notify()
+    if sink and sink.notify then
+      sink.notify("killingblow", killer .. " dealt the killing blow to " .. victim)
+    end
   end
 end
 
@@ -687,7 +704,12 @@ function M.on_load()
   print("[killers] Loaded - " .. (data.enabled and "ENABLED" or "DISABLED") .. " - type '/killers' for help")
 end
 
+function M.on_setup()
+  get_push_notify()
+end
+
 function M.on_unload()
+  pushn = nil
   unregister_triggers()
   unregister_command()
 
