@@ -944,6 +944,20 @@ function M.peek_step()
   return step_list[next_idx]
 end
 
+-- Snapshot upcoming parsed commands without advancing or wrapping the route.
+-- A step-list entry can contain several commands (e.g. 2n or (enter portal)).
+function M.upcoming_steps(limit)
+  limit = math.max(0, math.floor(tonumber(limit) or 5))
+  local result = {}
+  for i = step_index + 1, #step_list do
+    for _, cmd in ipairs(step_list[i].commands) do
+      if #result >= limit then return result end
+      result[#result + 1] = cmd
+    end
+  end
+  return result
+end
+
 -- Advance to next step and return it
 -- Returns: step table {raw=, commands=} or nil if no more steps
 function M.take_step()
