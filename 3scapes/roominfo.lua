@@ -3,10 +3,10 @@
 -- exits and their destinations), Room.Contents (players, monsters, items) and
 -- Room.Map (the line-of-sight grid).
 --
--- The server suppresses a resend when a payload is identical to the last one it
--- sent, so absence of a packet means "unchanged", never "empty". Each handler
--- therefore writes only its own slice of state: a Room.Info must not clear
--- contents or the map.
+-- Room.Info and Room.Map can suppress unchanged snapshots. Room.Contents is
+-- always sent on entry, with entry=1 on every page; forced refreshes omit that
+-- marker. Each handler writes only its own slice of state: Room.Info must not
+-- clear contents or the map.
 --
 -- Exposes API for other plugins to query current room state.
 
@@ -29,6 +29,7 @@ local current = {
   monsters = {},     -- List of monster entries
   items = {},        -- List of item entries
   truncated = false, -- Room.Contents reported dropped entries
+  entry = false,     -- Last complete contents list was sent for room entry
   timestamp = 0,     -- When the room identity was last updated
 }
 
@@ -61,17 +62,9 @@ local next_room_info_id = 0
 local on_room_contents_callbacks = {}   -- array of { id = n, fn = f }
 local next_room_contents_id = 0
 
--- Same registry shape again. Fires for ANY accepted room frame -- Room.Info,
--- a complete Room.Contents, or Room.Map -- meaning only "a room frame
--- arrived", nothing about which package or what it said. This exists because
--- no single package is a reliable arrival signal: the server suppresses a
--- resend when a payload repeats the last one it sent, and in an area where
--- many rooms share a name and exit set, Room.Info -- the package a consumer
--- would naturally reach for -- is exactly the one most likely to be
--- suppressed. Room.Map is `@`-centred and changes on virtually every move, so
--- it is the most reliable of the three, but any of the three arriving is
--- proof a room frame landed. Consumers that need to know *which* package
--- arrived, or its payload, keep using on_room_info/on_room_contents.
+-- Generic notification for any accepted Info, complete Contents, or Map frame.
+-- It is a diagnostic signal, not a movement acknowledgement. Consumers needing
+-- actual entry use on_room_contents and its entry flag instead.
 local on_room_frame_callbacks = {}   -- array of { id = n, fn = f }
 local next_room_frame_id = 0
 
@@ -260,7 +253,7 @@ local function classify_entry(raw)
   }
 end
 
-local function commit_contents(items, truncated)
+local function commit_contents(items, truncated, entry)
   local players, monsters, objects = {}, {}, {}
   for _, raw in ipairs(items) do
     local kind, entry = classify_entry(raw)
@@ -276,6 +269,7 @@ local function commit_contents(items, truncated)
   current.monsters = monsters
   current.items = objects
   current.truncated = truncated and true or false
+  current.entry = entry == true
 
   -- This is the single point a COMPLETE list is committed (single-page or
   -- final-page); see the registry comment above for why the notify lives here
@@ -292,22 +286,24 @@ local function handle_room_contents(data)
   local truncated = data.truncated ~= nil and data.truncated ~= 0
   local page = tonumber(data.page)
   local pages = tonumber(data.pages)
+  local entry = data.entry == 1
 
   -- page/pages appear only when there is more than one page, so a payload
   -- without them is a complete list.
   if not page or not pages or pages <= 1 then
     contents_accum = nil
-    commit_contents(items, truncated)
+    commit_contents(items, truncated, entry)
     return
   end
 
   -- A new page 1 abandons whatever was accumulating: it is a fresh list, not a
   -- continuation.
   if page == 1 or not contents_accum then
-    contents_accum = { pages = pages, next_page = 1, items = {}, truncated = false }
+    contents_accum = { pages = pages, next_page = 1, items = {}, truncated = false, entry = entry }
   end
 
-  if page ~= contents_accum.next_page or pages ~= contents_accum.pages then
+  if page ~= contents_accum.next_page or pages ~= contents_accum.pages
+      or entry ~= contents_accum.entry then
     -- Out-of-order or mismatched page: the list cannot be trusted.
     contents_accum = nil
     return
@@ -322,7 +318,7 @@ local function handle_room_contents(data)
   if page == pages then
     local accumulated = contents_accum
     contents_accum = nil
-    commit_contents(accumulated.items, accumulated.truncated)
+    commit_contents(accumulated.items, accumulated.truncated, accumulated.entry)
   end
 end
 
@@ -557,6 +553,7 @@ function M.info()
     player_count = M.player_count(),
     monster_count = M.monster_count(),
     truncated = current.truncated,
+    entry = current.entry,
     timestamp = current.timestamp,
   }
 end
@@ -693,6 +690,7 @@ function M.clear()
   current.monsters = {}
   current.items = {}
   current.truncated = false
+  current.entry = false
   current.timestamp = 0
   synced = false
   map_grid = nil

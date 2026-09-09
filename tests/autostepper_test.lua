@@ -1,12 +1,9 @@
 -- autostepper unit tests. Run from the lera-plugins repo root with LERA_ROOT
 -- pointing at a built Lera checkout.
 --
--- The plugin used to re-read roominfo after every fight, which worked while
--- roominfo was scraping the '=M=' line a 'glance' re-emitted. The GMCP Room.*
--- packages fire on room entry only, so that snapshot cannot change while the
--- player stands in the room: re-reading it makes the plugin attack a corpse
--- forever against a live server. These cases pin the local per-room view that
--- replaced it.
+-- Arrivals require complete GMCP Room.Contents snapshots. Char.Combat ends
+-- fights and Room.Refresh supplies the next authoritative occupant snapshot.
+-- The unit stand-ins expose the same registered callbacks as roominfo and gmcp.
 package.path = "3scapes/autostepper/?.lua;3scapes/?.lua;generic/?.lua;" .. package.path
 
 local failures = 0
@@ -24,19 +21,16 @@ local sent = {}
 mud = { send = function(cmd) sent[#sent + 1] = tostring(cmd) end }
 
 local timers = {}
-local timer_delays = {}  -- ms each queued timer was armed with, by id
 local next_timer_id = 0
 timer = {
   after = function(ms, fn)
     next_timer_id = next_timer_id + 1
     timers[next_timer_id] = fn
-    timer_delays[next_timer_id] = ms
     return next_timer_id
   end,
   cancel = function(id)
     if id and timers[id] then
       timers[id] = nil
-      timer_delays[id] = nil
       return true
     end
     return false
@@ -47,19 +41,6 @@ local function queued_timers()
   local n = 0
   for _ in pairs(timers) do n = n + 1 end
   return n
-end
-
--- The ms each currently-queued timer was armed with, in id order. run_timers()
--- fires every queued callback regardless of how long it was armed for -- this
--- stub has no simulated clock -- so this is the only way a case can pin WHICH
--- delay the plugin chose to arm (the short settle vs. the prompt fallback).
-local function queued_delays()
-  local ids = {}
-  for id in pairs(timers) do ids[#ids + 1] = id end
-  table.sort(ids)
-  local out = {}
-  for i, id in ipairs(ids) do out[i] = timer_delays[id] end
-  return out
 end
 
 -- Run every timer callback queued so far, in id order.
@@ -175,8 +156,8 @@ require = function(name)
   return real_require(name)
 end
 
--- roominfo stand-in. Its state is what the server told us on room ENTRY; the
--- test never mutates it after a kill, which is exactly the server's behaviour.
+-- roominfo stand-in. State changes only when a test delivers a new snapshot
+-- for an entry or a requested refresh, never merely because a fight ended.
 local ri_state = { room = "A dusty crossroads", room_id = 100,
                    monsters = {}, players = {} }
 local fake_roominfo = {
@@ -207,15 +188,11 @@ fake_roominfo.off_room_info = function(id)
 end
 fake_roominfo.info = function()
   return { room = ri_state.room, room_id = ri_state.room_id,
-           exits = ri_state.exits or {} }
+           exits = ri_state.exits or {}, entry = ri_state.entry == true }
 end
 
--- The generic "a room frame arrived" registry. The plugin arms its arrival
--- settle timer from THIS, not from on_room_info, because Room.Info is the
--- package most likely to be suppressed: two adjacent rooms sharing a name and
--- an exit set produce an identical payload and the server sends nothing. A
--- fixture that offers only on_room_info can therefore never arm an arrival,
--- and every case that drives one through deliver_frame() hangs in "stepping".
+-- Generic Room.* notifications can carry Info or Map without Contents. The
+-- production plugin may observe them, but cannot use them to commit arrivals.
 local ri_room_frame_cbs = {}
 fake_roominfo.on_room_frame = function(fn)
   ri_room_frame_cbs[#ri_room_frame_cbs + 1] = fn
@@ -226,9 +203,7 @@ fake_roominfo.off_room_frame = function(id)
   return false
 end
 
--- Deliver a Room.Info frame the way roominfo would: the info-specific
--- subscribers first, then the generic frame signal, matching the real
--- notify order in roominfo's handle_room_info.
+-- roominfo emits the generic frame before its package-specific callback.
 local function deliver_frame()
   for _, fn in pairs(ri_room_frame_cbs) do fn() end
   for _, fn in pairs(ri_frame_cbs) do fn(fake_roominfo.info()) end
@@ -244,15 +219,10 @@ fake_roominfo.off_room_contents = function(id)
   return false
 end
 
--- Deliver a COMPLETE Room.Contents list the way roominfo's on_room_contents
--- would, AFTER ri_state.monsters/players already reflect the server's answer
--- -- exactly like real roominfo, which updates its own state before firing.
--- Contents fires the generic frame signal too, in roominfo's own order
--- (contents-specific subscribers, then the frame signal, both from
--- commit_contents). Omitting the second half is what let the arrival
--- regression above hide: a fixture that under-reports which signals a frame
--- raises will pass while the production path it stands in for cannot arm.
-local function deliver_contents_frame()
+-- Complete Contents updates are committed before the generic and specific
+-- callbacks run, in the same order as real roominfo.
+local function deliver_contents_frame(entry)
+  ri_state.entry = entry == true
   for _, fn in pairs(ri_room_frame_cbs) do fn() end
   for _, fn in pairs(ri_contents_cbs) do fn(fake_roominfo.info()) end
 end
@@ -319,11 +289,6 @@ local as = require("init")
 as.on_load()
 print = real_print
 
--- A prompt pattern is mandatory: M.start refuses without one.
-print = function() end
-as.set_prompt_pattern("^H:")
-print = real_print
-
 -- ---- helpers ----------------------------------------------------------------
 
 local function quiet(fn, ...)
@@ -382,21 +347,24 @@ local function set_contents(monsters, players)
   ri_state.players = players or {}
 end
 
--- One prompt is a whole arrival now. Kept under its original name so the eight
--- existing call sites (lines 183, 197, 210, 216, 234, 256, 268, 273) read the
--- same; it simply no longer manufactures a second prompt. It deliberately does
--- NOT drain timers -- the original did not either, and several call sites call
--- run_timers() themselves.
-local function prompt_cycle()
-  quiet(as.prompt)
+-- The fake roominfo state is updated by arrive()/set_contents() before this
+-- complete snapshot event, matching roominfo's committed Contents callback.
+-- Do not fire timers here: the arrival may immediately send another movement,
+-- whose watchdog must remain pending until its own snapshot arrives.
+local function deliver_arrival_contents()
+  quiet(deliver_contents_frame, true)
 end
 
--- One prompt is now a whole arrival: the glance and its manufactured second
--- prompt are gone. Step 4 collapses prompt_cycle to a single prompt too; this
--- one additionally drains the timer queue, which Task 5's settle timer needs.
-local function arrival_prompt()
-  quiet(as.prompt)
-  run_timers()
+-- An observed fight ends, then the server answers the requested refresh with
+-- the surviving occupants. Neither the combat frame nor a timer fabricates
+-- the answer on the server's behalf.
+local function finish_combat(monsters, players)
+  quiet(function()
+    deliver_combat({ attacker = "a foe", attacker_hp = 10, rounds = 1 })
+    deliver_combat({ attacker = "", attacker_hp = 0, rounds = 0 })
+  end)
+  set_contents(monsters, players)
+  quiet(deliver_contents_frame, false)
 end
 
 -- count_sent is a PREFIX match, so count_sent("") equals #sent and would
@@ -442,410 +410,135 @@ local function failed_attacks_count(lines)
   return nil
 end
 
--- ---- one monster, one kill, then step --------------------------------------
--- Kills: driving the "room cleared" decision off roominfo.monsters(). The
--- server does not re-send Room.Contents when a mob dies, so the fixture leaves
--- 'a scrawny orc' listed for the whole room; a plugin that re-reads it attacks
--- the corpse forever.
+-- ---- complete contents is the only arrival signal -------------------------
 sw_steps = { { raw = "n", commands = { "n" } }, { raw = "e", commands = { "e" } } }
 sw_taken = {}
-arrive(100, "A dusty crossroads", { "a scrawny orc" }, {})
+arrive(100, "A dusty crossroads", {}, {})
 sent = {}
 local started = nil
 quiet(function() started = as.start(false) end)
-check("start succeeds", started == true, tostring(started))
+check("start succeeds without prompt configuration", started == true, tostring(started))
+check("the prompt entry point is removed", as.prompt == nil, type(as.prompt))
+check("the prompt configuration API is removed", as.set_prompt_pattern == nil,
+  type(as.set_prompt_pattern))
+check("start sends neither a glance nor an empty command",
+  #sent == 0, table.concat(sent, "|"))
+
+deliver_frame()
+check("Room.Info alone takes no step", #sent == 0, table.concat(sent, "|"))
+quiet(deliver_contents_frame, false) -- initial Room.Refresh has no entry marker
+check("complete Contents immediately sends the first step", last_sent() == "n",
+  table.concat(sent, "|"))
+check("one movement consumes exactly one route step", #sw_taken == 1, #sw_taken)
 
 sent = {}
-prompt_cycle()
-check("attacks the monster in the room", last_sent() == "kill orc",
-  table.concat(sent, "|"))
-check("tracked view holds the monster", #tracked() == 1,
-  #tracked())
+quiet(deliver_contents_frame, false)
+check("a same-room refresh cannot complete a pending movement",
+  #sent == 0 and #sw_taken == 1, table.concat(sent, "|"))
+check("a same-room refresh leaves the movement watchdog armed",
+  queued_timers() == 1, queued_timers())
+arrive_info_only(101, "A quiet lane")
+deliver_frame()
+check("the next room's Info does not reuse the previous empty snapshot",
+  #sent == 0, table.concat(sent, "|"))
+set_contents({ "a large rat" }, {})
+deliver_arrival_contents()
+check("the next room's complete Contents attacks its monster immediately",
+  last_sent() == "kill rat", table.concat(sent, "|"))
+check("an attack cancels the arrival watchdog", queued_timers() == 0,
+  queued_timers())
 
--- Combat ends: one prompt in the fighting state. It no longer re-glances --
--- the glance never refreshed Room.Contents, which is exactly why the tracked
--- view exists -- so the next decision is made straight from the pruned view
--- and the step goes out immediately.
 sent = {}
-quiet(as.prompt)
-check("no glance after combat", exact_sent("glance") == 0, table.concat(sent, "|"))
-check("steps straight from the pruned view", sent[1] == "n",
+deliver_arrival_contents()
+run_timers()
+check("duplicate Contents and old timers cannot repeat the attack",
+  #sent == 0, table.concat(sent, "|"))
+finish_combat({}, {})
+check("a cleared combat refresh sends the next step", last_sent() == "e",
   table.concat(sent, "|"))
-check("finished target left the tracked view", #tracked() == 0,
+check("the completed target leaves the tracked view", #tracked() == 0,
   table.concat(tracked(), ","))
+quiet(as.stop)
 
-sent = {}
-prompt_cycle()
-check("steps instead of attacking again", count_sent("kill") == 0,
-  table.concat(sent, "|"))
-check("the following step is sent", sent[1] == "e", table.concat(sent, "|"))
-check("roominfo still lists the dead monster",
-  #fake_roominfo.monsters() == 1, #fake_roominfo.monsters())
-
--- ---- entering a new room reseeds the view -----------------------------------
--- Kills: seeding the view once and never again. A step into a new room must
--- pick up that room's occupants.
-run_timers()  -- drain any pending timer
-arrive(101, "A quiet lane", { "a large rat" }, {})
-sent = {}
-prompt_cycle()
-check("new room's monster is attacked", last_sent() == "kill rat",
-  table.concat(sent, "|"))
-
-sent = {}
-quiet(as.prompt)      -- combat over
-prompt_cycle()
-check("new room clears too", count_sent("kill") == 0, table.concat(sent, "|"))
-check("second step taken", sw_taken[2] and sw_taken[2].raw == "e",
-  sw_taken[2] and sw_taken[2].raw)
-
--- ---- the loop terminates ----------------------------------------------------
--- Kills: any pruning that can fail to shrink the view. Two monsters must cost
--- exactly two fights, and the route must run out rather than the plugin
--- spinning on a room it can never empty.
-run_timers()
-sw_steps = { { raw = "s", commands = { "s" } } }
-sw_taken = {}
-arrive(102, "A crowded pit", { "a scrawny orc", "a large rat" }, {})
-sent = {}
-quiet(function() as.start(false) end)
-sent = {}
-local kills, steps, guard = 0, 0, 0
-while as.is_running() and guard < 50 do
-  guard = guard + 1
-  local before = #sent
-  prompt_cycle()
-  if as.get_state() == "fighting" then
-    quiet(as.prompt)  -- combat ends
-  else
-    steps = steps + 1
-    run_timers()
-  end
-  -- Counted after the whole iteration, not just after prompt_cycle(): a kill
-  -- on the second (or later) monster in a room now lands during the
-  -- "combat ends" follow-up prompt above, which is still part of this same
-  -- iteration's arrival -- narrowing the window to prompt_cycle() alone would
-  -- silently drop it.
-  for i = before + 1, #sent do
-    if sent[i]:sub(1, 4) == "kill" then kills = kills + 1 end
-  end
-end
-check("two monsters cost two fights", kills == 2, kills)
-check("route completed rather than looping", not as.is_running(), guard)
-check("terminated well inside the guard", guard < 10, guard)
-
--- ---- a player in the room still steps ---------------------------------------
-sw_steps = { { raw = "w", commands = { "w" } } }
-sw_taken = {}
-arrive(103, "A busy square", { "a scrawny orc" }, { "Bob" })
-sent = {}
-quiet(function() as.start(false) end)
-sent = {}
-prompt_cycle()
-check("player in room steps instead of fighting", count_sent("kill") == 0,
-  table.concat(sent, "|"))
-
--- ---- targets-only mode ------------------------------------------------------
-run_timers()
-sw_steps = { { raw = "n", commands = { "n" } } }
-sw_taken = {}
-sw_target_list = { "orc" }
-arrive(104, "A back alley", { "a harmless kitten", "a scrawny orc" }, {})
-sent = {}
-quiet(function() as.start(true) end)
-sent = {}
-prompt_cycle()
--- The command is the matched KEYWORD ("orc"), not the display name that
--- matched it -- monsters do not answer to their full display name.
-check("targets-only attacks the listed target by keyword",
-  last_sent() == "kill orc", table.concat(sent, "|"))
-sent = {}
-quiet(as.prompt)
-prompt_cycle()
-check("non-target left behind does not restart combat",
-  count_sent("kill") == 0, table.concat(sent, "|"))
-sw_target_list = {}
-
-quiet(as.on_unload)
-
--- ---- glance-free step cycle --------------------------------------------------
-run_timers()
+-- An incomplete arrival eventually stops. Elapsed time cannot certify that
+-- the cached empty list belongs to the destination room.
 sw_steps = { { raw = "n", commands = { "n" } }, { raw = "e", commands = { "e" } } }
 sw_taken = {}
 arrive(200, "A quiet lane", {}, {})
 sent = {}
 quiet(function() as.start(false) end)
-check("start does not send a glance",
-  count_sent("glance") == 0, table.concat(sent, "|"))
-check("start does not send a bare empty line",
-  exact_sent("") == 0, table.concat(sent, "|"))
-
--- start() leaves us awaiting arrival in the room we are standing in, so one
--- prompt is enough to make the first decision and take the first step.
+deliver_arrival_contents()
 sent = {}
-arrival_prompt()
-check("one prompt is a whole arrival", last_sent() == "n", table.concat(sent, "|"))
-check("state after a step is stepping", as.get_state() == "stepping", as.get_state())
-
-sent = {}
-arrive(201, "A quiet lane", {}, {})
-arrival_prompt()
-check("second arrival takes the second step",
-  last_sent() == "e", table.concat(sent, "|"))
-check("still no glance anywhere in the cycle",
-  count_sent("glance") == 0, table.concat(sent, "|"))
-
--- ---- glance escape hatch -----------------------------------------------------
--- Restoring the glance restores the old two-prompt cycle for that user,
--- including its fragility. It exists for brief-mode players who lose the room
--- description otherwise.
-quiet(as.stop)
-as.set_glance_cmd("glance")
-sw_steps = { { raw = "s", commands = { "s" } }, { raw = "w", commands = { "w" } } }
-sw_taken = {}
-arrive(202, "A dim hall", {}, {})
-sent = {}
-quiet(function() as.start(false) end)
-check("hatch on: start sends the glance", exact_sent("glance") == 1,
-  table.concat(sent, "|"))
-sent = {}
-arrival_prompt()
-check("hatch on: one prompt is not yet an arrival", #sent == 0,
-  table.concat(sent, "|"))
-arrival_prompt()
-check("hatch on: the second prompt completes the arrival", sent[1] == "s",
-  table.concat(sent, "|"))
-check("hatch on: a glance follows the step", sent[2] == "glance",
-  table.concat(sent, "|"))
-as.set_glance_cmd("")
-quiet(as.stop)
-
--- ---- arrival without a prompt ------------------------------------------------
--- A frame completes the arrival too, so a drifted or unset prompt pattern no
--- longer wedges the cycle.
---
--- THREE steps, not two: a spurious extra arrival has to have something left to
--- send, or the bug it would reveal looks identical to a completed route.
---
--- as.on_load() is called again on purpose. There is a quiet(as.on_unload) earlier
--- in this file, which tears down the Room.Info subscription -- so without this,
--- deliver_frame() below reaches an empty callback table and the two cases fail
--- with `sent` staying empty forever, which reads like a production bug and is
--- not one. Re-subscribing here also makes this block self-contained rather than
--- dependent on how much of the file ran before it. (The blocks added by the
--- previous task also sit after that on_unload, and work only because they need
--- no subscription: as.start re-acquires its plugin dependencies itself.)
-quiet(as.on_load)
-quiet(as.stop)
-sw_steps = { { raw = "n", commands = { "n" } }, { raw = "s", commands = { "s" } },
-             { raw = "w", commands = { "w" } } }
-sw_taken = {}
-arrive(300, "A cold cell", {}, {})
-sent = {}
-quiet(function() as.start(false) end)
+arrive_info_only(201, "A distant lane")
 deliver_frame()
-check("a frame alone does not arrive before the burst settles",
-  #sent == 0, table.concat(sent, "|"))
-run_timers()
-check("the settled burst completes the arrival",
-  last_sent() == "n", table.concat(sent, "|"))
+quiet(run_timers)
+check("an Info-only arrival timeout stops safely", not as.is_running(), as.get_state())
+check("an arrival timeout sends no further movement", #sent == 0,
+  table.concat(sent, "|"))
+check("an arrival timeout does not consume another route step", #sw_taken == 1,
+  #sw_taken)
+deliver_arrival_contents()
+check("a late destination snapshot cannot restart a timed-out run",
+  not as.is_running() and #sent == 0, table.concat(sent, "|"))
 
--- A prompt landing first wins, and must cancel the settle timer it raced --
--- otherwise that stale timer arrives a second time and takes another step.
-sent = {}
-arrive(301, "A cold cell", {}, {})
-deliver_frame()
-quiet(as.prompt)
-check("prompt wins when it lands first", last_sent() == "s", table.concat(sent, "|"))
-sent = {}
-run_timers()
-check("the raced settle timer does not fire a second arrival",
-  #sent == 0, table.concat(sent, "|"))
-
--- A raced settle timer must not survive into combat, and this is the ONLY case
--- that exercises either of the two overlapping protections against a stale
--- settle: complete_arrival's own cancel_settle(), and the `state ~= "stepping"`
--- guard. It exercises them JOINTLY, because each alone masks the other --
--- with cancel_settle intact the stale timer never fires, and with the guard
--- intact its firing is swallowed. Deleting both lets the stale timer re-enter
--- process_room mid-fight and attack the same monster a second time.
---
--- The route's third step is deliberately left untaken so the run is still live
--- here; an exhausted route would send nothing either way.
-sent = {}
-arrive(302, "A cold cell", { "a scrawny orc" }, {})
-deliver_frame()
-quiet(as.prompt)
-check("a raced timer in combat: the attack goes out once",
-  count_sent("kill") == 1, table.concat(sent, "|"))
-sent = {}
-run_timers()
-check("a raced settle timer does not re-attack",
-  count_sent("kill") == 0, table.concat(sent, "|"))
-
-quiet(as.stop)
-
--- ---- M.start no longer refuses without a prompt pattern (task-12 supp. 2) ---
--- Task 5 made a settled Room.Info burst complete an arrival on its own, so a
--- prompt is no longer load-bearing for starting a run. Nothing in the area
--- profile itself sets a pattern, so a refusal here made explore runs
--- impossible to start with the default configuration.
-run_timers()
-as.set_prompt_pattern(nil)
 sw_steps = { { raw = "n", commands = { "n" } } }
 sw_taken = {}
-arrive(303, "A cold cell", {}, {})
-sent = {}
-local no_prompt_started = nil
-quiet(function() no_prompt_started = as.start(false) end)
-check("start succeeds with no prompt pattern configured",
-  no_prompt_started == true, tostring(no_prompt_started))
-sent = {}
-deliver_frame()
-check("with no pattern, a frame arms the short settle, exactly as before",
-  queued_delays()[1] == 150, table.concat(queued_delays(), ","))
-run_timers()
-check("the first step arrives via the frame path with no prompt pattern set",
-  last_sent() == "n", table.concat(sent, "|"))
-as.set_prompt_pattern("^H:")
-quiet(as.stop)
-
--- ---- Task P: the prompt is authoritative, the settle is a fallback --------
--- Task 5 armed the settle from any room frame with one fixed delay, reasoning
--- only about the prompt going MISSING. It never considered the settle
--- WINNING when it should not: the burst is not self-describing -- Room.Info,
--- Room.Contents and Room.Map can each be suppressed, so a burst may begin
--- with any one of them and the first frame says nothing about whether more
--- is coming. When a prompt pattern is configured, the prompt -- sent after
--- the whole burst, by construction -- must be the thing that decides; the
--- settle only rescues a prompt that never comes.
-run_timers()
-as.set_prompt_pattern("^H:")
-sw_steps = { { raw = "n", commands = { "n" } } }
-sw_taken = {}
-sw_target_list = {}
-arrive(304, "A quiet hall", {}, {})
-sent = {}
-quiet(function() as.start(false) end)
-
--- A frame burst arms the LONG fallback, not the short settle, once a prompt
--- pattern is configured.
-deliver_frame()
-check("with a pattern configured, a frame arms the long fallback, not the short settle",
-  queued_delays()[1] == 1500, table.concat(queued_delays(), ","))
-
--- The prompt lands next: it completes the arrival on its own.
-prompt_cycle()
-check("the prompt completes the arrival",
-  last_sent() == "n", table.concat(sent, "|"))
-quiet(as.stop)
-
--- The cancel needs its own room WITH a monster: an empty room's arrival
--- steps again immediately, and do_step()'s own begin_arrival_wait() calls
--- cancel_settle() a second time -- which would mask complete_arrival()'s
--- cancel entirely and let this check pass whether or not that call exists.
--- Attacking, not stepping, is the case that isolates it: do_attack() never
--- touches the settle timer.
-run_timers()
-sw_steps = { { raw = "n", commands = { "n" } } }  -- never taken: the monster stops us
-sw_taken = {}
-sw_target_list = {}
-arrive(308, "A quiet hall", { "a lazy toad" }, {})
+arrive(202, "A distant lane", {}, {})
 sent = {}
 quiet(function() as.start(false) end)
 deliver_frame()
-prompt_cycle()
-check("the prompt attacks the monster",
-  last_sent() == "kill toad", table.concat(sent, "|"))
-check("...and cancels the pending fallback timer that would otherwise outlive it",
-  queued_timers() == 0, tostring(queued_timers()))
-quiet(as.stop)
+quiet(run_timers)
+check("an unanswered initial refresh stops without using the cached occupants",
+  not as.is_running() and #sent == 0 and #sw_taken == 0,
+  table.concat(sent, "|"))
 
--- If the prompt never comes at all, the fallback still completes the
--- arrival -- it is a rescue, not dead weight.
-run_timers()
-sw_steps = { { raw = "n", commands = { "n" } } }
+-- Two fights and the last room snapshot must exhaust a one-step route.
+sw_steps = { { raw = "s", commands = { "s" } } }
 sw_taken = {}
-arrive(305, "A quiet hall", {}, {})
+arrive(102, "A crowded pit", { "a scrawny orc", "a large rat" }, {})
 sent = {}
 quiet(function() as.start(false) end)
-sent = {}
-deliver_frame()
-run_timers()  -- no prompt ever arrives; only the fallback fires
-check("with a pattern configured and no prompt, the fallback still completes the arrival",
-  last_sent() == "n", table.concat(sent, "|"))
-quiet(as.stop)
+deliver_arrival_contents()
+finish_combat({ "a large rat" }, {})
+finish_combat({}, {})
+arrive(103, "An empty hall", {}, {})
+deliver_arrival_contents()
+check("two monsters cost two fights", count_sent("kill") == 2,
+  table.concat(sent, "|"))
+check("the refreshed empty room takes exactly one route step", exact_sent("s") == 1,
+  table.concat(sent, "|"))
+check("the route completes after the destination snapshot", not as.is_running(),
+  as.get_state())
 
--- The delay is chosen at ARM time, not cached at load or at M.start: a run
--- started with no pattern arms the short settle, and a pattern set mid-run
--- governs the very next frame with no extra bookkeeping.
-run_timers()
-as.set_prompt_pattern(nil)
-sw_steps = { { raw = "n", commands = { "n" } }, { raw = "e", commands = { "e" } } }
-sw_taken = {}
-arrive(306, "A quiet hall", {}, {})
-sent = {}
-quiet(function() as.start(false) end)
-deliver_frame()
-check("with no pattern at arm time, the frame arms the short settle",
-  queued_delays()[1] == 150, table.concat(queued_delays(), ","))
-run_timers()
-check("...and the settle completes that arrival",
-  last_sent() == "n", table.concat(sent, "|"))
-as.set_prompt_pattern("^H:")   -- flipped mid-run, before the next frame arms
-sent = {}
-arrive(307, "A sunny meadow", {}, {})
-deliver_frame()
-check("a pattern set mid-run governs the very next frame's arm delay",
-  queued_delays()[1] == 1500, table.concat(queued_delays(), ","))
-prompt_cycle()
-check("...and the prompt still completes that arrival",
-  last_sent() == "e", table.concat(sent, "|"))
-quiet(as.stop)
-
--- ---- Task P regression: the owner's live misfire ---------------------------
--- Reproduced from the owner's transcript: the stepper decided "no monsters"
--- for a room that held one -- because that room's Room.Info settled before
--- its own Room.Contents had arrived -- stepped on, and attacked the monster
--- from the WRONG room a step later ("There is no mutant here."). With a
--- prompt pattern configured, an Info-only settle must take no decision at
--- all; only the prompt, once Contents has actually landed, may commit it.
-run_timers()
 sw_steps = { { raw = "w", commands = { "w" } } }
 sw_taken = {}
-sw_target_list = {}
-arrive(1, "vr:0,7,2", {}, {})  -- standing room, empty
+arrive(104, "A busy square", { "a scrawny orc" }, { "Bob" })
 sent = {}
 quiet(function() as.start(false) end)
-prompt_cycle()  -- origin arrival completes; the room is empty, so it steps
-check("regression setup: steps toward the monster's room", last_sent() == "w",
-  table.concat(sent, "|"))
+deliver_arrival_contents()
+check("a player in the room still causes a step instead of combat",
+  last_sent() == "w" and count_sent("kill") == 0, table.concat(sent, "|"))
+quiet(as.stop)
 
+-- Preserve the targets-only decision after a fresh postcombat snapshot.
+sw_steps = { { raw = "n", commands = { "n" } } }
+sw_taken = {}
+sw_target_list = { "orc" }
+arrive(105, "A back alley", { "a harmless kitten", "a scrawny orc" }, {})
 sent = {}
--- Only Room.Info lands for the next room -- its Room.Contents (the monster)
--- has not arrived yet. The armed timer must be the long fallback, not the
--- short settle: even a real 150ms elapsing must not decide this room empty.
-arrive_info_only(2, "vr:1,7,2")
-deliver_frame()
-check("an Info-only frame with a pattern configured arms the fallback, not the settle",
-  queued_delays()[1] == 1500, table.concat(queued_delays(), ","))
-check("...and takes no decision on its own", #sent == 0, table.concat(sent, "|"))
-
--- The monster's own Room.Contents lands, then the prompt that terminates the
--- burst by construction.
-set_contents({ "an evolving organism" }, {})
-deliver_contents_frame()
-check("Contents landing still takes no decision before the prompt",
-  #sent == 0, table.concat(sent, "|"))
-prompt_cycle()
-check("the monster IN THIS ROOM is attacked, not the one after it",
-  last_sent() == "kill organism", table.concat(sent, "|"))
+quiet(function() as.start(true) end)
+deliver_arrival_contents()
+check("targets-only attacks the listed target by keyword", last_sent() == "kill orc",
+  table.concat(sent, "|"))
+sent = {}
+finish_combat({ "a harmless kitten" }, {})
+check("a surviving non-target does not restart combat",
+  last_sent() == "n" and count_sent("kill") == 0, table.concat(sent, "|"))
+sw_target_list = {}
 quiet(as.stop)
 
 -- ---- M.start asks the MUD for the current room (Item 1) ---------------------
--- mode.start's cached-roominfo seed was the fix for a review finding at a
--- time when nothing could force a re-read; Room.Refresh makes ASKING
--- possible, and the cache is only the FALLBACK for when gmcp.send fails.
+-- Room.Refresh supplies a fresh initial snapshot before any route decision.
 -- Route mode gets the same ask: it reads roominfo for its first decision
 -- too, and with the glance gone nothing else forces a re-read, so '-.' in a
 -- long-occupied room would otherwise decide on stale contents. Explore mode's
@@ -873,16 +566,14 @@ check("the refresh asks for Room.Info and Room.Contents",
 -- Taking a further step must not send a second refresh: the request is
 -- per-start, not per-step.
 sent = {}
-arrival_prompt()
+deliver_arrival_contents()
 check("a further step is taken normally", last_sent() == "n",
   table.concat(sent, "|"))
 check("the request is sent once per start, not per step",
   #gmcp_sent == 1, tostring(#gmcp_sent))
 quiet(as.stop)
 
--- gmcp.send returning false (not connected, or GMCP not negotiated) must not
--- stop the run from starting -- mode.start's cached-roominfo seed is exactly
--- the fallback for this case.
+-- A refused refresh cannot certify the cached occupants of the starting room.
 run_timers()
 gmcp_send_result = false
 gmcp_sent = {}
@@ -894,8 +585,11 @@ local refused_started = nil
 quiet(function() refused_started = as.start(false) end)
 check("gmcp.send is still attempted even though it will fail",
   #gmcp_sent == 1, tostring(#gmcp_sent))
-check("a gmcp.send that returns false still starts the run",
-  refused_started == true, tostring(refused_started))
+check("a refused starting refresh returns false and leaves the run stopped",
+  refused_started == false and not as.is_running(),
+  tostring(refused_started) .. ":" .. as.get_state())
+check("a refused starting refresh sends no movement", #sent == 0,
+  table.concat(sent, "|"))
 gmcp_send_result = true
 quiet(as.stop)
 
@@ -1009,7 +703,7 @@ as.debug_set_explore({
 -- INTO the area -- before the explore command runs and before any step is
 -- outstanding -- and an identical payload is never resent, so a frame dropped
 -- here is a room whose exits the explorer never learns. It must NOT arm the
--- arrival settle timer, though: nothing has been asked to move, so there is no
+-- arrival watchdog, though: nothing has been asked to move, so there is no
 -- arrival to commit.
 quiet(as.stop)
 run_timers()
@@ -1046,14 +740,14 @@ check("the explore-mode refresh asks for Room.Info and Room.Contents",
     and gmcp_sent[1].data.packages[1] == "Room.Info"
     and gmcp_sent[1].data.packages[2] == "Room.Contents",
   gmcp_sent[1] and (gmcp_sent[1].pkg .. ":" .. table.concat(gmcp_sent[1].data.packages or {}, ",")))
-arrival_prompt()
+deliver_arrival_contents()
 check("explore mode supplies the step", last_sent() == "n", table.concat(sent, "|"))
 check("explore mode is told about the arrival",
   explore_state.arrivals >= 1, tostring(explore_state.arrivals))
 
 sent = {}
 arrive(401, "Layer one of the Sea of Chaos", {}, {})
-arrival_prompt()
+deliver_arrival_contents()
 check("explore mode supplies the second step",
   last_sent() == "e", table.concat(sent, "|"))
 
@@ -1062,7 +756,7 @@ check("explore mode supplies the second step",
 -- it is standing in the maze.
 sent = {}
 arrive(402, "Layer one of the Sea of Chaos", {}, {})
-arrival_prompt()
+deliver_arrival_contents()
 check("an exhausted explore run stops the stepper", as.is_running() == false,
   tostring(as.is_running()))
 check("an exhausted explore run never takes a route step",
@@ -1087,13 +781,13 @@ explore_state.coord = 0
 arrive(403, "Layer one of the Sea of Chaos", { "a small mutant organism" }, {})
 sent = {}
 quiet(function() as.start(false) end)
-arrival_prompt()
+deliver_arrival_contents()
 check("a monster in the first sea room is attacked",
   last_sent() == "kill organism", table.concat(sent, "|"))
 sent = {}
-quiet(as.prompt)     -- combat ends; the mob is struck from the local view
+finish_combat({}, {})
 arrive(403, "Layer one of the Sea of Chaos", { "a twisted mutant creature" }, {})
-arrival_prompt()
+deliver_arrival_contents()
 check("a monster in the NEXT sea room is attacked despite the same room name",
   last_sent() == "kill creature", table.concat(sent, "|"))
 quiet(as.stop)
@@ -1115,7 +809,7 @@ sw_taken = {}
 arrive(700, "Layer one of the Sea of Chaos", {}, {})
 sent = {}
 quiet(function() as.start(false) end)
-arrival_prompt()
+deliver_arrival_contents()
 check("run_mode setup: explore mode supplies the first step",
   last_sent() == "n", table.concat(sent, "|"))
 
@@ -1124,7 +818,7 @@ check("run_mode setup: explore mode supplies the first step",
 explore_state.active = false
 sent = {}
 arrive(701, "A dusty crossroads", {}, {})
-arrival_prompt()
+deliver_arrival_contents()
 check("a self-deactivated explore run stops rather than falling through",
   as.is_running() == false, tostring(as.is_running()))
 check("a self-deactivated explore run never takes a route step",
@@ -1141,12 +835,12 @@ sw_taken = {}
 arrive(702, "A dusty crossroads", {}, {})
 sent = {}
 quiet(function() as.start(false) end)
-arrival_prompt()
+deliver_arrival_contents()
 check("a route run still takes its first step when explore is inactive at start",
   last_sent() == "n", table.concat(sent, "|"))
 sent = {}
 arrive(703, "A dusty crossroads", {}, {})
-arrival_prompt()
+deliver_arrival_contents()
 check("a route run takes its second step", last_sent() == "e",
   table.concat(sent, "|"))
 quiet(as.stop)
@@ -1353,7 +1047,7 @@ sw_taken = {}
 arrive(980, "A muddy field", {}, {})
 sent = {}
 quiet(function() as.start(false) end)
-arrival_prompt()
+deliver_arrival_contents()
 check("'-.' with nothing retained still starts an ordinary route run",
   last_sent() == "n", table.concat(sent, "|"))
 check("'-.' with nothing retained never even asks to resume",
@@ -1411,7 +1105,7 @@ sw_steps = { { raw = "SHOULD-NOT-RUN", commands = { "SHOULD-NOT-RUN" } } }
 arrive(950, "A muddy field", {}, {})
 sent = {}
 quiet(function() as.start(false) end)
-local origin_lines = capture(as.prompt)
+local origin_lines = capture(deliver_contents_frame)
 check("do_step reports 'back at the origin' when explore.stop_reason() says so",
   has_line(origin_lines, "back at the origin"), table.concat(origin_lines, "|"))
 check("completing a leave stops the run", as.is_running() == false,
@@ -1423,7 +1117,7 @@ explore_state.stop_reason = "exhausted"
 arrive(951, "A muddy field", {}, {})
 sent = {}
 quiet(function() as.start(false) end)
-local exhausted_lines = capture(as.prompt)
+local exhausted_lines = capture(deliver_contents_frame)
 check("do_step still reports 'no unvisited exits remain' for a genuine exhaustion",
   has_line(exhausted_lines, "no unvisited exits remain"),
   table.concat(exhausted_lines, "|"))
@@ -1445,7 +1139,7 @@ sent = {}
 quiet(function() as.start(false) end)
 explore_state.leaving = true
 sent = {}
-arrival_prompt()
+deliver_arrival_contents()
 check("a monster met on the way out is still attacked",
   last_sent() == "kill wolf", table.concat(sent, "|"))
 explore_state.leaving = false
@@ -1487,7 +1181,7 @@ explore_state.coord = 0
 arrive(420, "Layer one of the Sea of Chaos", { "A growing mutant being" }, {})
 sent = {}
 quiet(function() as.start(false) end)
-arrival_prompt()
+deliver_arrival_contents()
 check("a profile keyword contained in the display name is what goes out",
   last_sent() == "kill mutant", table.concat(sent, "|"))
 quiet(as.stop)
@@ -1506,7 +1200,7 @@ arrive(421, "Layer eight of the Sea of Chaos",
   { "a whirling monstrosity with a thousand mouths" }, {})
 sent = {}
 quiet(function() as.start(false) end)
-local sea_guess_lines = capture(as.prompt)
+local sea_guess_lines = capture(deliver_contents_frame)
 check("a monster matching no profile keyword falls back to the first entry",
   last_sent() == "kill mutant", table.concat(sent, "|"))
 check("that fallback is logged as a guess",
@@ -1528,7 +1222,7 @@ sw_target_list = { "gremlin" }
 arrive(423, "Layer three of the Sea of Chaos", { "A growing mutant being" }, {})
 sent = {}
 quiet(function() as.start(false) end)
-arrival_prompt()
+deliver_arrival_contents()
 check("the area profile outranks a stale speedwalk place list",
   last_sent() == "kill mutant", table.concat(sent, "|"))
 sw_target_list = {}
@@ -1546,7 +1240,7 @@ explore_state.coord = 0
 arrive(422, "Layer two of the Sea of Chaos", { "A small mutant being" }, {})
 sent = {}
 quiet(function() as.start(true) end)
-arrival_prompt()
+deliver_arrival_contents()
 check("targets-only mode attacks a monster the profile vocabulary matches",
   last_sent() == "kill mutant", table.concat(sent, "|"))
 quiet(as.stop)
@@ -1576,7 +1270,7 @@ sw_taken = {}
 arrive(425, "A dusty crossroads", { "a hulking orc" }, {})
 sent = {}
 quiet(function() as.start(false) end)
-arrival_prompt()
+deliver_arrival_contents()
 check("a route run started after a paused explore run uses the route's targets, not the retained area's",
   last_sent() == "kill orc", table.concat(sent, "|"))
 sw_target_list = {}
@@ -1699,7 +1393,7 @@ sw_taken = {}
 arrive(710, "Layer one of the Sea of Chaos", {}, {})
 sent = {}
 quiet(function() as.start(false) end)
-arrival_prompt()
+deliver_arrival_contents()
 check("explore run supplies a step before the re-dive",
   last_sent() == "n", table.concat(sent, "|"))
 
@@ -1709,7 +1403,7 @@ check("mid-run unsetsea calls discard",
   explore_state.discards == 1, tostring(explore_state.discards))
 sent = {}
 arrive(711, "Layer one of the Sea of Chaos", {}, {})
-arrival_prompt()
+deliver_arrival_contents()
 check("a mid-run discard ends the run through the explore-inactive branch",
   as.is_running() == false, tostring(as.is_running()))
 check("a mid-run discard never falls through to a route step",
@@ -1738,13 +1432,12 @@ quiet(function() as.start(false) end)
 -- reading that start-time send instead of a real regression.
 gmcp_sent = {}
 sent = {}
-prompt_cycle()
+deliver_arrival_contents()
 check("gmcp cycle: attacks the monster", last_sent() == "kill orc",
   table.concat(sent, "|"))
 
--- A Char.Combat frame WITH an attacker just says the fight continues. It must
--- latch the source (so the prompt path stands down) without ending anything
--- and without asking for a refresh.
+-- A Char.Combat frame with an attacker says the fight continues without
+-- ending anything or asking for a refresh.
 sent = {}
 quiet(function()
   deliver_combat({ attacker = "an orc", attacker_hp = 80, rounds = 1, target = "you" })
@@ -1754,22 +1447,19 @@ check("an in-progress Char.Combat frame does not end the fight",
 check("an in-progress frame does not request a refresh",
   #gmcp_sent == 0, tostring(#gmcp_sent))
 
--- Kills: removing the latch check from the prompt path. With the source
--- latched, an ordinary prompt arriving mid-fight (the round's own output, or
--- anything matching the prompt pattern) must not end the fight, and must not
--- go around Char.Combat to ask for a refresh either.
+-- A redundant contents broadcast during combat cannot decide the room again.
 sent = {}
 gmcp_sent = {}
-quiet(as.prompt)
-check("with the latch set, a prompt mid-fight does not end the fight",
-  #sent == 0, table.concat(sent, "|"))
-check("a plain prompt does not trigger a Room.Refresh",
-  #gmcp_sent == 0, tostring(#gmcp_sent))
-check("the tracked view is unchanged while the latch stands the prompt down",
+deliver_arrival_contents()
+check("an unsolicited Contents frame cannot end combat", #sent == 0,
+  table.concat(sent, "|"))
+check("an unsolicited Contents frame does not request a refresh", #gmcp_sent == 0,
+  tostring(#gmcp_sent))
+check("the tracked combat target remains unchanged",
   #tracked() == 1 and tracked()[1] == "an orc", table.concat(tracked(), ","))
 
--- Combat actually ends: attacker absent. Kills: sending on every prompt
--- instead, or asking for more than Room.Contents.
+-- Combat ends when Char.Combat reports no attacker. Only Contents needs
+-- refreshing because the player has not moved.
 gmcp_sent = {}
 quiet(function() deliver_combat({ attacker = "", attacker_hp = 0, rounds = 0 }) end)
 check("combat end sends exactly one Room.Refresh", #gmcp_sent == 1, tostring(#gmcp_sent))
@@ -1821,7 +1511,7 @@ arrive(600, "A foggy marsh", { "a bog wraith" }, {})
 sent = {}
 quiet(function() as.start(false) end)
 sent = {}
-prompt_cycle()
+deliver_arrival_contents()
 check("reentrancy setup: attacks the monster", last_sent() == "kill wraith",
   table.concat(sent, "|"))
 
@@ -1839,78 +1529,73 @@ check("a second back-to-back no-attacker frame sends no additional refresh",
 check("exactly one timer remains queued, not two",
   queued_timers() == 1, tostring(queued_timers()))
 
--- The answer arrives: it must cancel the (only) outstanding timer, leaving
--- none behind to later fire prune_and_decide() during an unrelated fight.
+-- The answer replaces the refresh timeout with the new movement's watchdog.
 ri_state.monsters = {}
 sent = {}
 quiet(deliver_contents_frame)
 check("the answer steps once the room is empty", last_sent() == "n",
   table.concat(sent, "|"))
-check("no timer remains after the answer", queued_timers() == 0,
+check("only the new movement watchdog remains after the answer",
+  queued_timers() == 1, tostring(queued_timers()))
+quiet(as.stop)
+check("stop cancels the outstanding movement watchdog", queued_timers() == 0,
   tostring(queued_timers()))
 
--- ---- gmcp.send returning false falls back immediately -----------------------
--- Kills: dropping the return-value check. Waiting out the timeout for a
--- request that was never sent is a stall with no cause to find later.
-run_timers()
-sw_steps = { { raw = "e", commands = { "e" } } }
-sw_taken = {}
-arrive(501, "A dry wash", { "a jackal" }, {})
-sent = {}
-quiet(function() as.start(false) end)
-sent = {}
-prompt_cycle()
-check("send-false scenario: attacks the monster", last_sent() == "kill jackal",
-  table.concat(sent, "|"))
+-- ---- failed postcombat refreshes preserve every possible live target ------
+-- An idle frame can follow a failed attack or a surviving/fleeing opponent.
+-- Even an observed active-to-idle transition does not prove the target died.
+for _, observed_active in ipairs({ false, true }) do
+  local combat_case = observed_active and "observed fight" or "idle-only combat"
+  for _, failure_kind in ipairs({ "send refused", "timeout" }) do
+    quiet(as.stop)
+    run_timers()
+    gmcp_send_result = true
+    sw_steps = { { raw = "e", commands = { "e" } } }
+    sw_taken = {}
+    arrive(501, "A dry wash", { "a jackal" }, {})
+    sent = {}
+    quiet(function() as.start(false) end)
+    deliver_arrival_contents()
+    check(combat_case .. "/" .. failure_kind .. ": attacks the target",
+      last_sent() == "kill jackal", table.concat(sent, "|"))
+    if observed_active then
+      quiet(function() deliver_combat({ attacker = "a jackal", rounds = 1 }) end)
+    end
 
-gmcp_send_result = false
-gmcp_sent = {}
-sent = {}
-quiet(function() deliver_combat({ attacker = "" }) end)
-check("gmcp.send is still attempted", #gmcp_sent == 1, tostring(#gmcp_sent))
-check("gmcp.send returning false falls back immediately",
-  sent[1] == "e", table.concat(sent, "|"))
-check("no timer is left waiting for a request that was never sent",
-  queued_timers() == 0, tostring(queued_timers()))
-gmcp_send_result = true
-
--- ---- no answer within the timeout falls back -----------------------------
--- Kills: dropping the timeout. Over-budget refreshes are dropped silently
--- with no error payload, so a run that waited forever would be worse than one
--- that occasionally guesses wrong.
-run_timers()
-sw_steps = { { raw = "s", commands = { "s" } } }
-sw_taken = {}
-arrive(502, "A stone bridge", { "a troll" }, {})
-sent = {}
-quiet(function() as.start(false) end)
-sent = {}
-prompt_cycle()
-check("timeout scenario: attacks the monster", last_sent() == "kill troll",
-  table.concat(sent, "|"))
-
-gmcp_sent = {}
-quiet(function() deliver_combat({ attacker = nil }) end)
-check("timeout scenario: exactly one Room.Refresh sent",
-  #gmcp_sent == 1, tostring(#gmcp_sent))
-check("a timer is armed while waiting for the answer",
-  queued_timers() == 1, tostring(queued_timers()))
-
-sent = {}
-local timeout_lines = capture(run_timers)  -- fire the ~1s timeout; no answer
-check("no answer within the timeout falls back to prune-and-decide",
-  sent[1] == "s", table.concat(sent, "|"))
--- The fallback used to be silent, which made "the plugin is confused" and "the
--- server is not answering" look identical from a session log -- and the run
--- decides from a guess for every room after it.
-check("an unanswered refresh says so",
-  has_line(timeout_lines, "Room.Refresh went unanswered"),
-  table.concat(timeout_lines, "|"))
-local unanswered_status = capture(as.status)
-check("and is counted in /step status",
-  has_line(unanswered_status, "Unanswered refreshes (this session): 1"),
-  table.concat(unanswered_status, "|"))
-
+    local before_status = capture(as.status)
+    gmcp_send_result = failure_kind ~= "send refused"
+    gmcp_sent = {}
+    sent = {}
+    local failure_lines = capture(function() deliver_combat({ attacker = "" }) end)
+    check(combat_case .. "/" .. failure_kind .. ": requests Contents once",
+      #gmcp_sent == 1 and gmcp_sent[1].pkg == "Room.Refresh", #gmcp_sent)
+    if failure_kind == "timeout" then
+      check(combat_case .. ": one refresh timeout is armed", queued_timers() == 1,
+        queued_timers())
+      failure_lines = capture(run_timers)
+      check(combat_case .. ": unanswered refresh is reported",
+        has_line(failure_lines, "Room.Refresh went unanswered"),
+        table.concat(failure_lines, "|"))
+      local function unanswered(lines)
+        for _, line in ipairs(lines) do
+          local n = line:match("Unanswered refreshes %(this session%): (%d+)")
+          if n then return tonumber(n) end
+        end
+      end
+      check(combat_case .. ": unanswered refresh is counted in status",
+        unanswered(capture(as.status)) == (unanswered(before_status) or 0) + 1)
+    end
+    check(combat_case .. "/" .. failure_kind .. ": stops safely",
+      not as.is_running(), as.get_state())
+    check(combat_case .. "/" .. failure_kind .. ": sends no movement",
+      #sent == 0 and #sw_taken == 0, table.concat(sent, "|"))
+    check(combat_case .. "/" .. failure_kind .. ": retains the possible live target",
+      #tracked() == 1 and tracked()[1] == "a jackal", table.concat(tracked(), ","))
+    check(combat_case .. "/" .. failure_kind .. ": leaves no pending timer",
+      queued_timers() == 0, queued_timers())
+    gmcp_send_result = true
+  end
+end
 quiet(as.stop)
 
 -- ---- attack resolves to the target keyword, not the display name (Task T) ---
@@ -1928,7 +1613,7 @@ arrive(700, "A sunken crypt", { "a scrawny orc" }, {})
 sent = {}
 quiet(function() as.start(false) end)
 sent = {}
-prompt_cycle()
+deliver_arrival_contents()
 check("a matching monster is attacked by its target keyword, not its display name",
   last_sent() == "kill orc", table.concat(sent, "|"))
 
@@ -1938,13 +1623,11 @@ check("current_target stays the display name after a keyword attack",
 check("the tracked view still holds the monster under its display name",
   #tracked() == 1 and tracked()[1] == "a scrawny orc", table.concat(tracked(), ","))
 
--- Combat ends: pruning must still find and strike the display name. Had
--- current_target been set to the keyword instead, forget_monster(name) would
--- search room_monsters (display names) for "orc" and find nothing, leaving
--- the corpse in the tracked view forever -- the trap this task exists to avoid.
+-- A confirmed attack failure must still remove the display name, even though
+-- the failure response echoes the keyword that was sent on the wire.
 sent = {}
-quiet(as.prompt)
-check("the finished target is pruned from the tracked view by display name",
+quiet(function() deliver_no_target("orc") end)
+check("the failed target is removed from the tracked view by display name",
   #tracked() == 0, table.concat(tracked(), ","))
 sw_target_list = {}
 quiet(as.stop)
@@ -1960,7 +1643,7 @@ arrive(701, "A dry cistern", { "a large rat" }, {})
 sent = {}
 quiet(function() as.start(false) end)
 sent = {}
-local guess_lines = capture(as.prompt)
+local guess_lines = capture(deliver_contents_frame)
 check("a non-matching monster in attack-anything mode is attacked by the first list entry",
   last_sent() == "kill gremlin", table.concat(sent, "|"))
 check("the fallback guess is logged",
@@ -1989,7 +1672,7 @@ local function attacks_as(id, room, monster)
   sent = {}
   quiet(function() as.start(false) end)
   sent = {}
-  prompt_cycle()
+  deliver_arrival_contents()
   local out = last_sent()
   quiet(as.stop)
   return out
@@ -2024,7 +1707,7 @@ arrive(703, "A locked vault", { "a large rat" }, {})
 sent = {}
 quiet(function() as.start(true) end)
 sent = {}
-prompt_cycle()
+deliver_arrival_contents()
 check("targets-only mode never attacks a non-matching monster",
   count_sent("kill") == 0, table.concat(sent, "|"))
 check("targets-only mode steps past the non-matching monster instead",
@@ -2045,7 +1728,7 @@ arrive(800, "A collapsed tunnel", { "a rock lizard" }, {})
 sent = {}
 quiet(function() as.start(false) end)
 sent = {}
-prompt_cycle()
+deliver_arrival_contents()
 check("no-target setup: attacks the monster", last_sent() == "kill lizard",
   table.concat(sent, "|"))
 check("no-target setup: tracked view holds it", #tracked() == 1, tostring(#tracked()))
@@ -2107,7 +1790,7 @@ arrive(802, "A sunlit clearing", { "a boar" }, {})
 sent = {}
 quiet(function() as.start(false) end)
 sent = {}
-prompt_cycle()
+deliver_arrival_contents()
 check("refresh-gate setup: attacks the boar", last_sent() == "kill boar",
   table.concat(sent, "|"))
 
@@ -2146,7 +1829,7 @@ arrive(803, "A sunken pit", { "a giant slug", "a cave rat" }, {})
 sent = {}
 quiet(function() as.start(false) end)
 sent = {}
-prompt_cycle()
+deliver_arrival_contents()
 
 local stepped = false
 for _ = 1, 5 do
@@ -2164,11 +1847,8 @@ check("the tracked view is empty once the step is taken",
 quiet(as.stop)
 
 -- ---- /step trace -------------------------------------------------------------
--- The arrival machinery is driven by two signals that print nothing at all: a
--- GMCP room frame and a settle timer. A run that stepped twice with no MUD
--- output in between therefore cannot be diagnosed from a session log -- which
--- is what this exists for, and why the trace names the CAUSE of each arrival
--- rather than just the fact of one.
+-- Trace identifies which GMCP event supplied the complete arrival snapshot,
+-- so a room decision can be explained from a session log.
 run_timers()
 sw_steps = { { raw = "n", commands = { "n" } }, { raw = "e", commands = { "e" } } }
 sw_taken = {}
@@ -2179,7 +1859,7 @@ quiet(function() as.start(false) end)
 -- Off by default: the same events, and not a word about them.
 local silent = capture(function()
   deliver_frame()
-  run_timers()
+  deliver_contents_frame()
 end)
 check("trace is off by default",
   not has_line(silent, "trace:"), table.concat(silent, "|"))
@@ -2187,14 +1867,14 @@ check("trace is off by default",
 quiet(function() step_cmd.handler("trace on") end)
 local traced = capture(function()
   arrive(731, "A long gallery", { "a pale newt" }, {})
-  deliver_frame()      -- a room frame: arms the settle
-  run_timers()         -- the settle fires: the arrival is committed
+  deliver_frame()
+  deliver_contents_frame(true)
 end)
 check("a frame is traced, with the state it arrived in",
   has_line(traced, "trace: frame #") and has_line(traced, "state stepping"),
   table.concat(traced, "|"))
 check("the arrival names the signal that committed it",
-  has_line(traced, "arrival committed by settle"), table.concat(traced, "|"))
+  has_line(traced, "arrival committed by Room.Contents"), table.concat(traced, "|"))
 check("the trace says how many frames arrived since the step",
   has_line(traced, "frame(s) since the step"), table.concat(traced, "|"))
 check("the reseed reports the key it moved to and what it read",
@@ -2208,7 +1888,7 @@ check("/step status reports the trace state",
 quiet(function() step_cmd.handler("trace off") end)
 local quiet_again = capture(function()
   deliver_frame()
-  run_timers()
+  deliver_contents_frame()
 end)
 check("trace off silences it again",
   not has_line(quiet_again, "trace:"), table.concat(quiet_again, "|"))
@@ -2237,7 +1917,7 @@ sw_target_list = {}
 arrive(720, "A slate hall", { "a grey mole" }, {})
 quiet(function() as.start(false) end)
 color_calls = {}
-prompt_cycle()                                    -- "Attacking: a grey mole"
+deliver_arrival_contents()                                    -- "Attacking: a grey mole"
 quiet(function() deliver_no_target("mole") end)   -- warns, prunes, then steps
 capture(as.status)                                -- one report, quietly
 quiet(as.stop)
@@ -2330,7 +2010,7 @@ do
     sw_steps = { { raw = "n", commands = { "n" } } }
     arrive(9900, "Ignore test room", mobs, players or {})
     quiet(as.start, targets or false)
-    arrival_prompt()
+    deliver_arrival_contents()
   end
   start_room({ "A gentle guide", "a scrawny orc" })
   check("ignored first target does not hide a real hostile", last_sent() == "kill orc")
@@ -2361,7 +2041,7 @@ do
   arrive(9900, "Layer one of the Sea of Chaos", { "A gentle guide", "a scrawny orc" }, {})
   quiet(step_cmd.handler, "set dive off")
   quiet(step_cmd.handler, "explore chaossea")
-  arrival_prompt()
+  deliver_arrival_contents()
   check("explore uses the real clear explorer", real_explore.active() and real_explore.policy() == "clear")
   check("clear explorer attacks real hostile after ignored first", count_sent("kill ") == 1 and not last_sent():find("guide", 1, true), table.concat(sent, "|"))
   quiet(deliver_no_target, "orc")
@@ -2369,8 +2049,7 @@ do
   arrive_info_only(9901, "Layer one of the Sea of Chaos")
   quiet(deliver_frame)
   set_contents({ "A gentle guide", "a fierce troll" })
-  quiet(deliver_contents_frame)
-  run_timers()
+  deliver_arrival_contents()
   check("split Room.Info/Contents filters new occupants", count_sent("kill ") == 2, table.concat(sent, "|"))
   quiet(as.stop)
   explore_state.active = false
@@ -2390,7 +2069,7 @@ do
   local old_restart = area.restart
   area.restart = function() return { "test-sea-setup" } end
   quiet(step_cmd.handler, "chaossea farm 0 risky")
-  arrival_prompt()
+  deliver_arrival_contents()
   check("farm moves past ignored mobs without attacking", real_explore.active() and last_sent() == "n" and count_sent("kill ") == 0, table.concat(sent, "|"))
   quiet(step_cmd.handler, "chaossea off")
   area.restart = old_restart

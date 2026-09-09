@@ -57,15 +57,7 @@ local function log_kind(msg, kind)
   log(msg, kind and COLOR_BY_KIND[kind] or COLOR_INFO)
 end
 
--- /step trace. Off by default and silent when off.
---
--- It exists because the events that drive an arrival are INVISIBLE in a
--- session log: a GMCP frame prints nothing, and neither does a settle timer
--- firing. A run that stepped twice with no MUD output between the two steps
--- (seen live in the chaos sea, 2026-09-03) is therefore indistinguishable, from
--- the outside, between "a stray frame armed the settle" and "a prompt that was
--- not ours completed the arrival" -- and those want opposite fixes. This turns
--- the invisible half of the state machine into lines you can paste.
+-- /step trace exposes room frames, refreshes, and movement decisions.
 local tracing = false
 
 local function trace(msg)
@@ -116,16 +108,11 @@ end
 --------------------------------------------------------------------------------
 
 local state = "idle"    -- idle, stepping, fighting
-local prompt_count = 0  -- Count of prompts received (diagnostic only)
-local pending_prompts = 0  -- prompts still owed before the current step arrives
 local enabled = false   -- Is autostepper active?
-local prompt_trigger_id = nil  -- Trigger ID for prompt detection
+local movement_trigger_ids = {}
 local no_target_trigger_id = nil  -- Trigger ID for "There is no X here."
 local failed_attacks = 0  -- count of attacks whose keyword never resolved
--- Refreshes that timed out. A run that decides from a pruned guess instead of
--- the server's answer used to do it in complete silence; a climbing count here
--- is the difference between "the plugin is confused" and "the answers are not
--- arriving", which is the first thing worth knowing.
+-- Missing post-combat snapshots, reported in /step status.
 local unanswered_refreshes = 0
 
 -- Which source do_step() takes steps from: "explore" or "route". Fixed once,
@@ -135,6 +122,7 @@ local unanswered_refreshes = 0
 -- would take the route branch and call sw.take_step() -- walking a stored
 -- speedwalk path from wherever the player now stands, outside the area.
 local run_mode = nil
+local route_commands = {} -- Unsent commands in the current speedwalk segment
 
 -- Chaos Sea farm mode keeps starting fresh instances only after the current
 -- explore run reaches the profile's completion room. It is deliberately
@@ -146,110 +134,41 @@ local chaossea_farm = {
   restart_timer = nil,
 }
 
--- The settle timer is armed from roominfo.on_room_frame -- ANY accepted room
--- frame, not just Room.Info -- because no single package is a reliable
--- arrival signal. The server suppresses a resend when a payload repeats the
--- last one it sent, and in a maze where many rooms share a name and exit set,
--- Room.Info is exactly the package most likely to be suppressed (the live
--- stall this fixed: two adjacent rooms with identical name/exits/num, differing
--- only in contents, left Room.Info silent with no prompt pattern configured to
--- fall back on). Arming from the generic signal means whichever of
--- Room.Info/Room.Contents/Room.Map actually arrives starts the settle.
---
--- A frame lands before the room text and therefore before the prompt. The
--- settle is not acted on immediately, though: a burst is up to three separate
--- frames (Info, then Contents, then Map), so a decision made in the first
--- frame's callback could read the previous room's monsters. Settling for a
--- moment lets the whole burst -- including a paged Room.Contents -- land
--- first; the `if settle_timer then return end` dedupe below means only the
--- first frame in a burst arms anything, and the timer's job is to outlast
--- the rest.
---
--- That reasoning only ever protected against a burst racing an EARLY decision
--- -- it never protected against the settle deciding TOO SOON on an incomplete
--- burst. The burst is not self-describing: the server sends Room.Info ->
--- Room.Contents -> Room.Map, but any of the three can be suppressed, so a
--- burst may begin with any one of them and the first frame carries no
--- indication of whether more is coming. A live misfire hit exactly this: a
--- room's Room.Info settled and decided "no monsters" before that room's
--- Room.Contents (which held one) had arrived.
---
--- The prompt is the one reliable burst terminator -- the MUD sends the
--- frames, then the room text, then the prompt, after everything, by
--- construction. So when a prompt pattern is configured, the prompt must be
--- authoritative and the settle must not race it: arm the long fallback
--- instead, which only fires if the prompt was lost or the pattern has
--- drifted. With no pattern configured the settle is the only signal
--- available, so it keeps arming at the short delay, unchanged.
-local BURST_SETTLE_MS = 150            -- no prompt pattern: the only signal
-local PROMPT_FALLBACK_MS = 1500        -- prompt configured: rescue, not rival
-local settle_timer = nil
--- Every accepted room frame, counted before any state test, plus the count as
--- it stood when the current step went out. The difference answers the one
--- question the transcript of a bad run cannot: did anything actually describe
--- a room to us between the step and the arrival we committed?
+-- Only a complete Room.Contents list acknowledges entry. Room.Info supplies
+-- exits and Room.Map supplies display data; neither proves the occupants are
+-- known. A timeout stops the run without inventing a successful move.
+local ARRIVAL_TIMEOUT_MS = 5000
+local arrival_timer = nil
+local arrival_kind = nil  -- "refresh" (start), "setup", or "move"
+local movement_failure = nil
 local frames_seen = 0
 local frames_at_step = 0
 local room_info_sub = nil
-local room_frame_sub = nil   -- roominfo.on_room_frame id, removed on unload
+local room_frame_sub = nil
 
--- Per-room view of what the room held on arrival.
---
--- The GMCP Room.* packages fire on room entry only: nothing re-emits when a mob
--- dies or a player leaves, and there is no client-initiated refresh. So
--- roominfo.monsters() still lists the mob we just killed for as long as we stand
--- in the room, and a decision loop that re-read it would attack the corpse
--- forever. (The old '=M=' scraper refreshed on every 'glance', which is why this
--- was not needed before.) Instead: seed once per room from roominfo, then prune
--- locally as each target is finished. Every fight removes exactly one monster,
--- so a room is always emptied in a bounded number of fights.
+-- Per-room view, seeded on arrival and replaced by post-combat refreshes.
+-- Failed keyword attempts are still removed locally by the existing recovery
+-- handler; they must not cause a repeated attack against the same missing id.
 local room_key = nil        -- identity of the room the view below describes
 local room_monsters = {}    -- monster names still believed to be standing
 local room_players = {}     -- player names seen on arrival
 local current_target = nil  -- monster do_attack() is working on
 
--- Char.Combat {attacker, attacker_hp, rounds, target} is pushed, delta-cached,
--- and free (no request, no budget): when a fight ends, query_attack() is nil,
--- the server sends one zeroed snapshot, and the stream goes quiet. A snapshot
--- with no attacker means the fight is over. This LATCHES the first time any
--- Char.Combat frame arrives -- not just an end-of-combat one -- because that
--- is the signal GMCP is telling us about this connection's combat at all;
--- from then on the prompt path must stand down from ending fights, or two
--- writers would own the same transition (the same trap guild_viking's vitals
--- block and chat_monitor's source both document). It is per-connection and is
--- checked per callback rather than once at registration, because it flips
--- mid-connection: the prompt is on screen before the first Char.Combat frame
--- lands.
-local combat_gmcp_seen = false
+-- Char.Combat is the sole combat-end signal. Starting/resuming cannot switch
+-- to guessing while the next combat snapshot is in flight.
 local combat_gmcp_sub = nil     -- gmcp handler id, removed on unload
 local room_contents_sub = nil   -- roominfo.on_room_contents id, removed on unload
 
--- Once Char.Combat says a fight is over, a stale prompt-driven guess (prune
--- the last-attacked name from the local view and decide) is no longer good
--- enough: a mob that survived its round would be abandoned rather than
--- re-attacked. So instead of deciding immediately, ask the server what is
--- actually in the room -- one Room.Refresh per fight, not per round -- and
--- decide from the answer. The guess is DEMOTED to a fallback for when the
--- question goes unanswered, not deleted: Room.Refresh is budgeted
--- (PROTOCOL_ROOM_REFRESH_PER_TICK = 2/s) and an over-budget request is
--- dropped silently with no error payload, so a run that waited forever on an
--- unanswerable question would be worse than one that occasionally guesses
--- wrong.
+-- After combat ends, ask for the actual remaining occupants. Losing an
+-- attacker does not prove it died, so a missing refresh must stop the run.
 local REFRESH_TIMEOUT_MS = 1000
 local awaiting_refresh = false   -- true between the request and its answer/timeout
 local refresh_timeout_id = nil
 
 -- Configuration
 local config = {
-  -- Disabled by default. Under GMCP a glance buys nothing -- Room.* fires on
-  -- room entry only and is not re-emitted for one, which is why the local
-  -- monster view below exists -- so it survived purely to manufacture a second
-  -- prompt for the state machine, and that pair was the cause of the stall
-  -- where the stepper sat silent waiting for a prompt that never came.
-  -- Set it back to "glance" for a brief-mode player who wants the room text.
-  glance_cmd = "",
+  glance_cmd = "",           -- Optional room text only; never an arrival signal
   attack_cmd = "kill",        -- Command prefix for attacking (kill <target>)
-  prompt_pattern = nil,       -- Pattern to detect prompts (set by user)
   auto_attack = true,         -- Attack valid targets automatically
   step_on_player = true,      -- Take step if player in room (don't fight)
   step_on_no_monster = true,  -- Take step if no monsters
@@ -407,7 +326,8 @@ local function forget_monster(name)
   end
 end
 
-local process_room  -- forward declaration: on_prompt calls it, it calls do_step
+local process_room  -- room callbacks call it; it calls do_step
+local complete_arrival
 
 local function cancel_refresh_wait()
   if refresh_timeout_id then
@@ -415,17 +335,6 @@ local function cancel_refresh_wait()
     refresh_timeout_id = nil
   end
   awaiting_refresh = false
-end
-
--- The fallback: today's guess, demoted rather than deleted (see the state
--- comment above for why). Strikes the last-attacked name from the local view
--- and decides from what remains.
-local function prune_and_decide()
-  cancel_refresh_wait()
-  forget_monster(current_target)
-  current_target = nil
-  state = "idle"
-  process_room()
 end
 
 -- The keyword guess in do_attack() is exactly that -- a guess -- and can fail
@@ -468,7 +377,7 @@ end
 -- The answer arrived: reseed the local view from roominfo UNCONDITIONALLY,
 -- ignoring the room key. The room has not changed -- we are asking about the
 -- room we are already standing in -- and the whole point of the refresh is to
--- replace the pruned guess with the server's own answer, so the normal
+-- replace the local view with the server's own answer, so the normal
 -- "only reseed on a new room" gate must not apply here.
 local function reseed_and_decide()
   cancel_refresh_wait()
@@ -479,171 +388,121 @@ local function reseed_and_decide()
   process_room()
 end
 
--- Char.Combat says the fight just ended. Ask the server what is actually in
--- the room rather than guessing: one Room.Refresh per fight, not per round.
---
--- The awaiting_refresh guard is load-bearing, not defensive dressing: without
--- it a second no-attacker frame arriving before the first refresh answers or
--- times out re-enters this function, sends a second Room.Refresh, and
--- overwrites refresh_timeout_id -- orphaning the first timer with no
--- cancel_refresh_wait() ever run on it. That orphan later fires
--- prune_and_decide() during a subsequent, unrelated fight, pruning the wrong
--- monster. Do not lean on the mudlib's "the zero snapshot is sent once"
--- guarantee to argue this guard is unreachable: gmcp_combat_send_step
--- (secure/protocol/char_combat_impl.h:76) bypasses its delta cache whenever
--- force is set, and gmcp_send_combat(1) is called forced from both the
--- reconnect/ready path and the subscription-transition path, so a second
--- zero snapshot within the ~1s refresh window is a real, reachable case, not
--- a hypothetical one.
+-- A refresh must be armed before the send, including for synchronous API
+-- adapters. Repeated idle snapshots cannot create overlapping refresh waits.
 local function handle_combat_end()
   if state ~= "fighting" or awaiting_refresh then return end
-  local sent = gmcp.send("Room.Refresh", { packages = { "Room.Contents" } })
-  if not sent then
-    -- Not connected, or GMCP isn't enabled: the request never went out, so
-    -- there is nothing to wait for. Waiting out the timeout here would be a
-    -- stall with no cause to find later.
-    prune_and_decide()
-    return
-  end
   awaiting_refresh = true
-  trace("combat ended; Room.Refresh sent, awaiting the answer")
   refresh_timeout_id = timer.after(REFRESH_TIMEOUT_MS, function()
     refresh_timeout_id = nil
-    -- Over-budget refreshes are dropped silently with no error payload, so a
-    -- request that never gets answered looks identical to one still in
-    -- flight. Falling back here is what keeps that case from waiting forever.
-    --
-    -- Said out loud, and counted: this is the plugin acting on a guess where
-    -- it asked for facts, and a run that does it repeatedly is a run whose
-    -- every later decision may be about the wrong room.
     unanswered_refreshes = unanswered_refreshes + 1
-    log("Room.Refresh went unanswered; deciding from the pruned view",
+    log("Room.Refresh went unanswered; stopping without discarding the target",
         COLOR_WARN)
-    prune_and_decide()
+    M.stop()
   end)
+  trace("combat ended; Room.Refresh sent, awaiting the answer")
+  if not gmcp.send("Room.Refresh", { packages = { "Room.Contents" } }) then
+    log("Room.Refresh could not be sent; stopping without discarding the target",
+        COLOR_WARN)
+    M.stop()
+  end
 end
 
--- gmcp.on("Char.Combat", cb): {attacker, attacker_hp, rounds, target}. Any
--- frame -- not only an end-of-combat one -- latches combat_gmcp_seen, since
--- that is what tells the prompt path this connection has a GMCP answer for
--- combat end and should stand down.
+-- gmcp.on("Char.Combat", cb): an absent attacker ends the current fight.
 local function on_char_combat(_, data)
   if type(data) ~= "table" then return end
-  combat_gmcp_seen = true
   local attacker = data.attacker
   local has_attacker = attacker ~= nil and attacker ~= ""
   if has_attacker then return end
   handle_combat_end()
 end
 
--- roominfo.on_room_contents(cb): fires once per COMPLETE Room.Contents list.
--- Only meaningful while a refresh is outstanding; a list arriving for any
--- other reason (another plugin's own re-glance, say) must not be mistaken for
--- our answer.
-local function on_room_contents_frame()
-  if not awaiting_refresh then
-    trace("contents frame with no refresh outstanding; ignored")
+-- Room entry lists are marked by the server. Refresh/subscription snapshots
+-- are not arrivals, even when they land while a movement is outstanding.
+local function on_room_contents_frame(info)
+  if not enabled then return end
+  if awaiting_refresh then
+    if info and info.entry then
+      log("Room changed during combat; stopping", COLOR_WARN)
+      M.stop()
+      return
+    end
+    trace("refresh answered")
+    reseed_and_decide()
     return
   end
-  trace("refresh answered")
-  reseed_and_decide()
-end
-
-local function cancel_settle()
-  if settle_timer then
-    timer.cancel(settle_timer)
-    settle_timer = nil
+  if state ~= "stepping" then return end
+  if arrival_kind ~= "refresh" and not (info and info.entry) then
+    trace("contents refresh ignored while awaiting room entry")
+    return
   end
+  if arrival_kind == "setup" then
+    local prof = explore and explore.profile and explore.profile()
+    if not (prof and prof.in_area and ri and prof.in_area(ri.room())) then return end
+  end
+  complete_arrival()
 end
 
--- The single place an arrival is committed, from either signal. Idempotent:
--- whichever lands second finds state ~= "stepping" and does nothing.
--- `cause` is trace-only, and names which signal committed the arrival: the
--- settle timer (a room frame landed) or the prompt. Which one it was is the
--- first thing to know about an arrival that turns out to have been wrong,
--- since only one of them is evidence that the MUD moved us.
-local function complete_arrival(cause)
+local function cancel_arrival()
+  if arrival_timer then timer.cancel(arrival_timer) end
+  arrival_timer = nil
+  arrival_kind = nil
+  movement_failure = nil
+end
+
+complete_arrival = function()
   if not enabled or state ~= "stepping" then return end
-  cancel_settle()
-  pending_prompts = 0
+  cancel_arrival()
   state = "idle"
-  trace("arrival committed by " .. tostring(cause) .. "; "
+  trace("arrival committed by Room.Contents; "
         .. (frames_seen - frames_at_step) .. " frame(s) since the step")
   if explore and explore.active() then explore.on_arrival() end
   process_room()
 end
 
--- Feeding the explorer is information: a frame describes the room we are
--- standing in whether or not a step is outstanding, and the frames that
--- arrive while the stepper is idle are the ones that matter most -- the entry
--- room's, seen when the player walks into the area before explore mode is
--- even started. This stays on roominfo.on_room_info alone, deliberately not
--- the generic on_room_frame signal: explore.on_frame records the room's exits
--- from ri.info(), and if it re-ran on every Contents or Map frame too, a
--- Room.Map arriving for a room whose Room.Info was suppressed would write the
--- PREVIOUS room's exits at the new coordinate -- a desync the topology check
--- would then report as real. See on_room_frame_arrival below for the settle
--- timer, which is the job that *does* need to run from any frame.
+-- Room.Info updates exits independently; Contents commits the arrival later.
 local function on_room_info_frame()
   if explore and explore.active() and explore.on_frame and ri and ri.info then
     explore.on_frame(ri.info())
   end
 end
 
--- Arms the arrival settle timer. Subscribed to roominfo.on_room_frame -- any
--- accepted Room.Info, Room.Contents, or Room.Map -- rather than Room.Info
--- alone, because no single package is guaranteed to arrive (see the comment
--- on BURST_SETTLE_MS above). Only means anything while a step is outstanding;
--- the settle_timer guard means only the first frame of a burst arms anything.
---
--- The delay is chosen here, at arm time, by reading config.prompt_pattern
--- fresh rather than caching it anywhere earlier -- so a pattern set mid-run
--- with '/step set prompt' governs the very next step, with no extra
--- bookkeeping. A pattern configured means the prompt will normally complete
--- the arrival long before this fires (see complete_arrival/on_prompt, which
--- cancels this timer); with none configured this is the only mechanism, so
--- it keeps the original short delay.
 local function on_room_frame_arrival()
   frames_seen = frames_seen + 1
   trace("frame #" .. frames_seen .. " (state " .. state .. ", "
         .. tostring(ri and ri.monster_count and ri.monster_count())
         .. " monsters in roominfo)")
-  if not enabled or state ~= "stepping" then return end
-  if settle_timer then return end
-  local delay = config.prompt_pattern and PROMPT_FALLBACK_MS or BURST_SETTLE_MS
-  settle_timer = timer.after(delay, function()
-    settle_timer = nil
-    complete_arrival("settle")
+end
+
+local function begin_arrival_wait(kind)
+  cancel_arrival()
+  state = "stepping"
+  arrival_kind = kind
+  frames_at_step = frames_seen
+  arrival_timer = timer.after(ARRIVAL_TIMEOUT_MS, function()
+    arrival_timer = nil
+    log(movement_failure and ("Movement blocked: " .. movement_failure .. "; stopping")
+        or "Room entry went unanswered; stopping at the last confirmed position",
+        COLOR_WARN)
+    M.stop()
   end)
 end
 
--- Begin waiting for the room we just moved into. One prompt is a whole arrival;
--- the escape-hatch glance adds a second command and therefore a second prompt.
-local function begin_arrival_wait()
-  cancel_settle()
-  state = "stepping"
-  frames_at_step = frames_seen
-  pending_prompts = 1
-  if config.glance_cmd and config.glance_cmd ~= "" then
-    mud.send(config.glance_cmd)
-    pending_prompts = pending_prompts + 1
-  end
+local function on_movement_failure(line)
+  if not enabled or state ~= "stepping" or arrival_kind ~= "move" then return end
+  movement_failure = tostring(line)
+  -- A Chaossea blocker prints the warning even for a wizard allowed to pass.
+  -- Keep the pending direction until entry confirms movement or the watchdog
+  -- stops it. A text response never commits or rolls back coordinates.
+  trace("movement reported blocked; awaiting entry confirmation")
 end
 
--- Ask, do not assume. roominfo's cached snapshot is whatever the last frame
--- said, which for a room entered before this command ran may be another room
--- entirely -- and Room.Contents is suppressed when it would repeat, so the
--- cache can be silently stale rather than merely old. One forced request
--- costs the same as one package (the budget is per request), and the answer
--- lands inside the arrival wait: Room.Info arms the settle timer, and
--- Room.Contents follows it in the same burst before that timer fires.
---
--- Called once per M.start/M.explore_reset -- never from do_step -- and its
--- result is not fatal: gmcp.send returns false when disconnected or GMCP
--- isn't negotiated, and mode.start's cached-roominfo seed is the fallback
--- for exactly that case, so the run must still start either way.
+local function send_glance()
+  if config.glance_cmd and config.glance_cmd ~= "" then mud.send(config.glance_cmd) end
+end
+
 local function request_room_refresh()
-  gmcp.send("Room.Refresh", { packages = { "Room.Info", "Room.Contents" } })
+  return gmcp.send("Room.Refresh", { packages = { "Room.Info", "Room.Contents" } })
 end
 
 -- Attempt to resume a paused, retained explore run in place -- shared by
@@ -786,12 +645,21 @@ local function do_attack(monster)
   log("Attacking: " .. monster, COLOR_FIGHT)
   notify(on_attack_callbacks, monster, cmd)
   mud.send(cmd)
-  -- After attack, a prompt ends the fight and the next decision follows
-  -- straight from the pruned view -- there is no glance any more.
 end
 
-local function do_step()
+-- These route commands do not move the player. Other custom commands may
+-- move (for example enter portal), so require entry before sending another.
+local PREPARATION_COMMANDS = { open = true, close = true, unlock = true,
+  lock = true, look = true, glance = true }
+
+local function is_preparation(cmd)
+  return PREPARATION_COMMANDS[tostring(cmd):lower():match("^%s*(%S+)")] == true
+end
+
+local function do_step(monsters)
   local step
+  local notify_step = true
+  local moves = true
   if run_mode == "explore" then
     if not (explore and explore.active()) then
       -- The mode deactivated itself mid-run -- today that means it saw the
@@ -802,31 +670,40 @@ local function do_step()
       log("Explore mode ended; stopping", COLOR_RUN)
       enabled = false
       state = "idle"
-      cancel_settle()
+      cancel_arrival()
       notify(on_complete_callbacks)
       return false
     end
-    step = explore.next_step()
+    -- Completion belongs to the cleared room, before frontier selection.
+    -- The cask can be reached while other branches remain unexplored. Use
+    -- process_room's filtered mobs so profile ignores apply to completion too.
+    local prof = explore.profile and explore.profile()
+    local at_completion = #monsters == 0 and prof and prof.name == "chaossea"
+      and prof.complete and ri and ri.items
+      and prof.complete({ items = ri.items() })
+    if at_completion and ri.contents_truncated and ri.contents_truncated() then
+      -- A dropped inventory entry could be a living boss. Stop without
+      -- claiming completion or scheduling another farm instance.
+      log("Cask/portal contents are truncated; stopping without confirming completion",
+          COLOR_WARN)
+      M.stop()
+      return false
+    end
+    if not at_completion then step = explore.next_step() end
     if not step then
-      -- Every reachable exit leads somewhere already mapped, OR a pending
-      -- leave path just finished draining -- explore.stop_reason() tells
-      -- them apart, since "no unvisited exits remain" is the wrong message
-      -- for a completed leave. It must NOT fall through to sw.take_step():
-      -- the stepper would silently start walking a stored speedwalk path
-      -- from wherever it happens to be standing in the maze.
+      -- Reached the completion room, exhausted the map, or finished leaving.
+      -- None may fall through to a stored speedwalk path in this maze.
       local reason = (explore.stop_reason and explore.stop_reason()) or "exhausted"
-      if reason == "at origin" then
+      if at_completion then
+        log("Chaos Sea complete: cask/portal reached", COLOR_RUN)
+      elseif reason == "at origin" then
         log("Explored: back at the origin", COLOR_RUN)
       else
         log("Explored: no unvisited exits remain", COLOR_RUN)
       end
       enabled = false
       state = "idle"
-      cancel_settle()
-      local prof = explore.profile and explore.profile()
-      local at_completion = prof and prof.name == "chaossea"
-        and prof.complete and ri and ri.items
-        and prof.complete({ items = ri.items() })
+      cancel_arrival()
       if chaossea_farm.active and at_completion then
         log("Chaos Sea farm: completion reached; preparing the next instance",
             COLOR_RUN)
@@ -848,25 +725,46 @@ local function do_step()
       return false
     end
   else
-    step = sw.take_step()
+    if #route_commands == 0 then
+      step = sw.take_step()
+      if step then route_commands = copy_names(step.commands) end
+    else
+      step = { raw = route_commands[1] }
+      notify_step = false
+    end
+    if step then
+      -- Send preparation plus exactly one possible movement. Retain the rest
+      -- across arrivals and fights, including expanded routes such as 2n.
+      local commands = {}
+      moves = false
+      while #route_commands > 0 do
+        local cmd = table.remove(route_commands, 1)
+        commands[#commands + 1] = cmd
+        if not is_preparation(cmd) then moves = true; break end
+      end
+      step = { raw = step.raw, commands = commands }
+    end
     if not step then
       log("Route complete!", COLOR_RUN)
       enabled = false
       state = "idle"
-      cancel_settle()
+      cancel_arrival()
       notify(on_complete_callbacks)
       return false
     end
   end
 
   log("Step: " .. step.raw, COLOR_STEP)
-  notify(on_step_callbacks, step.raw, sw and sw.step_info and sw.step_info())
+  if notify_step then
+    notify(on_step_callbacks, step.raw, sw and sw.step_info and sw.step_info())
+  end
 
+  if moves then begin_arrival_wait("move") end
   for _, cmd in ipairs(step.commands) do
     mud.send(cmd)
   end
-
-  begin_arrival_wait()
+  if not moves then return do_step(monsters) end
+  send_glance()
 
   return true
 end
@@ -878,8 +776,7 @@ function process_room()
     return
   end
 
-  -- Decisions come from the local per-room view, not from a fresh roominfo
-  -- read: the snapshot cannot change while we stand in the room.
+  -- Decisions use the arrival or post-combat snapshot already committed.
   sync_room_view()
   trace("deciding in state " .. state .. " (run_mode "
         .. tostring(run_mode) .. ")")
@@ -897,14 +794,14 @@ function process_room()
   -- Check if player in room
   if #players > 0 and config.step_on_player then
     log("Player in room (" .. room .. "), stepping...", COLOR_STEP)
-    do_step()
+    do_step(monsters)
     return
   end
 
   -- Check if no monsters
   if #monsters == 0 and config.step_on_no_monster then
     log("No monsters in room (" .. room .. "), stepping...", COLOR_STEP)
-    do_step()
+    do_step(monsters)
     return
   end
 
@@ -927,7 +824,7 @@ function process_room()
       log("Monster not in target list (" .. monsters[1] .. "), stepping...",
           COLOR_STEP)
       notify(on_skip_callbacks, monsters[1], room)
-      do_step()
+      do_step(monsters)
       return
     else
       -- Attack any monster (first one)
@@ -942,44 +839,7 @@ function process_room()
   end
 
   -- Fallback - just step
-  do_step()
-end
-
-local function on_prompt()
-  if not enabled then return end
-
-  prompt_count = prompt_count + 1
-
-  if state == "stepping" then
-    pending_prompts = pending_prompts - 1
-    trace("prompt #" .. prompt_count .. " while stepping ("
-          .. pending_prompts .. " still owed, "
-          .. (frames_seen - frames_at_step) .. " frame(s) since the step)")
-    if pending_prompts <= 0 then
-      complete_arrival("prompt")
-    end
-  elseif state == "fighting" then
-    -- Once any Char.Combat frame has arrived this connection, THAT owns
-    -- deciding when the fight is over (handle_combat_end, driven off the
-    -- attacker field going absent) -- checked per callback, not once at
-    -- registration, because the latch flips mid-connection: the prompt is on
-    -- screen before the first frame lands. Without this check both the
-    -- prompt and Char.Combat would try to end the same fight.
-    if combat_gmcp_seen then return end
-
-    -- Fallback, unchanged from before Char.Combat existed: the target is
-    -- struck from the local view here because nothing else will. Room.Contents
-    -- is not re-sent for a mob that died, so without this the next decision
-    -- would attack the corpse.
-    --
-    -- It no longer re-glances. The glance never refreshed anything -- that is
-    -- the whole reason this local view exists -- so the decision is made
-    -- straight from the pruned view.
-    forget_monster(current_target)
-    current_target = nil
-    state = "idle"
-    process_room()
-  end
+  do_step(monsters)
 end
 
 --------------------------------------------------------------------------------
@@ -999,12 +859,11 @@ end
 
 local function show_help()
   log("Commands:", COLOR_HEAD)
-  log("  -.                     - Start stepping, kill any mob")
-  log("  ->                     - Start stepping, only kill targets")
+  log("  -.                     - Start/resume stepping, kill any mob")
+  log("  ->                     - Start/resume stepping, only kill targets")
   log("  -!                     - Stop stepping")
   log("  /step status           - Show current status")
-  log("  /step trace [on|off]   - Log the invisible half: frames, prompts,")
-  log("                           settles, refreshes and every decision")
+  log("  /step trace [on|off]   - Log room frames, refreshes and decisions")
   log("  /step mobignore add|remove <name> | list | clear")
   log("                           Exact full name, case/whitespace normalized; saved per profile")
   log("  /step explore [area]   - Start explore mode in an area (default: chaossea)")
@@ -1016,12 +875,15 @@ local function show_help()
   log("  /step chaossea farm [level] [difficulty] - Repeat completed Sea runs")
   log("                           difficulty: risky, alarming or deadly")
   log("  /step chaossea off     - Stop Chaos Sea exploration/farming")
-  log("  /step set prompt <p>   - Set prompt detection pattern")
   log("  /step set attack [on|off] - Toggle auto-attack")
   log("  /step set glance [cmd]    - Set/show glance command")
   log("  /step set kill [cmd]      - Set/show attack command prefix")
   log("  /step set dive [on|off]   - Toggle explore dive policy")
   log("  /step set config       - Show configuration")
+  log("Waits for room contents before moving or attacking; no prompt setup needed.")
+  log("Stops if entry is not confirmed within five seconds. Use /step trace on for details.")
+  log("Stop the active run before starting another. Resume a paused run with -.")
+  log("Chaos Sea stops at the cask/portal after clearing non-ignored mobs; farm then restarts.")
 end
 
 -- The movement shorthands stay raw aliases: "-", "-.", "->" and "-!" are input
@@ -1068,7 +930,6 @@ local function show_config()
   log("Configuration:", COLOR_HEAD)
   log("  glance_cmd: " .. config.glance_cmd)
   log("  attack_cmd: " .. config.attack_cmd)
-  log("  prompt_pattern: " .. (config.prompt_pattern or "(not set)"))
   log("  auto_attack: " .. tostring(config.auto_attack))
   log("  targets_only: " .. tostring(config.targets_only))
 end
@@ -1085,13 +946,6 @@ local function dispatch_set(rest)
     M.status()
   elseif key == "config" then
     show_config()
-  elseif key == "prompt" then
-    if value == "" then
-      log("Usage: /step set prompt <pattern>", COLOR_WARN)
-      log("Current: " .. (config.prompt_pattern or "(not set)"))
-    else
-      M.set_prompt_pattern(value)
-    end
   elseif key == "attack" then
     if value == "" then
       log("Auto-attack: " .. (config.auto_attack and "on" or "off"))
@@ -1163,7 +1017,7 @@ local function dispatch(args)
     local arg = rest:match("^(%S*)"):lower()
     if arg == "on" then
       tracing = true
-      log("Trace on: every frame, prompt, settle and decision is logged.",
+      log("Trace on: every frame, refresh and decision is logged.",
           COLOR_RUN)
     elseif arg == "off" then
       tracing = false
@@ -1241,8 +1095,10 @@ local function register_command()
     summary = "Automatic speedwalk stepping with optional combat",
     description = "Walks a stored step path one room at a time, optionally "
       .. "glancing and attacking on the way. Or, with 'explore [area]', maps an "
-      .. "unmapped area room by room, stopping automatically once every reachable "
-      .. "exit leads somewhere already mapped; 'explore off' stops it early, "
+      .. "unmapped area room by room. Chaos Sea stops at the cask/portal after "
+      .. "clearing non-ignored mobs; farm mode then starts the next instance. Otherwise "
+      .. "exploration stops once every reachable exit leads somewhere already "
+      .. "mapped. 'explore off' stops it early, "
       .. "'explore reset' resets the map to a fresh origin at the current room and "
       .. "re-asks the MUD without stopping the run, and 'explore leave' walks the "
       .. "shortest recorded route back to the run's origin, fighting anything met on "
@@ -1254,8 +1110,12 @@ local function register_command()
       .. "collapsing whitespace; punctuation and articles are literal. Ignored mobs "
       .. "are neither attacked nor counted in route/explore/farm decisions. "
       .. "Changes apply on the next room decision, not by cancelling a current fight. "
-      .. "The shorthands are '-.' to start on any mob, '->' to start on targets only, "
-      .. "'-!' to stop, and '-' for help. Settings: status, config, prompt, attack, "
+      .. "Waits for complete room contents before moving or attacking; no prompt "
+      .. "setup is needed. Stops if entry is not confirmed within five seconds. "
+      .. "Use 'trace on' to inspect arrivals and combat decisions. Stop an active "
+      .. "run before starting another. The shorthands are '-.' to start/resume "
+      .. "on any mob, '->' to start/resume on targets only, "
+      .. "'-!' to stop, and '-' for help. Settings: status, config, attack, "
       .. "glance, kill, dive.",
     accepts_args = true,
     handler = dispatch,
@@ -1306,11 +1166,15 @@ function M.on_load()
     combat_gmcp_sub = gmcp.on("Char.Combat", on_char_combat)
   end
 
-  -- Unlike the prompt trigger, this one needs no user-supplied pattern, so it
-  -- is created unconditionally on load rather than waiting on a "configured"
-  -- step -- and it is removed on unload below.
+  -- Text failures are advisory; only GMCP can confirm entry or combat end.
   if trigger and trigger.add then
     no_target_trigger_id = trigger.add("^There is no (.*?) here\\.$", on_attack_no_target)
+    for _, pattern in ipairs({
+      "^.* blocks your way!$", "^The .* bars your way!$",
+      "^You can't go that way\\.$", "^You cannot go that way\\.$",
+    }) do
+      movement_trigger_ids[#movement_trigger_ids + 1] = trigger.add(pattern, on_movement_failure)
+    end
   end
 
   -- Register the movement shorthands and the /step command
@@ -1348,6 +1212,8 @@ function M.on_unload()
     trigger.remove(no_target_trigger_id)
   end
   no_target_trigger_id = nil
+  for _, id in ipairs(movement_trigger_ids) do trigger.remove(id) end
+  movement_trigger_ids = {}
 
   M.stop()
   -- Unlike an ordinary stop, unloading the plugin is real teardown: there is
@@ -1356,12 +1222,9 @@ function M.on_unload()
   log("Unloaded", COLOR_RUN)
 end
 
--- A reconnect that never negotiates Char.Combat must fall back to the prompt
--- guess rather than freeze with the latch still set from the previous
--- connection.
+-- A disconnected run cannot confirm any pending move or fight.
 function M.on_disconnect()
-  combat_gmcp_seen = false
-  cancel_refresh_wait()
+  M.stop()
 end
 
 -- A re-dive invalidates a retained map. Pause/resume keeps the map across a
@@ -1420,33 +1283,13 @@ end
 -- Public API
 --------------------------------------------------------------------------------
 
--- Set the prompt pattern and create trigger
-function M.set_prompt_pattern(pattern)
-  -- Remove old trigger if exists
-  if prompt_trigger_id then
-    trigger.remove(prompt_trigger_id)
-    prompt_trigger_id = nil
-  end
-
-  config.prompt_pattern = pattern
-
-  if pattern then
-    prompt_trigger_id = trigger.add(pattern, function()
-      on_prompt()
-    end)
-
-    if prompt_trigger_id then
-      log("Prompt pattern set: " .. pattern)
-    else
-      log("Failed to compile prompt pattern", COLOR_ERROR)
-      config.prompt_pattern = nil
-    end
-  end
-end
-
 -- Start autostepping at current place
 -- targets_only: if true, only kill monsters in target list; if false, kill any monster
-function M.start(targets_only)
+function M.start(targets_only, from_entry)
+  if enabled then
+    log("Already running; stop before starting another run", COLOR_WARN)
+    return false
+  end
   if not sw then
     sw = plugin.get("speedwalk")
     if not sw then
@@ -1461,18 +1304,6 @@ function M.start(targets_only)
       log("Error: roominfo plugin required", COLOR_ERROR)
       return false
     end
-  end
-
-  if not config.prompt_pattern then
-    -- Task 5 made a settled Room.Info burst complete an arrival on its own,
-    -- so a prompt is no longer load-bearing for starting a run. Warn instead
-    -- of refusing, and say what the session is then relying on: arrivals
-    -- come from the GMCP Room.Info path and combat end from Char.Combat. If
-    -- the MUD provides neither, the run stalls -- worth saying out loud
-    -- rather than discovering it.
-    log("No prompt pattern set: arrivals will rely on the GMCP Room.Info path and "
-        .. "combat end on Char.Combat. Set one with '/step set prompt <pattern>' if "
-        .. "either is unavailable.", COLOR_WARN)
   end
 
   local exploring = explore and explore.active()
@@ -1515,24 +1346,23 @@ function M.start(targets_only)
   end
 
   enabled = true
+  route_commands = {}
   state = "idle"
-  prompt_count = 0
   -- Forget any stale view so the room we are standing in is seeded afresh.
   room_key = nil
   current_target = nil
-  -- Reset the combat-source latch: see the on_disconnect note above for why
-  -- this and on_disconnect both clear it.
-  combat_gmcp_seen = false
   cancel_refresh_wait()
 
-  -- We are standing in a room already, so wait for the next prompt and decide
-  -- from it rather than manufacturing one.
-  begin_arrival_wait()
-
-  -- Both modes, not just explore: route mode reads roominfo for its first
-  -- decision too, and with the glance gone nothing else forces a re-read, so
-  -- '-.' in a long-occupied room would otherwise decide on stale contents.
-  request_room_refresh()
+  -- Setup commands can pass through other rooms before entering the new sea.
+  -- Only that final entry starts exploration; a refresh could still describe
+  -- the previous instance while the command queue is being processed.
+  begin_arrival_wait(from_entry and "setup" or "refresh")
+  if not from_entry and not request_room_refresh() then
+    log("Room.Refresh could not be sent; stopping", COLOR_WARN)
+    M.stop()
+    return false
+  end
+  send_glance()
 
   return true
 end
@@ -1549,13 +1379,12 @@ function M.stop(keep_farm)
   if enabled then
     log("Stopped", COLOR_RUN)
   end
-  cancel_settle()
+  cancel_arrival()
   cancel_refresh_wait()
   enabled = false
   state = "idle"
   run_mode = nil
-  prompt_count = 0
-  pending_prompts = 0
+  route_commands = {}
   current_target = nil
   -- explore.stop() PAUSES rather than discards: it is dead reckoned, so what
   -- used to be guarded against here -- the next "-." resuming that reckoning,
@@ -1568,6 +1397,10 @@ function M.stop(keep_farm)
 end
 
 function M.explore_start(area_name)
+  if enabled then
+    log("Already running; stop before starting another run", COLOR_WARN)
+    return false
+  end
   local prof = load_area(area_name)
   if not prof then
     log("Unknown area '" .. tostring(area_name) .. "'", COLOR_WARN)
@@ -1601,7 +1434,7 @@ function M.chaossea_setup(level, difficulty, preserve_farm)
   log(string.format("Chaos Sea setup sent (level %d, %s)",
     chosen_level, chosen_difficulty), COLOR_RUN)
   if not M.explore_start("chaossea") then return false end
-  return M.start(config.targets_only)
+  return M.start(config.targets_only, true)
 end
 
 function M.chaossea_farm_start(level, difficulty)
@@ -1684,9 +1517,7 @@ function M.status()
   log("Status:", COLOR_HEAD)
   log("  Running: " .. (enabled and "yes" or "no"))
   log("  State: " .. state)
-  log("  Pending prompts: " .. pending_prompts)
   log("  Mode: " .. (config.targets_only and "targets only (->)" or "any mob (-.))"))
-  log("  Prompt count: " .. prompt_count)
   -- A climbing count is the actionable diagnostic: it means the target list
   -- does not match the area, which the user can fix and nothing else says.
   log("  Failed attacks (this session): " .. failed_attacks)
@@ -1761,11 +1592,6 @@ end
 
 function M.on_skip(callback)
   table.insert(on_skip_callbacks, callback)
-end
-
--- Manual trigger for prompt (if not using pattern trigger)
-function M.prompt()
-  on_prompt()
 end
 
 return M

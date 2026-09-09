@@ -234,6 +234,40 @@ events or payloads for a plugin to consume.
 | `speedwalk` | `/speedwalk`, `.` `..` `.,` `.place` | Speedwalk path management |
 | `stats_window` | *(none)* | Statistics window UI |
 
+### Autostepper room entry
+
+Autostepper uses GMCP for arrivals and combat decisions. Prompt patterns and the
+`set_prompt_pattern()` / `prompt()` APIs have been removed. `-.` starts or resumes
+a run; stop an active run before starting another. `/step help` describes the
+controls, and `/step trace on` reports the room frames and decisions.
+
+The server must send a complete `Room.Contents` list on every entry, even when it
+matches the previous room. Every page of an entry list carries `entry: 1`;
+refresh and subscription snapshots omit it. The matching mudlib change is in
+`secure/pinc/gmcp.h` and `secure/protocol/config.h`. Deploy both changes before
+using this plugin version. The server contract is documented in `help protocols`,
+`help wizprotocols`, `man Protocol`, and `man query_protocol_room_contents`.
+
+The stepper waits for all contents pages before deciding what to attack. Info,
+Map, refreshes during movement, and elapsed time cannot advance its coordinates.
+If entry is not confirmed within five seconds, it stops at the last confirmed
+position. A blocking warning can still be followed by a successful entry (the
+Sea allows wizards past some blockers). Combat ends through `Char.Combat`, then a
+contents refresh confirms the remaining mobs; an unanswered refresh stops the
+run without discarding a target.
+
+Compound route steps such as `2n|e` are sent one movement at a time. Each room is
+checked for mobs before the next movement is sent.
+
+Chaos Sea runs stop at the cask or portal once that room's non-ignored mobs are
+cleared, even if other rooms remain unexplored. A normal run leaves opening the cask and
+entering the portal to you. `/step chaossea farm` starts its next instance from
+that completion point; `-!` cancels the pending restart.
+If the server truncates the cask room's contents, the run stops with a warning
+without confirming completion or restarting the farm.
+
+TODO: track or invalidate coordinates when moving manually during a paused run.
+
 ### Chat sources: MIP and GMCP
 
 `chat_monitor` can take chat from either protocol. 3K sends the same lines over

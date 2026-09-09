@@ -68,6 +68,7 @@ LERA_ROOT=$lera_root "$luajit" tests/minimap_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/mapper_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/mapview_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/autostepper_test.lua
+LERA_ROOT=$lera_root "$luajit" tests/autostepper_arrival_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/autostepper_map_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/autostepper_explore_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/autostepper_chaossea_test.lua

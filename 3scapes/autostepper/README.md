@@ -42,6 +42,11 @@ are unchanged. This is not protection from a mob attacking you, nor a new
 health/boss safety system. Ignoring a required gatekeeper may prevent the MUD
 from allowing progress.
 
+Chaos Sea runs stop at the cask or portal after clearing its non-ignored mobs,
+even with unexplored rooms remaining. Farm mode starts its next instance from
+there. If the server truncates that room's contents, the run stops with a warning
+without declaring completion or restarting, since omitted mobs may still exist.
+
 For example, ignore a guide while exploring:
 
 ```

@@ -64,14 +64,9 @@ function M.layer_of(room_name)
   return LAYER_WORDS[word]
 end
 
--- The portal object's short is set in example/objs/portal.c, so it reaches the
--- client as a Room.Contents item.
---
--- This is inferred from mudlib source rather than observed: the capture this
--- was designed against contains no portal room. Legacy's line triggers for the
--- same two objects are deliberately not ported -- the design keeps no text
--- dependency -- so if the portal does not surface as an item, the farm loop
--- never fires. That is the first thing to check on a live run.
+-- Both items were observed in Room.Contents in snoppelisnopptest.txt, including
+-- the post-combat refresh after the boss died. The stepper checks completion
+-- after clearing the room and before selecting another exit.
 local COMPLETION_ITEMS = {
   "glowing portal",
   "cask of chaotic energy",
