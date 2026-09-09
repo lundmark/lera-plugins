@@ -221,7 +221,7 @@ local function prison_lines(add, width)
 
   if have_siege then
     add(pagelib.trunc(string.format(
-      "%sSiege engines: %d/%d  -- 'vsiege build', deploy in an assault to breach walls%s",
+      "%sSiege engines: %d/%d  -- 'vsiege build'; a garrison holds its walls, so breach them%s",
       C.yellow, sg.engines or 0, sg.cap or 0, pagelib.RESET), width))
   end
 end
