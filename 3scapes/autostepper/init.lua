@@ -261,6 +261,75 @@ local config = {
   explore_policy = nil,      -- "clear" | "dive"; see explore/map.lua
 }
 
+-- Full display names only: fold case and whitespace, never patterns/substrings.
+local ignored_monsters = {}
+local function normalize_mob_name(name)
+  if type(name) ~= "string" or name:find("[%z\1-\8\11\12\14-\31\127]") then return nil end
+  local normalized = name:lower():gsub("%s+", " "):match("^%s*(.-)%s*$")
+  if normalized ~= "" then return normalized end
+end
+
+local function load_mobignore()
+  ignored_monsters = {}
+  if not store then return end
+  store.load()
+  local data = store.get()
+  local names = type(data) == "table" and data.ignored_monsters
+  if type(names) ~= "table" then return end
+  for name, value in pairs(names) do
+    local normalized = normalize_mob_name(name)
+    if value == true and normalized then ignored_monsters[normalized] = true end
+  end
+end
+
+local function save_mobignore()
+  if store then
+    local data = store.get()
+    if type(data) ~= "table" then data = {} end
+    local names = {}
+    for name in pairs(ignored_monsters) do names[name] = true end
+    data.ignored_monsters = names
+    if store.set(data) and store.save() then return end
+  end
+  log("Mob ignore changed in memory, but could not save it for this profile", COLOR_WARN)
+end
+
+local function dispatch_mobignore(rest)
+  local action, name = rest:match("^(%S*)%s*(.-)%s*$")
+  action = action:lower()
+  local normalized = normalize_mob_name(name)
+  if (action == "add" or action == "remove") and normalized then
+    if action == "add" then
+      if ignored_monsters[normalized] then
+        log("Already ignoring mob: " .. normalized)
+        return
+      end
+      ignored_monsters[normalized] = true
+      log("Ignoring mob: " .. normalized)
+    else
+      if not ignored_monsters[normalized] then
+        log("Mob not in ignore list: " .. normalized)
+        return
+      end
+      ignored_monsters[normalized] = nil
+      log("Removed ignored mob: " .. normalized)
+    end
+    save_mobignore()
+  elseif (action == "list" or action == "") and name == "" then
+    local names = {}
+    for n in pairs(ignored_monsters) do names[#names + 1] = n end
+    table.sort(names)
+    log("Ignored mobs (exact normalized display names): " .. #names)
+    for _, n in ipairs(names) do log("  " .. n) end
+  elseif action == "clear" and name == "" then
+    ignored_monsters = {}
+    save_mobignore()
+    log("Mob ignore list cleared")
+  else
+    log("Usage: /step mobignore add|remove <name> | list | clear", COLOR_WARN)
+  end
+end
+
 -- Callbacks
 local on_step_callbacks = {}      -- Called when a step is taken
 local on_attack_callbacks = {}    -- Called when attacking
@@ -815,7 +884,14 @@ function process_room()
   trace("deciding in state " .. state .. " (run_mode "
         .. tostring(run_mode) .. ")")
   local players = room_players
-  local monsters = room_monsters
+  -- Keep the authoritative local view intact: edits take effect at the next
+  -- decision, and removing an ignore must not lose a still-present monster.
+  local monsters = {}
+  for _, monster in ipairs(room_monsters) do
+    if not ignored_monsters[normalize_mob_name(monster) or ""] then
+      monsters[#monsters + 1] = monster
+    end
+  end
   local room = ri.room() or "unknown"
 
   -- Check if player in room
@@ -929,6 +1005,8 @@ local function show_help()
   log("  /step status           - Show current status")
   log("  /step trace [on|off]   - Log the invisible half: frames, prompts,")
   log("                           settles, refreshes and every decision")
+  log("  /step mobignore add|remove <name> | list | clear")
+  log("                           Exact full name, case/whitespace normalized; saved per profile")
   log("  /step explore [area]   - Start explore mode in an area (default: chaossea)")
   log("  /step explore off      - Stop explore mode")
   log("  /step explore reset    - Reset the map to a fresh origin here, keep stepping")
@@ -1077,6 +1155,8 @@ local function dispatch(args)
     show_help()
   elseif sub == "set" then
     dispatch_set(rest)
+  elseif sub == "mobignore" then
+    dispatch_mobignore(rest)
   elseif sub == "status" then
     M.status()
   elseif sub == "trace" then
@@ -1156,6 +1236,7 @@ local function register_command()
     aliases = { "/autostepper" },
     usage = "/step [start|targets|stop|explore [area]|explore off|explore reset|"
       .. "explore leave|chaossea [farm] [level] [difficulty]|chaossea off|"
+      .. "mobignore add|remove <name>|mobignore list|mobignore clear|"
       .. "status|trace [on|off]|set <key> [value]]",
     summary = "Automatic speedwalk stepping with optional combat",
     description = "Walks a stored step path one room at a time, optionally "
@@ -1167,6 +1248,12 @@ local function register_command()
       .. "shortest recorded route back to the run's origin, fighting anything met on "
       .. "the way -- this does NOT leave the area itself, since the explorer never "
       .. "walks an excluded exit, so the final step out is still the player's own. "
+      .. "'mobignore add|remove <name>', "
+      .. "'mobignore list' and 'mobignore clear' manage a per-profile saved ignore list. "
+      .. "Names match the entire GMCP display name after lowercasing, trimming and "
+      .. "collapsing whitespace; punctuation and articles are literal. Ignored mobs "
+      .. "are neither attacked nor counted in route/explore/farm decisions. "
+      .. "Changes apply on the next room decision, not by cancelling a current fight. "
       .. "The shorthands are '-.' to start on any mob, '->' to start on targets only, "
       .. "'-!' to stop, and '-' for help. Settings: status, config, prompt, attack, "
       .. "glance, kill, dive.",
@@ -1194,6 +1281,7 @@ end
 --------------------------------------------------------------------------------
 
 function M.on_load()
+  load_mobignore()
   -- Try to get dependencies
   sw = plugin.get("speedwalk")
   ri = plugin.get("roominfo")
