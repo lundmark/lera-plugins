@@ -460,8 +460,14 @@ check("builds: pending build row shows aggregate mats progress (Mats 3/10)",
 -- same way pages/builds.lua's mat_row does.
 local expected_mat_color = pagelib.pct_color(3, 10)
 local expected_mat_bar = pagelib.bar(12, 3, 10, expected_mat_color)
-local expected_mat_row = pagelib.trunc(string.format("  %s%-12s%s %d/%d %s",
-  cc.good_color("timber"), cc.good_label("timber"), pagelib.RESET, 3, 10, expected_mat_bar), WIDTH)
+-- Mirrors mat_row's CURRENT composition: fixed good and ratio columns via
+-- pagelib.trunc, so the bar starts at the same column on every row regardless
+-- of how many digits the ratio has.
+local expected_mat_row = pagelib.trunc("  "
+  .. pagelib.trunc(cc.good_color("timber") .. cc.good_label("timber")
+                   .. pagelib.RESET, 13)
+  .. pagelib.trunc(pagelib.C.white .. "3/10" .. pagelib.RESET, 12)
+  .. expected_mat_bar, WIDTH)
 check("builds: timber mat row (3/10) matches the exact pagelib.bar output",
       find_line(builds_lines, expected_mat_row) ~= nil, builds_all)
 check("builds: pct_color(3,10) is the 'red' tier (0.3 is > 0.25, <= 0.5)",

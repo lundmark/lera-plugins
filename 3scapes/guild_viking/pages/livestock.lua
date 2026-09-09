@@ -285,10 +285,21 @@ local function feed_lines(add, width)
   if market.wh_known() and draw > 0 then
     local stock = market.wh_amount_of("grain")
     local ticks = math.floor(stock / draw)
+    -- Colour by how much runway is left, not a flat cyan. "Covers: 0 ticks"
+    -- means the herd is about to go unfed, which is the single most
+    -- actionable line on this page and previously read the same as a healthy
+    -- 40. Zero also gets a plain-English tail -- a reader should not have to
+    -- infer starvation from a 0.
+    local cov_col = C.bright_green
+    if ticks <= 0 then cov_col = C.bright_red
+    elseif ticks < 5 then cov_col = C.red
+    elseif ticks < 20 then cov_col = C.yellow end
     add(pagelib.trunc(string.format(
-      "%sCovers:%s %s%d tick%s%s %s(%d grain in the warehouse)%s",
-      C.dim, pagelib.RESET, C.cyan, ticks, ticks == 1 and "" or "s",
-      pagelib.RESET, C.dim, stock, pagelib.RESET), width))
+      "%sCovers:%s %s%d tick%s%s %s(%d grain in the warehouse)%s%s",
+      C.dim, pagelib.RESET, cov_col, ticks, ticks == 1 and "" or "s",
+      pagelib.RESET, C.dim, stock, pagelib.RESET,
+      ticks <= 0 and (" " .. C.bright_red .. "-- the herd will not be fed"
+                      .. pagelib.RESET) or ""), width))
   end
 end
 
@@ -302,19 +313,39 @@ local function pending_lines(add, width)
     add(pagelib.trunc(C.dim .. "None" .. pagelib.RESET, width))
     return
   end
+  -- pagelib.columns pads each cell with pagelib.trunc, which is ANSI-aware,
+  -- so cells can carry colour without breaking the column widths.
+  --
+  -- SP_ANSI2 (species) and SP_ANSI (destination building) already existed and
+  -- were simply unused here, so a wall of identical grey rows was the only
+  -- thing distinguishing a sheep delivery from a horse one. Arrival time gets
+  -- a freshness gradient -- the next thing to land should be the thing that
+  -- catches the eye.
+  local function eta_color(secs)
+    secs = secs or 0
+    if secs <= 300 then return C.bright_green end   -- within 5 minutes
+    if secs <= 1800 then return C.green end         -- within half an hour
+    if secs <= 7200 then return C.yellow end        -- within two hours
+    return C.dim
+  end
+
   local rows = {}
   for _, p in ipairs(S.lpending) do
+    local scol = SP_ANSI2[p.species] or C.white
+    local bcol = SP_ANSI[p.bldg] or C.white
     rows[#rows + 1] = {
-      SP_DISP[p.species] or cc.cap_first(p.species or "?"),
-      breed_name(p.breed),
-      "x" .. tostring(p.count or 0),
-      cc.cap_first((p.bldg or ""):gsub("_", " ")),
-      cc.fmt_time(p.secs),
+      scol .. (SP_DISP[p.species] or cc.cap_first(p.species or "?")) .. pagelib.RESET,
+      C.dim .. breed_name(p.breed) .. pagelib.RESET,
+      C.white .. "x" .. tostring(p.count or 0) .. pagelib.RESET,
+      bcol .. cc.cap_first((p.bldg or ""):gsub("_", " ")) .. pagelib.RESET,
+      eta_color(p.secs) .. cc.fmt_time(p.secs) .. pagelib.RESET,
     }
   end
+  -- "To" widened 8 -> 9 so "Sheepfold" stops rendering as "Sheepfol"; the
+  -- Arrives column is "*" and simply absorbs the extra column.
   for _, l in ipairs(pagelib.columns(width, {
     { title = "Species", w = 8 }, { title = "Breed", w = 12 },
-    { title = "Count", w = 5 }, { title = "To", w = 8 },
+    { title = "Count", w = 5 }, { title = "To", w = 9 },
     { title = "Arrives", w = "*" },
   }, rows)) do add(l) end
 end

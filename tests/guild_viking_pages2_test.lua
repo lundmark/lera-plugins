@@ -213,8 +213,12 @@ check("Runic Monuments header present", find_line(city_lines, "Runic Monuments")
 check("monument row shows the seeded inscription",
       city_all:find("Saga of the North Wind", 1, true) ~= nil)
 
-check("city plan placeholder line present",
-      city_all:find("City plan: /vik cityplan", 1, true) ~= nil)
+-- The City page renders the plan inline now (popups.cityplan.inline_lines)
+-- rather than printing a pointer to /vik cityplan.
+check("city plan section present inline",
+      city_all:find("City Plan", 1, true) ~= nil)
+check("city page no longer points at the cityplan popup",
+      city_all:find("City plan: /vik cityplan", 1, true) == nil)
 
 -- ---- city page: mode separation (no trade-only headers) --------------------
 local trade_only_headers = {

@@ -377,6 +377,62 @@ local function pre_grid_lines(width)
   return out, true
 end
 
+-- Inline rendering for the City page (pages/city.lua). Same grid, footer and
+-- legend as the popup, minus the two things that only make sense in a popup:
+-- the hover line (there is no pointer tracking on a page) and the blank line
+-- that reserves room for it.
+--
+-- Deliberately shares make_grid()/footer_lines()/legend_entries() rather than
+-- reimplementing them on the page: the palette, the tile table and the
+-- castle/overlay precedence are all LEGACY-derived and documented above, and
+-- a second copy would drift from this one.
+function M.inline_lines(width)
+  local out, has_grid = pre_grid_lines(width)
+  if not has_grid then return out end
+
+  local cp = S.city_plan
+
+  -- Rendered in the SHAPE the game's own `vplan` uses (cmd/vplan.c:226-240),
+  -- not maplib's packed one-char-per-cell grid. In game each cell is two
+  -- columns wide -- glyph then a space -- with a numeric ruler over the
+  -- interior columns and a letter down the interior rows, which is what makes
+  -- the plan readable and what "vplan place <bldg> <cell>" refers to (B7, K12).
+  -- maplib.render packs glyphs with no separator and no labels, so the page
+  -- looked cramped and nothing like the in-game view.
+  --
+  -- The popup keeps maplib.render: it has pointer tracking, so a cell is
+  -- identified by clicking rather than by reading a label off the axis.
+  local grid = make_grid(cp)
+  local gw, gh, margin = plan_geometry(cp)
+  local dim = cp.dim or 12
+
+  local ruler = "  "
+  for c = 0, gw - 1 do
+    local ic = c - margin
+    ruler = ruler .. ((ic >= 0 and ic < dim)
+      and string.format("%-2d", ic + 1) or "  ")
+  end
+  out[#out + 1] = pagelib.trunc(C.white .. ruler .. RESET, width)
+  out[#out + 1] = ""
+
+  for r = 0, gh - 1 do
+    local ir = r - margin
+    local line = (ir >= 0 and ir < dim)
+      and (C.white .. string.char(65 + ir) .. RESET .. " ") or "  "
+    for c = 0, gw - 1 do
+      local cell = grid.cell(c, r)
+      line = line .. (cell.color or C.dim) .. (cell.glyph or ".") .. RESET .. " "
+    end
+    out[#out + 1] = pagelib.trunc(line, width)
+  end
+
+  for _, l in ipairs(footer_lines(width, cp)) do out[#out + 1] = l end
+  if page_opts.get("show_city_plan_legend") then
+    for _, l in ipairs(maplib.legend(width, legend_entries())) do out[#out + 1] = l end
+  end
+  return out
+end
+
 function M.lines(width)
   local out, has_grid = pre_grid_lines(width)
   if not has_grid then return out end

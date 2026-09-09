@@ -219,27 +219,60 @@ local function refsell_row(width, rank, r)
   local demand = string.format("%sDemand: %d%s", C.dim, r.demand or 0, pagelib.RESET)
   local blocked = (r.blocked or 0) > 0
     and string.format("  %s%d blocked%s", C.cyan, r.blocked, pagelib.RESET) or ""
-  return pagelib.trunc(left .. "  " .. stock .. "  " .. demand .. blocked, width)
+  -- The good and town are already %-padded above, but stock is not, so the
+  -- Demand column used to slide left and right with "have 12 (~340d)" vs
+  -- "no stock". Pad it to a fixed cell so Demand stacks down the page.
+  local REF_STOCK_W = 22
+  return pagelib.trunc(left .. "  " .. pagelib.trunc(stock, REF_STOCK_W)
+    .. demand .. blocked, width)
 end
 
 -- Auto-Trade status / log (guild_viking.lua:3376-3437's at_line part;
 -- job-segment shape from at_build_job_segs, :3288-3306).
+-- Fixed columns. Every field here was variable-width and concatenated with
+-- literal gaps, so the source town, the arrow, the profit and the margin all
+-- slid with the length of the good's name and the quantity's digits -- and
+-- job_row is what BOTH "Last run:" and the Auto-Trade Log render, so neither
+-- section lined up.
+local JOB_VERB_W  = 5    -- "sell " / "buy "
+local JOB_QTY_W   = 7    -- "1200x"
+local JOB_GOOD_W  = 14   -- longest good label
+local JOB_TOWN_W  = 11
+local JOB_PROFIT_W = 8   -- "+12345d"
+
 local function job_row(width, j, indent)
   local pad = string.rep(" ", indent or 4)
   local out = C.dim .. "- " .. pagelib.RESET
-  out = out .. ((j.mode == "sell")
-    and (C.cyan .. "sell " .. pagelib.RESET)
-    or (C.green .. "buy " .. pagelib.RESET))
-  out = out .. C.white .. (j.qty or 0) .. "x " .. pagelib.RESET
-  out = out .. cc.good_color(j.good) .. cc.good_label(j.good) .. pagelib.RESET
+
+  out = out .. pagelib.trunc((j.mode == "sell")
+    and (C.cyan .. "sell" .. pagelib.RESET)
+    or (C.green .. "buy" .. pagelib.RESET), JOB_VERB_W)
+
+  out = out .. pagelib.trunc(
+    C.white .. tostring(j.qty or 0) .. "x" .. pagelib.RESET, JOB_QTY_W)
+
+  out = out .. pagelib.trunc(
+    cc.good_color(j.good) .. cc.good_label(j.good) .. pagelib.RESET, JOB_GOOD_W)
+
+  local src
   if j.mode == "buy" and j.btown_lin then
-    out = out .. "  " .. C.white .. town_short(j.btown_lin) .. pagelib.RESET
+    src = C.white .. town_short(j.btown_lin) .. pagelib.RESET
   elseif j.stock then
-    out = out .. "  " .. C.dim .. "(stock)" .. pagelib.RESET
+    src = C.dim .. "(stock)" .. pagelib.RESET
+  else
+    src = ""
   end
-  out = out .. " " .. C.dim .. "->" .. pagelib.RESET .. " "
-  out = out .. C.bright_green .. town_short(j.stown_lin) .. pagelib.RESET
-  out = out .. "  " .. C.bright_green .. string.format("+%dd", j.profit or 0) .. pagelib.RESET
+  out = out .. pagelib.trunc(src, JOB_TOWN_W)
+
+  out = out .. C.dim .. "-> " .. pagelib.RESET
+  out = out .. pagelib.trunc(
+    C.bright_green .. town_short(j.stown_lin) .. pagelib.RESET, JOB_TOWN_W)
+
+  -- Profit right-aligned so the digits stack rather than the plus signs.
+  local prof = string.format("+%dd", j.profit or 0)
+  out = out .. string.rep(" ", math.max(0, JOB_PROFIT_W - #prof))
+    .. C.bright_green .. prof .. pagelib.RESET
+
   if (j.margin or 0) > 0 then
     out = out .. "  " .. C.dim .. string.format("(%d/u)", j.margin) .. pagelib.RESET
   end
