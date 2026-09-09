@@ -140,6 +140,57 @@ This is the reusable plugin API only. Packaging or converting the existing
 | `mxp_links` | `/link` | Makes MXP `<send>`/`<a>` links usable via a popup picker |
 | `push_notify` | `/pushn` | Push notifications via Pushover |
 
+### Old push notification producers
+
+With `push_notify` and the producer plugins loaded, these channels are available:
+
+| Channel | Producer | Matching event / notification text |
+|---------|----------|------------------------------------|
+| `wimpy` | `chat_monitor` | `Your legs run away with you ...` → `You have wimpied.` |
+| `worlddrop` | `chat_monitor` | `You have found ...!` or `YOWZA! You are lucky enough to find ...` → original full line |
+| `artifactdrop` | `chat_monitor` | Exactly `You catch the glint of something special.` → original full line |
+| `killingblow` | `kill_trigger` | Enabled `/killers` system, killer outside the configured list → `Killer dealt the killing blow to Victim` (trimmed names, no final added period) |
+
+The text triggers are anchored PCRE patterns and leave MUD output visible; the
+YOWZA variant accepts one space or the old XML's two spaces after `!`. Killing
+blows retain their existing formatted replacement output, listener delivery,
+and command execution. A configured `self` entry excludes equal killer/victim
+names (case-insensitive); it does not mean the logged-in player. `/killers off`
+also suppresses the killing-blow producer, not its output or listeners.
+
+All four channels default **off**. Use `/pushn` for status/help and `/pushn toggle`
+to list channel states, then opt in individually (each command toggles, not sets):
+
+```text
+/pushn toggle wimpy
+/pushn toggle worlddrop
+/pushn toggle artifactdrop
+/pushn toggle killingblow
+```
+
+`/pushn enable` and `/pushn disable` control the global push switch;
+`/pushn grace <seconds>` controls the existing activity grace period. Credentials
+remain exclusively managed by `push_notify` via `/pushn set <token> <userkey>`;
+do not put them in producer code or tests. Existing per-channel preferences,
+priority, rate limits, and grace settings are unchanged. Enabled notifications
+send the text shown above to Pushover, so opt in only if that sharing is wanted.
+`/pushn notify <message>` is a **live send** command, not an offline check.
+
+Producers register channels during setup and re-resolve the optional consumer
+at delivery. If `push_notify` loads later, channels register on the next matching
+event (or producer setup); no event backlog is replayed. Unloading the consumer
+is safe, and producer unload removes its text triggers.
+
+Offline regression (LuaJIT plus the system `libpcre2-8`, also in `run_tests.sh`):
+
+```sh
+LERA_ROOT=/path/to/lera /path/to/lera/external/luajit/src/luajit tests/old_push_producers_test.lua
+```
+
+This exercises actual PCRE2 patterns, producer branching, output retention,
+optional-consumer/reload behavior, and opt-in defaults without credentials or
+network sends.
+
 ### Protocol plugins
 
 `gmcp_state` and `mxp_links` turn a Lera protocol API into features, the way

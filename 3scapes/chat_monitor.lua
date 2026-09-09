@@ -423,8 +423,38 @@ local function get_color(color_name)
   return colors[color_name] or colors.white
 end
 
--- push_notify sink, resolved in on_setup (nil when push_notify isn't loaded)
 local pushn
+local push_trigger_ids = {}
+
+-- Resolve again at delivery: the optional consumer may load late or reload.
+local function get_push_notify()
+  local current = plugin and plugin.get("push_notify")
+  if current ~= pushn then
+    pushn = current
+    if pushn and pushn.register_channel then
+      pushn.register_channel("tells", { priority = 1 })
+      pushn.register_channel("wimpy")
+      pushn.register_channel("worlddrop")
+      pushn.register_channel("artifactdrop")
+    end
+  end
+  return pushn
+end
+
+local function register_push_triggers()
+  local function add(pattern, channel, message)
+    local id = trigger.add(pattern, function(line)
+      local sink = get_push_notify()
+      if sink and sink.notify then sink.notify(channel, message or line) end
+    end, { omit_from_output = false })
+    if id then push_trigger_ids[#push_trigger_ids + 1] = id end
+  end
+  add("^Your legs run away with you (.*?)$", "wimpy", "You have wimpied.")
+  add("^You have found (.*?)!$", "worlddrop")
+  -- Portal used two spaces; also accept the current one-space spelling.
+  add("^YOWZA! {1,2}You are lucky enough to find (.*?)$", "worlddrop")
+  add("^You catch the glint of something special\\.$", "artifactdrop")
+end
 
 -- A lead-in and the body need exactly one space between them, and a prefix may
 -- or may not already end in whitespace: the built-in defaults do ("[Bob] "), a
@@ -501,7 +531,8 @@ local function add_message(msg_type, sender, text, opts)
 
   -- Forward to push_notify: incoming tells/emotes and chat lines, never our
   -- own outgoing messages. push_notify applies its own per-channel gating.
-  if pushn then
+  local sink = get_push_notify()
+  if sink and sink.notify then
     local channel
     if msg_type == "tell_in" then
       channel = "tells"
@@ -515,7 +546,7 @@ local function add_message(msg_type, sender, text, opts)
         type = msg_type, sender = sender, structured = structured,
         prefix = prefix_text, prefix_from_server = prefix_from_server,
       })
-      pushn.notify(channel, join_prefix(prefix, text))
+      sink.notify(channel, join_prefix(prefix, text))
     end
   end
 
@@ -1625,6 +1656,7 @@ function M.on_load()
   local gmcp_id = gmcp.on("Comm", handle_gmcp_comm)
   if gmcp_id then table.insert(gmcp_handlers, gmcp_id) end
 
+  register_push_triggers()
   register_command()
 end
 
@@ -1644,13 +1676,14 @@ function M.on_disconnect()
 end
 
 function M.on_setup()
-  pushn = plugin.get("push_notify")
-  if pushn and pushn.register_channel then
-    pushn.register_channel("tells", { priority = 1 })
-  end
+  get_push_notify()
 end
 
 function M.on_unload()
+  for _, id in ipairs(push_trigger_ids) do trigger.remove(id) end
+  push_trigger_ids = {}
+  pushn = nil
+
   -- Unregister protocol handlers
   for _, handler_id in ipairs(mip_handlers) do
     mip.off(handler_id)
