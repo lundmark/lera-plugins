@@ -2360,9 +2360,9 @@ do
   ri_state.exits = { "n" }
   arrive(9900, "Layer one of the Sea of Chaos", { "A gentle guide", "a scrawny orc" }, {})
   quiet(step_cmd.handler, "set dive off")
-  quiet(step_cmd.handler, "xplore chaossea")
+  quiet(step_cmd.handler, "explore chaossea")
   arrival_prompt()
-  check("xplore uses the real clear explorer", real_explore.active() and real_explore.policy() == "clear")
+  check("explore uses the real clear explorer", real_explore.active() and real_explore.policy() == "clear")
   check("clear explorer attacks real hostile after ignored first", count_sent("kill ") == 1 and not last_sent():find("guide", 1, true), table.concat(sent, "|"))
   quiet(deliver_no_target, "orc")
   check("clear explorer moves past only ignored mobs", last_sent() == "n")
@@ -2381,11 +2381,7 @@ do
   quiet(as.on_unload)
   quiet(as.on_load)
   check("clear persists across reload", has_line(cmd("list"), "names): 0"))
-  arrive(9902, "Layer one of the Sea of Chaos", {}, {})
-  quiet(step_cmd.handler, "xplore chaossea")
-  check("xplore starts same explorer", real_explore.active())
-  quiet(step_cmd.handler, "xplore off")
-  check("xplore off stops explorer", not real_explore.active())
+
   cmd("add a gentle guide")
   arrive(9903, "Layer one of the Sea of Chaos", { "A gentle guide" }, {})
   sent = {}

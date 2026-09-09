@@ -42,10 +42,9 @@ are unchanged. This is not protection from a mob attacking you, nor a new
 health/boss safety system. Ignoring a required gatekeeper may prevent the MUD
 from allowing progress.
 
-`/step xplore` is a synonym for `/step explore`, including area selection and
-`off`, `reset`, and `leave`. For example:
+For example, ignore a guide while exploring:
 
 ```
 /step mobignore add A gentle guide
-/step xplore chaossea
+/step explore chaossea
 ```

@@ -1008,7 +1008,6 @@ local function show_help()
   log("  /step mobignore add|remove <name> | list | clear")
   log("                           Exact full name, case/whitespace normalized; saved per profile")
   log("  /step explore [area]   - Start explore mode in an area (default: chaossea)")
-  log("                           /step xplore is a synonym for /step explore")
   log("  /step explore off      - Stop explore mode")
   log("  /step explore reset    - Reset the map to a fresh origin here, keep stepping")
   log("  /step explore leave    - Walk back to the run's origin, fighting on the way;")
@@ -1203,7 +1202,7 @@ local function dispatch(args)
         M.chaossea_setup(tonumber(level_s), difficulty)
       end
     end
-  elseif sub == "explore" or sub == "xplore" then
+  elseif sub == "explore" then
     local arg = rest:match("^(%S*)")
     if arg == "off" then
       M.explore_stop()
@@ -1237,7 +1236,7 @@ local function register_command()
     aliases = { "/autostepper" },
     usage = "/step [start|targets|stop|explore [area]|explore off|explore reset|"
       .. "explore leave|chaossea [farm] [level] [difficulty]|chaossea off|"
-      .. "xplore [area|off|reset|leave]|mobignore add|remove <name>|mobignore list|mobignore clear|"
+      .. "mobignore add|remove <name>|mobignore list|mobignore clear|"
       .. "status|trace [on|off]|set <key> [value]]",
     summary = "Automatic speedwalk stepping with optional combat",
     description = "Walks a stored step path one room at a time, optionally "
@@ -1249,7 +1248,7 @@ local function register_command()
       .. "shortest recorded route back to the run's origin, fighting anything met on "
       .. "the way -- this does NOT leave the area itself, since the explorer never "
       .. "walks an excluded exit, so the final step out is still the player's own. "
-      .. "'xplore' is a synonym for 'explore'. 'mobignore add|remove <name>', "
+      .. "'mobignore add|remove <name>', "
       .. "'mobignore list' and 'mobignore clear' manage a per-profile saved ignore list. "
       .. "Names match the entire GMCP display name after lowercasing, trimming and "
       .. "collapsing whitespace; punctuation and articles are literal. Ignored mobs "
