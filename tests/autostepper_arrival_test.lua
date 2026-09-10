@@ -571,5 +571,147 @@ for _, farm in ipairs({false, true}) do
   end
 end
 
+-- Three-hop frontier: C -> B -> A -> unexplored D. The first two rooms
+-- were already visited; only D gets a new combat/exploration decision.
+local function frontier_trip(before_dispatch)
+  local e = engine()
+  e.begin({n = 0, e = 0}, {})
+  e.info({n = 0, s = 0}); e.contents({}, nil, true)
+  e.info({s = 0}); e.contents({"A growing mutant being"}, nil, true)
+  e.deliver("Char.Combat", {attacker = ""})
+  local sent = #e.sent
+  if before_dispatch then before_dispatch(e) end
+  e.contents({})
+  return e, sent
+end
+
+do
+  local e, before = frontier_trip()
+  check("frontier travel sends all directions before any arrival",
+    #e.sent == before + 3 and table.concat(e.sent, ",", before + 1) == "s,s,e")
+  check("dispatch does not advance coordinates", e.pos() == "0,2,0")
+  e.advance(4000)
+  e.info({n = 0, s = 0})
+  e.contents({}, nil, false)
+  check("unmarked refresh cannot consume a speedwalk direction", e.pos() == "0,2,0")
+  e.contents({"A growing mutant being"}, nil, true)
+  check("intermediate room updates position without fighting or sending more moves",
+    e.pos() == "0,1,0" and #e.sent == before + 3 and e.as.get_state() == "stepping")
+  e.advance(4000)
+  e.info({n = 0, e = 0}); e.contents({}, nil, true)
+  check("each intermediate arrival refreshes the movement watchdog",
+    e.as.is_running() and e.pos() == "0,0,0" and #e.sent == before + 3)
+  e.advance(4000)
+  e.info({w = 0})
+  e.deliver("Room.Contents", {full = 1, entry = 1, page = 1, pages = 2, items = {}})
+  check("destination waits for the complete contents list", e.pos() == "0,0,0" and #e.sent == before + 3)
+  e.deliver("Room.Contents", {full = 1, entry = 1, page = 2, pages = 2,
+    items = {{type = "monster", name = "A tiny evolving creature"}}})
+  check("destination commits the last direction and attacks exactly once",
+    e.pos() == "1,0,0" and #e.sent == before + 4 and e.sent[#e.sent] == "kill mutant")
+  e.advance(6000)
+  check("finished speedwalk leaves no movement watchdog", e.as.get_state() == "fighting")
+end
+
+for _, action in ipairs({"stop", "disconnect", "unload", "timeout", "blocked", "reset", "instance", "desync", "layer", "outside"}) do
+  local e, before = frontier_trip()
+  if action == "stop" then e.as.stop()
+  elseif action == "disconnect" then e.as.on_disconnect()
+  elseif action == "unload" then e.as.on_unload()
+  elseif action == "timeout" then e.advance(5000)
+  elseif action == "blocked" then e.blocked()
+  elseif action == "reset" then e.as.explore_reset()
+  elseif action == "instance" then e.as.on_send("unsetsea")
+  elseif action == "desync" then e.info({w = 0}); e.contents({}, nil, true)
+  elseif action == "layer" then
+    e.deliver("Room.Info", {num = 0, name = "Layer two of the Sea of Chaos", exits = {n = 0, s = 0}})
+    e.contents({}, nil, true)
+  elseif action == "outside" then
+    e.deliver("Room.Info", {num = 42, name = "Outside the Sea", exits = {}})
+    e.contents({}, nil, true)
+  end
+  check(action .. " during frontier travel stops and discards the uncertain map",
+    not e.as.is_running() and not e.mode.active() and not e.mode.retained())
+  e.info({n = 0, s = 0}); e.contents({}, nil, true)
+  e.advance(10000)
+  check(action .. " leaves queued arrivals unable to restart exploration", not e.as.is_running() and #e.sent == before + 3)
+end
+
+do
+  local e, before = frontier_trip()
+  e.info({n = 0, s = 0}); e.contents({}, nil, true)
+  check("leave cannot plan from the middle of an outstanding speedwalk", not e.as.explore_leave())
+  check("refused leave keeps the frontier trip intact", e.as.is_running() and #e.sent == before + 3)
+  e.info({n = 0, e = 0}); e.contents({}, nil, true)
+  e.info({w = 0}); e.contents({}, nil, true, {cask})
+  check("a cask at the speedwalk destination stops before another frontier",
+    not e.as.is_running() and e.pos() == "1,0,0" and #e.sent == before + 3)
+end
+
+do
+  local notifications, raw = 0
+  local e, before = frontier_trip(function(e)
+    e.as.on_step(function(path) notifications = notifications + 1; raw = path end)
+    local send = mud.send
+    local moved = 0
+    mud.send = function(cmd)
+      send(cmd)
+      if cmd == "s" or cmd == "e" then
+        moved = moved + 1
+        if moved == 1 then e.info({n = 0, s = 0}); e.contents({}, nil, true)
+        elseif moved == 2 then e.info({n = 0, e = 0}); e.contents({}, nil, true)
+        else e.info({w = 0}); e.contents({"A growing mutant being"}, nil, true) end
+      end
+    end
+  end)
+  check("synchronous entries acknowledge a fully registered frontier path",
+    table.concat(e.sent, ",", before + 1) == "s,s,e,kill mutant" and e.pos() == "1,0,0")
+  check("the whole frontier path produces one step notification", notifications == 1 and raw == "s s e")
+  e.advance(6000)
+  check("synchronous final arrival leaves no stale watchdog", e.as.get_state() == "fighting")
+end
+
+for _, action in ipairs({"stop", "blocked", "desync"}) do
+  local e, before = frontier_trip(function(e)
+    local send = mud.send
+    mud.send = function(cmd)
+      send(cmd)
+      if action == "stop" then e.as.stop()
+      elseif action == "blocked" then e.blocked()
+      else e.info({w = 0}); e.contents({}, nil, true) end
+    end
+  end)
+  check("synchronous " .. action .. " prevents sending the remaining directions",
+    #e.sent == before + 1 and e.sent[#e.sent] == "s" and not e.as.is_running() and not e.mode.retained())
+  e.advance(10000)
+  check("synchronous " .. action .. " leaves no queued local work", #e.sent == before + 1)
+end
+
+do
+  local e, before = frontier_trip(function(e)
+    e.as.on_step(function() e.as.stop() end)
+  end)
+  check("stopping from the step notification sends none of the route", #e.sent == before and not e.as.is_running())
+  e.advance(10000)
+  check("notification stop cannot rearm the movement timer", #e.sent == before and not e.as.is_running())
+end
+
+do
+  local e = engine()
+  e.begin({n = 0, d = 0}, {})
+  e.info({n = 0, s = 0}); e.contents({}, nil, true)
+  e.info({s = 0}); e.contents({"A growing mutant being"}, nil, true)
+  e.deliver("Char.Combat", {attacker = ""})
+  local before = #e.sent
+  e.contents({})
+  check("frontier speedwalk retains its final vertical direction", table.concat(e.sent, ",", before + 1) == "s,s,d")
+  e.info({n = 0, s = 0}); e.contents({}, nil, true)
+  e.info({n = 0, d = 0}); e.contents({}, nil, true)
+  e.deliver("Room.Info", {num = 0, name = "Layer two of the Sea of Chaos", exits = {u = 0}})
+  e.contents({"A growing mutant being"}, nil, true)
+  check("vertical frontier arrives on the right layer without correction",
+    e.pos() == "0,0,1" and e.mode.stats().layer_corrections == 0 and e.as.get_state() == "fighting")
+end
+
 print(string.format("%d checks, %d failures", checks, failures))
 if failures > 0 then os.exit(1) end

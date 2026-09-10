@@ -250,16 +250,31 @@ using this plugin version. The server contract is documented in `help protocols`
 
 The stepper waits for all contents pages before deciding what to attack. Info,
 Map, refreshes during movement, and elapsed time cannot advance its coordinates.
-If entry is not confirmed within five seconds, it stops at the last confirmed
-position. A blocking warning can still be followed by a successful entry (the
-Sea allows wizards past some blockers). Combat ends through `Char.Combat`, then a
+If entry is not confirmed within five seconds, it stops. For a single move, a
+blocking warning can still be followed by a successful entry (the Sea allows
+wizards past some blockers). Combat ends through `Char.Combat`, then a
 contents refresh confirms the remaining mobs. Each attempt waits three seconds,
 with two retries if no complete reply arrives. After three unanswered attempts
 (nine seconds total), the run stops without discarding a target. A complete
 reply cancels the retries, as do stopping, disconnecting, and unloading the plugin.
 
-Compound route steps such as `2n|e` are sent one movement at a time. Each room is
-checked for mobs before the next movement is sent.
+Exploration finds a shortest route through recorded rooms to the next unexplored
+room and sends all its directions together. For example, `s s e` is sent without
+waiting in the two known rooms. Each complete entry list commits one direction;
+only the destination triggers a combat or exploration decision. The five-second
+arrival timeout restarts on each intermediate entry. The existing breadth-first
+search finds shortest paths for these equal-cost room exits.
+
+A blocking warning, timeout, stop, disconnect, or contradictory map during a
+frontier speedwalk stops exploration and discards the map. Commands already sent
+may still execute: wait for queued movement to finish before starting a new run.
+GMCP has no command identifiers to distinguish late arrivals from a prior run.
+`/step explore leave` refuses while a route is outstanding; ask again at its
+destination. `/step explore reset` during a frontier speedwalk stops and discards
+its map instead of continuing from an uncertain origin.
+
+Stored route steps such as `2n|e`, and `/step explore leave`, still send one
+movement at a time and check each room for mobs.
 
 Chaos Sea runs stop at the cask or portal once that room's non-ignored mobs are
 cleared, even if other rooms remain unexplored. A normal run leaves opening the cask and

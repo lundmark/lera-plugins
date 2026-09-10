@@ -1,4 +1,17 @@
-# Autostepper mob ignores
+# Autostepper
+
+Exploration speedwalks the complete shortest route through known rooms to the next
+unexplored room. A route such as `s s e` sends all three moves together; arriving
+room contents track each move, with combat and exploration decisions at the
+destination. Each intermediate arrival restarts the five-second movement timeout.
+
+An interrupted or blocked frontier speedwalk discards its map. Already sent
+commands may still run, so wait for queued movement to finish before restarting.
+`/step explore reset` also stops an outstanding frontier speedwalk;
+`/step explore leave` refuses until the current route arrives. Stored routes and
+the walk back to the origin continue to check each room for mobs.
+
+## Mob ignores
 
 ```
 /step mobignore add A gentle guide

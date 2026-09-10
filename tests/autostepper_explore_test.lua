@@ -276,15 +276,25 @@ frame({ name = "Room B (dead end)", exits = { "s" } })
 quiet(mode.on_arrival)
 
 local hop2 = mode.next_step()
-check("next_step returns exactly one command over a multi-hop route",
-  hop2 and #hop2.commands == 1, hop2 and hop2.commands and #hop2.commands)
-check("raw is the route's first hop ('s', back toward A) -- not the frontier direction ('e') and not the whole path",
-  hop2 and hop2.raw == "s", hop2 and hop2.raw)
+check("next_step returns the entire route to the next unexplored room",
+  hop2 and table.concat(hop2.commands, ",") == "s,e")
+check("raw describes the whole frontier speedwalk", hop2 and hop2.raw == "s e")
+check("an outstanding route cannot be replaced by another frontier plan", mode.next_step() == nil)
+hop2.commands[2] = "n" -- Returning commands must not expose the retained arrival queue.
+frame({ name = "Room A", exits = { "e", "n" } })
+quiet(mode.on_arrival)
+local transit = mode.stats()
+check("first speedwalk entry commits only the first direction", transit.x == 0 and transit.y == 0)
+check("the intermediate room keeps its coordinate identity", mode.room_key() == "xyz:0,0,0")
+frame({ name = "Room C", exits = { "w" } })
+quiet(mode.on_arrival)
+local destination = mode.stats()
+check("second speedwalk entry commits its own copy of the retained direction", destination.x == 1 and destination.y == 0)
 mode.stop()
 
 -- ---- z is read from the room name, not dead-reckoned -------------------------
--- Every z/layer assertion above sits at the origin room, where pending_dir is
--- nil, map:move never runs, and dead reckoning (z stays 0) and the
+-- Every z/layer assertion above sits at the origin room, where pending_dirs is
+-- empty, map:move never runs, and dead reckoning (z stays 0) and the
 -- name-derived layer (also 0 for "Layer one...") are indistinguishable. No
 -- fixture above ever takes a "d" or "u" step, so the layer-override block in
 -- on_arrival -- the entire reason this module reads z from the room name

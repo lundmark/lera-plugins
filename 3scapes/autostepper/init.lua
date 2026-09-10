@@ -123,6 +123,7 @@ local unanswered_refreshes = 0
 -- speedwalk path from wherever the player now stands, outside the area.
 local run_mode = nil
 local route_commands = {} -- Unsent commands in the current speedwalk segment
+local step_dispatch = nil -- Commands sent and entries acknowledged in this step
 
 -- Chaos Sea farm mode keeps starting fresh instances only after the current
 -- explore run reaches the profile's completion room. It is deliberately
@@ -465,13 +466,40 @@ local function cancel_arrival()
   movement_failure = nil
 end
 
+local begin_arrival_wait
+
 complete_arrival = function()
   if not enabled or state ~= "stepping" then return end
+  local dispatch = step_dispatch
+  if dispatch and dispatch.explore_batch then
+    if dispatch.arrived >= dispatch.sent then
+      log("Unexpected entry during frontier speedwalk; stopping", COLOR_WARN)
+      M.stop()
+      return
+    end
+    local desyncs = explore.desyncs()
+    local corrections = explore.stats().layer_corrections
+    explore.on_arrival()
+    if not explore.active() or explore.desyncs() ~= desyncs
+        or explore.stats().layer_corrections ~= corrections then
+      log("Frontier speedwalk no longer matches the map; stopping", COLOR_WARN)
+      M.stop()
+      return
+    end
+    dispatch.arrived = dispatch.arrived + 1
+    trace("frontier speedwalk entry " .. dispatch.arrived .. "/" .. dispatch.total)
+    if dispatch.arrived < dispatch.total then
+      begin_arrival_wait("move")
+      return
+    end
+  elseif explore and explore.active() then
+    explore.on_arrival()
+  end
+  step_dispatch = nil
   cancel_arrival()
   state = "idle"
   trace("arrival committed by Room.Contents; "
         .. (frames_seen - frames_at_step) .. " frame(s) since the step")
-  if explore and explore.active() then explore.on_arrival() end
   process_room()
 end
 
@@ -489,7 +517,7 @@ local function on_room_frame_arrival()
         .. " monsters in roominfo)")
 end
 
-local function begin_arrival_wait(kind)
+begin_arrival_wait = function(kind)
   cancel_arrival()
   state = "stepping"
   arrival_kind = kind
@@ -506,6 +534,13 @@ end
 local function on_movement_failure(line)
   if not enabled or state ~= "stepping" or arrival_kind ~= "move" then return end
   movement_failure = tostring(line)
+  if step_dispatch and step_dispatch.explore_batch then
+    -- Later queued commands may succeed even if this one failed: their entries
+    -- cannot be assigned safely to the original path, including wizard warnings.
+    log("Movement reported blocked during frontier speedwalk; stopping", COLOR_WARN)
+    M.stop()
+    return
+  end
   -- A Chaossea blocker prints the warning even for a wizard allowed to pass.
   -- Keep the pending direction until entry confirms movement or the watchdog
   -- stops it. A text response never commits or rolls back coordinates.
@@ -769,15 +804,24 @@ local function do_step(monsters)
     end
   end
 
+  local dispatch = {
+    total = #step.commands, sent = 0, arrived = 0,
+    explore_batch = run_mode == "explore" and #step.commands > 1,
+  }
+  step_dispatch = dispatch
+  if moves then begin_arrival_wait("move") end
   log("Step: " .. step.raw, COLOR_STEP)
   if notify_step then
     notify(on_step_callbacks, step.raw, sw and sw.step_info and sw.step_info())
   end
 
-  if moves then begin_arrival_wait("move") end
   for _, cmd in ipairs(step.commands) do
+    -- Callbacks and test transports can stop or complete a step synchronously.
+    if not enabled or step_dispatch ~= dispatch then return false end
+    dispatch.sent = dispatch.sent + 1
     mud.send(cmd)
   end
+  if not enabled or step_dispatch ~= dispatch then return false end
   if not moves then return do_step(monsters) end
   send_glance()
 
@@ -883,9 +927,9 @@ local function show_help()
   log("                           Exact full name, case/whitespace normalized; saved per profile")
   log("  /step explore [area]   - Start explore mode in an area (default: chaossea)")
   log("  /step explore off      - Stop explore mode")
-  log("  /step explore reset    - Reset the map to a fresh origin here, keep stepping")
+  log("  /step explore reset    - Reset here; stops and discards an outstanding frontier speedwalk")
   log("  /step explore leave    - Walk back to the run's origin, fighting on the way;")
-  log("                           does NOT leave the area -- the last step out is yours")
+  log("                           wait for the current route to arrive; the last step out is yours")
   log("  /step chaossea [level] [difficulty] - Set up Chaos Sea and explore it")
   log("  /step chaossea farm [level] [difficulty] - Repeat completed Sea runs")
   log("                           difficulty: risky, alarming or deadly")
@@ -895,8 +939,10 @@ local function show_help()
   log("  /step set kill [cmd]      - Set/show attack command prefix")
   log("  /step set dive [on|off]   - Toggle explore dive policy")
   log("  /step set config       - Show configuration")
-  log("Waits for room contents before moving or attacking; no prompt setup needed.")
-  log("Stops if entry is not confirmed within five seconds. Use /step trace on for details.")
+  log("Exploration speedwalks the full route through known rooms to the next unexplored room.")
+  log("Each entry updates position; combat and exploration decisions wait for the destination.")
+  log("Stops after five seconds without an entry. No prompt setup needed; /step trace on for details.")
+  log("Interrupted frontier speedwalks discard the map; wait for queued moves before restarting.")
   log("Combat refreshes wait three seconds per attempt, with two retries before stopping.")
   log("Stop the active run before starting another. Resume a paused run with -.")
   log("Chaos Sea stops at the cask/portal after clearing non-ignored mobs; farm then restarts.")
@@ -1111,12 +1157,15 @@ local function register_command()
     summary = "Automatic speedwalk stepping with optional combat",
     description = "Walks a stored step path one room at a time, optionally "
       .. "glancing and attacking on the way. Or, with 'explore [area]', maps an "
-      .. "unmapped area room by room. Chaos Sea stops at the cask/portal after "
+      .. "unmapped area, speedwalking the full shortest route through known rooms to "
+      .. "the next unexplored room. Each entry updates position; combat and exploration "
+      .. "decisions wait for the destination. Chaos Sea stops at the cask/portal after "
       .. "clearing non-ignored mobs; farm mode then starts the next instance. Otherwise "
       .. "exploration stops once every reachable exit leads somewhere already "
       .. "mapped. 'explore off' stops it early, "
       .. "'explore reset' resets the map to a fresh origin at the current room and "
-      .. "re-asks the MUD without stopping the run, and 'explore leave' walks the "
+      .. "re-asks the MUD (during a frontier speedwalk it stops and discards the map). "
+      .. "'explore leave' refuses while a route is outstanding; otherwise it walks the "
       .. "shortest recorded route back to the run's origin, fighting anything met on "
       .. "the way -- this does NOT leave the area itself, since the explorer never "
       .. "walks an excluded exit, so the final step out is still the player's own. "
@@ -1126,8 +1175,9 @@ local function register_command()
       .. "collapsing whitespace; punctuation and articles are literal. Ignored mobs "
       .. "are neither attacked nor counted in route/explore/farm decisions. "
       .. "Changes apply on the next room decision, not by cancelling a current fight. "
-      .. "Waits for complete room contents before moving or attacking; no prompt "
-      .. "setup is needed. Stops if entry is not confirmed within five seconds. "
+      .. "Complete entry contents track each move; no prompt setup is needed. "
+      .. "Stops after five seconds without an entry. Interrupted or blocked frontier "
+      .. "speedwalks discard the map; wait for already queued moves to finish before restarting. "
       .. "Use 'trace on' to inspect arrivals and combat decisions. Stop an active "
       .. "run before starting another. The shorthands are '-.' to start/resume "
       .. "on any mob, '->' to start/resume on targets only, "
@@ -1276,6 +1326,7 @@ local function check_instance_reset(text)
     if trimmed:find(pattern) then
       log("explore: \"" .. trimmed .. "\" starts a new instance; discarding the retained map",
           COLOR_RUN)
+      if step_dispatch and step_dispatch.explore_batch then M.stop() end
       explore.discard()
       return
     end
@@ -1402,6 +1453,12 @@ function M.stop(keep_farm)
   run_mode = nil
   route_commands = {}
   current_target = nil
+  if step_dispatch and step_dispatch.explore_batch then
+    -- Already transmitted commands may still move the player after this stop.
+    log("Interrupted frontier speedwalk; discarding the map. Wait for queued moves before restarting.", COLOR_WARN)
+    explore.discard()
+  end
+  step_dispatch = nil
   -- explore.stop() PAUSES rather than discards: it is dead reckoned, so what
   -- used to be guarded against here -- the next "-." resuming that reckoning,
   -- and the combat that goes with it, wherever the player is now standing
@@ -1485,6 +1542,10 @@ end
 -- this run's own next arrival -- in flight already, or the next step ahead --
 -- commits the refreshed exits via explore.on_arrival() as it always does.
 function M.explore_reset()
+  if step_dispatch and step_dispatch.explore_batch then
+    M.stop()
+    return true
+  end
   -- Works whether the run is active or merely retained (paused): resetting a
   -- stopped run must not start the player walking, so mode.reset() itself
   -- leaves `active` exactly as it found it -- this only checks that a map

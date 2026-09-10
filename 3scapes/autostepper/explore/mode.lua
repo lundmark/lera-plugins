@@ -25,7 +25,7 @@ local policy = "clear"
 
 local last_exits = {}     -- exit list from the most recent accepted frame
 local last_name = nil     -- room name from the most recent accepted frame
-local pending_dir = nil   -- direction emitted and not yet committed
+local pending_dirs = {}   -- emitted directions, consumed by confirmed entries
 local layer_corrections = 0  -- times the room name overrode a reckoned z
 local desync_count = 0       -- times contradicted topology forced a map reset
 
@@ -95,7 +95,7 @@ function M.start(prof, initial_policy)
   map = map_mod.new({ vertical = prof and prof.vertical })
   policy = initial_policy or prof.default_policy or "clear"
   active = true
-  pending_dir = nil
+  pending_dirs = {}
   pending_leave_path = nil
   stop_reason_val = "exhausted"
   last_exits = {}
@@ -124,7 +124,7 @@ end
 -- back up without remapping from scratch. M.discard() is the real teardown.
 function M.stop()
   active = false
-  pending_dir = nil
+  pending_dirs = {}
   pending_leave_path = nil
 end
 
@@ -136,7 +136,7 @@ function M.discard()
   active = false
   profile = nil
   map = nil
-  pending_dir = nil
+  pending_dirs = {}
   pending_leave_path = nil
   last_exits = {}
   last_name = nil
@@ -179,7 +179,7 @@ end
 function M.reset(reason)
   if not map then return end
   map = map_mod.new({ vertical = profile and profile.vertical })
-  pending_dir = nil
+  pending_dirs = {}
   -- A pending leave path names directions in the OLD map's coordinate frame;
   -- left set across a reset, next_step() would keep walking it against a map
   -- that no longer has those rooms recorded, oblivious to the fresh origin.
@@ -212,9 +212,8 @@ function M.on_arrival()
     return
   end
 
-  if pending_dir then
-    map:move(pending_dir)
-    pending_dir = nil
+  if #pending_dirs > 0 then
+    map:move(table.remove(pending_dirs, 1))
   end
 
   -- z is read from the room name, not dead-reckoned, whenever the profile can
@@ -311,6 +310,10 @@ function M.leave()
     log("explore: leave refused -- explore mode is not active", "warn")
     return false
   end
+  if #pending_dirs > 0 then
+    log("explore: leave refused -- wait for the current route to arrive", "warn")
+    return false
+  end
   local path = map:path_to(0, 0, 0)
   if path == nil then
     log("explore: leave refused -- the origin is unrecorded or unreachable",
@@ -334,12 +337,12 @@ function M.stop_reason()
 end
 
 function M.next_step()
-  if not active or not map then return nil end
+  if not active or not map or #pending_dirs > 0 then return nil end
 
   -- A pending leave path takes precedence over frontier selection: once
   -- M.leave() has armed one, every next_step() call drains it one direction
-  -- at a time until it is empty, honouring the same one-direction-per-call
-  -- contract as frontier stepping. The path is checked whether or not it is
+  -- at a time until it is empty, checking each room on the way out.
+  -- The path is checked whether or not it is
   -- empty, rather than only when non-empty, because an EMPTY-but-still-armed
   -- path is what marks "the walk just finished" -- once drained, this run is
   -- over and must report so, not silently fall through to frontier search.
@@ -350,7 +353,7 @@ function M.next_step()
       return nil
     end
     local dir = table.remove(pending_leave_path, 1)
-    pending_dir = dir
+    pending_dirs = { dir }
     return { raw = dir, commands = { dir } }
   end
 
@@ -360,9 +363,11 @@ function M.next_step()
     defer_dirs = profile and profile.defer_dirs,
   })
   if not path or #path == 0 then return nil end
-  local dir = path[1]
-  pending_dir = dir
-  return { raw = dir, commands = { dir } }
+  -- BFS traverses recorded rooms only; the last direction enters the frontier.
+  -- Keep our own copy so each arriving entry can commit exactly one direction.
+  pending_dirs = {}
+  for i, dir in ipairs(path) do pending_dirs[i] = dir end
+  return { raw = table.concat(path, " "), commands = path }
 end
 
 function M.stats()
