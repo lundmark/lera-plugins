@@ -112,7 +112,7 @@ local enabled = false   -- Is autostepper active?
 local movement_trigger_ids = {}
 local no_target_trigger_id = nil  -- Trigger ID for "There is no X here."
 local failed_attacks = 0  -- count of attacks whose keyword never resolved
--- Missing post-combat snapshots, reported in /step status.
+-- Post-combat refresh waits that exhausted their attempts, shown in /step status.
 local unanswered_refreshes = 0
 
 -- Which source do_step() takes steps from: "explore" or "route". Fixed once,
@@ -159,10 +159,11 @@ local current_target = nil  -- monster do_attack() is working on
 local combat_gmcp_sub = nil     -- gmcp handler id, removed on unload
 local room_contents_sub = nil   -- roominfo.on_room_contents id, removed on unload
 
--- After combat ends, ask for the actual remaining occupants. Losing an
--- attacker does not prove it died, so a missing refresh must stop the run.
-local REFRESH_TIMEOUT_MS = 1000
-local awaiting_refresh = false   -- true between the request and its answer/timeout
+-- After combat ends, ask for the actual remaining occupants. Allow delayed
+-- replies and retry dropped requests, but never infer a kill from silence.
+local REFRESH_TIMEOUT_MS = 3000
+local REFRESH_MAX_ATTEMPTS = 3
+local awaiting_refresh = false   -- stays true across retries until answered/stopped
 local refresh_timeout_id = nil
 
 -- Configuration
@@ -388,24 +389,38 @@ local function reseed_and_decide()
   process_room()
 end
 
--- A refresh must be armed before the send, including for synchronous API
--- adapters. Repeated idle snapshots cannot create overlapping refresh waits.
-local function handle_combat_end()
-  if state ~= "fighting" or awaiting_refresh then return end
-  awaiting_refresh = true
+-- Arm every attempt before sending, including retries: a synchronous reply
+-- must cancel this timer before it can interrupt a subsequent move or fight.
+local function request_combat_refresh(attempt)
   refresh_timeout_id = timer.after(REFRESH_TIMEOUT_MS, function()
     refresh_timeout_id = nil
+    if not enabled or not awaiting_refresh then return end
+    if attempt < REFRESH_MAX_ATTEMPTS then
+      log("Room.Refresh still unanswered; retrying (" .. (attempt + 1)
+          .. "/" .. REFRESH_MAX_ATTEMPTS .. ")", COLOR_WARN)
+      request_combat_refresh(attempt + 1)
+      return
+    end
     unanswered_refreshes = unanswered_refreshes + 1
-    log("Room.Refresh went unanswered; stopping without discarding the target",
-        COLOR_WARN)
+    log("Room.Refresh went unanswered after " .. REFRESH_MAX_ATTEMPTS
+        .. " attempts; stopping without discarding the target", COLOR_WARN)
     M.stop()
   end)
-  trace("combat ended; Room.Refresh sent, awaiting the answer")
+  trace("Room.Refresh attempt " .. attempt .. "/" .. REFRESH_MAX_ATTEMPTS
+        .. "; awaiting the answer")
   if not gmcp.send("Room.Refresh", { packages = { "Room.Contents" } }) then
     log("Room.Refresh could not be sent; stopping without discarding the target",
         COLOR_WARN)
     M.stop()
   end
+end
+
+-- Keep the same wait active across retries so duplicate combat-end frames
+-- and unrelated no-target text cannot start a second decision.
+local function handle_combat_end()
+  if state ~= "fighting" or awaiting_refresh then return end
+  awaiting_refresh = true
+  request_combat_refresh(1)
 end
 
 -- gmcp.on("Char.Combat", cb): an absent attacker ends the current fight.
@@ -882,6 +897,7 @@ local function show_help()
   log("  /step set config       - Show configuration")
   log("Waits for room contents before moving or attacking; no prompt setup needed.")
   log("Stops if entry is not confirmed within five seconds. Use /step trace on for details.")
+  log("Combat refreshes wait three seconds per attempt, with two retries before stopping.")
   log("Stop the active run before starting another. Resume a paused run with -.")
   log("Chaos Sea stops at the cask/portal after clearing non-ignored mobs; farm then restarts.")
 end
@@ -1521,8 +1537,7 @@ function M.status()
   -- A climbing count is the actionable diagnostic: it means the target list
   -- does not match the area, which the user can fix and nothing else says.
   log("  Failed attacks (this session): " .. failed_attacks)
-  -- Both counted for the same reason: each is the run acting on something
-  -- weaker than the server's own answer.
+  -- Count exhausted refresh waits once; individual retries are logged above.
   log("  Unanswered refreshes (this session): " .. unanswered_refreshes)
   log("  Trace: " .. (tracing and "on" or "off"))
 

@@ -221,13 +221,126 @@ do
   check("combat refresh is not also a movement arrival", e.pos() == "0,0,0")
 end
 
+-- Refresh replies can arrive after the former one-second deadline. Keep
+-- combat unresolved until a complete reply arrives, with bounded retries.
 do
   local e = engine()
   e.begin({n = 0}, {"A growing mutant being"})
-  e.deliver("Char.Combat", {attacker = "A growing mutant being"})
+  local initial_requests = #e.requests
   e.deliver("Char.Combat", {attacker = ""})
-  e.advance(1000)
-  check("unanswered combat refresh cannot discard a live target", #e.sent == 1 and #e.as.tracked_monsters() == 1 and not e.as.is_running())
+  e.advance(1200)
+  e.no_target("reason to 'dg'")
+  check("a delayed refresh keeps the target and ignores unrelated no-target text",
+    e.as.is_running() and #e.sent == 1 and #e.as.tracked_monsters() == 1)
+  check("ordinary latency does not send a premature retry", #e.requests == initial_requests + 1)
+  e.contents({}, nil, false)
+  check("a reply after one second still permits exactly one move", #e.sent == 2 and e.sent[2] == "n" and e.pos() == "0,0,0")
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {"A growing mutant being"})
+  local initial_requests = #e.requests
+  e.deliver("Char.Combat", {attacker = ""})
+  e.advance(2999)
+  check("combat refresh waits three seconds before retrying", e.as.is_running() and #e.requests == initial_requests + 1)
+  e.advance(1)
+  check("first timeout retries without moving or discarding the target",
+    #e.requests == initial_requests + 2 and #e.sent == 1 and #e.as.tracked_monsters() == 1 and e.as.is_running())
+  e.deliver("Char.Combat", {attacker = ""})
+  check("duplicate combat-end frames do not add retries", #e.requests == initial_requests + 2)
+  e.advance(3000)
+  check("second timeout sends the final refresh attempt", #e.requests == initial_requests + 3 and e.as.is_running())
+  for i = initial_requests + 1, #e.requests do
+    local req = e.requests[i]
+    check("refresh attempt " .. (i - initial_requests) .. " requests Contents only",
+      req.pkg == "Room.Refresh" and #req.data.packages == 1 and req.data.packages[1] == "Room.Contents")
+  end
+  e.advance(3000)
+  check("exhausted refresh attempts stop with the possible live target intact",
+    not e.as.is_running() and #e.sent == 1 and #e.as.tracked_monsters() == 1 and e.pos() == "0,0,0")
+  e.contents({}, nil, false)
+  e.advance(30000)
+  check("late replies cannot restart an exhausted refresh", not e.as.is_running() and #e.sent == 1 and #e.requests == initial_requests + 3)
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {"A growing mutant being"})
+  local initial_requests = #e.requests
+  e.deliver("Char.Combat", {attacker = ""})
+  e.advance(3000)
+  e.contents({"A growing mutant being"}, nil, false)
+  check("a retry reply reattacks a surviving monster", #e.sent == 2 and e.sent[2] == "kill mutant")
+  e.advance(10000)
+  check("an answered retry leaves no timer that interrupts the new fight", e.as.is_running() and #e.requests == initial_requests + 2 and #e.sent == 2)
+  e.deliver("Char.Combat", {attacker = ""})
+  e.advance(6000)
+  check("the next combat gets a fresh retry budget", e.as.is_running() and #e.requests == initial_requests + 5)
+  e.contents({}, nil, false)
+  e.contents({}, nil, false)
+  check("duplicate retry replies do not acknowledge the next movement", #e.sent == 3 and e.sent[3] == "n" and e.pos() == "0,0,0")
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {"A growing mutant being"})
+  local send, attempts = gmcp.send, 0
+  gmcp.send = function(pkg, data)
+    local sent = send(pkg, data)
+    attempts = attempts + 1
+    if attempts == 2 then e.contents({}, nil, false) end
+    return sent
+  end
+  e.deliver("Char.Combat", {attacker = ""})
+  e.advance(3000)
+  check("a synchronous retry reply moves once", attempts == 2 and #e.sent == 2 and e.sent[2] == "n")
+  e.info({s = 0}); e.contents({"A growing mutant being"}, nil, true)
+  e.advance(10000)
+  check("a synchronous reply cancels the retry timer before the next fight", e.as.is_running() and attempts == 2 and #e.sent == 3)
+end
+
+for _, action in ipairs({"stop", "on_disconnect", "on_unload"}) do
+  local e = engine()
+  e.begin({n = 0}, {"A growing mutant being"})
+  e.deliver("Char.Combat", {attacker = ""})
+  e.advance(3000)
+  local requests = #e.requests
+  e.as[action]()
+  e.advance(30000)
+  check(action .. " cancels pending refresh retries", not e.as.is_running() and #e.requests == requests and #e.sent == 1)
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {"A growing mutant being"})
+  e.deliver("Char.Combat", {attacker = ""})
+  local retries = 0
+  gmcp.send = function() retries = retries + 1; return false end
+  e.advance(30000)
+  check("a refused retry stops immediately and retains the target", retries == 1 and not e.as.is_running() and #e.sent == 1 and #e.as.tracked_monsters() == 1)
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {"A growing mutant being"})
+  e.deliver("Char.Combat", {attacker = ""})
+  e.deliver("Room.Contents", {full = 1, page = 1, pages = 2, items = {}})
+  e.advance(3000)
+  check("a partial refresh cannot finish combat during retries", e.as.is_running() and #e.sent == 1 and #e.as.tracked_monsters() == 1)
+  e.deliver("Room.Contents", {full = 1, page = 2, pages = 2, items = {}})
+  check("the final page of a delayed refresh permits movement", #e.sent == 2 and e.sent[2] == "n")
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {"A growing mutant being"})
+  e.deliver("Char.Combat", {attacker = ""})
+  e.advance(3000)
+  local requests = #e.requests
+  e.contents({}, nil, true)
+  e.advance(30000)
+  check("room entry during refresh retries stops instead of using another room", not e.as.is_running() and #e.requests == requests and #e.sent == 1 and e.pos() == "0,0,0")
 end
 
 do

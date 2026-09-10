@@ -1572,7 +1572,14 @@ for _, observed_active in ipairs({ false, true }) do
     if failure_kind == "timeout" then
       check(combat_case .. ": one refresh timeout is armed", queued_timers() == 1,
         queued_timers())
+      for attempt = 1, 2 do
+        quiet(run_timers)
+        check(combat_case .. ": retry " .. attempt .. " keeps waiting without moving",
+          as.is_running() and #gmcp_sent == attempt + 1 and #sent == 0
+            and #tracked() == 1 and queued_timers() == 1)
+      end
       failure_lines = capture(run_timers)
+      check(combat_case .. ": three attempts exhaust the refresh budget", #gmcp_sent == 3, #gmcp_sent)
       check(combat_case .. ": unanswered refresh is reported",
         has_line(failure_lines, "Room.Refresh went unanswered"),
         table.concat(failure_lines, "|"))

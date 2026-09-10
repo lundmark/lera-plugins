@@ -42,6 +42,11 @@ are unchanged. This is not protection from a mob attacking you, nor a new
 health/boss safety system. Ignoring a required gatekeeper may prevent the MUD
 from allowing progress.
 
+After combat, the stepper requests complete room contents before attacking or
+moving again. It waits three seconds per attempt and retries twice if needed.
+After three unanswered attempts (nine seconds total), it stops with the target
+still tracked. A complete reply, stop, disconnect, or unload cancels the retries.
+
 Chaos Sea runs stop at the cask or portal after clearing its non-ignored mobs,
 even with unexplored rooms remaining. Farm mode starts its next instance from
 there. If the server truncates that room's contents, the run stops with a warning

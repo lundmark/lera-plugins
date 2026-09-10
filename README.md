@@ -253,8 +253,10 @@ Map, refreshes during movement, and elapsed time cannot advance its coordinates.
 If entry is not confirmed within five seconds, it stops at the last confirmed
 position. A blocking warning can still be followed by a successful entry (the
 Sea allows wizards past some blockers). Combat ends through `Char.Combat`, then a
-contents refresh confirms the remaining mobs; an unanswered refresh stops the
-run without discarding a target.
+contents refresh confirms the remaining mobs. Each attempt waits three seconds,
+with two retries if no complete reply arrives. After three unanswered attempts
+(nine seconds total), the run stops without discarding a target. A complete
+reply cancels the retries, as do stopping, disconnecting, and unloading the plugin.
 
 Compound route steps such as `2n|e` are sent one movement at a time. Each room is
 checked for mobs before the next movement is sent.
