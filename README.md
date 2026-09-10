@@ -73,6 +73,19 @@ be spelled as a slash token: `speedwalk`'s `.`, `..`, `.,`, `.place` and
 `.from-to`, and `autostepper`'s `-`, `-.`, `->` and `-!`. Those are movement
 syntax; everything word-shaped lives under `/speedwalk` and `/step`.
 
+## Chat history selection
+
+With a Lera core that supports `wm` history-selection providers, `chat_monitor`
+lets you hold the left mouse button and drag above or below the chat pane to
+scroll and select older or newer text. `Ctrl+C` includes offscreen selected rows,
+with their displayed wrapping and indentation. Selection uses a stable snapshot,
+so incoming messages do not change the selected text. Explicit scrolling cancels
+selection; no new chat commands are needed.
+
+This optional `selection_source` provider requires the corresponding Lera core
+feature for edge scrolling. Older cores keep their existing selection behavior.
+It covers messages displayed in the chat pane, including relay messages.
+
 ## Image surfaces
 
 Directory plugins can load PNG assets relative to their own root and place

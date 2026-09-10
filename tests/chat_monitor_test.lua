@@ -841,5 +841,27 @@ if reloaded.companion_source then
   check("mobile_history_clear_resets_epoch", cleared.reset and cleared.epoch ~= page.epoch and #cleared.records == 0)
 end
 
+-- The optional selection provider is independent of the newer core module.
+chat = reloaded
+chat.clear()
+for i = 1, 12 do chat.receive("tell_in", "Sender", "message " .. i .. " wrapped words") end
+local rect = {x=4,y=6,w=22,h=3}
+render_at(rect)
+local source = assert(chat.selection_source(rect))
+check("selection_exports_offscreen_history", #source.rows > rect.h)
+check("selection_bounds", source.bounds.x == 4 and source.bounds.y == 6 and source.bounds.w == 22)
+local target = math.min(3, #source.rows)
+local selected_text = source.rows[target].text
+chat.receive("tell_in", "Sender", "new arrival")
+source.finish({moved=true,bottom=target}, "cancel")
+local restored = chat.selection_source(rect)
+check("selection_returns_to_anchor", restored.rows[restored.bottom].text == selected_text)
+chat.clear()
+check("selection_snapshot_survives_clear", source.rows[target].text == selected_text)
+render_at(rect)
+local invalidated = chat.selection_source(rect)
+chat.scroll(-1)
+check("selection_explicit_scroll_invalidates", not invalidated.valid())
+
 print(failures == 0 and "ALL PASS" or (failures .. " FAILURES"))
 os.exit(failures == 0 and 0 or 1)
