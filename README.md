@@ -8,6 +8,53 @@
 
 Plugin collection for the Lera MUD client.
 
+## Chat padding
+
+Single-line tells, emotes and chat-channel bodies compact internal runs of eight
+or more spaces to one space by default. This handles server-formatted wrapping
+whose line breaks were removed before GMCP/MIP delivery. Shorter runs, prefixes,
+and explicit multiline layout are preserved; relay processing is idempotent.
+This is a prose heuristic: intentional single-line columns with eight or more
+spaces are indistinguishable from padding. Use `/chat padding off` to preserve
+those; `/chat padding on` enables compaction again. The setting is saved on
+plugin unload. It affects new messages only, not existing history.
+
+Wrapped display rows use hanging indentation: continuation text starts at the
+same column as the message body after the timestamp and sender prefix. Very
+narrow panes fall back to a small indent to leave usable text width. This applies
+to local and relayed messages, with URL hit positions adjusted to match.
+
+## Chat spacing diagnostics
+
+After reloading the updated `chat_monitor` plugin through your usual plugin controls:
+
+1. Run `/chat spacing on` (clears earlier diagnostic records).
+2. Reproduce with a synthetic long tell, avoiding private conversation during capture.
+3. Run `/chat spacing report` to inspect or share the metadata.
+4. Run `/chat spacing off` to stop capture and clear its records.
+
+This uses the plugin's existing `/chat`; a profile-owned `/chat` (including hosted
+mode) is not replaced. If `/chat help` does not list `spacing`, check the loaded
+plugin version and command owner rather than sending these commands to the MUD.
+
+Capture is off by default. It retains only the latest 20 metadata records in
+memory, with no automatic printing, file logging, or diagnostic persistence.
+Disconnect and plugin unload also disable and clear it. Reports contain fixed
+source/type categories, raw and normalized **byte lengths** and LF/CR counts, and
+the first 10 raw and normalized ASCII-space runs of length >=2 as `position:length` (1-based byte
+positions; `...` means more runs). Bytes include ANSI escapes and UTF-8, so these
+are not screen columns. No text, sender names, URLs, prefixes, or channel names
+are retained by diagnostics. Normal chat history/relay behavior is unchanged;
+the explicit report is printed locally and may remain in normal client scrollback.
+
+“Raw” means the decoded message body at `add_message`, before continuation
+normalization and local filtering—not a wire packet. It excludes the prefix and
+protocol envelope; inactive-source/unmapped events do not reach this capture.
+`lf=0 cr=0` with a long raw space run demonstrates that the gap was present at
+intake, but does not prove which upstream component created it. Raw newlines
+that disappear in `normalized` show the client's folding. This diagnostic does
+not itself fix spacing or distinguish all intentional formatting from padding.
+
 ## Legacy parity validation
 
 The repeatable validation workflow, its public/private trust boundary, and safe

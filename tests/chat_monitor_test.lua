@@ -28,11 +28,16 @@ ui = {
 -- Stateful, so a save/load round trip can be exercised: starts empty, which is
 -- what the initial on_load below sees.
 local stored_chat = nil
+local store_writes = 0
 store = {
   load = function() end,
   get = function() return stored_chat end,
-  set = function(data) stored_chat = data end,
-  save = function() end,
+  set = function(data) stored_chat = data; store_writes = store_writes + 1 end,
+  save = function() store_writes = store_writes + 1 end,
+}
+trigger = {
+  add = function() return 1 end,
+  remove = function() end,
 }
 trigger = {
   add = function() return 1 end,
@@ -764,6 +769,103 @@ check("chat_source_rejects_nonsense",
 cmd_out = capture("types")
 check("chat_types_lists", cmd_out:find("chat_wiz", 1, true) ~= nil, cmd_out)
 
+-- ---- opt-in spacing diagnostics: only bounded metadata, never content -----------
+local spacing_header = "[chat spacing] %s; records=%d/20; bytes include ANSI/UTF-8; spaces=1-based byte position:length (first 10 runs >=2; ...=more)"
+check("spacing_disabled_by_default", capture("spacing report") == spacing_header:format("off", 0))
+check("padding_default_on", capture("padding") == "[chat] padding: on; new single-line prose only")
+capture("padding off")
+chat.receive("tell_in", "Example", "first        second", "")
+check("padding_off_preserves", chat.get_messages(1)[1].text == "first        second")
+for _, args in ipairs({ "padding maybe", "padding on extra", "padding off extra" }) do
+  check("padding_invalid", capture(args) == "Usage: /chat padding [on|off]")
+end
+check("padding_invalid_unchanged", capture("padding"):find("padding: off", 1, true) ~= nil)
+capture("padding on")
+chat.receive("other", "Example", "first        second\n    third", "")
+check("padding_other_type_untouched", chat.get_messages(1)[1].text == "first        second\n    third")
+chat.receive("tell_in", "Example", "first        second", "prefix        preserved")
+local prefix_rows = render_at({ x = 0, y = 0, w = 120, h = 5 })
+local prefix_found = false
+for _, row in pairs(prefix_rows) do
+  if row:find("prefix        preserved", 1, true) then prefix_found = true end
+end
+check("padding_prefix_untouched", prefix_found)
+local writes_before_spacing = store_writes
+check("spacing_on_clears", capture("spacing on") == "[chat spacing] on; records cleared")
+chat.set_source("gmcp")
+send_gmcp("private_channel_marker", "private_sender_marker", "é\27[31mA  B\r\n    C\27[0m")
+check("spacing_exact_pre_post_bytes", capture("spacing report") == spacing_header:format("on", 1)
+  .. "\n[chat spacing] 1 gmcp channel raw{bytes=22 lf=1 cr=1 spaces=[9:2,14:4]} normalized{bytes=17 lf=0 cr=0 spaces=[9:2]}")
+
+-- Synthetic bodies reproduce the reported byte lengths and gap offsets without
+-- retaining any private capture text.
+capture("spacing on")
+chat.receive("chat_gossip", "Example", string.rep("a", 56) .. string.rep(" ", 9)
+  .. string.rep("b", 26) .. "  " .. string.rep("c", 10) .. string.rep(" ", 9) .. string.rep("d", 29), "")
+send_gmcp("gossip", "Example", string.rep("a", 40) .. string.rep(" ", 8)
+  .. string.rep("b", 42) .. "  " .. string.rep("c", 10) .. string.rep(" ", 8) .. string.rep("d", 29))
+check("padding_exact_reported_evidence", capture("spacing report") == spacing_header:format("on", 2)
+  .. "\n[chat spacing] 1 relay channel raw{bytes=141 lf=0 cr=0 spaces=[57:9,92:2,104:9]} normalized{bytes=125 lf=0 cr=0 spaces=[84:2]}"
+  .. "\n[chat spacing] 2 gmcp channel raw{bytes=139 lf=0 cr=0 spaces=[41:8,91:2,103:8]} normalized{bytes=125 lf=0 cr=0 spaces=[84:2]}")
+capture("spacing on")
+local silent_output = {}
+print = function(text) silent_output[#silent_output + 1] = tostring(text) end
+send_gmcp("private_channel_marker", "private_sender_marker",
+  "private_body_marker  https://private-url.invalid/secret_marker\n    end")
+chat.receive("private_type_marker", "private_sender_marker", "private_body_marker", "private_prefix_marker")
+print = real_print
+check("spacing_no_automatic_logging", #silent_output == 0)
+cmd_out = capture("spacing report")
+for index, marker in ipairs({ "private_channel_marker", "private_sender_marker", "private_body_marker",
+    "private_type_marker", "private_prefix_marker", "https://", "secret_marker", "\27" }) do
+  check("spacing_report_excludes_marker_" .. index, not cmd_out:find(marker, 1, true))
+end
+check("spacing_fixed_categories", cmd_out:find("gmcp channel raw{", 1, true)
+  and cmd_out:find("relay other raw{", 1, true))
+
+capture("spacing on")
+chat.set_source("mip")
+mip_handlers.BAB("k", "BAB", "~private_sender_marker~A" .. string.rep(" ", 60) .. "B")
+check("spacing_flattened_mip", capture("spacing report") == spacing_header:format("on", 1)
+  .. "\n[chat spacing] 1 mip tell_in raw{bytes=62 lf=0 cr=0 spaces=[2:60]} normalized{bytes=3 lf=0 cr=0 spaces=[]}")
+chat.set_source("gmcp")
+capture("spacing on")
+send_gmcp("private_channel_marker", "private_sender_marker", string.rep("x  ", 11))
+check("spacing_run_limit", capture("spacing report") == spacing_header:format("on", 1)
+  .. "\n[chat spacing] 1 gmcp channel raw{bytes=33 lf=0 cr=0 spaces=[2:2,5:2,8:2,11:2,14:2,17:2,20:2,23:2,26:2,29:2,...]} normalized{bytes=33 lf=0 cr=0 spaces=[2:2,5:2,8:2,11:2,14:2,17:2,20:2,23:2,26:2,29:2,...]}")
+capture("spacing on")
+send_gmcp("private_channel_marker", "private_sender_marker", string.rep("x  ", 10))
+check("spacing_exactly_ten_runs_not_truncated", not capture("spacing report"):find("29:2,...", 1, true))
+
+capture("spacing on")
+for i = 1, 25 do send_gmcp("private_channel_marker", "private_sender_marker", string.rep("x", i)) end
+capture("spacing report")
+check("spacing_record_limit", #printed_lines == 21 and printed_lines[1] == spacing_header:format("on", 20))
+check("spacing_keeps_latest_twenty", printed_lines[2]
+  == "[chat spacing] 1 gmcp channel raw{bytes=6 lf=0 cr=0 spaces=[]} normalized{bytes=6 lf=0 cr=0 spaces=[]}"
+  and printed_lines[21]
+  == "[chat spacing] 20 gmcp channel raw{bytes=25 lf=0 cr=0 spaces=[]} normalized{bytes=25 lf=0 cr=0 spaces=[]}")
+local before_invalid = capture("spacing report")
+for _, args in ipairs({ "spacing", "spacing private_argument_marker", "spacing on extra",
+    "spacing off extra", "spacing report extra" }) do
+  check("spacing_invalid_command", capture(args) == "Usage: /chat spacing on|report|off")
+  check("spacing_invalid_preserves_state", capture("spacing report") == before_invalid)
+end
+capture("spacing on")
+check("spacing_on_resets_records", capture("spacing report") == spacing_header:format("on", 0))
+send_gmcp("private_channel_marker", "private_sender_marker", "A  B")
+check("spacing_off_clears", capture("spacing off") == "[chat spacing] off; records cleared")
+send_gmcp("private_channel_marker", "private_sender_marker", "A  B")
+check("spacing_off_stops_capture", capture("spacing report") == spacing_header:format("off", 0))
+capture("spacing on")
+send_gmcp("private_channel_marker", "private_sender_marker", "A  B")
+chat.on_disconnect()
+check("spacing_disconnect_clears", capture("spacing report") == spacing_header:format("off", 0))
+check("spacing_never_writes_store", store_writes == writes_before_spacing)
+check("spacing_help", capture("help"):find("/chat spacing on|report|off", 1, true) ~= nil)
+-- Leave capture enabled to check that unload clears it without persisting it.
+capture("spacing on")
+
 -- ---- the remembered source kills the duplicate first line -----------------------
 -- Both protocols deliver the same line and MIP arrives first, so a session that
 -- starts on MIP prints it before the latch can flip. A profile that has seen
@@ -774,7 +876,19 @@ gmcp_handlers["Comm"]("Comm.Channel.Text",
 check("gmcp_seen_recorded", chat.source().gmcp_seen == true)
 
 chat.clear()
+capture("padding off")
 chat.on_unload()
+check("padding_persisted", stored_chat.config.padding == false)
+check("spacing_unload_clears", capture("spacing report") == spacing_header:format("off", 0))
+local function has_spacing_data(value)
+  if type(value) == "string" then return value:find("raw{bytes=", 1, true) ~= nil end
+  if type(value) ~= "table" then return false end
+  for key, item in pairs(value) do
+    if tostring(key):find("spacing", 1, true) or has_spacing_data(item) then return true end
+  end
+  return false
+end
+check("spacing_not_persisted", not has_spacing_data(stored_chat))
 check("gmcp_seen_persisted",
       stored_chat and stored_chat.config and stored_chat.config.gmcp_chat_seen == true,
       stored_chat and stored_chat.config and tostring(stored_chat.config.gmcp_chat_seen))
@@ -782,6 +896,14 @@ check("gmcp_seen_persisted",
 package.loaded.chat_monitor = nil
 local reloaded = require("chat_monitor")
 reloaded.on_load()
+reloaded.receive("tell_in", "Example", "first        second", "")
+check("padding_restored_off", reloaded.get_messages(1)[1].text == "first        second")
+-- This stub retains old registrations; release them for a real new command binding.
+registered = {}
+reloaded.on_unload()
+stored_chat.config.padding = true
+reloaded.on_load()
+chat_spec = spec_for("/chat")
 
 check("reload_starts_on_gmcp", reloaded.source().active == "gmcp",
       reloaded.source().active)
@@ -840,6 +962,193 @@ if reloaded.companion_source then
   local cleared = provider.page({epoch=page.epoch,after=page.records[1].id,before="",limit=2})
   check("mobile_history_clear_resets_epoch", cleared.reset and cleared.epoch ~= page.epoch and #cleared.records == 0)
 end
+
+-- Continuation folding happens before storage, relay listeners and rendering.
+chat = reloaded
+chat.set_timestamps(false)
+local observed
+chat.on_message(function(_, _, text) observed = text end)
+local folding_cases = {
+  { "lf_indent", "be\n        fixed..", "be fixed.." },
+  { "crlf_boundary", "be  \r\n \t fixed..", "be fixed.." },
+  { "cr_boundary", "be\r        fixed..", "be fixed.." },
+  { "same_line", "  keep   these\tspaces  ", "  keep   these\tspaces  " },
+  { "intraline_multiline", "keep   these \n    and   those", "keep   these and   those" },
+  { "paragraphs", "first \r\n \t\r\n    second", "first \n \t\n    second" },
+  { "explicit_lines", "first\nsecond", "first\nsecond" },
+  { "explicit_ansi_line", "first \n\27[31msecond", "first \n\27[31msecond" },
+  { "indented_paragraph", "intro\n\n    code()", "intro\n\n    code()" },
+  { "unicode", "räksmörgås\n    世界", "räksmörgås 世界" },
+  { "flattened_padding", "first" .. string.rep(" ", 60) .. "second",
+    "first second" },
+  { "eight_nine_two", "first        second  third         fourth", "first second  third fourth" },
+  { "seven", "first       second", "first       second" },
+  { "ansi_padding", "first    \27[31m    \27[1m second\27[0m", "first \27[31m\27[1msecond\27[0m" },
+  { "edge_padding", "        first        second         ", "        first second         " },
+  { "tabs", "first\t        second", "first\t        second" },
+  { "table", "name        value\n    a        b", "name        value\n    a        b" },
+  { "code", "    if ok then\n        run()\n    end", "    if ok then\n        run()\n    end" },
+  { "aligned_wrap", "first        second\n        third", "first        second\n        third" },
+  { "edge_newlines", "\n  first\n    second \n", "first second" },
+  { "only_blank", " \n \t\r\n", "" },
+  { "ansi_indent", "be \27[0m \n \27[31m   fixed..\27[0m",
+    "be \27[0m\27[31mfixed..\27[0m" },
+}
+for _, protocol in ipairs({ "gmcp_tell", "gmcp_emote", "gmcp_gossip", "BAB", "BAG", "CAA" }) do
+  local channel = protocol:match("^gmcp_(.+)$")
+  chat.set_source(channel and "gmcp" or "mip")
+  for _, case in ipairs(folding_cases) do
+    chat.clear()
+    if channel then
+      gmcp_handlers.Comm("Comm.Channel.Text", {
+        channel = channel, direction = "out", talker = "Example", prefix = "You tell Example:",
+        text = case[2],
+      })
+    else
+      local lead = protocol == "CAA" and "gossip~Gossip~Example~" or "x~Example~"
+      mip_handlers[protocol]("k", protocol, lead .. case[2])
+    end
+    check("fold_" .. protocol .. "_" .. case[1], chat.get_messages(1)[1].text == case[3])
+    check("fold_listener_" .. protocol .. "_" .. case[1], observed == case[3])
+    for _, relay_type in ipairs({ "tell_in", "tell_out", "emote_in", "emote_out", "chat_gossip" }) do
+      chat.receive(relay_type, "Example", case[2], "")
+      check("padding_relay_" .. relay_type .. "_" .. case[1], chat.get_messages(1)[1].text == case[3])
+    end
+    chat.receive("tell_in", "Example", case[3], "")
+    check("fold_idempotent_" .. protocol .. "_" .. case[1], chat.get_messages(1)[1].text == case[3])
+  end
+end
+
+-- Separate protocol events are separate messages, never inferred continuations.
+chat.clear()
+send_chat("Example", "first")
+send_chat("Example", "        second")
+check("fold_does_not_merge_events", chat.count() == 2
+  and chat.get_messages(1)[1].text == "        second")
+
+-- Receiving a relay is idempotent and must not notify outgoing listeners.
+observed = nil
+chat.receive("tell_in", "Example", "be \r\n        fixed..", "[remote] Example tells you:")
+check("fold_remote_receive", chat.get_messages(1)[1].text == "be fixed.." and observed == nil)
+
+-- Exercise the real relay plugin with a closed in-process session transport.
+local remote_receiver, relayed
+session = {
+  name = function() return "local-test" end,
+  on_message = function(fn) remote_receiver = fn end,
+  send = function(target, type_id, sender, text, prefix)
+    relayed = { target, type_id, sender, text, prefix }
+    return true
+  end,
+}
+plugin = { get = function(name) if name == "chat_monitor" then return chat end end }
+local relay = require("chat_relay")
+relay.on_load()
+spec_for("/chatrelay").handler("add tells remote-test")
+chat.set_source("mip")
+mip_handlers.BAB("k", "BAB", "~Example~be\n        fixed..")
+check("fold_relay_send", relayed and relayed[4] == "be fixed..")
+relayed = nil
+remote_receiver("tell_in", "Example", "be\r\n        fixed..", "[remote]", true)
+check("fold_relay_receive_no_loop", chat.get_messages(1)[1].text == "be fixed.." and relayed == nil)
+mip_handlers.BAB("k", "BAB", "~Example~first        second  third         fourth")
+check("padding_relay_send", relayed and relayed[4] == "first second  third fourth")
+relayed = nil
+for _, type_id in ipairs({ "tell_in", "emote_in", "chat_gossip" }) do
+  remote_receiver(type_id, "Example", "first        second  third         fourth", "[remote]", true)
+  check("padding_real_relay_" .. type_id,
+    chat.get_messages(1)[1].text == "first second  third fourth" and relayed == nil)
+end
+
+-- URL detection and hit testing use normalized bytes, including paragraph
+-- separators and ANSI at the fold. No browser or network call is made.
+local opened_url
+mxp = { open_url = function(url) opened_url = url; return true end }
+for _, separator in ipairs({ " \n \27[31m   ", " \r\n \r\n \27[31m   ", "    \27[31m    ", "         \27[31m" }) do
+  chat.clear()
+  chat.receive("tell_in", "Example", "see" .. separator .. "https://example.org/path\27[0m done", "")
+  local rows = render_at({ x = 0, y = 0, w = 100, h = 5 })
+  local row, column
+  for y, text in pairs(rows) do
+    local start = plain(text):find("https://example.org/path", 1, true)
+    if start then row, column = y, start - 1 end
+  end
+  check("fold_url_rendered", row ~= nil)
+  if row then
+    local function point(kind, x)
+      return chat.on_pointer({ kind = kind, button = "left", x = x, y = row,
+        width = 100, height = 5, inside = true })
+    end
+    check("fold_url_left_boundary", not point("down", column - 1))
+    check("fold_url_right_boundary", not point("down", column + #"https://example.org/path"))
+    opened_url = nil
+    check("fold_url_hit", point("down", column))
+    point("up", column)
+    check("fold_url_target", opened_url == "https://example.org/path")
+    check("fold_ansi_preserved", rows[row]:find("\27[31m", 1, true) ~= nil)
+  end
+  if separator:find("\r", 1, true) then
+    check("fold_blank_row_retained", plain(rows[3] or ""):match("^ *$") ~= nil
+      and plain(rows[2] or ""):find("see", 1, true) ~= nil)
+  end
+end
+
+local wrapped_url = "https://example.org/abcdefghij"
+for _, separator in ipairs({ "\n    ", "\n  \n    ", "\n", "        ", "         " }) do
+  chat.clear()
+  chat.receive("tell_in", "Example", "see" .. separator .. "\27[31m" .. wrapped_url .. "\27[0m", "")
+  local rect = { x = 0, y = 0, w = 12, h = 15 }
+  local rows = render_at(rect)
+  render_pass = "remote"
+  local remote_rows = render_at(rect)
+  render_pass = "local"
+  local clicked = 0
+  for y, text in pairs(rows) do
+    check("fold_wrapped_remote_matches", remote_rows[y] == text)
+    local visible = plain(text)
+    check("fold_wrapped_fits", #visible <= rect.w)
+    local chunk = visible:gsub("^ +", ""):gsub("^see *", "")
+    if chunk ~= "" then
+      check("fold_wrapped_url_chunk", wrapped_url:find(chunk, 1, true) ~= nil)
+      local start = assert(visible:find(chunk, 1, true)) - 1
+      for x = start, start + #chunk - 1 do
+        opened_url = nil
+        local event = { kind = "down", button = "left", x = x, y = y,
+          width = rect.w, height = rect.h, inside = true }
+        check("fold_wrapped_url_hit", chat.on_pointer(event))
+        event.kind = "up"
+        chat.on_pointer(event)
+        check("fold_wrapped_url_target", opened_url == wrapped_url)
+        clicked = clicked + 1
+      end
+    end
+  end
+  check("fold_wrapped_all_url_cells", clicked == #wrapped_url)
+end
+
+-- Hanging indentation includes the timestamp and the full server lead-in.
+chat.clear()
+chat.receive("tell_in", "Skuggis", string.rep("word ", 30), "[Livsfara] Skuggis tells you:")
+local hanging_rect = { x = 0, y = 0, w = 80, h = 20 }
+render_pass = "local"
+local hanging_rows = render_at(hanging_rect)
+local body_column, continuations = nil, 0
+for y = 0, hanging_rect.h - 1 do
+  local line = plain(hanging_rows[y] or "")
+  if line:find("Skuggis tells you:", 1, true) then
+    body_column = assert(line:find("word", 1, true))
+  elseif line:find("word", 1, true) then
+    continuations = continuations + 1
+    check("hanging_body_alignment", body_column ~= nil and line:find("word", 1, true) == body_column)
+  end
+end
+check("hanging_has_continuations", continuations > 0)
+render_pass = "remote"
+local remote_hanging = render_at(hanging_rect)
+for y = 0, hanging_rect.h - 1 do
+  check("hanging_remote_matches", remote_hanging[y] == hanging_rows[y])
+end
+render_pass = "local"
 
 print(failures == 0 and "ALL PASS" or (failures .. " FAILURES"))
 os.exit(failures == 0 and 0 or 1)
