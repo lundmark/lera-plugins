@@ -95,10 +95,18 @@ end
 -- LEGACY:3192-3193 (GOODS_ALL). The primary goods eligible for arbitrage --
 -- excludes weapons/armour/finery (never traded lineage-to-lineage) and
 -- REFINED_GOODS below (towns only ever BUY those, never supply them).
+--
+-- The 8 raw husbandry goods (wool/eggs/pork/mutton/poultry/beef/milk/
+-- horsemeat) were missing entirely -- this list predates Guild.Livestock,
+-- and nothing added them when those goods shipped. None of the 8 is in
+-- REFINED_GOODS (only their refined forms -- cloth, smoked_meat, cheese --
+-- are, and those stay excluded same as weapons/armour/finery), so they
+-- belong here on the same footing as any other raw good.
 local GOODS_ALL = {
   "timber", "ore", "iron", "furs", "fish", "grain", "mead", "sunstone",
   "runestones", "spoils", "salted_fish", "bread", "fine_furs", "tools",
   "gemstones", "honey",
+  "wool", "eggs", "pork", "mutton", "poultry", "beef", "milk", "horsemeat",
 }
 
 -- LEGACY:3201-3210. A profitable arbitrage buy must come from a surplus

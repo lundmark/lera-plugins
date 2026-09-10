@@ -1,297 +1,462 @@
--- autostepper arrival-signal regression test. Run from the lera-plugins repo
--- root with LERA_ROOT pointing at a built Lera checkout.
---
--- Reproduces the live stall an owner's explore run hit: two consecutive rooms
--- sharing the same name, exits and Room.Info `num` -- so a real server
--- suppresses the second Room.Info as an identical resend -- differing only in
--- Room.Contents (the first room held a monster/player, the second did not, or
--- vice versa). With no prompt pattern configured, arrival used to be armed
--- from Room.Info alone (roominfo.on_room_info), so the second room's arrival
--- never completed: the run sat in state "stepping" forever.
---
--- This exercises the REAL roominfo.lua and the REAL autostepper/init.lua
--- together, not stand-ins for either, so it also proves Part 1
--- (roominfo.on_room_frame) and Part 2 (arming the settle timer from it) work
--- as integrated, not just each in isolation.
+-- Autostepper GMCP integration regressions: real plugins, simulated I/O and time.
 package.path = "3scapes/autostepper/?.lua;3scapes/?.lua;generic/?.lua;" .. package.path
 
-local failures = 0
-local function check(name, ok, detail)
-  if ok then
-    print("CASE " .. name .. ": PASS")
-  else
-    failures = failures + 1
-    print("CASE " .. name .. ": FAIL" .. (detail and (" - " .. tostring(detail)) or ""))
+local function engine()
+  for _, name in ipairs({"roominfo", "init", "explore.mode", "areas.chaossea"}) do
+    package.loaded[name] = nil
   end
-end
-
--- ---- stubs ------------------------------------------------------------------
-local clock = 1000
-lera = { time = function() return clock end }
-
-local sent = {}
-mud = { send = function(cmd) sent[#sent + 1] = tostring(cmd) end }
-
--- Timer stand-in. A callback scheduled DURING run_timers() lands in a fresh
--- `timers` table (queued is swapped out before anything runs) and is not
--- fired until the NEXT explicit run_timers() call, so this can never recurse
--- or spin -- there is no way for a test bug here to turn into an actual hang.
-local timers = {}
-local next_timer_id = 0
-timer = {
-  after = function(_, fn)
-    next_timer_id = next_timer_id + 1
-    timers[next_timer_id] = fn
-    return next_timer_id
-  end,
-  cancel = function(id)
-    if id and timers[id] then timers[id] = nil return true end
-    return false
-  end,
-}
-local function run_timers()
-  local queued = timers
-  timers = {}
-  local ids = {}
-  for id in pairs(queued) do ids[#ids + 1] = id end
-  table.sort(ids)
-  for _, id in ipairs(ids) do queued[id]() end
-end
-
-local triggers = {}
-trigger = {
-  add = function(pattern, fn)
-    triggers[#triggers + 1] = { pattern = pattern, fn = fn }
-    return #triggers
-  end,
-  remove = function(id)
-    if id and triggers[id] then triggers[id] = nil return true end
-    return false
-  end,
-}
-
-alias = {
-  add = function() return 1 end,
-  remove = function() return true end,
-}
-
--- gmcp stand-in, shared by roominfo (Room.Info/Contents/Map) and autostepper
--- (Char.Combat) -- the same pattern roominfo_test.lua uses, since both
--- modules register under distinct package names.
-local gmcp_handlers = {}
-gmcp = {
-  on = function(pkg, fn) gmcp_handlers[pkg] = fn; return pkg end,
-  remove = function() return true end,
-  send = function() return true end,
-}
-
-local function deliver(pkg, data)
-  local fn = gmcp_handlers[pkg]
-  if not fn then return false end
-  fn(pkg, data)
-  return true
-end
-
--- plugin.get: the real roominfo module for "roominfo" (set below, once
--- required); a bare truthy table for "speedwalk" -- autostepper's M.start
--- only touches it in the route-mode branch, which this test's explore run
--- never takes.
-local ri  -- assigned below; referenced here as an upvalue
-plugin = {
-  get = function(name)
-    if name == "roominfo" then return ri end
-    if name == "speedwalk" then return {} end
-    return nil
-  end,
-}
-
--- The plugin narrates through buffer.color_print now (a coloured
--- "[autostepper] " tag, then the message in a colour that says what kind of
--- line it is). Route both segments back through the CURRENT global print --
--- looked up at call time, so the quiet() helper that swaps print
--- still see every line exactly as the player reads it.
-local color_calls = {}
-buffer = {
-  -- select('#', ...), never #{...}: an ordinary line passes fg = nil for the
-  -- message (the buffer's default foreground), and a nil in the middle of a
-  -- packed table leaves a hole whose # is undefined -- LuaJIT reports 3 there,
-  -- so the message segment vanishes and every content assertion in this file
-  -- silently sees a bare tag. The real color_print is a C function counting
-  -- with lua_gettop, which is not fooled.
-  color_print = function(...)
-    local n = select('#', ...)
-    local parts, segments = {}, {}
-    for i = 3, n, 3 do
-      local text = tostring((select(i, ...)))
-      parts[#parts + 1] = text
-      segments[#segments + 1] = { fg = (select(i - 1, ...)), text = text }
-    end
-    color_calls[#color_calls + 1] = segments
-    print(table.concat(parts))
-  end,
-}
-
-local printed = {}
-local print_real = print
-local function quiet(fn, ...)
-  print = function(...)
+  local E = { sent = {}, logs = {}, requests = {}, now = 0 }
+  local handlers, timers, triggers = {}, {}, {}
+  local next_id = 0
+  lera = { time = function() return E.now / 1000 end }
+  mud = { send = function(cmd) E.sent[#E.sent + 1] = cmd end }
+  buffer = { color_print = function(...)
     local parts = {}
-    for i = 1, select('#', ...) do parts[#parts + 1] = tostring((select(i, ...))) end
-    printed[#printed + 1] = table.concat(parts, " ")
+    for i = 3, select("#", ...), 3 do parts[#parts + 1] = tostring(select(i, ...)) end
+    E.logs[#E.logs + 1] = table.concat(parts)
+  end }
+  timer = {
+    after = function(ms, fn)
+      next_id = next_id + 1
+      timers[next_id] = { at = E.now + ms, fn = fn }
+      return next_id
+    end,
+    cancel = function(id) timers[id] = nil end,
+  }
+  function E.advance(ms)
+    local finish = E.now + ms
+    for _ = 1, 100 do
+      local chosen, due
+      for id, t in pairs(timers) do
+        if t.at <= finish and (not due or t.at < due) then chosen, due = id, t.at end
+      end
+      if not chosen then E.now = finish; return end
+      local t = timers[chosen]
+      timers[chosen] = nil
+      E.now = due
+      t.fn()
+    end
+    error("timer loop")
   end
-  local ok, err = pcall(fn, ...)
-  print = print_real
-  if not ok then error(err, 0) end
+  trigger = {
+    add = function(pattern, fn)
+      next_id = next_id + 1
+      triggers[next_id] = { pattern = pattern, fn = fn }
+      return next_id
+    end,
+    remove = function(id) triggers[id] = nil end,
+  }
+  E.triggers = triggers
+  function E.no_target(name)
+    for _, t in pairs(triggers) do
+      if t.pattern:find("There is no", 1, true) then t.fn(nil, name) end
+    end
+  end
+  alias = { add = function() return 1 end, remove = function() end }
+  gmcp = {
+    on = function(pkg, fn) handlers[pkg] = fn; return pkg end,
+    remove = function(pkg) handlers[pkg] = nil end,
+    send = function(pkg, data)
+      E.requests[#E.requests + 1] = { pkg = pkg, data = data }
+      return true
+    end,
+  }
+  function E.deliver(pkg, data) assert(handlers[pkg], pkg)(pkg, data) end
+  local ri
+  plugin = { get = function(name)
+    if name == "roominfo" then return ri end
+    if name == "speedwalk" then return {
+      step_info = function() return {current = 0, total = 0, remaining = 0} end,
+      get_current_place = function() return "test route" end,
+      get_targets = function() return {} end,
+      load_steps = function() return E.routes and #E.routes > 0 end,
+      take_step = function() return table.remove(E.routes, 1) end,
+    } end
+  end }
+  ri = require("roominfo")
+  local output = print
+  print = function() end
+  ri.on_load()
+  print = output
+  E.ri, E.mode, E.as = ri, require("explore.mode"), require("init")
+  E.as.on_load()
+  function E.info(exits)
+    E.deliver("Room.Info", {num = 0, name = "Layer one of the Sea of Chaos", exits = exits})
+  end
+  function E.contents(monsters, players, entry, items)
+    local entries = {}
+    for _, name in ipairs(monsters or {}) do
+      entries[#entries + 1] = {name = name, type = "monster", count = 1}
+    end
+    for _, name in ipairs(players or {}) do
+      entries[#entries + 1] = {name = name, type = "player", count = 1}
+    end
+    for _, name in ipairs(items or {}) do
+      entries[#entries + 1] = {name = name, type = "item", count = 1}
+    end
+    E.deliver("Room.Contents", {full = 1, items = entries, entry = entry and 1 or nil})
+  end
+  function E.begin(exits, monsters, targets_only, players)
+    E.info(exits); E.contents(monsters, players)
+    assert(E.as.explore_start("chaossea"))
+    assert(E.as.start(targets_only))
+    E.info(exits); E.contents(monsters, players)
+  end
+  function E.blocked()
+    for _, t in pairs(triggers) do
+      if t.pattern:find("blocks your way", 1, true) then
+        t.fn("A growing mutant being blocks your way!")
+        return true
+      end
+    end
+    return false
+  end
+  function E.pos()
+    local s = E.mode.stats()
+    return s.x .. "," .. s.y .. "," .. s.z
+  end
+  return E
 end
 
--- ---- load the real modules ---------------------------------------------------
-ri = require("roominfo")
-quiet(ri.on_load)
-
-local explore = require("explore.mode")
-local as = require("init")
-quiet(as.on_load)
-
--- ---- a minimal area profile --------------------------------------------------
--- Same shape as the one in autostepper_explore_test.lua's engine-tier cases;
--- declared here rather than required so this suite does not depend on
--- areas/chaossea.lua, which is real area DATA, not part of this engine
--- behaviour.
-local profile = {
-  name = "test-suppressed",
-  exclude_exits = { out = true },
-  dive_dirs = {},
-  defer_dirs = {},
-  default_policy = "clear",
-  in_area = function(name)
-    return type(name) == "string" and name:lower():find("sea of chaos", 1, true) ~= nil
-  end,
-  layer_of = function() return 2 end,
-  targets = {},
-}
-
--- ---- room A: the origin -------------------------------------------------------
--- Empty room (no players, no monsters). num 60494 is the Chaos Sea's
--- per-character constant -- every room in the area reports it -- which is
--- exactly what makes two different rooms' Room.Info payloads identical.
-local ROOM_INFO = { num = 60494, area = "Unknown",
-  name = "Layer two of the Sea of Chaos", exits = { s = 60494 } }
-deliver("Room.Info", ROOM_INFO)
-deliver("Room.Contents", { full = 1, items = {} })
-
-explore.attach(ri)
-check("explore starts", explore.start(profile, "clear") == true)
-
-quiet(as.start)
-check("run starts stepping", as.get_state() == "stepping", tostring(as.get_state()))
-
--- M.start() re-asks the MUD for the room it is already standing in (a forced
--- Room.Refresh); answer it exactly like room A above -- both packages arrive,
--- so this first arrival is the ordinary case, not yet the stall.
-deliver("Room.Info", ROOM_INFO)
-deliver("Room.Contents", { full = 1, items = {} })
-run_timers()
-check("origin arrival completes and takes the first step",
-  as.get_state() == "stepping" and #sent == 1,
-  tostring(as.get_state()) .. "/" .. #sent)
-check("first step is south", sent[1] == "s", tostring(sent[1]))
-
--- ---- room B: the stall ---------------------------------------------------------
--- Same name, same exits, same num as room A -- so a real server suppresses
--- this Room.Info as an identical resend. No Room.Info is delivered at all,
--- simulating exactly that. The only signal for this room is Room.Contents,
--- which differs (a player has appeared) and is therefore sent.
-deliver("Room.Contents", { full = 1, items = {
-  { name = "Bob", type = "player", count = 1 },
-} })
-
--- Old behaviour: roominfo.on_room_info was the only thing that armed the
--- settle timer, and it never fires for this room, so nothing is ever queued
--- and the run sits in "stepping" forever -- the owner's exact stall. This is
--- a bounded drain, not a `while state == "stepping" do ... end` poll: under
--- the old bug nothing here can make further progress, so an unbounded loop
--- would hang this suite exactly as the real session hung. Capped at 3 rounds,
--- generously more than the single round one settle timer ever needs.
-local ARRIVAL_CAP = 3
-for _ = 1, ARRIVAL_CAP do
-  if #sent >= 2 then break end
-  run_timers()
+local failures, checks = 0, 0
+local function check(name, ok)
+  checks = checks + 1
+  if not ok then failures = failures + 1 end
+  print("CASE " .. name .. ": " .. (ok and "PASS" or "FAIL"))
 end
 
-check("the suppressed-Info room's arrival still completes and a second step is taken",
-  #sent == 2, tostring(#sent))
-check("second step is south again", sent[2] == "s", tostring(sent[2]))
-check("state is stepping again, not stuck idle-less in the old stall",
-  as.get_state() == "stepping", tostring(as.get_state()))
-
--- ---- room C: Info AND Contents both suppressed, only Room.Map differs -------
--- Same name/exits/num as room B (Info suppressed again) and the same occupant
--- list as room B (Contents suppressed too -- still just Bob, so nothing new
--- to send). Room.Map is '@'-centred and changes on virtually every move, so
--- it is the one package still delivered.
-deliver("Room.Map", {
-  kind = "los", w = 3, h = 1, rows = { "O-@" }, legend = {},
-  up = 0, down = 0, enter = 0,
-})
-
-for _ = 1, ARRIVAL_CAP do
-  if #sent >= 3 then break end
-  run_timers()
+do
+  local e = engine()
+  check("prompt APIs are removed", e.as.prompt == nil and e.as.set_prompt_pattern == nil)
+  e.begin({n = 0}, {})
+  check("initial refresh completes without prompts or timers", e.sent[1] == "n")
+  e.info({s = 0, e = 0})
+  e.advance(1600)
+  check("Info and elapsed settle delays cannot complete a move", #e.sent == 1 and e.pos() == "0,0,0")
+  e.deliver("Room.Map", {w = 1, h = 1, rows = {"@"}})
+  check("Map cannot complete a move", #e.sent == 1)
+  e.contents({"A growing mutant being"}, nil, true)
+  check("late contents attacks the mob in the arrived room", e.sent[2] == "kill mutant" and e.pos() == "0,1,0")
+  e.advance(1600)
+  check("no delayed arrival timer moves during combat", #e.sent == 2 and e.as.get_state() == "fighting")
 end
 
-check("a Room.Map-only arrival (Info and Contents both suppressed) still completes",
-  #sent == 3, tostring(#sent))
-check("third step is south again", sent[3] == "s", tostring(sent[3]))
-
--- ---- explore.on_frame is fed from Room.Info alone, never the generic signal ---
--- The subtlety Part 2 calls out by name: only settle ARMING should move to
--- on_room_frame. explore.on_frame must keep receiving exits from Room.Info
--- alone -- if it also ran on Contents/Map, a Contents-only arrival (Info
--- suppressed) would re-record exits at the new coordinate from a call that
--- was never told about this room. In THIS suite's own maze that call happens
--- to carry the same (correct, suppression-implied) value, so the scenario
--- above cannot distinguish the two wirings by VALUE. This checks it directly
--- by COUNT instead, with a spy standing in for explore.
-quiet(as.stop)
-run_timers()
-
-local on_frame_calls = 0
-local spy_active = true
-local spy = {
-  active = function() return spy_active end,
-  on_frame = function() on_frame_calls = on_frame_calls + 1 end,
-  on_arrival = function() end,
-  next_step = function() return { raw = "s", commands = { "s" } } end,
-  room_key = function() return "spy" end,
-  stats = function() return { policy = "clear" } end,
-  stop = function() spy_active = false end,
-  stop_reason = function() return "exhausted" end,
-}
-as.debug_set_explore(spy)
-
-quiet(as.start)
-check("no on_frame call yet: M.start() only waits, it does not feed a frame",
-  on_frame_calls == 0, tostring(on_frame_calls))
-
--- The origin's forced Room.Refresh answer: one Info, one Contents, both for
--- the same room.
-deliver("Room.Info", ROOM_INFO)
-deliver("Room.Contents", { full = 1, items = {} })
-run_timers()
-check("spy sees exactly one on_frame call for the origin's Info",
-  on_frame_calls == 1, tostring(on_frame_calls))
-
--- The suppressed-Info room again, this time observed through the spy:
--- Contents only, no Info at all.
-deliver("Room.Contents", { full = 1, items = {
-  { name = "Bob", type = "player", count = 1 },
-} })
-run_timers()
-check("a Contents-only arrival does not add a second on_frame call",
-  on_frame_calls == 1, tostring(on_frame_calls))
-
-if failures > 0 then
-  print(failures .. " FAILURE(S)")
-  os.exit(1)
+do
+  local e = engine()
+  e.begin({n = 0, s = 0}, {})
+  e.contents({}, nil, false)
+  check("an unrelated refresh cannot acknowledge a move", #e.sent == 1 and e.pos() == "0,0,0")
+  e.contents({}, nil, true)
+  check("identical entry contents still commits exactly one room", #e.sent == 2 and e.pos() == "0,1,0")
+  e.deliver("Room.Map", {w = 1, h = 1, rows = {"@"}})
+  check("trailing Map cannot acknowledge the following move", #e.sent == 2 and e.pos() == "0,1,0")
 end
-print("ALL PASS")
+
+do
+  local e = engine()
+  e.begin({n = 0}, {})
+  e.info({s = 0})
+  e.deliver("Room.Contents", {full = 1, entry = 1, page = 1, pages = 2,
+    items = {{type = "item", name = "A rusty sword"}}})
+  e.advance(1600)
+  check("a partial contents list cannot complete arrival", #e.sent == 1 and e.pos() == "0,0,0")
+  e.deliver("Room.Contents", {full = 1, entry = 1, page = 2, pages = 2,
+    items = {{type = "monster", name = "A growing mutant being"}}})
+  check("final contents page commits and attacks", e.sent[2] == "kill mutant" and e.pos() == "0,1,0")
+  check("roominfo retains the entry marker across paging", e.ri.info().entry == true)
+end
+
+do
+  local e = engine()
+  e.begin({n = 0, s = 0}, {"A growing mutant being"}, false, {"OtherPlayer"})
+  check("blocked response handler exists", e.blocked())
+  e.advance(5000)
+  check("blocked movement stops with confirmed coordinates", not e.as.is_running() and e.pos() == "0,0,0")
+  e.advance(10000)
+  e.contents({}, nil, false)
+  check("blocked movement leaves no callbacks that resume walking", #e.sent == 1 and e.pos() == "0,0,0")
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {})
+  e.blocked() -- Chaossea warns even when a wizard is allowed to pass.
+  e.info({s = 0})
+  e.contents({"A growing mutant being"}, nil, true)
+  check("successful wizard entry wins over the blocking warning", e.pos() == "0,1,0" and e.sent[2] == "kill mutant")
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {})
+  e.info({s = 0})
+  e.deliver("Room.Contents", {full = 1, entry = 1, page = 1, pages = 2, items = {}})
+  e.deliver("Room.Contents", {full = 1, page = 2, pages = 2, items = {}})
+  check("mismatched entry markers cannot complete a paged arrival", #e.sent == 1 and e.pos() == "0,0,0")
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {})
+  e.advance(10000)
+  check("missing arrival stops instead of advancing the map", not e.as.is_running() and e.pos() == "0,0,0" and #e.sent == 1)
+  e.contents({}, nil, true)
+  check("late entry cannot restart a timed-out run", #e.sent == 1 and not e.as.is_running())
+end
+
+do
+  local e = engine()
+  e.deliver("Char.Combat", {attacker = ""})
+  e.begin({n = 0}, {"A growing mutant being"})
+  e.advance(1600)
+  check("starting a run cannot prune a target without combat events", #e.sent == 1 and e.sent[1] == "kill mutant" and #e.as.tracked_monsters() == 1)
+  e.deliver("Char.Combat", {attacker = "A growing mutant being"})
+  e.deliver("Char.Combat", {attacker = ""})
+  e.contents({"A growing mutant being"}, nil, false)
+  check("combat refresh reattacks a surviving monster", e.sent[2] == "kill mutant")
+  e.deliver("Char.Combat", {attacker = "A growing mutant being"})
+  e.deliver("Char.Combat", {attacker = ""})
+  e.contents({}, nil, false)
+  check("combat refresh confirming empty room permits movement", e.sent[3] == "n")
+  check("combat refresh is not also a movement arrival", e.pos() == "0,0,0")
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {"A growing mutant being"})
+  e.deliver("Char.Combat", {attacker = "A growing mutant being"})
+  e.deliver("Char.Combat", {attacker = ""})
+  e.advance(1000)
+  check("unanswered combat refresh cannot discard a live target", #e.sent == 1 and #e.as.tracked_monsters() == 1 and not e.as.is_running())
+end
+
+do
+  local e = engine()
+  e.routes = {{raw = "2n", commands = {"n", "n"}}, {raw = "e", commands = {"e"}}}
+  e.info({n = 0}); e.contents({})
+  local callbacks = 0
+  e.as.on_step(function() callbacks = callbacks + 1 end)
+  e.as.start(false); e.contents({})
+  check("compound route sends only its first movement", table.concat(e.sent, ",") == "n")
+  e.deliver("Room.Info", {num = 1, name = "First route room", exits = {n = 0, s = 0}})
+  e.contents({"A growing mutant being"}, nil, true)
+  check("compound route fights before queuing another movement", table.concat(e.sent, ",") == "n,kill being")
+  e.deliver("Char.Combat", {attacker = ""})
+  e.contents({}, nil, false)
+  check("compound route continues after combat refresh", table.concat(e.sent, ",") == "n,kill being,n")
+  e.deliver("Room.Info", {num = 2, name = "Second route room", exits = {s = 0, e = 0}})
+  e.contents({}, nil, true)
+  check("next route segment waits for the final compound arrival", e.sent[4] == "e" and #e.sent == 4)
+  check("compound route preserves one callback per authored segment", callbacks == 2)
+end
+
+do
+  local e = engine()
+  e.begin({n = 0, s = 0}, {})
+  e.blocked()
+  check("repeated start refuses an already running move", e.as.start(false) == false)
+  e.contents({}, nil, false)
+  check("repeated start cannot refresh a blocked move into success", e.pos() == "0,0,0" and #e.sent == 1)
+end
+
+do
+  local e = engine()
+  e.deliver("Room.Info", {num = 400, name = "Outside the Sea", exits = {}})
+  e.contents({})
+  e.as.chaossea_setup(0, "risky")
+  check("setup sends its commands without a stale initial refresh", #e.sent == 5 and #e.requests == 0)
+  e.deliver("Room.Info", {num = 401, name = "The portal shore", exits = {}})
+  e.contents({}, nil, true)
+  check("setup ignores intermediate entry outside the Sea", #e.sent == 5 and e.as.is_running())
+  e.info({n = 0}); e.contents({"A growing mutant being"}, nil, false)
+  check("setup ignores an unmarked snapshot of an old instance", #e.sent == 5)
+  e.contents({"A growing mutant being"}, nil, true)
+  check("setup starts fighting on the confirmed Sea entry", e.sent[6] == "kill mutant" and e.pos() == "0,0,0")
+end
+
+do
+  local e = engine()
+  local send = mud.send
+  mud.send = function(cmd)
+    send(cmd)
+    if cmd == "n" then
+      e.info({s = 0})
+      e.contents({"A growing mutant being"}, nil, true)
+    end
+  end
+  e.begin({n = 0}, {})
+  check("movement wait is armed before sending its command", table.concat(e.sent, ",") == "n,kill mutant" and e.pos() == "0,1,0")
+end
+
+do
+  local e = engine()
+  e.routes = {{raw = "(open door)n", commands = {"open door", "n"}}}
+  e.info({n = 0}); e.contents({})
+  e.as.start(false); e.contents({})
+  check("route sends preparatory commands before its movement", table.concat(e.sent, ",") == "open door,n")
+  e.deliver("Room.Info", {num = 1, name = "Beyond the door", exits = {s = 0}})
+  e.contents({"A growing mutant being"}, nil, true)
+  check("mixed route processes the movement's actual contents", e.sent[3] == "kill being")
+end
+
+do
+  local e = engine()
+  e.routes = {{raw = "open door", commands = {"open door"}}, {raw = "n", commands = {"n"}}}
+  e.info({n = 0}); e.contents({})
+  e.as.start(false); e.contents({})
+  check("a preparatory-only route segment does not wait for impossible entry", table.concat(e.sent, ",") == "open door,n")
+end
+
+do
+  local e = engine()
+  e.routes = {{raw = "(enter portal)n", commands = {"enter portal", "n"}}}
+  e.info({n = 0}); e.contents({})
+  e.as.start(false); e.contents({})
+  check("unfamiliar custom commands require entry before another move", table.concat(e.sent, ",") == "enter portal")
+end
+
+-- The captured run reached these items, killed the boss, then walked away
+-- because the origin still had unexplored exits. Completion must win before
+-- the next frontier is selected, after a full contents list clears the room.
+local cask = "A cask of chaotic energy (closed)"
+local portal = "A glowing portal (swirling chaotically)"
+local boss = "A whirling monstrosity with three tentacles"
+
+do
+  local e = engine()
+  local completed = 0
+  e.as.on_complete(function() completed = completed + 1 end)
+  e.begin({n = 0, e = 0}, {})
+  e.info({s = 0})
+  e.contents({boss}, nil, true, {cask, portal})
+  check("cask arrival fights its boss before completing", table.concat(e.sent, ",") == "n,kill mutant" and e.as.is_running() and completed == 0)
+  e.deliver("Char.Combat", {attacker = ""})
+  e.deliver("Room.Contents", {full = 1, page = 1, pages = 2,
+    items = {{name = cask, type = "item", count = 1}}})
+  check("cask on a partial combat refresh cannot complete the run", #e.sent == 2 and e.as.is_running() and completed == 0)
+  e.deliver("Room.Contents", {full = 1, page = 2, pages = 2,
+    items = {{name = boss, type = "monster", count = 1}}})
+  check("a surviving boss beside the cask is fought again", e.sent[3] == "kill mutant" and e.as.is_running() and completed == 0)
+  e.deliver("Char.Combat", {attacker = ""})
+  e.contents({}, nil, false, {cask, portal})
+  check("clearing the cask room stops before backtracking to other unexplored exits", not e.as.is_running() and not e.mode.active() and #e.sent == 3 and e.pos() == "0,1,0")
+  check("cask completion notifies once", completed == 1)
+  check("cask completion reports the destination instead of exhausted exits", table.concat(e.logs, "\n"):find("Chaos Sea complete: cask/portal reached", 1, true) ~= nil)
+  e.contents({}, nil, false, {cask, portal})
+  e.advance(10000)
+  check("duplicate contents and old timers cannot resume a completed cask run", not e.as.is_running() and #e.sent == 3 and completed == 1)
+end
+
+for _, item in ipairs({cask, portal}) do
+  local e = engine()
+  e.begin({n = 0, e = 0}, {})
+  e.info({s = 0, n = 0})
+  e.contents({}, nil, true, {item})
+  check(item .. " stops an empty destination room immediately", not e.as.is_running() and #e.sent == 1 and e.pos() == "0,1,0")
+end
+
+do
+  local e = engine()
+  e.info({n = 0}); e.contents({}, nil, false, {cask})
+  assert(e.as.explore_start("chaossea"))
+  assert(e.as.start(false))
+  e.contents({}, nil, false, {cask})
+  check("starting at the cleared cask completes without moving", not e.as.is_running() and #e.sent == 0)
+end
+
+for _, cancel in ipairs({false, true}) do
+  local e = engine()
+  e.deliver("Room.Info", {num = 400, name = "Outside the Sea", exits = {}})
+  e.contents({})
+  assert(e.as.chaossea_farm_start(5, "risky"))
+  e.info({n = 0, e = 0}); e.contents({}, nil, true)
+  e.info({s = 0}); e.contents({boss}, nil, true, {cask, portal})
+  e.advance(1000)
+  check("farm waits for the cask room's boss before restarting", #e.sent == 7 and e.sent[7] == "kill mutant" and e.as.is_running())
+  e.deliver("Char.Combat", {attacker = ""})
+  e.contents({}, nil, false, {cask, portal})
+  check("farm completes at the cask with unexplored exits remaining", not e.as.is_running() and #e.sent == 7)
+  e.contents({}, nil, false, {cask, portal})
+  if cancel then e.as.stop() end
+  e.advance(1000)
+  if cancel then
+    check("stop cancels the pending farm restart at the cask", not e.as.is_running() and #e.sent == 7)
+  else
+    check("farm schedules one next instance from the cask", #e.sent == 12 and table.concat(e.sent, ",", 8) == "open cask,enter portal,unsetsea,setsea 5 risky,enter sea" and e.as.is_running())
+  end
+end
+
+-- The server may omit the boss when a crowded room hits its inventory cap.
+-- Receiving every page of that truncated list does not establish a clear room.
+for _, farm in ipairs({false, true}) do
+  for _, after_combat in ipairs({false, true}) do
+    local e = engine()
+    local completed = 0
+    e.as.on_complete(function() completed = completed + 1 end)
+    if farm then
+      e.deliver("Room.Info", {num = 400, name = "Outside the Sea", exits = {}})
+      e.contents({})
+      assert(e.as.chaossea_farm_start(5, "risky"))
+      e.info({n = 0, e = 0}); e.contents({}, nil, true)
+    else
+      e.begin({n = 0, e = 0}, {})
+    end
+    e.info({s = 0})
+    if after_combat then
+      e.contents({boss}, nil, true, {cask})
+      e.deliver("Char.Combat", {attacker = ""})
+    end
+    local sent = #e.sent
+    local pages = {{}, {}}
+    for i = 1, 64 do
+      local page = i <= 32 and 1 or 2
+      pages[page][#pages[page] + 1] = {
+        name = i == 1 and cask or ("a trinket " .. i), type = "item", count = 1,
+      }
+    end
+    local label = (farm and "farm" or "ordinary")
+      .. (after_combat and " combat refresh" or " entry")
+    e.deliver("Room.Contents", {full = 1, page = 1, pages = 2,
+      entry = not after_combat and 1 or nil, truncated = 1, items = pages[1]})
+    e.deliver("Room.Contents", {full = 1, page = 2, pages = 2,
+      entry = not after_combat and 1 or nil, items = pages[2]})
+    check(label .. ": truncated cask contents stop without completing", not e.as.is_running() and completed == 0 and #e.sent == sent)
+    check(label .. ": truncated cask contents explain the stop", table.concat(e.logs, "\n"):find("contents are truncated", 1, true) ~= nil)
+    e.advance(10000)
+    check(label .. ": truncated cask contents cannot restart movement or farming", not e.as.is_running() and completed == 0 and #e.sent == sent)
+  end
+end
+
+for _, farm in ipairs({false, true}) do
+  local old_store = store
+  store = {
+    load = function() return true end,
+    get = function() return {ignored_monsters = {["a gentle guide"] = true}} end,
+  }
+  local e = engine()
+  store = old_store
+  if farm then
+    e.deliver("Room.Info", {num = 400, name = "Outside the Sea", exits = {}})
+    e.contents({})
+    assert(e.as.chaossea_farm_start(5, "risky"))
+    e.info({n = 0, e = 0}); e.contents({}, nil, true)
+  else
+    e.begin({n = 0, e = 0}, {})
+  end
+  local sent = #e.sent
+  e.info({s = 0})
+  e.contents({"A gentle guide", boss}, nil, true, {cask})
+  check("cask completion still fights a non-ignored boss", e.sent[sent + 1] == "kill mutant" and e.as.is_running())
+  e.deliver("Char.Combat", {attacker = ""})
+  e.contents({"A gentle guide"}, nil, false, {cask})
+  check((farm and "farm" or "ordinary") .. " cask completion excludes ignored mobs", not e.as.is_running() and #e.sent == sent + 1)
+  e.advance(1000)
+  if farm then
+    check("farm restarts when only ignored mobs remain beside the cask", #e.sent == sent + 6 and e.sent[sent + 2] == "open cask")
+  else
+    check("ordinary cask run stays stopped beside an ignored mob", #e.sent == sent + 1 and not e.as.is_running())
+  end
+end
+
+print(string.format("%d checks, %d failures", checks, failures))
+if failures > 0 then os.exit(1) end

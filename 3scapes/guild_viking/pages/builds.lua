@@ -73,11 +73,20 @@ end
 -- across a separately-colored number and a ratio-independent bar tone.
 -- Content fidelity over pixel fidelity, same precedent as the
 -- veterancy-bar note in pages/army.lua.
+-- The good name was %-padded but the done/need ratio was not, so the progress
+-- bars slid with the number of digits -- "12/40" and "1200/4000" pushed the
+-- bar to different columns on consecutive rows of the same project.
+local MAT_GOOD_W  = 13
+local MAT_RATIO_W = 12   -- "12000/15000"
+
 local function mat_row(width, mg)
   local color = pagelib.pct_color(mg.done or 0, mg.need or 1)
-  return pagelib.trunc(string.format("  %s%-12s%s %d/%d %s",
-    cc.good_color(mg.good), cc.good_label(mg.good), pagelib.RESET,
-    mg.done or 0, mg.need or 0, pagelib.bar(12, mg.done or 0, mg.need or 1, color)), width)
+  local ratio = string.format("%d/%d", mg.done or 0, mg.need or 0)
+  return pagelib.trunc("  "
+    .. pagelib.trunc(cc.good_color(mg.good) .. cc.good_label(mg.good)
+                     .. pagelib.RESET, MAT_GOOD_W)
+    .. pagelib.trunc(C.white .. ratio .. pagelib.RESET, MAT_RATIO_W)
+    .. pagelib.bar(12, mg.done or 0, mg.need or 1, color), width)
 end
 
 -- ---------------------------------------------------------------------------
@@ -108,9 +117,12 @@ local function construction_lines(add, width)
   end
   for _, pb in ipairs(list) do
     local status_text, status_color = construction_status(pb)
-    add(pagelib.trunc(string.format("%s%-16s%s T%d  %s%s%s",
-      C.white, bldg_display(pb.bldg_id), pagelib.RESET, pb.tier or 1,
-      status_color, status_text, pagelib.RESET), width))
+    -- Tier gets its own column too: "T1" and "T10" are different widths, so
+    -- the status text moved between rows.
+    add(pagelib.trunc(
+      pagelib.trunc(C.white .. bldg_display(pb.bldg_id) .. pagelib.RESET, 18)
+      .. pagelib.trunc(C.dim .. "T" .. tostring(pb.tier or 1) .. pagelib.RESET, 5)
+      .. status_color .. status_text .. pagelib.RESET, width))
 
     if pb.mats and #pb.mats > 0 then
       -- Time-to-completion bar, only while the build clock is running and

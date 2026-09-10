@@ -24,7 +24,22 @@ local STFX_META = {
   skad = { cat="Def",  cs="#00CCCC", ci=0xCCCC00 },
   vkj  = { cat="Def",  cs="#00CCCC", ci=0xCCCC00 },
   ram  = { cat="Def",  cs="#00CCCC", ci=0xCCCC00 },
-  gul  = { cat="Def",  cs="#00CCCC", ci=0xCCCC00 },
+  -- Heimdall's vital-sight enchantments are purple effects, not defensive
+  -- wards.
+  --
+  -- The server emits `bsjon`/`gsjon` for Broddsjón/Gullsjón -- see
+  -- query_spell_fx_bar() in players/viking/obj/include/spell_data.h, which
+  -- picks the tag from vital_sight_tier. An unknown tag falls through to
+  -- STFX_DEFAULT, whose cat is "DoT", so Broddsjón was being filed and
+  -- coloured as a damage-over-time effect rather than an enchantment.
+  --
+  -- `bro`/`gul` are kept as aliases: an older feed used them, and `gul` in
+  -- particular must stay because gullhjalmr_buff ALSO emits `gul` (same file,
+  -- cyan ward). Removing it would send Gullhjalmr to the DoT bucket instead.
+  bsjon = { cat="Off",  cs="#DD44DD", ci=0xDD44DD },
+  gsjon = { cat="Off",  cs="#DD44DD", ci=0xDD44DD },
+  bro  = { cat="Off",  cs="#DD44DD", ci=0xDD44DD },
+  gul  = { cat="Off",  cs="#DD44DD", ci=0xDD44DD },
   tvi  = { cat="Def",  cs="#00CCCC", ci=0xCCCC00 },
   nau  = { cat="Def",  cs="#00CCCC", ci=0xCCCC00 },
   valg = { cat="Def",  cs="#00CCCC", ci=0xCCCC00 },
@@ -37,6 +52,10 @@ local STFX_META = {
   bles = { cat="Heal", cs="#33CC33", ci=0x33CC33 },
   gro  = { cat="Heal", cs="#33CC33", ci=0x33CC33 },
   jor  = { cat="Heal", cs="#33CC33", ci=0x33CC33 },
+  -- Baldr's lingering regen (ljosbylgja_regen). Emitted green by the server
+  -- like every other regen, but it was absent from this table, so it landed
+  -- in STFX_DEFAULT's "DoT" bucket -- a heal displayed as damage-over-time.
+  ljos = { cat="Heal", cs="#33CC33", ci=0x33CC33 },
   van  = { cat="Heal", cs="#33CC33", ci=0x33CC33 },
   frey = { cat="Heal", cs="#33CC33", ci=0x33CC33 },
   gald = { cat="Off",  cs="#DD44DD", ci=0xDD44DD },

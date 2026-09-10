@@ -196,10 +196,21 @@ local function prison_lines(add, width)
       pr.pend_cmd and ", commander" or "", pagelib.RESET), width))
   end
 
+  -- Captive roster: id, name, size and ransom were concatenated, so the
+  -- ransom column slid with the length of each captive's name. Fixed columns,
+  -- ransom right-aligned so the figures stack; commanders flagged in colour
+  -- rather than as a trailing ", cmdr" that pushed everything further right.
   for _, p in ipairs(pr.roster or {}) do
-    add(pagelib.trunc(string.format("  %s%d) %s (%d%s)  ransom %dd%s",
-      C.white, p.id or 0, p.name or "?", p.size or 0, p.cmd and ", cmdr" or "", p.val or 0,
-      pagelib.RESET), width))
+    local ransom = string.format("%dd", p.val or 0)
+    add(pagelib.trunc(
+      "  " .. pagelib.trunc(C.dim .. tostring(p.id or 0) .. ")" .. pagelib.RESET, 5)
+      .. pagelib.trunc((p.cmd and C.yellow or C.white) .. (p.name or "?")
+                       .. pagelib.RESET, 22)
+      .. pagelib.trunc(C.dim .. "x" .. tostring(p.size or 0) .. pagelib.RESET, 6)
+      .. pagelib.trunc(p.cmd and (C.yellow .. "cmdr" .. pagelib.RESET) or "", 6)
+      .. C.dim .. "ransom " .. pagelib.RESET
+      .. string.rep(" ", math.max(0, 8 - #ransom))
+      .. C.bright_green .. ransom .. pagelib.RESET, width))
   end
 
   if (pr.kin or 0) > 0 then
@@ -210,7 +221,7 @@ local function prison_lines(add, width)
 
   if have_siege then
     add(pagelib.trunc(string.format(
-      "%sSiege engines: %d/%d  -- 'vsiege build', deploy in an assault to breach walls%s",
+      "%sSiege engines: %d/%d  -- 'vsiege build'; a garrison holds its walls, so breach them%s",
       C.yellow, sg.engines or 0, sg.cap or 0, pagelib.RESET), width))
   end
 end

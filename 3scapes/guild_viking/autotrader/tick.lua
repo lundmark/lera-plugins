@@ -210,11 +210,33 @@ local function fail_closed(message, now)
 end
 
 -- LEGACY:793-804 (local plan(), renamed do_plan -- see header).
+--
+-- `at.debug` (set by "atrade debug on", tick.lua's M.config) was previously
+-- write-only: nothing anywhere read it, so the command's own promise --
+-- "each idle tick will print why nothing was sent" -- never actually
+-- happened. planner.build() already computes exactly that reason in
+-- result.status; this was just never surfaced. Gated on `result` itself
+-- (not merely on debug being on): planner.build() no-ops to nil under its
+-- own AT_INTERVAL throttle, and do_plan() can be reached far more often
+-- than that via M.tick()'s idle-phase check -- printing on every one of
+-- those no-op calls would spam far faster than the "idle tick" framing
+-- implies.
 local function do_plan()
   local ok, result = pcall(planner.build)
   if not ok then
     fail_closed("planner failed: " .. tostring(result), os.time())
     return
+  end
+  if result and core.settings().debug then
+    if result.status then
+      note("888888", "idle tick: " .. result.status)
+    elseif result.jobs and #result.jobs > 0 then
+      local labels = {}
+      for _, j in ipairs(result.jobs) do labels[#labels + 1] = j.label or "?" end
+      note("888888", "idle tick: planned " .. #result.jobs .. " job(s): " .. table.concat(labels, "; "))
+    else
+      note("888888", "idle tick: nothing to report")
+    end
   end
   local commands = (result and result.commands) or {}
   sm.pending = transactions(commands)

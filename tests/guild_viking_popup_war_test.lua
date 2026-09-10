@@ -222,7 +222,7 @@ local function seed_battle(t)
                             size = u.size or 0, coord = u.coord or "",
                             morale = u.morale or 0, type = u.utype or "",
                             leader = u.leader or "", bid = u.bid or 0,
-                            ord = u.ord or 0 }
+                            g = u.g, ord = u.ord or 0 }
     end
   end
   protocol.on_gmcp("Guild.War", {
@@ -1041,6 +1041,72 @@ local ok_wired_oob = renderer.on_pointer({ kind = "up", x = 0, y = 1000, inside 
 check("an out-of-grid wrapper coordinate does not send to the MUD", #send_calls == 0)
 
 if is_open_flag then package.loaded["wm"].popup.close() end
+
+-- =============================================================================
+-- war_battle: per-unit letter handles. The server gives every unit on the
+-- board its own letter for the battle -- lowercase yours, uppercase the foe's
+-- -- so a glyph names exactly one unit instead of a type shared by several.
+-- The board draws that letter, and the unit key is built from the units on
+-- the board rather than from the static type list.
+-- =============================================================================
+reset_all()
+seed_battle({
+  phase = "deploy", turn = 0, mode = "field", target = "Jorvik",
+  width = 3, height = 2, dz = 1,
+  budget = 100, spent = 20, war_points = 15,
+  terrain_rows = { "...", "..." },
+  works_rows = { "...", "..." },
+  units = {
+    -- Two units of ONE type on ONE side: the case that used to draw a pair of
+    -- indistinguishable "S" tiles, then a pair of ordinals that collided with
+    -- every other type's ordinals.
+    { side = "Y", label = "First Wall", size = 8, coord = "A2", morale = 80,
+      utype = "shieldwall", bid = 101, g = "a" },
+    { side = "Y", label = "Second Wall", size = 8, coord = "B2", morale = 80,
+      utype = "shieldwall", bid = 102, g = "b" },
+    { side = "N", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
+      utype = "foe_raiders", bid = 103, g = "A" },
+  },
+})
+
+local glines = war_battle.lines(WIDTH)
+local goffset = war_battle.grid_line_offset(WIDTH)
+local function ggrid_line(gr) return glines[goffset + gr + 1] end
+
+check("two units of one type draw as two DIFFERENT letters, not one shared glyph",
+  ggrid_line(0) == bfield(C.bright_green, "a") .. bfield(C.bright_green, "b") ..
+    bfield(C.bright_red, "A"), ggrid_line(0))
+
+check("the foe's letter is uppercase and red",
+  ggrid_line(0):find("A", 1, true) ~= nil and ggrid_line(0):find(C.bright_red, 1, true) ~= nil)
+
+-- The key is now a one-line roster: letter -> what that letter is.
+check("unit key lists each unit's own letter",
+  find_plain(glines, "a") and find_plain(glines, "b") and find_plain(glines, "wall"))
+check("unit key still names the foe's type", find_plain(glines, "raiders"))
+
+-- A server that sends no letters must still render the old way, so the plugin
+-- keeps working against an un-upgraded MUD.
+reset_all()
+seed_battle({
+  phase = "deploy", turn = 0, mode = "field", target = "Jorvik",
+  width = 3, height = 2, dz = 1,
+  budget = 100, spent = 20, war_points = 15,
+  terrain_rows = { "...", "..." },
+  works_rows = { "...", "..." },
+  units = {
+    { side = "Y", label = "Huscarl Guard", size = 8, coord = "A2", morale = 80,
+      utype = "huscarls", bid = 101 },
+    { side = "N", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
+      utype = "foe_raiders", bid = 103, ord = 2 },
+  },
+})
+local olines = war_battle.lines(WIDTH)
+local ooffset = war_battle.grid_line_offset(WIDTH)
+check("without letters the board falls back to type glyph + ordinal",
+  olines[ooffset + 1]:find("H", 1, true) ~= nil and
+  olines[ooffset + 1]:find("2", 1, true) ~= nil, olines[ooffset + 1])
+check("without letters the static type key is used", find_plain(olines, "huscarl"))
 
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING POPUP WAR TESTS PASSED")

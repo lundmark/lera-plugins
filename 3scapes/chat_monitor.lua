@@ -14,6 +14,190 @@ M.version = "1.3"
 M.priority = 50  -- Run before most plugins
 
 local wm = require("wm")
+-- URL detection/highlighting, inlined from Lera core's
+-- scripts/default/url_links.lua (which wm.lua uses for the window manager's
+-- own links). It cannot be required here: the plugin sandbox resolves
+-- require() to "command", "wm" and "menu" only, and sends every other name
+-- into the plugin's own directory (src/script/plugin.c:520-535) -- core
+-- modules are deliberately unreachable. A single-file plugin has no such
+-- directory (root_off == 0), so require("url_links") raised "plugin module is
+-- not allowed" and took chat_monitor down at load.
+--
+-- Kept byte-identical to core's implementation apart from the local name, so
+-- the two can be diffed. If core's copy changes, re-sync this one.
+local url_links = {}
+
+-- Lera's cell renderer uses one cell per UTF-8 codepoint (not wcwidth).
+-- Keep raw byte positions as well, for consumers with word-wrapped rows.
+function url_links.cells(text)
+  local cells, plain, map, i, col = {}, {}, {}, 1, 0
+  while i <= #text do
+    local escape = text:byte(i) == 27 and text:sub(i):match("^\27%[[0-9;]*.")
+    if escape then
+      i = i + #escape
+    else
+      local b = text:byte(i)
+      local n = 1
+      if b >= 194 and b <= 244 then
+        local candidate = b < 224 and 2 or (b < 240 and 3 or 4)
+        local valid = i + candidate - 1 <= #text
+        for j = 1, candidate - 1 do
+          local c = text:byte(i+j) or 0
+          valid = valid and c >= 128 and c <= 191
+        end
+        local second = text:byte(i+1) or 0
+        if b == 224 then valid = valid and second >= 160 end
+        if b == 237 then valid = valid and second <= 159 end
+        if b == 240 then valid = valid and second >= 144 end
+        if b == 244 then valid = valid and second <= 143 end
+        if valid then n = candidate end
+      end
+      local cell = { first = i, last = i+n-1, col = col }
+      -- Controls delimit candidates but occupy no rendered cells.
+      plain[#plain+1] = text:sub(i, i+n-1)
+      for j = 1, n do map[#map+1] = cell end
+      if b >= 32 and b ~= 127 then
+        cells[#cells+1] = cell
+        col = col + 1
+      end
+      i = i + n
+    end
+  end
+  return cells, table.concat(plain), map
+end
+
+function url_links.find(text)
+  local _, plain, map = url_links.cells(text)
+  local lower, links, pos = plain:lower(), {}, 1
+  while pos <= #plain do
+    local start
+    for _, prefix in ipairs({"http://", "https://", "www."}) do
+      local at = lower:find(prefix, pos, true)
+      if at and (not start or at < start) then start = at end
+    end
+    if not start then break end
+    local finish = start
+    while finish <= #plain and not plain:sub(finish, finish):match('[%s<>"\'`]') do
+      finish = finish + 1
+    end
+    local value = plain:sub(start, finish-1)
+    local prev = plain:sub(start-1, start-1)
+    local valid = start == 1 or not prev:match('[%w_/@.:%-]')
+    valid = valid and not value:find('[%c\\]')
+    -- Sentence punctuation is not part of a URL; balanced path brackets are.
+    while #value > 0 do
+      local last = value:sub(-1)
+      local opener = ({ [")"] = "(", ["]"] = "[", ["}"] = "{" })[last]
+      local trim = last:match('[.,;:!?]') ~= nil
+      if opener then
+        local opens, closes = 0, 0
+        for c in value:gmatch('.') do
+          if c == opener then opens = opens + 1 end
+          if c == last then closes = closes + 1 end
+        end
+        trim = closes > opens
+      end
+      if not trim then break end
+      value = value:sub(1, -2)
+    end
+    local normalized = value:lower():sub(1,4) == 'www.' and ('https://' .. value) or value
+    local host = normalized:match('^[Hh][Tt][Tt][Pp][Ss]?://([^/?#]+)')
+    valid = valid and host and host ~= '' and not host:find('@', 1, true)
+    if value:lower():sub(1,4) == 'www.' then
+      valid = valid and #host > 4 and host:sub(-1) ~= '.'
+    end
+    if valid then
+      local a, b = map[start], map[start+#value-1]
+      links[#links+1] = {kind='url', value=normalized, col_start=a.col,
+        col_end=b.col+1, byte_start=a.first, byte_end=b.last}
+    end
+    pos = math.max(start+1, finish)
+  end
+  return links
+end
+-- Match api_ui.c's SGR style semantics, including its all-style reset for
+-- selective style-off codes. Extended colour operands are not style codes.
+local style_bits = { [1]=1, [2]=2, [3]=4, [4]=8, [5]=16, [7]=32 }
+local function sgr_styles(params, styles)
+  local codes = {}
+  if params == '' then codes[1] = 0 end
+  local pos = 1
+  while pos <= #params do
+    local stop = params:find(';', pos, true) or (#params+1)
+    codes[#codes+1] = tonumber(params:sub(pos, stop-1)) or 0
+    pos = stop+1
+  end
+  local i = 1
+  while i <= #codes do
+    local code = codes[i]
+    if code == 0 or code == 22 or code == 23 or code == 24 or code == 25 or code == 27 then
+      styles = {}
+    elseif style_bits[code] then
+      styles[code] = true
+    elseif code == 38 or code == 48 then
+      local mode = codes[i+1]
+      i = i + (mode == 2 and 4 or (mode == 5 and 2 or 1))
+    end
+    i = i + 1
+  end
+  return styles
+end
+
+-- Spans use visible cell columns, so callers can reuse wrapped click metadata.
+-- Never replay source escapes: only underline and style restoration are added.
+function url_links.highlight(text, state, spans, excluded)
+  spans = spans or url_links.find(text)
+  local ranges = {}
+  for _, span in ipairs(spans) do
+    local overlap = false
+    for _, anchor in ipairs(excluded or {}) do
+      if span.col_start < anchor.col_end and span.col_end > anchor.col_start then
+        overlap = true
+        break
+      end
+    end
+    if not overlap then ranges[#ranges+1] = span end
+  end
+  if #ranges == 0 then return text end
+  local styles = {}
+  for code, bit in pairs(style_bits) do
+    if math.floor(((state and state.style) or 0) / bit) % 2 == 1 then styles[code] = true end
+  end
+  local actual = {}
+  for code in pairs(styles) do actual[code] = true end
+  local out, cursor, range = {}, 1, 1
+  local function restore()
+    out[#out+1] = '\27[24m'
+    for _, code in ipairs({1,2,3,4,5,7}) do
+      if styles[code] then out[#out+1] = '\27[' .. code .. 'm' end
+    end
+    actual = {}
+    for code in pairs(styles) do actual[code] = true end
+  end
+  local function escapes(fragment)
+    out[#out+1] = fragment
+    for params in fragment:gmatch('\27%[([0-9;]*)m') do
+      styles = sgr_styles(params, styles)
+      actual = sgr_styles(params, actual)
+    end
+  end
+  for _, cell in ipairs(url_links.cells(text)) do
+    escapes(text:sub(cursor, cell.first-1))
+    while ranges[range] and ranges[range].col_end <= cell.col do range = range + 1 end
+    local span = ranges[range]
+    local linked = span and cell.col >= span.col_start and cell.col < span.col_end
+    if linked then
+      if not actual[4] then out[#out+1] = '\27[4m'; actual[4] = true end
+    elseif actual[4] and not styles[4] then
+      restore()
+    end
+    out[#out+1] = text:sub(cell.first, cell.last)
+    cursor = cell.last+1
+  end
+  if actual[4] and not styles[4] then restore() end
+  out[#out+1] = text:sub(cursor)
+  return table.concat(out)
+end
 
 -- Configuration
 local config = {
@@ -134,6 +318,7 @@ local colors = {
 -- Each entry: { type = "type_id", sender = "name", text = "message", seq = N }
 local messages = {}
 local message_seq = 0  -- Sequence number for ordering
+local listeners = {}
 
 -- Protocol handler refs for cleanup
 local mip_handlers = {}
@@ -239,8 +424,38 @@ local function get_color(color_name)
   return colors[color_name] or colors.white
 end
 
--- push_notify sink, resolved in on_setup (nil when push_notify isn't loaded)
 local pushn
+local push_trigger_ids = {}
+
+-- Resolve again at delivery: the optional consumer may load late or reload.
+local function get_push_notify()
+  local current = plugin and plugin.get("push_notify")
+  if current ~= pushn then
+    pushn = current
+    if pushn and pushn.register_channel then
+      pushn.register_channel("tells", { priority = 1 })
+      pushn.register_channel("wimpy")
+      pushn.register_channel("worlddrop")
+      pushn.register_channel("artifactdrop")
+    end
+  end
+  return pushn
+end
+
+local function register_push_triggers()
+  local function add(pattern, channel, message)
+    local id = trigger.add(pattern, function(line)
+      local sink = get_push_notify()
+      if sink and sink.notify then sink.notify(channel, message or line) end
+    end, { omit_from_output = false })
+    if id then push_trigger_ids[#push_trigger_ids + 1] = id end
+  end
+  add("^Your legs run away with you (.*?)$", "wimpy", "You have wimpied.")
+  add("^You have found (.*?)!$", "worlddrop")
+  -- Portal used two spaces; also accept the current one-space spelling.
+  add("^YOWZA! {1,2}You are lucky enough to find (.*?)$", "worlddrop")
+  add("^You catch the glint of something special\\.$", "artifactdrop")
+end
 
 -- A lead-in and the body need exactly one space between them, and a prefix may
 -- or may not already end in whitespace: the built-in defaults do ("[Bob] "), a
@@ -298,9 +513,27 @@ local function add_message(msg_type, sender, text, opts)
     end
   end
 
+  -- Notify optional consumers (for example chat relay) after local filtering.
+  if not (opts and opts.remote) then
+    local listener_opts = opts or {}
+    if listener_opts.prefix == nil then
+      listener_opts = {}
+      for key, value in pairs(opts or {}) do listener_opts[key] = value end
+      listener_opts.prefix = resolve_prefix(type_cfg, {
+        type = msg_type, sender = sender, structured = structured,
+        prefix = prefix_text, prefix_from_server = prefix_from_server,
+      })
+    end
+    for _, listener in ipairs(listeners) do
+      local ok, err = pcall(listener, msg_type, sender, text, listener_opts)
+      if not ok then print("[chat_monitor] listener error: " .. tostring(err)) end
+    end
+  end
+
   -- Forward to push_notify: incoming tells/emotes and chat lines, never our
   -- own outgoing messages. push_notify applies its own per-channel gating.
-  if pushn then
+  local sink = get_push_notify()
+  if sink and sink.notify then
     local channel
     if msg_type == "tell_in" then
       channel = "tells"
@@ -314,7 +547,7 @@ local function add_message(msg_type, sender, text, opts)
         type = msg_type, sender = sender, structured = structured,
         prefix = prefix_text, prefix_from_server = prefix_from_server,
       })
-      pushn.notify(channel, join_prefix(prefix, text))
+      sink.notify(channel, join_prefix(prefix, text))
     end
   end
 
@@ -373,25 +606,28 @@ end
 -- has to be exact rather than inferred from the line lengths.
 local function word_wrap(text, width)
   if width <= 0 then return { text }, { #text } end
-  if #text <= width then return { text }, { #text } end
+  if #url_links.cells(text) <= width then return { text }, { #text } end
 
   local lines = {}
   local consumed = {}
   local remaining = text
 
   while #remaining > 0 do
-    if #remaining <= width then
+    local cells = url_links.cells(remaining)
+    local row_width = math.max(1, width - (#lines > 0 and math.min(2, width-1) or 0))
+    if #cells <= row_width then
       table.insert(lines, remaining)
       table.insert(consumed, #remaining)
       break
     end
 
     -- Find a good break point (space, hyphen, etc.)
-    local break_pos = width
+    local break_pos = cells[row_width].last
     local found_break = false
 
     -- Look backwards for a space or break character
-    for i = width, 1, -1 do
+    for index = row_width, 1, -1 do
+      local i = cells[index].last
       local c = remaining:sub(i, i)
       if c == " " or c == "-" or c == "," or c == "." or c == ":" or c == ";" then
         break_pos = i
@@ -402,7 +638,7 @@ local function word_wrap(text, width)
 
     -- If no break found, just break at width
     if not found_break then
-      break_pos = width
+      break_pos = cells[row_width].last
     end
 
     local line = remaining:sub(1, break_pos)
@@ -439,7 +675,7 @@ end
 --
 -- Each line opens with an explicit colour code, so a continuation line resumes
 -- in the right colour rather than inheriting the row's base one.
-local function paint_spans(lines, consumed, spans)
+local function paint_spans(lines, consumed, spans, source)
   local bounds, acc = {}, 0
   for _, span in ipairs(spans) do
     if span.len > 0 then
@@ -452,12 +688,17 @@ local function paint_spans(lines, consumed, spans)
   local painted = {}
   local offset = 0
   for i, line in ipairs(lines) do
-    local opening = bounds[1].code
+    local opening, span_start = bounds[1].code, 0
     for _, bound in ipairs(bounds) do
-      if bound.at <= offset then opening = bound.code end
+      if bound.at <= offset then opening, span_start = bound.code, bound.at end
+    end
+    -- Inline ANSI in a message must also resume after a word-wrap boundary.
+    local carry = {}
+    for code in source:sub(span_start+1, offset):gmatch("\27%[[0-9;]*m") do
+      carry[#carry+1] = code
     end
 
-    local parts, cursor = { opening }, 0
+    local parts, cursor = { opening, table.concat(carry) }, 0
     for _, bound in ipairs(bounds) do
       local rel = bound.at - offset
       if rel > 0 and rel < #line then
@@ -501,19 +742,41 @@ local function logical_message(msg)
 end
 
 local function wrap_msg(msg, width)
-  local color_code, plain, spans = logical_message(msg)
-  local lines, consumed = word_wrap(plain, width)
-  return color_code, paint_spans(lines, consumed, spans)
+  local color_code, source, spans = logical_message(msg)
+  local lines, consumed = word_wrap(source, width)
+  local detected, row_links, offset = url_links.find(source), {}, 0
+  for i, line in ipairs(lines) do
+    row_links[i] = {}
+    for _, link in ipairs(detected) do
+      local first = math.max(link.byte_start, offset + 1)
+      local last = math.min(link.byte_end, offset + #line)
+      if first <= last then
+        row_links[i][#row_links[i]+1] = {
+          value = link.value, message = msg, source_start = link.byte_start,
+          col_start = #url_links.cells(line:sub(1, first-offset-1)),
+          col_end = #url_links.cells(line:sub(1, last-offset)),
+        }
+      end
+    end
+    offset = offset + consumed[i]
+  end
+
+  local painted = paint_spans(lines, consumed, spans, source)
+  for i, line in ipairs(painted) do
+    painted[i] = url_links.highlight(line, nil, row_links[i])
+  end
+  return color_code, painted, row_links
 end
 
 -- Wrap one message and append its rows to the cache. Returns the row count,
 -- which is also recorded on the message for trim accounting.
 function wrapped_append(msg, width)
-  local color_code, lines = wrap_msg(msg, width)
+  local color_code, lines, row_links = wrap_msg(msg, width)
   for j = 1, #lines do
     wrapped.last = wrapped.last + 1
     wrapped.lines[wrapped.last] = {
       text = lines[j],
+      links = row_links[j],
       color_code = color_code,
       is_continuation = (j > 1),
     }
@@ -703,6 +966,21 @@ local function invalidate_wrapped_formatting()
   wrapped.width = nil
 end
 
+function M.on_message(callback)
+  if type(callback) ~= "function" then return false end
+  listeners[#listeners + 1] = callback
+  return true
+end
+
+function M.receive(msg_type, sender, text, prefix)
+  return add_message(msg_type, sender, text, {
+    remote = true,
+    structured = true,
+    prefix = prefix or "",
+    prefix_from_server = true,
+  })
+end
+
 -- Configure any line type (built-in or chat)
 -- type_id: "tell_in", "tell_out", "emote_in", "emote_out", or "chat_<command>"
 -- opts: { color = "color_name", label = "Display Name", prefix = function, enabled = true/false }
@@ -860,12 +1138,17 @@ function M.count()
   return #messages
 end
 
+local link_capture
+local pointer_border = 1
+
 -- Scroll the chat pane by wrapped rows. delta < 0 = up/older.
 function M.scroll(delta)
+  link_capture = nil
   sc.scroll(delta)
 end
 
 function M.scroll_to_bottom()
+  link_capture = nil
   sc.scroll_to_bottom()
 end
 
@@ -961,7 +1244,7 @@ function companion_provider.page(req)
     local msg = messages[i]
     if msg then
       local _, plain, spans = logical_message(msg)
-      records[#records+1] = {id=companion_id(msg),text=paint_spans({plain},{#plain},spans)[1]}
+      records[#records+1] = {id=companion_id(msg),text=paint_spans({plain},{#plain},spans,plain)[1]}
     end
   end
   return {epoch=epoch,records=records,oldest=companion_id(messages[1]),latest=companion_id(messages[#messages]),
@@ -976,7 +1259,7 @@ local function draw_row(x, y, w, line)
   if not line then return end
   local display_text
   if line.is_continuation then
-    display_text = line.color_code .. "  " .. line.text .. colors.reset
+    display_text = line.color_code .. string.rep(" ", math.min(2, math.max(0, w-1))) .. line.text .. colors.reset
   else
     display_text = line.color_code .. line.text .. colors.reset
   end
@@ -1012,12 +1295,88 @@ local function build_transient(width, need_rows)
   return list
 end
 
+-- wm supplies zero-based pane-local coordinates, including the border.
+local function link_at(event)
+  local trace = event.url_trace
+  if event.inside == false then return nil end
+  local border = pointer_border
+  local w, h = event.width - 2*border, event.height - 2*border
+  local x, y = event.x - border, event.y - border
+  if w <= 0 or h <= 0 or x < 0 or x >= w or y < 0 or y >= h then return nil end
+  wrapped_ensure(w)
+  local offset = sc.offset()
+  if trace then
+    trace.pane, trace.width, trace.height, trace.offset = "chat", w, h, offset
+  end
+  if offset > 0 and y == h-1 then
+    local length = #string.format(" [+%d] ", offset)
+    if x >= w-length-1 and x < w-1 then return nil end
+  end
+  local index = wrapped.last - offset - (h-1-y)
+  local row = index >= wrapped.first and wrapped.lines[index]
+  if not row then return nil end
+  x = x - (row.is_continuation and math.min(2, w-1) or 0)
+  if trace then
+    local _, plain = url_links.cells(row.text)
+    local _, www = plain:lower():gsub("www%.", "")
+    local _, controls = plain:gsub("%c", "")
+    trace.cell, trace.plain, trace.www, trace.controls = x, #(row.links or {}), www, controls
+  end
+  for _, link in ipairs(row.links or {}) do
+    if x >= link.col_start and x < link.col_end then
+      if trace then trace.hit = "plain-url" end
+      return link
+    end
+  end
+end
+
+function M.on_pointer(event)
+  if event.kind == "cancel" then link_capture = nil; return false end
+  if event.kind == "move" then
+    if link_capture and (event.x ~= link_capture.x or event.y ~= link_capture.y) then
+      link_capture.cancelled = true
+    end
+    return false
+  end
+  if event.kind == "down" then
+    link_capture = nil
+    if event.button ~= "left" then return false end
+    local link = link_at(event)
+    if not link then return false end
+    link_capture = { link=link, x=event.x, y=event.y,
+      width=event.width, height=event.height }
+    return true
+  end
+  if event.kind == "up" then
+    local capture = link_capture
+    link_capture = nil
+    if event.url_trace then
+      event.url_trace.activation = not capture and "no-capture"
+        or (capture.cancelled and "drag-cancelled" or "not-matched")
+    end
+    if not capture or capture.cancelled or event.button ~= "left" then return false end
+    if event.width ~= capture.width or event.height ~= capture.height then
+      if event.url_trace then event.url_trace.activation = "geometry-changed" end
+      return false
+    end
+    local link = link_at(event)
+    if link and link.message == capture.link.message
+       and link.source_start == capture.link.source_start and link.value == capture.link.value then
+      local ok, err = mxp.open_url(link.value)
+      if event.url_trace then event.url_trace.activation = ok and "opened" or "opener-failed" end
+      if not ok then print("[chat] " .. (err or "could not open URL")) end
+    end
+  end
+  return false
+end
+
 -- Render the chat monitor in a given rect
 -- rect: { x, y, w, h } or rect object with :x(), :y(), :w(), :h() methods
 -- opts: { show_border = true, title = "Chat" }
 function M.render(rect, opts)
   opts = opts or {}
   local show_border = opts.show_border ~= false
+  if lera.render_pass() ~= "remote" then pointer_border = show_border and 1 or 0 end
   local title = opts.title or "Chat"
 
   -- Get rect dimensions
@@ -1337,6 +1696,7 @@ function M.on_load()
     wrapped_reset()
   end
 
+
   -- Register MIP handlers
   table.insert(mip_handlers, mip.on("BAB", handle_tell))
   table.insert(mip_handlers, mip.on("BAG", handle_emote))
@@ -1348,6 +1708,7 @@ function M.on_load()
   local gmcp_id = gmcp.on("Comm", handle_gmcp_comm)
   if gmcp_id then table.insert(gmcp_handlers, gmcp_id) end
 
+  register_push_triggers()
   register_command()
 end
 
@@ -1367,13 +1728,14 @@ function M.on_disconnect()
 end
 
 function M.on_setup()
-  pushn = plugin.get("push_notify")
-  if pushn and pushn.register_channel then
-    pushn.register_channel("tells", { priority = 1 })
-  end
+  get_push_notify()
 end
 
 function M.on_unload()
+  for _, id in ipairs(push_trigger_ids) do trigger.remove(id) end
+  push_trigger_ids = {}
+  pushn = nil
+
   -- Unregister protocol handlers
   for _, handler_id in ipairs(mip_handlers) do
     mip.off(handler_id)

@@ -284,14 +284,22 @@ local S = require("state").S
 
 page_opts.set("show_city_plan", true)
 local city_lines = window.PAGES[2].mod.lines(80) -- city
-local city_placeholder_found = false
+-- The City page no longer points at the popup: it renders the plan inline,
+-- through popups.cityplan.inline_lines(). With no plan data loaded that is the
+-- section header plus the "view it in-game" line, which is what proves the
+-- section is present rather than a one-line pointer to /vik cityplan.
+local city_plan_header, city_plan_nodata, stale_pointer = false, false, false
 for _, l in ipairs(city_lines) do
-  if l:find("City plan: /vik cityplan", 1, true) then city_placeholder_found = true end
+  if l:find("City Plan", 1, true) then city_plan_header = true end
+  if l:find("No data", 1, true) then city_plan_nodata = true end
+  if l:find("City plan: /vik cityplan", 1, true) then stale_pointer = true end
   if l:find("(stage 3)", 1, true) then
     check("city.lua placeholder no longer says (stage 3)", false, l)
   end
 end
-check("city.lua placeholder text updated", city_placeholder_found)
+check("city.lua renders the City Plan section inline", city_plan_header)
+check("city.lua shows the no-data line when no plan has loaded", city_plan_nodata)
+check("city.lua no longer points at the popup", not stale_pointer)
 
 -- war.lua's placeholder only appears once the campaign map has active data
 -- (M.lines gates campaign_map_lines on S.war_map.active) -- minimal seed,

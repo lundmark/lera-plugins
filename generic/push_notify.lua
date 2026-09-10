@@ -24,6 +24,7 @@
 
 local M = {}
 M.name = "push_notify"
+M.version = "1.0"
 M.priority = 50
 
 -- require("command") is optional: a profile that never required 'commands' has

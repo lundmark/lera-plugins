@@ -22,6 +22,7 @@ local config = {
   auto_use_stamina_threshold = 80,
   auto_use_ap_threshold = 80,
   auto_use_cooldown_seconds = 4,
+  omit_status_lines = true,
 }
 
 local valid_abilities = {
@@ -31,6 +32,7 @@ local valid_abilities = {
 }
 
 local auto_use_last_time = 0
+local omit_trigger_ids = {}
 
 -- ---- helpers ---------------------------------------------------------------
 
@@ -196,6 +198,29 @@ function M.set_auto_use_cooldown(seconds)
   return false
 end
 
+function M.omit_status_lines() return config.omit_status_lines end
+local function rebuild_omit_triggers()
+  for _, id in ipairs(omit_trigger_ids) do trigger.remove(id) end
+  omit_trigger_ids = {}
+  if not config.omit_status_lines then return end
+
+  -- These are the three legacy MercenaryStats output lines. The GMCP pane
+  -- already renders the same state, so hide only complete matching lines.
+  for _, pattern in ipairs({
+    "^\\[.+?\\] HP:[0-9]+/[0-9]+\\([0-9]+%\\) Stam:[0-9]+/[0-9]+\\([0-9]+%\\)\\+[0-9]+ AP:[0-9]+/[0-9]+\\([0-9]+%\\)\\+[0-9]+.*$",
+    "^PL:[0-9]+\\([0-9]+/[0-9]+\\) IL:[0-9]+\\([0-9]+/[0-9]+\\) Cost:[0-9]+ Type:[^ ]+ Follow:[^ ]+.*$",
+    "^Fund:[0-9,]+ Spent:[0-9,]+ Target:.+$",
+  }) do
+    local id = trigger.add(pattern, function() end, { omit_from_output = true })
+    if id then omit_trigger_ids[#omit_trigger_ids + 1] = id end
+  end
+end
+function M.set_omit_status_lines(enabled)
+  config.omit_status_lines = enabled and true or false
+  rebuild_omit_triggers()
+  return config.omit_status_lines
+end
+
 function M.get_auto_use_config()
   return {
     enabled = config.auto_use_enabled,
@@ -234,10 +259,10 @@ function M.on_load()
     if data.auto_use_ap_threshold then
       config.auto_use_ap_threshold = data.auto_use_ap_threshold
     end
-    if data.auto_use_cooldown_seconds then
-      config.auto_use_cooldown_seconds = data.auto_use_cooldown_seconds
-    end
+    if data.auto_use_cooldown_seconds then config.auto_use_cooldown_seconds = data.auto_use_cooldown_seconds end
+    if data.omit_status_lines ~= nil then config.omit_status_lines = data.omit_status_lines end
   end
+  rebuild_omit_triggers()
 
   protocol.on_apply(function(sub, mirror, merc, switched)
     state.apply(sub, mirror, merc, switched)
@@ -258,6 +283,8 @@ function M.on_disconnect()
 end
 
 function M.on_unload()
+  for _, id in ipairs(omit_trigger_ids) do trigger.remove(id) end
+  omit_trigger_ids = {}
   commands.uninstall()
   protocol.unsubscribe()
   store.set({
@@ -266,6 +293,7 @@ function M.on_unload()
     auto_use_stamina_threshold = config.auto_use_stamina_threshold,
     auto_use_ap_threshold = config.auto_use_ap_threshold,
     auto_use_cooldown_seconds = config.auto_use_cooldown_seconds,
+    omit_status_lines = config.omit_status_lines,
   })
   store.save()
 end

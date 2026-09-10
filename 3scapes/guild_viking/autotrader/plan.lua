@@ -501,6 +501,13 @@ function M.build()
     at.last_msg  = table.concat(labels, "; ")
     at.status    = nil   -- dispatched something; the "Last run" line tells the story
     core.log(jobs)
+  elseif #cand == 0 then
+    -- The "budget/reserve" message below only makes sense once there is at
+    -- least one candidate to have rejected -- daler reserve is an
+    -- arbitrage-only concept (dispatch_stock_sell never touches it), so
+    -- printing it here previously implied reserve was blocking a stock sell
+    -- when in fact nothing was ever found to try in the first place.
+    at.status = "no stock or arbitrage candidates found -- check demand, cure/freshness, and blocks (vtrade block)"
   else
     at.status = string.format(
       "%d deal(s) found but none affordable after reserve (budget %dd) -- lower reserve/margin/min-profit or raise carts",

@@ -69,17 +69,20 @@ local expected_pages = {
   { key = "war",    label = "War" },
   { key = "trade",  label = "Trade" },
   { key = "stock",  label = "Stock" },
+  { key = "sea",    label = "Sea" },
 }
-check("PAGES has 13 entries", #window.PAGES == 13, #window.PAGES)
+check("PAGES has 14 entries", #window.PAGES == 14, #window.PAGES)
 local pages_ok = true
 for i, exp in ipairs(expected_pages) do
   local got = window.PAGES[i]
   if not got or got.key ~= exp.key or got.label ~= exp.label then pages_ok = false end
 end
-check("PAGES keys/labels match the thirteen stage-2 pages", pages_ok)
+check("PAGES keys/labels match the fourteen Viking tabs", pages_ok)
 check("every PAGES entry is a valid page module (stats real, the rest placeholder)", (function()
   for _, p in ipairs(window.PAGES) do
-    if type(p.mod) ~= "table" or type(p.mod.lines) ~= "function" then return false end
+    if type(p.mod) ~= "table" or type(p.mod.lines) ~= "function" then
+      return false
+    end
   end
   return true
 end)())
@@ -91,7 +94,7 @@ local function find_page(key)
   end
 end
 
--- ---- tab bar: all thirteen labels rendered, current highlighted ------------
+-- ---- tab bar: all fourteen labels rendered, current highlighted ------------
 reset_drawn()
 window.render(make_rect(0, 0, 100, 5), {})
 check("tab bar drew at least the header row", #drawn.ansi >= 1)
@@ -100,7 +103,7 @@ local all_present = true
 for _, p in ipairs(expected_pages) do
   if not tabrow:find(p.label, 1, true) then all_present = false end
 end
-check("tab bar contains all thirteen labels", all_present, tabrow)
+check("tab bar contains all fourteen labels", all_present, tabrow)
 check("current tab (Stats) is reverse-video highlighted",
       tabrow:find("\27%[7mStats\27%[27m") ~= nil, tabrow)
 check("non-current tab (City) is not reverse-video wrapped",

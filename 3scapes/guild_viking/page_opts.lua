@@ -36,6 +36,7 @@ page_opts.defaults = {
   show_goods_atlog=false,
   auto_trade=false,   -- on/off for the client arbitrage trader (was missing here,
                       -- so it never saved/loaded via the popt_ loop below)
+  auto_battle=false,  -- on/off for the client-side Auto-War command runner
   auto_voyage=false,  -- on/off for the client-side auto-voyager
   av_verbose=false,   -- echo each auto-voyage action to the main window
   show_map_towns=true,

@@ -207,6 +207,7 @@ local function reset_all()
   S.raid_targets = nil
   S.raid_targets_lin = nil
   S.raid_targets_hist = nil
+  S.heat = nil
   mud_connected = true
   sent = {}
   printed = {}
@@ -230,21 +231,18 @@ check("available_ships: only docked AND not-held ships qualify",
       end)())
 
 -- Merge dedup: a ship present in BOTH LONGSHIP and SHIPS is one entry, and
--- (LEGACY quirk, ported verbatim -- see module header) the merge does NOT
--- copy `.held` onto an already-found voyage_longships record -- only a ship
--- absent from LONGSHIP keeps its own SHIPS `.held`.
+-- the SHIPS-side held flag is preserved so a reserved ship cannot be raided.
 reset_all()
 set_longships({ longship_entry({ sid = "1", name = "Drakkar", state = "docked" }) })
 set_ships({ ship_entry({ name = "Drakkar", state = "docked", held = "1" }),
             ship_entry({ name = "Solo", state = "docked", held = "1" }) })
 check("merged_ships: dedups by name across LONGSHIP+SHIPS (2 entries, not 3)",
       #ar.merged_ships() == 2)
-check("available_ships: Drakkar's SHIPS-side held=1 is dropped by the merge -- "
-      .. "counted available (LEGACY quirk, ported verbatim)",
+check("available_ships: Drakkar's SHIPS-side held=1 is preserved by the merge",
       (function()
         local avail = ar.available_ships()
-        for _, sh in ipairs(avail) do if sh.name == "Drakkar" then return true end end
-        return false
+        for _, sh in ipairs(avail) do if sh.name == "Drakkar" then return false end end
+        return true
       end)())
 check("available_ships: Solo (SHIPS-only, held=1 intact) is correctly excluded",
       (function()
@@ -592,6 +590,76 @@ check("tick/branch: last_dispatch records convoy=true", ar.settings().last_dispa
 check("tick/branch: note text -- plural \"ships\" AND the convoy suffix",
       printed[1] == "[Auto-Raid] sent 2 ships to Uppsala (convoy)", printed[1])
 
+-- =============================================================================
+-- Rotate mode: ar.mode == "rotate" picks a lineage-city target by heat
+-- instead of using ar.target, gated the same as fixed mode otherwise.
+-- S.heat is 1-based by lineage id (client.h's _v_heat()); poked directly
+-- here, same documented direct-poke exception as S.autoraid itself (this
+-- suite has no reason to round-trip the real HEAD/HEAT wire handler just to
+-- seed a read-only fixture that pick_rotate_target only ever reads).
+-- =============================================================================
+
+-- ---- rotate mode with no target set still sends (target only gates fixed
+-- mode) -----------------------------------------------------------------
+reset_all()
+page_opts.set("auto_raid", true)
+set_ships({ ship_entry({ name = "Drakkar1", state = "docked" }) })
+ar.settings().mode = "rotate"
+-- All 13 seeded: an unseeded lineage reads 0 via pick_rotate_target's own
+-- `or 0` fallback and would win as "coldest", so a partial fixture would
+-- test the fallback rather than the heat ordering.
+S.heat = { 50, 10, 30, 60, 70, 80, 90, 55, 65, 75, 85, 95, 45 }
+open_interval()
+ar.tick()
+check("tick/rotate: empty ar.target does not block rotate mode",
+      #sent == 1, table.concat(sent, "|"))
+check("tick/rotate: picks the lowest-heat town (lineage 2 = Eiriksby)",
+      sent[1] == "vlongship raid Drakkar1 Eiriksby", sent[1])
+check("tick/rotate: records last_rotate for next tick's exclusion",
+      ar.settings().last_rotate == "Eiriksby", ar.settings().last_rotate)
+
+-- ---- rotate mode excludes the immediately-previous pick when a
+-- within-band alternative exists ----------------------------------------
+reset_all()
+page_opts.set("auto_raid", true)
+set_ships({ ship_entry({ name = "Drakkar1", state = "docked" }) })
+ar.settings().mode = "rotate"
+ar.settings().last_rotate = "Eiriksby"
+-- Lineages 2 (Eiriksby) and 3 (Imaird) tie at the minimum heat (10); every
+-- other town sits far outside AR_ROTATE_HEAT_BAND (5) of that minimum. With
+-- Eiriksby excluded as the last pick, Imaird is the only one left in the
+-- pool, so the pick is deterministic despite the random tie-break.
+S.heat = { 50, 10, 10, 60, 70, 80, 90, 55, 65, 75, 85, 95, 45 }
+open_interval()
+ar.tick()
+check("tick/rotate: excludes the immediately-previous pick from a tied pool",
+      sent[1] == "vlongship raid Drakkar1 Imaird", sent[1])
+
+-- ---- rotate mode still allows repeating the previous pick when it is the
+-- ONLY town within the heat band (no alternative exists) -----------------
+reset_all()
+page_opts.set("auto_raid", true)
+set_ships({ ship_entry({ name = "Drakkar1", state = "docked" }) })
+ar.settings().mode = "rotate"
+ar.settings().last_rotate = "Eiriksby"
+S.heat = { 90, 10, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90 }
+open_interval()
+ar.tick()
+check("tick/rotate: repeats the previous pick when it is the only one in band",
+      sent[1] == "vlongship raid Drakkar1 Eiriksby", sent[1])
+
+-- ---- fixed mode is unaffected: ar.target still gates, ar.mode defaults
+-- to "fixed" -------------------------------------------------------------
+reset_all()
+page_opts.set("auto_raid", true)
+set_ships({ ship_entry({ name = "Drakkar1", state = "docked" }) })
+check("rotate: ar.mode defaults to \"fixed\"", ar.settings().mode == "fixed")
+ar.settings().target = ""
+open_interval()
+ar.tick()
+check("tick/rotate: fixed mode with empty target still blocks (unchanged gate)",
+      #sent == 0)
+
 print(string.format("\n%d failures so far (tick)", failures))
 
 -- =============================================================================
@@ -605,7 +673,7 @@ ar.config("on")
 check("config/on: exact ON reply", printed[1] == "[Auto-Raid] ON.", printed[1])
 check("config/on: flag flipped", page_opts.get("auto_raid") == true)
 check("config/on: trailing status line",
-      printed[2] == "[Auto-Raid] ON | ships 2 | convoy no | target (none)", printed[2])
+      printed[2] == "[Auto-Raid] ON | mode fixed | ships 2 | convoy no | target (none)", printed[2])
 -- Persistence-on-toggle: OnPluginSaveState() (LEGACY:4289) is an IMMEDIATE
 -- persist.save() -- prove the store snapshot reflects the flip right away,
 -- not merely that the in-memory flag flipped.
@@ -645,7 +713,7 @@ printed = {}
 ar.settings().ships = 2
 ar.config("ships all")
 check("config/\"ships all\": digit-only grammar rejects it -- falls through to the usage error",
-      printed[1] == "[Auto-Raid] usage: araid on|off | convoy on|off | ships <n>|all | target <name>",
+      printed[1] == "[Auto-Raid] usage: araid on|off | convoy on|off | ships <n>|all | target <name> | mode fixed|rotate",
       printed[1])
 check("config/\"ships all\": no state disturbed", ar.settings().ships == 2)
 
@@ -659,7 +727,7 @@ local ok_bad = pcall(ar.config, "bogus")
 check("config/bogus: does not error", ok_bad)
 check("config/bogus: exact usage message, no trailing status line",
       #printed == 1 and printed[1] == "[Auto-Raid] usage: araid on|off | convoy on|off | "
-        .. "ships <n>|all | target <name>", printed[1])
+        .. "ships <n>|all | target <name> | mode fixed|rotate", printed[1])
 
 printed = {}
 ar.config("status")
@@ -696,14 +764,14 @@ page_opts.set("auto_raid", false)
 reset_all()
 last_menu_open = nil
 ar.raid_command("")
-check("menu: 5 items, LEGACY's araid_menu_build order",
-      last_menu_open and #last_menu_open.items == 5, last_menu_open and #last_menu_open.items)
+check("menu: 6 items, LEGACY's araid_menu_build order plus the Mode entry",
+      last_menu_open and #last_menu_open.items == 6, last_menu_open and #last_menu_open.items)
 if last_menu_open then
   local labels = menu_item_labels(last_menu_open)
   check("menu: item labels reflect default settings (dock defaults to tier 1, cap 2)",
         labels[1] == "Auto-Raid: off" and labels[2] == "Convoy: no"
-          and labels[3] == "Ships to send (max 2): 2" and labels[4] == "Target: (pick)"
-          and labels[5] == "Show raid log: yes",
+          and labels[3] == "Ships to send (max 2): 2" and labels[4] == "Mode: fixed"
+          and labels[5] == "Target: (pick)" and labels[6] == "Show raid log: yes",
         table.concat(labels, "|"))
 end
 
@@ -779,8 +847,10 @@ end
 printed = {}
 last_menu_open.on_select("lin_1")
 check("menu/target: picking a lineage entry sets the target -- exact reply",
-      printed[1] == "[Auto-Raid] target = Uppsala", printed[1])
+      printed[1] == "[Auto-Raid] target = Uppsala (mode = fixed)", printed[1])
 check("menu/target: target actually set", ar.settings().target == "Uppsala")
+check("menu/target: picking an explicit target forces mode back to fixed",
+      ar.settings().mode == "fixed")
 check("menu/target: picking does NOT persist either (LEGACY quirk, ported verbatim)",
       stored == nil)
 check("menu/target: reopens the settings menu afterward",

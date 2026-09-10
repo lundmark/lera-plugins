@@ -69,6 +69,13 @@ local LABEL_COLORS = {
 
 local BAR_MAX, BAR_MIN = 500, -500
 
+-- Fixed column widths. Every cell is padded with pagelib.trunc (ANSI-aware,
+-- pads as well as truncates) so the bars, scores and labels line up down the
+-- page instead of floating with the length of each lineage name.
+local ST_NAME_W  = 20   -- marker + lineage name
+local ST_BAR_W   = 18
+local ST_SCORE_W = 6    -- "+500" / "-500"
+
 local function standing_row(width, s)
   local lbl = s.label or "Neutral"
   local lbl_col = LABEL_COLORS[lbl] or C.dim
@@ -78,18 +85,21 @@ local function standing_row(width, s)
   -- Own lineage: gold-ish name (0x00CCFF decodes to (R=CC,G=CC,B=00), a
   -- yellow-gold); others: light grey (0xCCCCCC) -- guild_viking.lua:12893-12898.
   local name_col = s.is_own and C.yellow or C.white
-  local left = marker .. name_col .. (s.name or "?") .. pagelib.RESET
+  local left = pagelib.trunc(marker .. name_col .. (s.name or "?") .. pagelib.RESET,
+                             ST_NAME_W)
 
   -- Zero-centered relation normalized to a single left-to-right fill -- see
   -- the module header's disclosed simplification.
-  local bar = pagelib.bar(18, score - BAR_MIN, BAR_MAX - BAR_MIN, lbl_col)
+  local bar = pagelib.bar(ST_BAR_W, score - BAR_MIN, BAR_MAX - BAR_MIN, lbl_col)
   local score_str = (score >= 0 and "+" or "") .. tostring(score)
-  local mid = left .. "  " .. bar .. "  " .. lbl_col .. score_str .. pagelib.RESET
+  -- Right-align the score in its column so the digits stack.
+  local score_pad = ST_SCORE_W - #score_str
+  if score_pad < 0 then score_pad = 0 end
+  local score_cell = string.rep(" ", score_pad)
+    .. lbl_col .. score_str .. pagelib.RESET
 
-  local label_part = lbl_col .. lbl .. pagelib.RESET
-  local pad = width - pagelib.visible_width(mid) - pagelib.visible_width(label_part)
-  if pad < 1 then pad = 1 end
-  return pagelib.trunc(mid .. string.rep(" ", pad) .. label_part, width)
+  local mid = left .. " " .. bar .. " " .. score_cell .. "  "
+  return pagelib.trunc(mid .. lbl_col .. lbl .. pagelib.RESET, width)
 end
 
 local function standings_lines(add, width)
@@ -124,22 +134,28 @@ local RANK_NAMES = { [0] = "Framandi", [1] = "Gestur", [2] = "Kaupmadur", [3] = 
 local RANK_COLORS = { [0] = C.dim, [1] = C.white, [2] = C.yellow, [3] = C.green,
   [4] = C.bright_green, [5] = C.bright_cyan, [6] = C.magenta, [7] = C.red }
 
+-- Same fixed-column treatment as the standings block above.
+local VR_NAME_W = 18
+local VR_RANK_W = 11   -- longest rank name is "Kaupmadur"/"Framandi"
+local VR_BAR_W  = 16
+
 local function vrep_row(width, vr)
   local rn = RANK_NAMES[vr.rank] or "Framandi"
   local rc = RANK_COLORS[vr.rank] or C.dim
-  local left = rc .. (vr.name or "?") .. pagelib.RESET .. "  " .. rc .. rn .. pagelib.RESET
+  local left = pagelib.trunc(rc .. (vr.name or "?") .. pagelib.RESET, VR_NAME_W)
+    .. pagelib.trunc(rc .. rn .. pagelib.RESET, VR_RANK_W)
 
   if (vr.next_at or 0) > 0 then
     local range = (vr.next_at or 0) - (vr.start_at or 0)
     local progress = (vr.rep or 0) - (vr.start_at or 0)
     if progress < 0 then progress = 0 end
     if range > 0 and progress > range then progress = range end
-    local bar = pagelib.bar(16, progress, range > 0 and range or 1, C.green)
-    return pagelib.trunc(left .. "  " .. bar .. " " .. progress .. "/" .. range, width)
+    local bar = pagelib.bar(VR_BAR_W, progress, range > 0 and range or 1, C.green)
+    return pagelib.trunc(left .. bar .. " " .. progress .. "/" .. range, width)
   end
 
   -- Max rank: full bar, "MAX" (guild_viking.lua:12968-12971).
-  return pagelib.trunc(left .. "  " .. pagelib.bar(16, 1, 1, C.green) ..
+  return pagelib.trunc(left .. pagelib.bar(VR_BAR_W, 1, 1, C.green) ..
     " " .. C.bright_green .. "MAX" .. pagelib.RESET, width)
 end
 

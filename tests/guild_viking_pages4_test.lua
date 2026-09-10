@@ -324,16 +324,23 @@ check("army: Levy header shows conscript count",
       army_all:find("Levy", 1, true) ~= nil and army_all:find("42 conscripts", 1, true) ~= nil, army_all)
 check("army: Units header shows used/cap", army_all:find("Units", 1, true) ~= nil and
       army_all:find("(6 / 10)", 1, true) ~= nil, army_all)
-check("army: unit 1 shows type and size", army_all:find("skirmishers x12", 1, true) ~= nil, army_all)
+-- The unit rows are laid out in fixed columns now, so type/size and
+-- "led by"/leader are no longer adjacent -- padding and colour resets sit
+-- between them. Collapse runs of whitespace (and strip ANSI) before matching,
+-- which keeps these assertions about FIELD ORDER rather than exact spacing.
+local army_flat = strip_ansi(army_all):gsub("%s+", " ")
+-- Unit types are title-cased for display now ("shieldwall" -> "Shieldwall"),
+-- so these assert the rendered label rather than the raw wire value.
+check("army: unit 1 shows type and size", army_flat:find("Skirmishers x12", 1, true) ~= nil, army_flat)
 check("army: unit 1 status is 'ready'", army_all:find("ready", 1, true) ~= nil, army_all)
-check("army: unit 1 leader is named", army_all:find("led by Ivar", 1, true) ~= nil, army_all)
+check("army: unit 1 leader is named", army_flat:find("led by Ivar", 1, true) ~= nil, army_flat)
 check("army: unit 1 veterancy bar shows 55%", army_all:find("55%", 1, true) ~= nil, army_all)
 check("army: unit 1 traits line names both traits",
       army_all:find("Blooded", 1, true) ~= nil and army_all:find("Scarred", 1, true) ~= nil, army_all)
 check("army: unit 2 status is 'training' (no leader -> '-')",
-      army_all:find("huscarls x8", 1, true) ~= nil and
-      army_all:find("training", 1, true) ~= nil and
-      army_all:find("led by -", 1, true) ~= nil, army_all)
+      army_flat:find("Huscarls x8", 1, true) ~= nil and
+      army_flat:find("training", 1, true) ~= nil and
+      army_flat:find("led by -", 1, true) ~= nil, army_flat)
 
 -- ---- Gate off -----------------------------------------------------------------
 page_opts.set("show_army_levy", false)
@@ -442,8 +449,13 @@ check("war: War Captives header shows held/cap",
       prison_all:find("War Captives  (2/5 held)", 1, true) ~= nil, prison_all)
 check("war: pending-judgement line names the captive and 'commander'",
       prison_all:find("Awaiting judgement: Ragnar  (8, commander)", 1, true) ~= nil, prison_all)
+-- The captive roster is laid out in fixed columns now, so the fields are no
+-- longer adjacent and the size reads "x3" rather than "(3)". Match against an
+-- ANSI-stripped, whitespace-collapsed copy so this still asserts field ORDER
+-- without pinning the spacing.
+local prison_flat = strip_ansi(prison_all):gsub("%s+", " ")
 check("war: roster row shows id/name/size/ransom",
-      prison_all:find("1) Thrall A (3)  ransom 50d", 1, true) ~= nil, prison_all)
+      prison_flat:find("1) Thrall A x3 ransom 50d", 1, true) ~= nil, prison_flat)
 check("war: kin-held-by-foe line", prison_all:find("Our kin held by the foe: 1", 1, true) ~= nil, prison_all)
 check("war: siege engines line", prison_all:find("Siege engines: 2/4", 1, true) ~= nil, prison_all)
 

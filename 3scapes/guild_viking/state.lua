@@ -67,6 +67,7 @@ local state = {
   cart_upgrades = {},  -- { cart_id, target_tier, secs_left, mats_total, mats_done, mats, target_refit, job_type }
   ships      = {},   -- { name, tier, state, target, return_in, ship_id, crew }
   wstock     = {},   -- { good, amount, freshness_pct }
+  wh_cap     = nil,  -- real warehouse capacity incl. steward/lager/star bonuses
   cellar     = {},   -- { stock, cap, tier, lots={{qty, pct}, ...} }
   market_orders = {},  -- { id, buyer, good, remaining, price, age_secs }
   vfind = { tier = 0, postings = {}, offers = {}, auctions = {} },

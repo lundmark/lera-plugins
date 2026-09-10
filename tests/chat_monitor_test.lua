@@ -34,6 +34,10 @@ store = {
   set = function(data) stored_chat = data end,
   save = function() end,
 }
+trigger = {
+  add = function() return 1 end,
+  remove = function() end,
+}
 local mip_handlers = {}
 mip = {
   on = function(code, fn) mip_handlers[code] = fn; return code end,

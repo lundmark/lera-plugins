@@ -249,6 +249,17 @@ check("hp_bar_3 heal category", S.stfx[3].name == "bles" and S.stfx[3].cat == "H
 hp_bar_3.fn("[]", "")
 check("hp_bar_3 empty clears stfx", #S.stfx == 0)
 
+-- Heimdall vital-sight enchantments are purple/offensive in the STFX
+-- presentation, rather than falling through to the red DoT default or the
+-- cyan defensive category.
+hp_bar_3.fn("[bro:12 gul:18]", "bro:12 gul:18")
+check("hp_bar_3 Broddsjón uses purple/off category",
+      S.stfx[1].name == "bro" and S.stfx[1].cat == "Off"
+      and S.stfx[1].cs == "#DD44DD")
+check("hp_bar_3 Gullsjón uses purple/off category",
+      S.stfx[2].name == "gul" and S.stfx[2].cat == "Off"
+      and S.stfx[2].cs == "#DD44DD")
+
 -- unknown tag falls back to STFX_DEFAULT
 hp_bar_3.fn("[zzz:12]", "zzz:12")
 check("hp_bar_3 unknown tag uses default meta", S.stfx[1].cat == "DoT" and S.stfx[1].cs == "#FF5555")

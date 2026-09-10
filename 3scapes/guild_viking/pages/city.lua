@@ -108,9 +108,15 @@ local function longship_lines(add, width)
     if sh.target and sh.target ~= "" and sh.state ~= "docked" then
       target = " -> " .. sh.target .. ((sh.convoy == 1) and " (convoy)" or "")
     end
-    add(pagelib.trunc(string.format("%-12s %-10s %s%s%s%s  Crew:%s%d/%d%s",
-      sh.name or "?", tier_name, state_color, sh.state or "docked", pagelib.RESET, target,
-      crew_color, crew, crew_max, pagelib.RESET), width))
+    -- Name and tier were already %-padded, but the state was not -- so
+    -- "Crew:" slid with the length of "docked"/"returning"/"upgrading", and
+    -- the trailing target pushed it further. State now has its own column and
+    -- the variable-length target moves to the END of the row, after Crew, so
+    -- every fixed field stacks down the page.
+    add(pagelib.trunc(string.format("%-12s %-10s %s%-10s%s  Crew:%s%d/%d%s%s",
+      sh.name or "?", tier_name,
+      state_color, sh.state or "docked", pagelib.RESET,
+      crew_color, crew, crew_max, pagelib.RESET, target), width))
     if sh.return_in and sh.return_in > 0 then
       add(pagelib.trunc("  " .. cc.fmt_time(sh.return_in), width))
     elseif sh.state == "upgrading" then
@@ -199,13 +205,20 @@ local function raids_lines(add, width)
     else
       local goods_parts = {}
       for _, g in ipairs(r.goods or {}) do
-        goods_parts[#goods_parts + 1] = string.format("%d %s", g.qty or 0, cc.good_label(g.good))
+        -- LEGACY colours each cargo entry by its good (guild_viking.lua:8957);
+        -- the port printed the label plain, so every raid haul rendered white.
+        goods_parts[#goods_parts + 1] = string.format("%d %s%s%s",
+          g.qty or 0, cc.good_color(g.good), cc.good_label(g.good), pagelib.RESET)
       end
       local goods_txt = (#goods_parts > 0) and ("  " .. table.concat(goods_parts, "  ")) or ""
       local thralls_txt = ((r.thralls or 0) > 0)
         and string.format("  %d thrall%s", r.thralls, (r.thralls == 1) and "" or "s") or ""
-      add(pagelib.trunc(string.format("%s @%s  %s+%dd%s%s%s",
-        r.ship, cc.tcase(r.target or "?"), C.yellow, r.daler or 0, pagelib.RESET,
+      -- Ship and target were unpadded, so the daler figure and the whole
+      -- cargo list slid with the length of each name. Both get a column, and
+      -- the daler is right-aligned so the digits stack.
+      add(pagelib.trunc(string.format("%-12s %-18s %s%6s%s%s%s",
+        r.ship or "?", "@" .. cc.tcase(r.target or "?"),
+        C.yellow, "+" .. tostring(r.daler or 0) .. "d", pagelib.RESET,
         goods_txt, thralls_txt), width))
     end
   end
@@ -243,7 +256,11 @@ end
 
 local function warehouse_lines(add, width)
   local wh_tier = S.buildings and S.buildings["warehouse"] or 0
-  local wh_cap = WH_CAP[wh_tier] or 0
+  -- S.wh_cap (from WSTOCK's cap field) is the server's real capacity,
+  -- including steward/lager/star bonuses the static per-tier table below
+  -- knows nothing about -- LEGACY prefers it the same way
+  -- (guild_viking.lua:9626).
+  local wh_cap = S.wh_cap or WH_CAP[wh_tier] or 0
   local wh_used = 0
   for _, ws in ipairs(S.wstock or {}) do wh_used = wh_used + (ws.amount or 0) end
   if wh_cap > 0 then
@@ -513,10 +530,16 @@ function M.lines(width)
     monuments_lines(add, width)
   end
 
-  -- City Plan grid: excluded per the task brief, replaced with one placeholder
-  -- line, gated the same as LEGACY (show_city_plan).
+  -- City Plan grid, inline -- where LEGACY drew it (guild_viking.lua:10338).
+  -- This page used to print a one-line pointer to the popup instead; the grid
+  -- itself lives in popups/cityplan.lua and is reused through inline_lines()
+  -- so the two views cannot drift apart. Gated the same as LEGACY
+  -- (show_city_plan), and pre_grid_lines() inside it emits its own header and
+  -- the "No data" line, so nothing extra is needed here.
   if page_opts.get("show_city_plan") then
-    add(pagelib.trunc("City plan: /vik cityplan", width))
+    for _, l in ipairs(require("popups.cityplan").inline_lines(width)) do
+      add(l)
+    end
   end
 
   return lines

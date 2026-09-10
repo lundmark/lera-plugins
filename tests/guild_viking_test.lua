@@ -579,6 +579,8 @@ assert_trigger("push_cart_return", "Cart returned from Aldby.", nil,
   "Cart returned from trade route.")
 assert_trigger("push_longship_return", "The longship returned from the island.", nil,
   "Longship returned from island with thralls.")
+assert_trigger("push_longship_return", "The longship docks safely and the secured voyage spoils are brought home.", nil,
+  "Longship returned from island with thralls.")
 assert_trigger("push_longship_saved", "The Northwind was saved from the deep by the Iron Hull perk.", nil,
   "Longship saved by Iron Hull perk.")
 assert_trigger("push_longship_tattoo", "The Northwind returned with a foreign tattoo pattern.", nil,
@@ -587,6 +589,10 @@ assert_trigger("push_longship_thralls", "The Northwind returned with 3 thralls."
   "Longship returned with thralls.")
 assert_trigger("push_voyage_node", "A hidden harbor rises off the port bow.", "hidden harbor",
   "Voyage: hidden harbor reached - resolve needed.")
+assert_trigger("push_voyage_node", "A harbor rises off B12.", "harbor",
+  "Voyage: harbor reached - resolve needed.")
+assert_trigger("push_voyage_node", "An island rises off C03.", "island",
+  "Voyage: island reached - resolve needed.")
 assert_trigger("push_voyage_pause", "[Viking-Voyage] Spoiled casks are found below deck.",
   "Spoiled casks are found below deck.",
   "Voyage: Spoiled casks are found below deck.")
@@ -599,6 +605,8 @@ assert_trigger("push_war_declared", "Ivar declares war and gathers a host.", "Iv
 assert_trigger("push_realm_sacked", "A raiding party sacks your holdings.", nil,
   "War: your holdings were sacked -- you left an incoming war unanswered.")
 assert_trigger("push_battle_lost", "[War] Defeat. Your host was routed.", nil,
+  "Battle: your host was defeated.")
+assert_trigger("push_battle_lost", "Defeat. Your host is broken; the fielded companies are lost.", nil,
   "Battle: your host was defeated.")
 assert_trigger("push_recruit_found", "A wanderer is looking for a hall to serve.", nil,
   "Kaupstefna: a specialist wanderer is available to hire (vfind).")
@@ -1229,7 +1237,7 @@ printed = {}
 local ok_bad_raid = pcall(registered_vik.handler, "raid bogus", "/vik")
 check("/vik raid bogus: does not error", ok_bad_raid)
 check("/vik raid bogus: usage message verbatim",
-      printed[1] == "[Auto-Raid] usage: araid on|off | convoy on|off | ships <n>|all | target <name>"
+      printed[1] == "[Auto-Raid] usage: araid on|off | convoy on|off | ships <n>|all | target <name> | mode fixed|rotate"
         and #printed == 1, printed[1])
 
 -- ---- /vik raid (bare): opens the settings menu -----------------------------
@@ -1239,8 +1247,8 @@ last_menu_open = nil
 registered_vik.handler("raid", "/vik")
 check("/vik raid (bare): opens a menu", last_menu_open ~= nil)
 check("/vik raid (bare): menu title", last_menu_open and last_menu_open.title == "Auto-Raid Settings")
-check("/vik raid (bare): 5 items, LEGACY's araid_menu_build order",
-      last_menu_open and #last_menu_open.items == 5, last_menu_open and #last_menu_open.items)
+check("/vik raid (bare): 6 items, LEGACY's araid_menu_build order plus the Mode entry",
+      last_menu_open and #last_menu_open.items == 6, last_menu_open and #last_menu_open.items)
 
 last_menu_open.on_select("on")
 check("/vik raid menu: selecting 'on' flips auto_raid", page_opts.get("auto_raid") == true)
@@ -1639,6 +1647,9 @@ voyage2.settings().last = 0
 local herd2 = require("autoherd")
 herd2.settings().log = { { t = "11:45", desc = "stock sheep into sheepfold" } }
 herd2.settings().last = 0
+local war2 = require("autowar")
+war2.settings().status = "battle live (auto-fight off)"
+war2.settings().last = 0
 
 printed = {}
 registered_vik.handler("status", "/vik")
@@ -1656,8 +1667,14 @@ check("/vik status: Auto-Voyage line reports ON + the last log entry + ready",
 check("/vik status: Auto-Herd line reports off + the last log entry + ready",
       printed[7] == "  Auto-Herd: off | last: 11:45 stock sheep into sheepfold | next: ready",
       printed[7])
-check("/vik status: exactly 7 lines printed (3 ingestion + 4 automation)",
-      #printed == 7, #printed)
+-- Auto-War is the fifth automation, and /vik help makes the same promise for
+-- it as for the other four, so status has to account for its line too.
+check("/vik status: Auto-War line reports off + phase + the last action + ready",
+      printed[8] == "  Auto-War: off | phase=idle"
+        .. " | last: battle live (auto-fight off) | next: ready",
+      printed[8])
+check("/vik status: exactly 8 lines printed (3 ingestion + 5 automation)",
+      #printed == 8, #printed)
 
 -- "next: Ns" -- not yet ready -- when a real dispatch happened recently.
 raid2.settings().last = os.time()
