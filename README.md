@@ -73,6 +73,19 @@ be spelled as a slash token: `speedwalk`'s `.`, `..`, `.,`, `.place` and
 `.from-to`, and `autostepper`'s `-`, `-.`, `->` and `-!`. Those are movement
 syntax; everything word-shaped lives under `/speedwalk` and `/step`.
 
+### Autostepper glance command
+
+`/step set glance` reports the current optional room-text command without changing
+it; the default is `(disabled)`. `/step set glance off` clears it, so starting or
+stepping sends neither a glance command, an empty command, nor the literal `off`.
+Any other non-empty value is a literal custom command, for example
+`/step set glance look brief`; `on` is also a literal command, not a toggle.
+`/step set config` includes the current command or `(disabled)`.
+
+This setting is runtime-only, not saved per profile; a fresh plugin load defaults
+to disabled. It only requests optional room text: arrival confirmation still
+requires complete GMCP room contents, independently of glance output.
+
 ## Image surfaces
 
 Directory plugins can load PNG assets relative to their own root and place

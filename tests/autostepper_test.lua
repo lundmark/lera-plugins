@@ -410,6 +410,47 @@ local function failed_attacks_count(lines)
   return nil
 end
 
+-- ---- optional glance command configuration --------------------------------
+do
+  check("glance defaults to disabled",
+    has_line(capture(step_cmd.handler, "set glance"), "glance_cmd: (disabled)"))
+  check("config displays disabled glance",
+    has_line(capture(step_cmd.handler, "set config"), "glance_cmd: (disabled)"))
+  check("help documents glance off",
+    has_line(capture(step_cmd.handler, "help"), "glance [cmd|off]"))
+
+  for _, value in ipairs({ "look brief", "on", "OFF", "off now" }) do
+    quiet(step_cmd.handler, "set glance " .. value)
+    check("glance query preserves literal " .. value,
+      has_line(capture(step_cmd.handler, "set glance"), "glance_cmd: " .. value))
+    check("config displays literal " .. value,
+      has_line(capture(step_cmd.handler, "set config"), "glance_cmd: " .. value))
+    sw_steps = { { raw = "n", commands = { "n" } } }
+    sw_taken = {}
+    arrive(99, "Glance test room", {}, {})
+    sent = {}
+    quiet(as.start, false)
+    check("start sends literal glance " .. value,
+      #sent == 1 and sent[1] == value, table.concat(sent, "|"))
+    sent = {}
+    quiet(deliver_contents_frame, false)
+    check("movement sends literal glance " .. value,
+      #sent == 2 and sent[1] == "n" and sent[2] == value,
+      table.concat(sent, "|"))
+    quiet(as.stop)
+  end
+
+  sent = {}
+  check("glance off reports disabled",
+    has_line(capture(step_cmd.handler, "set glance off"), "glance_cmd: (disabled)"))
+  quiet(step_cmd.handler, "set glance off")
+  check("glance off is idempotent and query does not re-enable it",
+    has_line(capture(step_cmd.handler, "set glance"), "glance_cmd: (disabled)"))
+  check("config reports cleared glance",
+    has_line(capture(step_cmd.handler, "set config"), "glance_cmd: (disabled)"))
+  check("glance configuration sends no MUD commands", #sent == 0)
+end
+
 -- ---- complete contents is the only arrival signal -------------------------
 sw_steps = { { raw = "n", commands = { "n" } }, { raw = "e", commands = { "e" } } }
 sw_taken = {}
@@ -430,6 +471,8 @@ quiet(deliver_contents_frame, false) -- initial Room.Refresh has no entry marker
 check("complete Contents immediately sends the first step", last_sent() == "n",
   table.concat(sent, "|"))
 check("one movement consumes exactly one route step", #sw_taken == 1, #sw_taken)
+check("cleared glance sends only movement, never off or an empty command",
+  #sent == 1 and sent[1] == "n", table.concat(sent, "|"))
 
 sent = {}
 quiet(deliver_contents_frame, false)
