@@ -876,7 +876,7 @@ local function show_help()
   log("                           difficulty: risky, alarming or deadly")
   log("  /step chaossea off     - Stop Chaos Sea exploration/farming")
   log("  /step set attack [on|off] - Toggle auto-attack")
-  log("  /step set glance [cmd]    - Set/show glance command")
+  log("  /step set glance [cmd|off] - Set/show glance command; off disables")
   log("  /step set kill [cmd]      - Set/show attack command prefix")
   log("  /step set dive [on|off]   - Toggle explore dive policy")
   log("  /step set config       - Show configuration")
@@ -928,7 +928,8 @@ end
 
 local function show_config()
   log("Configuration:", COLOR_HEAD)
-  log("  glance_cmd: " .. config.glance_cmd)
+  log("  glance_cmd: " .. ((config.glance_cmd == "" or config.glance_cmd == nil)
+      and "(disabled)" or config.glance_cmd))
   log("  attack_cmd: " .. config.attack_cmd)
   log("  auto_attack: " .. tostring(config.auto_attack))
   log("  targets_only: " .. tostring(config.targets_only))
@@ -960,6 +961,9 @@ local function dispatch_set(rest)
       local shown = (config.glance_cmd == "" or config.glance_cmd == nil)
         and "(disabled)" or config.glance_cmd
       log("glance_cmd: " .. shown)
+    elseif value == "off" then
+      config.glance_cmd = ""
+      log("glance_cmd: (disabled)")
     else
       config.glance_cmd = value
       log("Glance command set: " .. config.glance_cmd)
@@ -1116,7 +1120,9 @@ local function register_command()
       .. "run before starting another. The shorthands are '-.' to start/resume "
       .. "on any mob, '->' to start/resume on targets only, "
       .. "'-!' to stop, and '-' for help. Settings: status, config, attack, "
-      .. "glance, kill, dive.",
+      .. "glance, kill, dive. 'set glance' shows the optional room-text command; "
+      .. "'set glance off' clears it; any other value sets a literal command. "
+      .. "The glance setting is runtime-only and defaults to disabled.",
     accepts_args = true,
     handler = dispatch,
   })
