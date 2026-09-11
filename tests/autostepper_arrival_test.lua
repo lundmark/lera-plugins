@@ -878,5 +878,113 @@ do
   package.loaded.push_notify = nil
 end
 
+local function status_text(e)
+  local first = #e.logs + 1
+  e.as.status()
+  return table.concat(e.logs, "\n", first)
+end
+
+do
+  local e = engine()
+  check("obsolete automatic glance API is removed", e.as.set_glance_cmd == nil)
+  local text = status_text(e)
+  check("idle status includes disabled farm and default settings",
+    text:find("Chaos Sea farm: off", 1, true) and text:find("Farm settings: level 0, risky", 1, true))
+  e.as.set_auto_attack(false)
+  e.as.set_attack_cmd("attack")
+  text = status_text(e)
+  check("status reports the configured attack settings",
+    text:find("Auto-attack: off", 1, true) and text:find("Attack command: attack", 1, true))
+end
+
+do
+  local e = engine()
+  e.as.chaossea_farm_start(5, "deadly")
+  local sent, requested = #e.sent, #e.requests
+  local text = status_text(e)
+  check("farm setup status includes selected level and difficulty",
+    text:find("Chaos Sea farm: on", 1, true) and text:find("Farm settings: level 5, deadly", 1, true))
+  check("farm setup status explains the wait for the new maze",
+    text:find("Waiting for: maze entry", 1, true) and text:find("Farm restart: waiting for maze entry", 1, true))
+  check("exploration status hides unrelated stored-route step counts", not text:find("Steps:", 1, true))
+  check("status is read-only during farm setup", #e.sent == sent and #e.requests == requested)
+  e.info({n = 0}); e.contents({}, nil, true)
+  check("movement status identifies the room entry wait", status_text(e):find("Waiting for: room entry", 1, true))
+  e.info({s = 0}); e.contents({boss}, nil, true, {cask})
+  check("fighting status identifies combat end as the next event", status_text(e):find("Waiting for: combat end", 1, true))
+  e.deliver("Char.Combat", {attacker = ""})
+  check("post-combat status identifies the contents refresh wait", status_text(e):find("Waiting for: combat contents refresh", 1, true))
+  e.contents({}, nil, false, {cask})
+  text = status_text(e)
+  check("pending farm restart stays visible while stepping is stopped",
+    text:find("Running: no", 1, true) and text:find("Chaos Sea farm: on", 1, true)
+      and text:find("Farm restart: scheduled", 1, true))
+  e.advance(1000)
+  check("automatic restart status returns to waiting for maze entry",
+    status_text(e):find("Farm restart: waiting for maze entry", 1, true))
+  e.as.stop()
+  text = status_text(e)
+  check("stopped farm status retains its selected settings without a pending restart",
+    text:find("Chaos Sea farm: off", 1, true) and text:find("Farm settings: level 5, deadly", 1, true)
+      and text:find("Farm restart: none", 1, true) and text:find("Waiting for: nothing", 1, true))
+end
+
+do
+  local e = frontier_trip()
+  check("status shows progress through the full frontier route",
+    status_text(e):find("Frontier travel: 0/3 rooms", 1, true))
+  e.info({n = 0, s = 0}); e.contents({}, nil, true)
+  check("frontier status counts only confirmed room arrivals",
+    status_text(e):find("Frontier travel: 1/3 rooms", 1, true))
+  e.as.stop()
+  check("stopping clears frontier travel status", not status_text(e):find("Frontier travel:", 1, true))
+end
+
+do
+  local e = engine()
+  e.routes = {{raw = "n", commands = {"n"}}}
+  e.as.start(false)
+  local text = status_text(e)
+  check("stored-route status retains its step count", text:find("Steps:", 1, true))
+  check("route startup status identifies its initial contents wait",
+    text:find("Waiting for: initial room contents", 1, true))
+  e.as.stop()
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {})
+  e.as.stop()
+  e.deliver("Room.Info", {num = 400, name = "Outside the Sea", exits = {n = 401}})
+  e.contents({}, nil, true)
+  e.routes = {{raw = "n", commands = {"n"}}}
+  assert(e.as.start(false))
+  check("an active stored route shows progress even with an old explore map retained",
+    e.mode.retained() and status_text(e):find("Steps:", 1, true))
+  e.as.stop()
+end
+
+do
+  local e = engine()
+  e.as.chaossea_farm_start(5, "risky")
+  e.info({n = 0}); e.contents({}, nil, true)
+  e.info({s = 0}); e.contents({}, nil, true, {cask})
+  e.as.chaossea_setup(0, "risky")
+  local text = status_text(e)
+  check("switching to ordinary setup does not report the cancelled farm timer as a restart",
+    text:find("Chaos Sea farm: off", 1, true) and text:find("Farm restart: none", 1, true))
+  e.as.stop()
+end
+
+do
+  local e = engine()
+  e.as.chaossea_farm_start(5, "risky")
+  e.info({}); e.contents({}, nil, true)
+  local text = status_text(e)
+  check("exhausted farm reports no automatic restart despite the retained farm setting",
+    text:find("Running: no", 1, true) and text:find("Chaos Sea farm: on", 1, true)
+      and text:find("Farm restart: none", 1, true))
+end
+
 print(string.format("%d checks, %d failures", checks, failures))
 if failures > 0 then os.exit(1) end

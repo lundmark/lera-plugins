@@ -2085,6 +2085,17 @@ do
   quiet(as.stop)
 end
 
+do
+  local config_lines = capture(step_cmd.handler, "set config")
+  check("set config includes the farm settings", has_line(config_lines, "Farm settings: level 0, risky"))
+  check("set config no longer advertises glance_cmd", not has_line(config_lines, "glance_cmd"))
+  local help_lines = capture(step_cmd.handler, "help")
+  check("step help no longer advertises automatic glance", not has_line(help_lines, "/step set glance"))
+  local rejected = capture(step_cmd.handler, "set glance look")
+  check("obsolete glance setting cannot configure an automatic command", has_line(rejected, "Unknown setting: glance"))
+  check("registry help no longer advertises optional glancing", not step_cmd.description:find("glanc", 1, true))
+end
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)

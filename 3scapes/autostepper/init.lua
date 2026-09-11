@@ -190,7 +190,6 @@ local refresh_timeout_id = nil
 
 -- Configuration
 local config = {
-  glance_cmd = "",           -- Optional room text only; never an arrival signal
   attack_cmd = "kill",        -- Command prefix for attacking (kill <target>)
   auto_attack = true,         -- Attack valid targets automatically
   step_on_player = true,      -- Take step if player in room (don't fight)
@@ -568,10 +567,6 @@ local function on_movement_failure(line)
   trace("movement reported blocked; awaiting entry confirmation")
 end
 
-local function send_glance()
-  if config.glance_cmd and config.glance_cmd ~= "" then mud.send(config.glance_cmd) end
-end
-
 local function request_room_refresh()
   return gmcp.send("Room.Refresh", { packages = { "Room.Info", "Room.Contents" } })
 end
@@ -844,7 +839,6 @@ local function do_step(monsters)
   end
   if not enabled or step_dispatch ~= dispatch then return false end
   if not moves then return do_step(monsters) end
-  send_glance()
 
   return true
 end
@@ -950,7 +944,7 @@ local function show_help()
   log("  -.                     - Start/resume stepping, kill any mob")
   log("  ->                     - Start/resume stepping, only kill targets")
   log("  -!                     - Stop stepping")
-  log("  /step status           - Show current status")
+  log("  /step status           - Show farm settings, restart/wait state and travel progress")
   log("  /step trace [on|off]   - Log room frames, refreshes and decisions")
   log("  /step mobignore add|remove <name> | list | clear")
   log("                           Exact full name, case/whitespace normalized; saved per profile")
@@ -964,7 +958,6 @@ local function show_help()
   log("                           difficulty: risky, alarming or deadly")
   log("  /step chaossea off     - Stop Chaos Sea exploration/farming")
   log("  /step set attack [on|off] - Toggle auto-attack")
-  log("  /step set glance [cmd]    - Set/show glance command")
   log("  /step set kill [cmd]      - Set/show attack command prefix")
   log("  /step set dive [on|off]   - Toggle explore dive policy")
   log("  /step set config       - Show configuration")
@@ -1020,12 +1013,35 @@ end
 -- Command
 --------------------------------------------------------------------------------
 
+local function show_farm_status()
+  log("  Chaos Sea farm: " .. (chaossea_farm.active and "on" or "off"))
+  log(string.format("  Farm settings: level %d, %s", chaossea_farm.level, chaossea_farm.difficulty))
+  local restart = "none"
+  if chaossea_farm.active and chaossea_farm.restart_timer then
+    restart = "scheduled"
+  elseif chaossea_farm.active and enabled and run_mode == "explore" then
+    restart = arrival_kind == "setup" and "waiting for maze entry" or "after cask"
+  end
+  log("  Farm restart: " .. restart)
+end
+
+local function waiting_for()
+  if awaiting_refresh then return "combat contents refresh" end
+  if arrival_kind == "setup" then return "maze entry" end
+  if arrival_kind == "move" then return "room entry" end
+  if arrival_kind == "refresh" then return "initial room contents" end
+  if state == "fighting" then return "combat end" end
+  if chaossea_farm.active and chaossea_farm.restart_timer then return "farm restart" end
+  return "nothing"
+end
+
 local function show_config()
   log("Configuration:", COLOR_HEAD)
-  log("  glance_cmd: " .. config.glance_cmd)
   log("  attack_cmd: " .. config.attack_cmd)
   log("  auto_attack: " .. tostring(config.auto_attack))
   log("  targets_only: " .. tostring(config.targets_only))
+  log("  explore_policy: " .. (config.explore_policy or "profile default"))
+  show_farm_status()
 end
 
 -- "set" takes a key and an optional value; with no value each key reports what
@@ -1048,15 +1064,6 @@ local function dispatch_set(rest)
       log("Auto-attack " .. (config.auto_attack and "enabled" or "disabled"))
     else
       log("Usage: /step set attack [on|off]", COLOR_WARN)
-    end
-  elseif key == "glance" then
-    if value == "" then
-      local shown = (config.glance_cmd == "" or config.glance_cmd == nil)
-        and "(disabled)" or config.glance_cmd
-      log("glance_cmd: " .. shown)
-    else
-      config.glance_cmd = value
-      log("Glance command set: " .. config.glance_cmd)
     end
   elseif key == "kill" then
     if value == "" then
@@ -1188,7 +1195,7 @@ local function register_command()
       .. "status|trace [on|off]|set <key> [value]]",
     summary = "Automatic speedwalk stepping with optional combat",
     description = "Walks a stored step path one room at a time, optionally "
-      .. "glancing and attacking on the way. Or, with 'explore [area]', maps an "
+      .. "attacking on the way. Or, with 'explore [area]', maps an "
       .. "unmapped area, speedwalking the full shortest route through known rooms to "
       .. "the next unexplored room. Each entry updates position; combat and exploration "
       .. "decisions wait for the destination. Chaos Sea stops at the cask/portal after "
@@ -1214,11 +1221,13 @@ local function register_command()
       .. "Complete entry contents track each move; no prompt setup is needed. "
       .. "Stops after five seconds without an entry. Interrupted or blocked frontier "
       .. "speedwalks discard the map; wait for already queued moves to finish before restarting. "
+      .. "'status' shows farm on/off, level, difficulty, restart and wait state, "
+      .. "attack settings and frontier travel progress. 'set config' also shows farm settings. "
       .. "Use 'trace on' to inspect arrivals and combat decisions. Stop an active "
       .. "run before starting another. The shorthands are '-.' to start/resume "
       .. "on any mob, '->' to start/resume on targets only, "
       .. "'-!' to stop, and '-' for help. Settings: status, config, attack, "
-      .. "glance, kill, dive.",
+      .. "kill, dive.",
     accepts_args = true,
     handler = dispatch,
   })
@@ -1470,7 +1479,6 @@ function M.start(targets_only, from_entry)
     M.stop()
     return false
   end
-  send_glance()
 
   return true
 end
@@ -1643,7 +1651,14 @@ function M.status()
   log("Status:", COLOR_HEAD)
   log("  Running: " .. (enabled and "yes" or "no"))
   log("  State: " .. state)
-  log("  Mode: " .. (config.targets_only and "targets only (->)" or "any mob (-.))"))
+  log("  Waiting for: " .. waiting_for())
+  log("  Auto-attack: " .. (config.auto_attack and "on" or "off"))
+  log("  Attack command: " .. config.attack_cmd)
+  show_farm_status()
+  if step_dispatch and step_dispatch.explore_batch then
+    log("  Frontier travel: " .. step_dispatch.arrived .. "/" .. step_dispatch.total .. " rooms")
+  end
+  log("  Mode: " .. (config.targets_only and "targets only (->)" or "any mob (-.)"))
   -- A climbing count is the actionable diagnostic: it means the target list
   -- does not match the area, which the user can fix and nothing else says.
   log("  Failed attacks (this session): " .. failed_attacks)
@@ -1651,20 +1666,22 @@ function M.status()
   log("  Unanswered refreshes (this session): " .. unanswered_refreshes)
   log("  Trace: " .. (tracing and "on" or "off"))
 
-  if explore and explore.active() then
+  local exploring = explore and explore.active()
+  local retained = explore and explore.retained and explore.retained()
+  if exploring then
     local s = explore.stats()
     log("  Explore: " .. (s.policy or "clear") .. ", " .. s.rooms .. " rooms, "
         .. "at " .. s.x .. "," .. s.y .. "," .. s.z
         .. (s.layer and (" (layer " .. s.layer .. ")") or ""))
     log("  Desyncs: " .. tostring(explore.desyncs and explore.desyncs() or 0))
-  elseif explore and explore.retained and explore.retained() then
+  elseif retained then
     local s = explore.stats()
-    log("  Explore: paused, " .. s.rooms .. " rooms retained, "
+    log("  Explore: paused, " .. (s.policy or "clear") .. ", " .. s.rooms .. " rooms retained, "
         .. "at " .. s.x .. "," .. s.y .. "," .. s.z
         .. (s.layer and (" (layer " .. s.layer .. ")") or ""))
   end
 
-  if sw then
+  if sw and (run_mode == "route" or (not exploring and not retained)) then
     local info = sw.step_info()
     log("  Steps: " .. info.current .. "/" .. info.total ..
         " (" .. info.remaining .. " remaining)")
@@ -1690,10 +1707,6 @@ function M.tracked_monsters()
 end
 
 -- Configuration setters
-function M.set_glance_cmd(cmd)
-  config.glance_cmd = cmd
-end
-
 function M.set_attack_cmd(cmd)
   config.attack_cmd = cmd
 end

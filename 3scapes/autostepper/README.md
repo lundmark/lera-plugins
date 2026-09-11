@@ -16,6 +16,22 @@ complete entry contents arrive for a "Layer ... of the Sea of Chaos" room.
 Only that maze room becomes the new exploration origin; its mobs are handled
 before stepping continues.
 
+## Status and configuration
+
+`/step status` shows farm on/off, selected level and difficulty, and whether the
+next restart is scheduled, waiting for maze entry, or due after clearing the cask room.
+Stopping the farm leaves its last selected level and difficulty visible.
+
+It also shows auto-attack and the attack command, the event being awaited
+(initial contents, maze/room entry, combat end or a combat contents refresh),
+and confirmed arrivals versus total rooms during a frontier speedwalk. Stored
+route runs show their step counts even when an old exploration map is retained.
+`/step set config` includes farm settings and the configured exploration policy.
+
+Room entries and occupants come from GMCP. The automatic glance setting and
+`set_glance_cmd()` API have been removed; no extra glance is sent on start or
+after a step.
+
 ## Chaos Sea push notifications
 
 Enable the two channels in the existing `push_notify` plugin:

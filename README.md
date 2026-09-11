@@ -241,6 +241,12 @@ Autostepper uses GMCP for arrivals and combat decisions. Prompt patterns and the
 a run; stop an active run before starting another. `/step help` describes the
 controls, and `/step trace on` reports the room frames and decisions.
 
+`/step status` includes farm on/off, level, difficulty, restart state, attack
+settings, the event being awaited, and progress through a frontier speedwalk.
+`/step set config` also includes farm settings and the configured exploration
+policy. The automatic glance setting and `set_glance_cmd()` API have been removed;
+GMCP supplies room contents without extra text commands.
+
 The server must send a complete `Room.Contents` list on every entry, even when it
 matches the previous room. Every page of an entry list carries `entry: 1`;
 refresh and subscription snapshots omit it. The matching mudlib change is in
