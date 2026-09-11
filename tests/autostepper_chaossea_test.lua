@@ -21,6 +21,8 @@ check("in_area recognises a deeper layer",
   cs.in_area("Layer eight of the Sea of Chaos") == true)
 check("in_area rejects an ordinary room", cs.in_area("A dusty crossroads") == false)
 check("in_area tolerates a nil name", cs.in_area(nil) == false)
+check("in_area rejects the portal lobby despite its Sea of Chaos name",
+  cs.in_area("A swirling Sea of Chaos") == false)
 
 -- ---- layer_of ----------------------------------------------------------------
 -- The mudlib renders the layer with number_switch(query_z()+1), so "one" is

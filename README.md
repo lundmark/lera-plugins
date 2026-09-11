@@ -280,6 +280,8 @@ Chaos Sea runs stop at the cask or portal once that room's non-ignored mobs are
 cleared, even if other rooms remain unexplored. A normal run leaves opening the cask and
 entering the portal to you. `/step chaossea farm` starts its next instance from
 that completion point; `-!` cancels the pending restart.
+Restarting waits through the portal lobby for confirmed entry into a named maze
+layer, then checks that room's mobs before exploring the fresh map.
 If the server truncates the cask room's contents, the run stops with a warning
 without confirming completion or restarting the farm.
 

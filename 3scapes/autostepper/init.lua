@@ -975,6 +975,7 @@ local function show_help()
   log("Combat refreshes wait three seconds per attempt, with two retries before stopping.")
   log("Stop the active run before starting another. Resume a paused run with -.")
   log("Chaos Sea stops at the cask/portal after clearing non-ignored mobs; farm then restarts.")
+  log("Farm restarts wait through the portal lobby for confirmed entry into the new maze.")
   log("Push alerts: /pushn toggle chaossea_cask and /pushn toggle chaossea_farm (default off).")
   log("Cask alerts fire on discovery, before combat; farm alerts fire when setup commands are sent.")
 end
@@ -1191,7 +1192,8 @@ local function register_command()
       .. "unmapped area, speedwalking the full shortest route through known rooms to "
       .. "the next unexplored room. Each entry updates position; combat and exploration "
       .. "decisions wait for the destination. Chaos Sea stops at the cask/portal after "
-      .. "clearing non-ignored mobs; farm mode then starts the next instance. "
+      .. "clearing non-ignored mobs; farm mode then starts the next instance, waiting "
+      .. "through the portal lobby for confirmed entry into the new maze. "
       .. "Push channels 'chaossea_cask' (discovery, before combat) and 'chaossea_farm' "
       .. "(each farm setup, including the first) default off; enable them with "
       .. "'/pushn toggle <channel>'. Existing push grace and rate limits apply. Otherwise "

@@ -46,8 +46,9 @@ M.vertical = { d = 1, u = -1 }
 M.targets = { "mutant" }
 
 function M.in_area(room_name)
-  if type(room_name) ~= "string" then return false end
-  return room_name:lower():find("sea of chaos", 1, true) ~= nil
+  -- The portal lobby, "A swirling Sea of Chaos", is outside the maze. During
+  -- farm setup its entry arrives before the new instance's layer-one entry.
+  return M.layer_of(room_name) ~= nil
 end
 
 -- The mudlib renders the layer as number_switch(query_z() + 1), so "one" is

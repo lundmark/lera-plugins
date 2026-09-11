@@ -524,6 +524,51 @@ for _, cancel in ipairs({false, true}) do
   end
 end
 
+-- explore_5.txt: portal lobby and new instance arrive consecutively in the
+-- same network read. The lobby must not become the fresh maze's origin.
+do
+  local e = engine()
+  e.deliver("Room.Info", {num = 266, name = "A swirling Sea of Chaos", exits = {out = 267}})
+  e.contents({})
+  assert(e.as.chaossea_farm_start(5, "risky"))
+  e.info({n = 0, e = 0}); e.contents({}, nil, true)
+  e.info({s = 0}); e.contents({boss}, nil, true, {cask, portal})
+  e.deliver("Char.Combat", {attacker = ""})
+  e.contents({}, nil, false, {cask, portal})
+  e.advance(1000)
+  local sent = #e.sent
+  check("farm restart begins with a fresh unrecorded map", e.mode.stats().rooms == 0)
+  e.deliver("Room.Info", {num = 266, area = "The Sea of Chaos",
+    name = "A swirling Sea of Chaos", exits = {out = 267}})
+  e.deliver("Room.Contents", {entry = 1, full = 1,
+    items = {{type = "item", count = 64, name = "A cube of raw chaos"}}})
+  check("portal lobby cannot complete the farm setup arrival",
+    e.as.is_running() and e.as.get_state() == "stepping" and #e.sent == sent)
+  check("portal lobby is not recorded as the new maze origin", e.mode.stats().rooms == 0)
+  e.deliver("Room.Info", {num = 60494, area = "The Sea of Chaos",
+    name = "Layer one of the Sea of Chaos", exits = {n = 0, w = 0, out = 266}})
+  e.deliver("Room.Contents", {entry = 1, full = 1,
+    items = {{type = "monster", count = 1, name = "A tiny evolving being"}}})
+  check("new farm instance attacks the occupant of its actual first room",
+    e.as.get_state() == "fighting" and e.sent[sent + 1] == "kill mutant"
+      and e.pos() == "0,0,0" and e.mode.stats().rooms == 1)
+  e.deliver("Char.Combat", {attacker = ""}); e.contents({})
+  check("farm continues exploring after clearing the new entry room",
+    e.as.is_running() and e.sent[sent + 2] == "n")
+  e.as.stop()
+end
+
+do
+  local e = engine()
+  e.as.chaossea_farm_start(5, "risky")
+  e.deliver("Room.Info", {num = 266, name = "A swirling Sea of Chaos", exits = {out = 267}})
+  e.contents({}, nil, true)
+  e.advance(5000)
+  check("farm setup still times out when only the lobby arrives",
+    not e.as.is_running() and e.mode.stats().rooms == 0
+      and table.concat(e.logs, "\n"):find("Room entry went unanswered", 1, true) ~= nil)
+end
+
 -- The server may omit the boss when a crowded room hits its inventory cap.
 -- Receiving every page of that truncated list does not establish a clear room.
 for _, farm in ipairs({false, true}) do

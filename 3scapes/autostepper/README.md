@@ -11,6 +11,11 @@ commands may still run, so wait for queued movement to finish before restarting.
 `/step explore leave` refuses until the current route arrives. Stored routes and
 the walk back to the origin continue to check each room for mobs.
 
+Farm restarts wait through the portal lobby, "A swirling Sea of Chaos", until
+complete entry contents arrive for a "Layer ... of the Sea of Chaos" room.
+Only that maze room becomes the new exploration origin; its mobs are handled
+before stepping continues.
+
 ## Chaos Sea push notifications
 
 Enable the two channels in the existing `push_notify` plugin:
