@@ -135,6 +135,27 @@ local chaossea_farm = {
   restart_timer = nil,
 }
 
+local cask_announced = false -- Kept across pause/resume; reset for a fresh sea.
+local pushn = nil
+
+local function get_push_notify()
+  local current = plugin and plugin.get("push_notify")
+  if current ~= pushn then
+    pushn = current
+    if pushn and pushn.register_channel then
+      -- Separate channels let discovery and restart arrive close together.
+      pushn.register_channel("chaossea_cask")
+      pushn.register_channel("chaossea_farm")
+    end
+  end
+  return pushn
+end
+
+local function push_event(channel, message)
+  local sink = get_push_notify()
+  if sink and sink.notify then sink.notify(channel, message) end
+end
+
 -- Only a complete Room.Contents list acknowledges entry. Room.Info supplies
 -- exits and Room.Map supplies display data; neither proves the occupants are
 -- known. A timeout stops the run without inventing a successful move.
@@ -835,6 +856,14 @@ function process_room()
     return
   end
 
+  -- Announce discovery before fighting the boss, once per fresh explore run.
+  local prof = run_mode == "explore" and explore and explore.profile()
+  if not cask_announced and prof and prof.name == "chaossea" and prof.cask_found
+      and ri.items and prof.cask_found({ items = ri.items() }) then
+    cask_announced = true
+    push_event("chaossea_cask", "Chaos Sea: cask found in " .. (ri.room() or "unknown room"))
+  end
+
   -- Decisions use the arrival or post-combat snapshot already committed.
   sync_room_view()
   trace("deciding in state " .. state .. " (run_mode "
@@ -946,6 +975,8 @@ local function show_help()
   log("Combat refreshes wait three seconds per attempt, with two retries before stopping.")
   log("Stop the active run before starting another. Resume a paused run with -.")
   log("Chaos Sea stops at the cask/portal after clearing non-ignored mobs; farm then restarts.")
+  log("Push alerts: /pushn toggle chaossea_cask and /pushn toggle chaossea_farm (default off).")
+  log("Cask alerts fire on discovery, before combat; farm alerts fire when setup commands are sent.")
 end
 
 -- The movement shorthands stay raw aliases: "-", "-.", "->" and "-!" are input
@@ -1160,7 +1191,10 @@ local function register_command()
       .. "unmapped area, speedwalking the full shortest route through known rooms to "
       .. "the next unexplored room. Each entry updates position; combat and exploration "
       .. "decisions wait for the destination. Chaos Sea stops at the cask/portal after "
-      .. "clearing non-ignored mobs; farm mode then starts the next instance. Otherwise "
+      .. "clearing non-ignored mobs; farm mode then starts the next instance. "
+      .. "Push channels 'chaossea_cask' (discovery, before combat) and 'chaossea_farm' "
+      .. "(each farm setup, including the first) default off; enable them with "
+      .. "'/pushn toggle <channel>'. Existing push grace and rate limits apply. Otherwise "
       .. "exploration stops once every reachable exit leads somewhere already "
       .. "mapped. 'explore off' stops it early, "
       .. "'explore reset' resets the map to a fresh origin at the current room and "
@@ -1250,7 +1284,12 @@ function M.on_load()
   log("Loaded (use /step help for commands)", COLOR_RUN)
 end
 
+function M.on_setup()
+  get_push_notify()
+end
+
 function M.on_unload()
+  pushn = nil
   unregister_aliases()
   unregister_command()
 
@@ -1484,6 +1523,7 @@ function M.explore_start(area_name)
     log("Explore mode failed to start", COLOR_ERROR)
     return false
   end
+  cask_announced = false
   log("Explore mode active: " .. prof.name, COLOR_RUN)
   return true
 end
@@ -1503,9 +1543,16 @@ function M.chaossea_setup(level, difficulty, preserve_farm)
   local chosen_level = tonumber(level) or 0
   local chosen_difficulty = difficulty or "risky"
   local commands = prof.restart({ level = chosen_level, difficulty = chosen_difficulty })
-  for _, cmd in ipairs(commands) do mud.send(cmd) end
+  local setup_sent = true
+  for _, cmd in ipairs(commands) do
+    if mud.send(cmd) == false then setup_sent = false end
+  end
   log(string.format("Chaos Sea setup sent (level %d, %s)",
     chosen_level, chosen_difficulty), COLOR_RUN)
+  if setup_sent and preserve_farm and chaossea_farm.active then
+    push_event("chaossea_farm", string.format("Chaos Sea farm: starting a new sea (level %d, %s)",
+      chosen_level, chosen_difficulty))
+  end
   if not M.explore_start("chaossea") then return false end
   return M.start(config.targets_only, true)
 end

@@ -283,6 +283,14 @@ that completion point; `-!` cancels the pending restart.
 If the server truncates the cask room's contents, the run stops with a warning
 without confirming completion or restarting the farm.
 
+Optional push channels `chaossea_cask` and `chaossea_farm` announce cask discovery
+(before combat, once per fresh explore run) and each farm setup after its commands
+are sent, including the first start. Both default off; enable them with
+`/pushn toggle chaossea_cask` and `/pushn toggle chaossea_farm`. Existing global
+push enable, activity grace and rate limits apply. Separate channels keep the
+cask alert from suppressing the nearby restart alert. A cancelled pending restart
+sends no alert. See [autostepper push notifications](3scapes/autostepper/README.md#chaos-sea-push-notifications).
+
 TODO: track or invalidate coordinates when moving manually during a paused run.
 
 ### Chat sources: MIP and GMCP

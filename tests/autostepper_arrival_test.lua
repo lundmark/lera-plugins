@@ -5,7 +5,14 @@ local function engine()
   for _, name in ipairs({"roominfo", "init", "explore.mode", "areas.chaossea"}) do
     package.loaded[name] = nil
   end
-  local E = { sent = {}, logs = {}, requests = {}, now = 0 }
+  local E = { sent = {}, logs = {}, requests = {}, now = 0, pushes = {}, channels = {} }
+  E.push_sink = {
+    register_channel = function(name, opts) E.channels[name] = opts or {} end,
+    notify = function(channel, message)
+      E.pushes[#E.pushes + 1] = {channel = channel, message = message, commands = #E.sent}
+      return true
+    end,
+  }
   local handlers, timers, triggers = {}, {}, {}
   local next_id = 0
   lera = { time = function() return E.now / 1000 end }
@@ -65,6 +72,7 @@ local function engine()
   local ri
   plugin = { get = function(name)
     if name == "roominfo" then return ri end
+    if name == "push_notify" then return E.push_sink end
     if name == "speedwalk" then return {
       step_info = function() return {current = 0, total = 0, remaining = 0} end,
       get_current_place = function() return "test route" end,
@@ -80,6 +88,7 @@ local function engine()
   print = output
   E.ri, E.mode, E.as = ri, require("explore.mode"), require("init")
   E.as.on_load()
+  if E.as.on_setup then E.as.on_setup() end
   function E.info(exits)
     E.deliver("Room.Info", {num = 0, name = "Layer one of the Sea of Chaos", exits = exits})
   end
@@ -442,6 +451,9 @@ do
   e.begin({n = 0, e = 0}, {})
   e.info({s = 0})
   e.contents({boss}, nil, true, {cask, portal})
+  check("cask discovery pushes before the boss fight",
+    #e.pushes == 1 and e.pushes[1].channel == "chaossea_cask"
+      and e.pushes[1].message:find("cask", 1, true) and e.pushes[1].commands == 1)
   check("cask arrival fights its boss before completing", table.concat(e.sent, ",") == "n,kill mutant" and e.as.is_running() and completed == 0)
   e.deliver("Char.Combat", {attacker = ""})
   e.deliver("Room.Contents", {full = 1, page = 1, pages = 2,
@@ -457,6 +469,7 @@ do
   check("cask completion reports the destination instead of exhausted exits", table.concat(e.logs, "\n"):find("Chaos Sea complete: cask/portal reached", 1, true) ~= nil)
   e.contents({}, nil, false, {cask, portal})
   e.advance(10000)
+  check("boss refreshes and duplicate contents do not repeat the cask push", #e.pushes == 1)
   check("duplicate contents and old timers cannot resume a completed cask run", not e.as.is_running() and #e.sent == 3 and completed == 1)
 end
 
@@ -465,6 +478,7 @@ for _, item in ipairs({cask, portal}) do
   e.begin({n = 0, e = 0}, {})
   e.info({s = 0, n = 0})
   e.contents({}, nil, true, {item})
+  check(item .. " only sends a discovery push for an actual cask", #e.pushes == (item == cask and 1 or 0))
   check(item .. " stops an empty destination room immediately", not e.as.is_running() and #e.sent == 1 and e.pos() == "0,1,0")
 end
 
@@ -488,14 +502,25 @@ for _, cancel in ipairs({false, true}) do
   check("farm waits for the cask room's boss before restarting", #e.sent == 7 and e.sent[7] == "kill mutant" and e.as.is_running())
   e.deliver("Char.Combat", {attacker = ""})
   e.contents({}, nil, false, {cask, portal})
+  check("farm start and cask discovery use separate push channels",
+    #e.pushes == 2 and e.pushes[1].channel == "chaossea_farm" and e.pushes[1].commands == 5
+      and e.pushes[2].channel == "chaossea_cask")
   check("farm completes at the cask with unexplored exits remaining", not e.as.is_running() and #e.sent == 7)
   e.contents({}, nil, false, {cask, portal})
   if cancel then e.as.stop() end
   e.advance(1000)
   if cancel then
+    check("cancelling a pending farm restart sends no restart push", #e.pushes == 2)
     check("stop cancels the pending farm restart at the cask", not e.as.is_running() and #e.sent == 7)
   else
+    check("automatic farm restart pushes once after sending setup commands",
+      #e.pushes == 3 and e.pushes[3].channel == "chaossea_farm" and e.pushes[3].commands == 12
+        and e.pushes[3].message:find("5", 1, true) and e.pushes[3].message:find("risky", 1, true))
     check("farm schedules one next instance from the cask", #e.sent == 12 and table.concat(e.sent, ",", 8) == "open cask,enter portal,unsetsea,setsea 5 risky,enter sea" and e.as.is_running())
+    e.info({n = 0}); e.contents({}, nil, true)
+    e.info({s = 0}); e.contents({}, nil, true, {cask})
+    check("the new farm instance can announce its own cask", #e.pushes == 4 and e.pushes[4].channel == "chaossea_cask")
+    e.as.stop()
   end
 end
 
@@ -711,6 +736,101 @@ do
   e.contents({"A growing mutant being"}, nil, true)
   check("vertical frontier arrives on the right layer without correction",
     e.pos() == "0,0,1" and e.mode.stats().layer_corrections == 0 and e.as.get_state() == "fighting")
+end
+
+do
+  local e = engine()
+  check("autostepper registers both push channels during setup",
+    e.channels.chaossea_cask ~= nil and e.channels.chaossea_farm ~= nil)
+  e.begin({n = 0}, {})
+  e.info({s = 0})
+  e.deliver("Room.Contents", {full = 1, entry = 1, page = 1, pages = 2,
+    items = {{type = "item", name = cask}}})
+  check("partial cask contents cannot send discovery pushes", #e.pushes == 0)
+  e.deliver("Room.Contents", {full = 1, entry = 1, page = 2, pages = 2,
+    items = {{type = "monster", name = boss}}})
+  check("complete cask contents sends one discovery push", #e.pushes == 1)
+  e.as.stop()
+  assert(e.as.start(false))
+  e.contents({boss}, nil, false, {cask})
+  check("pause and resume do not announce the same cask twice", #e.pushes == 1)
+end
+
+do
+  local e = engine()
+  e.as.chaossea_setup(5, "risky")
+  check("ordinary Chaos Sea setup sends no farm push", #e.pushes == 0)
+  e.push_sink = nil
+  e.as.stop()
+  e.as.chaossea_farm_start(5, "risky")
+  e.info({n = 0}); e.contents({}, nil, true)
+  e.info({s = 0}); e.contents({boss}, nil, true, {cask})
+  check("missing push consumer leaves exploration and combat working", #e.pushes == 0 and e.as.get_state() == "fighting")
+  local replacement_calls, replacement_channels = {}, {}
+  e.push_sink = {
+    register_channel = function(name) replacement_channels[name] = true end,
+    notify = function(channel) replacement_calls[#replacement_calls + 1] = channel; return false end,
+  }
+  e.as.stop()
+  e.as.chaossea_farm_start(5, "risky")
+  check("replacement push consumer is discovered and registered",
+    replacement_channels.chaossea_cask and replacement_channels.chaossea_farm
+      and replacement_calls[1] == "chaossea_farm")
+  check("declined push does not stop the farm setup", e.as.is_running())
+end
+
+for _, rejected in ipairs({0, 1, 3, 5}) do
+  local e = engine()
+  mud.send = function(cmd)
+    e.sent[#e.sent + 1] = cmd
+    return rejected ~= 0 and #e.sent ~= rejected
+  end
+  e.as.chaossea_farm_start(5, "risky")
+  check("rejected farm setup commands do not announce a restart (" .. rejected .. ")", #e.pushes == 0)
+end
+
+-- Exercise the actual notification consumer; this backend only records calls.
+do
+  local e = engine()
+  local old_store, old_push = store, push
+  local delivered, limited = {}, {}
+  store = {
+    load = function() end,
+    get = function() return {app_token = "offline-test", user_key = "offline-test",
+      config = {grace_period = 0, rate_limit = 60}} end,
+  }
+  push = {
+    init = function(token, key) assert(token == "offline-test" and key == "offline-test") end,
+    enabled = function() return true end,
+    set_rate_limit = function() end,
+    is_rate_limited = function(channel) return limited[channel] == true end,
+    record_send = function(channel) limited[channel] = true end,
+    send = function(message, opts) delivered[#delivered + 1] = {message = message, title = opts.title} end,
+  }
+  package.loaded.push_notify = nil
+  local sink = require("push_notify")
+  local output = print
+  print = function() end
+  sink.on_load()
+  print = output
+  e.push_sink = sink
+  e.as.on_setup()
+  e.begin({n = 0}, {})
+  e.info({s = 0}); e.contents({}, nil, true, {cask})
+  check("real consumer keeps new Chaos Sea channels opt-in", #delivered == 0)
+  print = function() end
+  sink.enable_channel("chaossea_cask", true)
+  sink.enable_channel("chaossea_farm", true)
+  print = output
+  assert(e.as.explore_start("chaossea"))
+  assert(e.as.start(false))
+  e.contents({}, nil, false, {cask})
+  e.as.chaossea_farm_start(5, "risky")
+  check("real consumer delivers both nearby events on distinct rate-limit channels",
+    #delivered == 2 and delivered[1].title == "CHAOSSEA_CASK" and delivered[2].title == "CHAOSSEA_FARM")
+  e.as.stop()
+  store, push = old_store, old_push
+  package.loaded.push_notify = nil
 end
 
 print(string.format("%d checks, %d failures", checks, failures))

@@ -72,15 +72,23 @@ local COMPLETION_ITEMS = {
   "cask of chaotic energy",
 }
 
-function M.complete(ctx)
+local function has_item(ctx, needles)
   for _, item in ipairs((ctx and ctx.items) or {}) do
     local item_name = type(item) == "table" and item.name or item
     local low = tostring(item_name or ""):lower()
-    for _, needle in ipairs(COMPLETION_ITEMS) do
+    for _, needle in ipairs(needles) do
       if low:find(needle, 1, true) then return true end
     end
   end
   return false
+end
+
+function M.complete(ctx)
+  return has_item(ctx, COMPLETION_ITEMS)
+end
+
+function M.cask_found(ctx)
+  return has_item(ctx, { "cask of chaotic energy" })
 end
 
 local DIFFICULTIES = { risky = true, alarming = true, deadly = true }

@@ -11,6 +11,30 @@ commands may still run, so wait for queued movement to finish before restarting.
 `/step explore leave` refuses until the current route arrives. Stored routes and
 the walk back to the origin continue to check each room for mobs.
 
+## Chaos Sea push notifications
+
+Enable the two channels in the existing `push_notify` plugin:
+
+```
+/pushn toggle chaossea_cask
+/pushn toggle chaossea_farm
+```
+
+Both channels default off. `/pushn toggle` lists their current states; toggling
+an enabled channel turns it off again. Global push enable, credentials, activity
+grace and rate limits remain controlled by `push_notify`.
+
+`chaossea_cask` announces a cask once per fresh exploration run, when a complete
+contents list shows it, before fighting its boss. It means the cask was found,
+not that the room is clear. Pausing/resuming and combat refreshes do not repeat
+it; a portal alone does not trigger this alert.
+
+`chaossea_farm` announces each farm setup after its commands are sent, including
+the initial farm start and automatic repeats. Cancelling a pending repeat sends
+no restart alert; rejected setup sends also suppress it. These are separate channels so discovery does not rate-limit
+the nearby farm alert. No notifications are queued if the consumer is missing
+or suppresses the event.
+
 ## Mob ignores
 
 ```
