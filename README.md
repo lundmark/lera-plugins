@@ -284,8 +284,15 @@ movement at a time and check each room for mobs.
 
 Chaos Sea runs stop at the cask or portal once that room's non-ignored mobs are
 cleared, even if other rooms remain unexplored. A normal run leaves opening the cask and
-entering the portal to you. `/step chaossea farm` starts its next instance from
-that completion point; `-!` cancels the pending restart.
+entering the portal to you. `/step chaossea farm <level> <risky|alarming|deadly>`
+configures repeats without starting or sending gameplay commands. Both arguments
+are required. Start/resume in the current sea with `/step explore`, or start a
+fresh map there with `/step explore chaossea`. Farming creates its next instance
+only from the cleared cask/portal. Changing settings applies to the next restart.
+`-!` cancels pending work while keeping the configuration; `/step chaossea farm off`
+disables repeats without interrupting exploration. Bare `/step chaossea`, its old
+level/setup/off forms, and `/step cs` are no longer accepted. Farm settings last
+until changed or the plugin is reloaded.
 Restarting waits through the portal lobby for confirmed entry into a named maze
 layer, then checks that room's mobs before exploring the fresh map.
 If the server truncates the cask room's contents, the run stops with a warning
@@ -293,7 +300,8 @@ without confirming completion or restarting the farm.
 
 Optional push channels `chaossea_cask` and `chaossea_farm` announce cask discovery
 (before combat, once per fresh explore run) and each farm setup after its commands
-are sent, including the first start. Both default off; enable them with
+are sent. Configuring farming or starting exploration sends no farm alert. Both
+default off; enable them with
 `/pushn toggle chaossea_cask` and `/pushn toggle chaossea_farm`. Existing global
 push enable, activity grace and rate limits apply. Separate channels keep the
 cask alert from suppressing the nearby restart alert. A cancelled pending restart

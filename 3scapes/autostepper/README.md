@@ -20,7 +20,7 @@ before stepping continues.
 
 `/step status` shows farm on/off, selected level and difficulty, and whether the
 next restart is scheduled, waiting for maze entry, or due after clearing the cask room.
-Stopping the farm leaves its last selected level and difficulty visible.
+Stopping cancels pending restarts and keeps the farm configuration enabled for the next run.
 
 It also shows auto-attack and the attack command, the event being awaited
 (initial contents, maze/room entry, combat end or a combat contents refresh),
@@ -31,6 +31,31 @@ route runs show their step counts even when an old exploration map is retained.
 Room entries and occupants come from GMCP. The automatic glance setting and
 `set_glance_cmd()` API have been removed; no extra glance is sent on start or
 after a step.
+
+## Chaos Sea farming
+
+```
+/step chaossea farm 5 risky
+/step explore
+```
+
+The first command only configures automatic repeats. Both level (a non-negative
+whole number) and difficulty (`risky`, `alarming` or `deadly`) are required. It sends
+no gameplay commands or notifications and does not start or interrupt exploration.
+Changing these settings applies to the next restart, including one already scheduled.
+
+`/step explore` starts or resumes exploring the current sea; `/step explore chaossea`
+starts a fresh map in the current sea. After the cask/portal room is cleared, farming
+opens the cask, enters the portal, unsets the old sea, creates the configured sea,
+and enters it. Only this automatic restart sends the setup commands.
+
+`/step chaossea farm off` disables repeats and cancels a pending restart without
+interrupting the current exploration or fight. `-!`, `/step stop` and `/step explore off`
+stop exploration and cancel pending restarts while keeping the farm configuration.
+Settings last until changed or the plugin is reloaded.
+
+Bare `/step chaossea`, its old level/setup/off forms, and the `/step cs` shorthand
+are no longer accepted. Use `/step explore` to start and the farm commands to configure.
 
 ## Chaos Sea push notifications
 
@@ -50,10 +75,10 @@ contents list shows it, before fighting its boss. It means the cask was found,
 not that the room is clear. Pausing/resuming and combat refreshes do not repeat
 it; a portal alone does not trigger this alert.
 
-`chaossea_farm` announces each farm setup after its commands are sent, including
-the initial farm start and automatic repeats. Cancelling a pending repeat sends
-no restart alert; rejected setup sends also suppress it. These are separate channels so discovery does not rate-limit
-the nearby farm alert. No notifications are queued if the consumer is missing
+`chaossea_farm` announces each automatic restart after its setup commands are sent.
+Configuring farming or starting exploration sends no farm alert. Cancelling a pending
+repeat sends no restart alert; rejected setup sends also suppress it. Separate
+channels prevent discovery from rate-limiting the nearby farm alert. No notifications are queued if the consumer is missing
 or suppresses the event.
 
 ## Mob ignores

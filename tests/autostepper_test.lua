@@ -2071,15 +2071,12 @@ do
   cmd("add a gentle guide")
   arrive(9903, "Layer one of the Sea of Chaos", { "A gentle guide" }, {})
   sent = {}
-  -- Earlier policy tests installed a minimal area profile without restart.
-  local area = require("areas.chaossea")
-  local old_restart = area.restart
-  area.restart = function() return { "test-sea-setup" } end
   quiet(step_cmd.handler, "chaossea farm 0 risky")
+  quiet(step_cmd.handler, "explore chaossea")
   deliver_arrival_contents()
   check("farm moves past ignored mobs without attacking", real_explore.active() and last_sent() == "n" and count_sent("kill ") == 0, table.concat(sent, "|"))
-  quiet(step_cmd.handler, "chaossea off")
-  area.restart = old_restart
+  quiet(step_cmd.handler, "chaossea farm off")
+  quiet(as.stop)
   store.save = function() return false end
   check("save failure is visible", has_line(cmd("add a guide"), "could not save"))
   quiet(as.stop)
@@ -2094,6 +2091,17 @@ do
   local rejected = capture(step_cmd.handler, "set glance look")
   check("obsolete glance setting cannot configure an automatic command", has_line(rejected, "Unknown setting: glance"))
   check("registry help no longer advertises optional glancing", not step_cmd.description:find("glanc", 1, true))
+end
+
+do
+  local help = capture(step_cmd.handler, "help")
+  check("step help describes configuration without starting",
+    has_line(help, "/step chaossea farm <level> <difficulty> - Configure farming without starting"))
+  check("step help removes the old setup and off commands",
+    not has_line(help, "/step chaossea [level]") and not has_line(help, "/step chaossea off"))
+  check("registry usage requires explicit farm settings",
+    step_cmd.usage:find("chaossea farm <level> <difficulty>", 1, true)
+      and not step_cmd.usage:find("chaossea [farm]", 1, true))
 end
 
 if failures > 0 then

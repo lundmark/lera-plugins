@@ -127,13 +127,22 @@ local step_dispatch = nil -- Commands sent and entries acknowledged in this step
 
 -- Chaos Sea farm mode keeps starting fresh instances only after the current
 -- explore run reaches the profile's completion room. It is deliberately
--- separate from ordinary explore mode so `/step explore` remains one-shot.
+-- configured independently of starting or stopping an explore run.
 local chaossea_farm = {
-  active = false,
+  enabled = false,
   level = 0,
   difficulty = "risky",
   restart_timer = nil,
 }
+
+local restart_chaossea
+
+local function cancel_farm_restart()
+  if chaossea_farm.restart_timer then
+    timer.cancel(chaossea_farm.restart_timer)
+    chaossea_farm.restart_timer = nil
+  end
+end
 
 local cask_announced = false -- Kept across pause/resume; reset for a fresh sea.
 local pushn = nil
@@ -770,15 +779,14 @@ local function do_step(monsters)
       enabled = false
       state = "idle"
       cancel_arrival()
-      if chaossea_farm.active and at_completion then
+      if chaossea_farm.enabled and at_completion then
         log("Chaos Sea farm: completion reached; preparing the next instance",
             COLOR_RUN)
         if explore.stop then explore.stop() end
-        local next_level, next_difficulty = chaossea_farm.level, chaossea_farm.difficulty
         chaossea_farm.restart_timer = timer.after(1000, function()
           chaossea_farm.restart_timer = nil
-          if chaossea_farm.active then
-            M.chaossea_setup(next_level, next_difficulty, true)
+          if chaossea_farm.enabled then
+            restart_chaossea()
           end
         end)
         return false
@@ -953,10 +961,9 @@ local function show_help()
   log("  /step explore reset    - Reset here; stops and discards an outstanding frontier speedwalk")
   log("  /step explore leave    - Walk back to the run's origin, fighting on the way;")
   log("                           wait for the current route to arrive; the last step out is yours")
-  log("  /step chaossea [level] [difficulty] - Set up Chaos Sea and explore it")
-  log("  /step chaossea farm [level] [difficulty] - Repeat completed Sea runs")
+  log("  /step chaossea farm <level> <difficulty> - Configure farming without starting")
   log("                           difficulty: risky, alarming or deadly")
-  log("  /step chaossea off     - Stop Chaos Sea exploration/farming")
+  log("  /step chaossea farm off - Disable farming without stopping exploration")
   log("  /step set attack [on|off] - Toggle auto-attack")
   log("  /step set kill [cmd]      - Set/show attack command prefix")
   log("  /step set dive [on|off]   - Toggle explore dive policy")
@@ -967,7 +974,9 @@ local function show_help()
   log("Interrupted frontier speedwalks discard the map; wait for queued moves before restarting.")
   log("Combat refreshes wait three seconds per attempt, with two retries before stopping.")
   log("Stop the active run before starting another. Resume a paused run with -.")
-  log("Chaos Sea stops at the cask/portal after clearing non-ignored mobs; farm then restarts.")
+  log("Start in the current Sea with /step explore [chaossea]; farm config sends no setup commands.")
+  log("Stop cancels pending restarts but keeps farm settings; farm off disables repeats.")
+  log("Chaos Sea stops at the cask/portal after clearing non-ignored mobs; configured farm then restarts.")
   log("Farm restarts wait through the portal lobby for confirmed entry into the new maze.")
   log("Push alerts: /pushn toggle chaossea_cask and /pushn toggle chaossea_farm (default off).")
   log("Cask alerts fire on discovery, before combat; farm alerts fire when setup commands are sent.")
@@ -1014,12 +1023,12 @@ end
 --------------------------------------------------------------------------------
 
 local function show_farm_status()
-  log("  Chaos Sea farm: " .. (chaossea_farm.active and "on" or "off"))
+  log("  Chaos Sea farm: " .. (chaossea_farm.enabled and "on" or "off"))
   log(string.format("  Farm settings: level %d, %s", chaossea_farm.level, chaossea_farm.difficulty))
   local restart = "none"
-  if chaossea_farm.active and chaossea_farm.restart_timer then
+  if chaossea_farm.enabled and chaossea_farm.restart_timer then
     restart = "scheduled"
-  elseif chaossea_farm.active and enabled and run_mode == "explore" then
+  elseif chaossea_farm.enabled and enabled and run_mode == "explore" then
     restart = arrival_kind == "setup" and "waiting for maze entry" or "after cask"
   end
   log("  Farm restart: " .. restart)
@@ -1031,7 +1040,7 @@ local function waiting_for()
   if arrival_kind == "move" then return "room entry" end
   if arrival_kind == "refresh" then return "initial room contents" end
   if state == "fighting" then return "combat end" end
-  if chaossea_farm.active and chaossea_farm.restart_timer then return "farm restart" end
+  if chaossea_farm.enabled and chaossea_farm.restart_timer then return "farm restart" end
   return "nothing"
 end
 
@@ -1134,28 +1143,12 @@ local function dispatch(args)
     M.start(true)
   elseif sub == "stop" then
     M.stop()
-  elseif sub == "chaossea" or sub == "cs" then
-    local arg = rest:match("^(%S*)")
-    if arg == "off" then
-      M.explore_stop()
+  elseif sub == "chaossea" then
+    if rest:match("^farm%s+off$") then
+      M.chaossea_farm_off()
     else
-      local farm = arg == "farm"
-      if arg == "setup" or farm then
-        rest = rest:sub(#arg + 1):match("^%s*(.*)$") or ""
-      end
-      local level_s, difficulty = rest:match("^(%d+)%s*(%a*)$")
-      if rest == "" then
-        level_s, difficulty = "0", "risky"
-      elseif not level_s then
-        log("Usage: /step chaossea [farm] [level] [risky|alarming|deadly]", COLOR_WARN)
-        return
-      end
-      if difficulty == "" then difficulty = "risky" end
-      if farm then
-        M.chaossea_farm_start(tonumber(level_s), difficulty)
-      else
-        M.chaossea_setup(tonumber(level_s), difficulty)
-      end
+      local level, difficulty = rest:match("^farm%s+(%d+)%s+(%a+)$")
+      M.chaossea_farm_config(level, difficulty)
     end
   elseif sub == "explore" then
     local arg = rest:match("^(%S*)")
@@ -1190,7 +1183,7 @@ local function register_command()
     name = "/step",
     aliases = { "/autostepper" },
     usage = "/step [start|targets|stop|explore [area]|explore off|explore reset|"
-      .. "explore leave|chaossea [farm] [level] [difficulty]|chaossea off|"
+      .. "explore leave|chaossea farm <level> <difficulty>|chaossea farm off|"
       .. "mobignore add|remove <name>|mobignore list|mobignore clear|"
       .. "status|trace [on|off]|set <key> [value]]",
     summary = "Automatic speedwalk stepping with optional combat",
@@ -1198,11 +1191,16 @@ local function register_command()
       .. "attacking on the way. Or, with 'explore [area]', maps an "
       .. "unmapped area, speedwalking the full shortest route through known rooms to "
       .. "the next unexplored room. Each entry updates position; combat and exploration "
-      .. "decisions wait for the destination. Chaos Sea stops at the cask/portal after "
+      .. "decisions wait for the destination. 'chaossea farm <level> <difficulty>' configures "
+      .. "repeats without starting, moving or notifying. Both arguments are required; "
+      .. "difficulty is risky, alarming or deadly. Start in the current Sea with "
+      .. "'explore [chaossea]'. Stops cancel pending restarts but keep the configuration; "
+      .. "'chaossea farm off' disables repeats without stopping exploration. "
+      .. "Chaos Sea stops at the cask/portal after "
       .. "clearing non-ignored mobs; farm mode then starts the next instance, waiting "
       .. "through the portal lobby for confirmed entry into the new maze. "
       .. "Push channels 'chaossea_cask' (discovery, before combat) and 'chaossea_farm' "
-      .. "(each farm setup, including the first) default off; enable them with "
+      .. "(each automatic restart) default off; enable them with "
       .. "'/pushn toggle <channel>'. Existing push grace and rate limits apply. Otherwise "
       .. "exploration stops once every reachable exit leads somewhere already "
       .. "mapped. 'explore off' stops it early, "
@@ -1462,6 +1460,7 @@ function M.start(targets_only, from_entry)
         COLOR_RUN)
   end
 
+  cancel_farm_restart()
   enabled = true
   route_commands = {}
   state = "idle"
@@ -1484,14 +1483,8 @@ function M.start(targets_only, from_entry)
 end
 
 -- Stop autostepping
-function M.stop(keep_farm)
-  if not keep_farm then
-    chaossea_farm.active = false
-    if chaossea_farm.restart_timer then
-      timer.cancel(chaossea_farm.restart_timer)
-      chaossea_farm.restart_timer = nil
-    end
-  end
+function M.stop()
+  cancel_farm_restart()
   if enabled then
     log("Stopped", COLOR_RUN)
   end
@@ -1538,44 +1531,51 @@ function M.explore_start(area_name)
   return true
 end
 
--- Set up a fresh Chaos Sea instance using the same sequence as the legacy
--- `-cs` helper, then hand control to the existing area-aware explorer. Keeping
--- this here (rather than in the area profile) makes the profile data-only while
--- ensuring the setup commands are sent before Room.Refresh is requested.
-function M.chaossea_setup(level, difficulty, preserve_farm)
+-- Configuration applies to the next completed Sea, including a restart that
+-- is already scheduled. It never sends commands or changes the current run.
+function M.chaossea_farm_config(level, difficulty)
+  level = tonumber(level)
+  if not level or level < 0 or level > 9007199254740991 or level ~= math.floor(level)
+      or (difficulty ~= "risky" and difficulty ~= "alarming" and difficulty ~= "deadly") then
+    log("Usage: /step chaossea farm <level> <risky|alarming|deadly> | /step chaossea farm off", COLOR_WARN)
+    return false
+  end
+  chaossea_farm.enabled = true
+  chaossea_farm.level = level
+  chaossea_farm.difficulty = difficulty
+  log(string.format("Chaos Sea farm configured: level %d, %s. Start/resume with /step explore.",
+    level, difficulty), COLOR_RUN)
+  return true
+end
+
+function M.chaossea_farm_off()
+  chaossea_farm.enabled = false
+  cancel_farm_restart()
+  log("Chaos Sea farm off", COLOR_RUN)
+  return true
+end
+
+-- Only a cleared completion room schedules the setup sequence. Its final
+-- maze entry, rather than a refresh of the old instance, begins the new run.
+restart_chaossea = function()
   local prof = load_area("chaossea")
   if not prof or type(prof.restart) ~= "function" then
     log("Chaos Sea setup is unavailable", COLOR_ERROR)
     return false
   end
-  if not preserve_farm then chaossea_farm.active = false end
-  if enabled then M.stop(preserve_farm) end
-  local chosen_level = tonumber(level) or 0
-  local chosen_difficulty = difficulty or "risky"
-  local commands = prof.restart({ level = chosen_level, difficulty = chosen_difficulty })
+  local level, difficulty = chaossea_farm.level, chaossea_farm.difficulty
+  local commands = prof.restart({ level = level, difficulty = difficulty })
   local setup_sent = true
   for _, cmd in ipairs(commands) do
     if mud.send(cmd) == false then setup_sent = false end
   end
-  log(string.format("Chaos Sea setup sent (level %d, %s)",
-    chosen_level, chosen_difficulty), COLOR_RUN)
-  if setup_sent and preserve_farm and chaossea_farm.active then
+  log(string.format("Chaos Sea setup sent (level %d, %s)", level, difficulty), COLOR_RUN)
+  if setup_sent then
     push_event("chaossea_farm", string.format("Chaos Sea farm: starting a new sea (level %d, %s)",
-      chosen_level, chosen_difficulty))
+      level, difficulty))
   end
   if not M.explore_start("chaossea") then return false end
   return M.start(config.targets_only, true)
-end
-
-function M.chaossea_farm_start(level, difficulty)
-  chaossea_farm.active = true
-  chaossea_farm.level = tonumber(level) or 0
-  chaossea_farm.difficulty = difficulty or "risky"
-  if chaossea_farm.restart_timer then
-    timer.cancel(chaossea_farm.restart_timer)
-    chaossea_farm.restart_timer = nil
-  end
-  return M.chaossea_setup(chaossea_farm.level, chaossea_farm.difficulty, true)
 end
 
 function M.explore_stop()

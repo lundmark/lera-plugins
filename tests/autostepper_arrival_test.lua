@@ -13,6 +13,13 @@ local function engine()
       return true
     end,
   }
+  package.loaded.command = {
+    register = function(spec)
+      if spec.name == "/step" then E.command = spec.handler end
+      return 1
+    end,
+    unregister = function() end,
+  }
   local handlers, timers, triggers = {}, {}, {}
   local next_id = 0
   lera = { time = function() return E.now / 1000 end }
@@ -110,6 +117,18 @@ local function engine()
     assert(E.as.explore_start("chaossea"))
     assert(E.as.start(targets_only))
     E.info(exits); E.contents(monsters, players)
+  end
+  -- Seed a completed Sea, then exercise the real delayed restart. Callers
+  -- inspect the new instance; drop only the seed's I/O observations.
+  function E.restart_farm(level, difficulty)
+    local cask = "A cask of chaotic energy (closed)"
+    E.info({}); E.contents({}, nil, false, {cask})
+    assert(E.as.chaossea_farm_config(level, difficulty))
+    E.command("explore chaossea")
+    E.contents({}, nil, false, {cask})
+    E.pushes, E.requests = {}, {}
+    E.advance(1000)
+    return E.as.is_running()
   end
   function E.blocked()
     for _, t in pairs(triggers) do
@@ -385,7 +404,7 @@ do
   local e = engine()
   e.deliver("Room.Info", {num = 400, name = "Outside the Sea", exits = {}})
   e.contents({})
-  e.as.chaossea_setup(0, "risky")
+  e.restart_farm(0, "risky")
   check("setup sends its commands without a stale initial refresh", #e.sent == 5 and #e.requests == 0)
   e.deliver("Room.Info", {num = 401, name = "The portal shore", exits = {}})
   e.contents({}, nil, true)
@@ -495,7 +514,7 @@ for _, cancel in ipairs({false, true}) do
   local e = engine()
   e.deliver("Room.Info", {num = 400, name = "Outside the Sea", exits = {}})
   e.contents({})
-  assert(e.as.chaossea_farm_start(5, "risky"))
+  assert(e.restart_farm(5, "risky"))
   e.info({n = 0, e = 0}); e.contents({}, nil, true)
   e.info({s = 0}); e.contents({boss}, nil, true, {cask, portal})
   e.advance(1000)
@@ -530,7 +549,7 @@ do
   local e = engine()
   e.deliver("Room.Info", {num = 266, name = "A swirling Sea of Chaos", exits = {out = 267}})
   e.contents({})
-  assert(e.as.chaossea_farm_start(5, "risky"))
+  assert(e.restart_farm(5, "risky"))
   e.info({n = 0, e = 0}); e.contents({}, nil, true)
   e.info({s = 0}); e.contents({boss}, nil, true, {cask, portal})
   e.deliver("Char.Combat", {attacker = ""})
@@ -560,7 +579,7 @@ end
 
 do
   local e = engine()
-  e.as.chaossea_farm_start(5, "risky")
+  e.restart_farm(5, "risky")
   e.deliver("Room.Info", {num = 266, name = "A swirling Sea of Chaos", exits = {out = 267}})
   e.contents({}, nil, true)
   e.advance(5000)
@@ -579,7 +598,7 @@ for _, farm in ipairs({false, true}) do
     if farm then
       e.deliver("Room.Info", {num = 400, name = "Outside the Sea", exits = {}})
       e.contents({})
-      assert(e.as.chaossea_farm_start(5, "risky"))
+      assert(e.restart_farm(5, "risky"))
       e.info({n = 0, e = 0}); e.contents({}, nil, true)
     else
       e.begin({n = 0, e = 0}, {})
@@ -621,7 +640,7 @@ for _, farm in ipairs({false, true}) do
   if farm then
     e.deliver("Room.Info", {num = 400, name = "Outside the Sea", exits = {}})
     e.contents({})
-    assert(e.as.chaossea_farm_start(5, "risky"))
+    assert(e.restart_farm(5, "risky"))
     e.info({n = 0, e = 0}); e.contents({}, nil, true)
   else
     e.begin({n = 0, e = 0}, {})
@@ -803,11 +822,11 @@ end
 
 do
   local e = engine()
-  e.as.chaossea_setup(5, "risky")
-  check("ordinary Chaos Sea setup sends no farm push", #e.pushes == 0)
+  e.command("chaossea farm 5 risky")
+  check("farm configuration sends no push", #e.pushes == 0)
   e.push_sink = nil
   e.as.stop()
-  e.as.chaossea_farm_start(5, "risky")
+  e.restart_farm(5, "risky")
   e.info({n = 0}); e.contents({}, nil, true)
   e.info({s = 0}); e.contents({boss}, nil, true, {cask})
   check("missing push consumer leaves exploration and combat working", #e.pushes == 0 and e.as.get_state() == "fighting")
@@ -817,10 +836,10 @@ do
     notify = function(channel) replacement_calls[#replacement_calls + 1] = channel; return false end,
   }
   e.as.stop()
-  e.as.chaossea_farm_start(5, "risky")
+  e.restart_farm(5, "risky")
   check("replacement push consumer is discovered and registered",
     replacement_channels.chaossea_cask and replacement_channels.chaossea_farm
-      and replacement_calls[1] == "chaossea_farm")
+      and replacement_calls[#replacement_calls] == "chaossea_farm")
   check("declined push does not stop the farm setup", e.as.is_running())
 end
 
@@ -830,7 +849,7 @@ for _, rejected in ipairs({0, 1, 3, 5}) do
     e.sent[#e.sent + 1] = cmd
     return rejected ~= 0 and #e.sent ~= rejected
   end
-  e.as.chaossea_farm_start(5, "risky")
+  e.restart_farm(5, "risky")
   check("rejected farm setup commands do not announce a restart (" .. rejected .. ")", #e.pushes == 0)
 end
 
@@ -870,7 +889,7 @@ do
   assert(e.as.explore_start("chaossea"))
   assert(e.as.start(false))
   e.contents({}, nil, false, {cask})
-  e.as.chaossea_farm_start(5, "risky")
+  e.restart_farm(5, "risky")
   check("real consumer delivers both nearby events on distinct rate-limit channels",
     #delivered == 2 and delivered[1].title == "CHAOSSEA_CASK" and delivered[2].title == "CHAOSSEA_FARM")
   e.as.stop()
@@ -899,7 +918,7 @@ end
 
 do
   local e = engine()
-  e.as.chaossea_farm_start(5, "deadly")
+  e.restart_farm(5, "deadly")
   local sent, requested = #e.sent, #e.requests
   local text = status_text(e)
   check("farm setup status includes selected level and difficulty",
@@ -925,7 +944,7 @@ do
   e.as.stop()
   text = status_text(e)
   check("stopped farm status retains its selected settings without a pending restart",
-    text:find("Chaos Sea farm: off", 1, true) and text:find("Farm settings: level 5, deadly", 1, true)
+    text:find("Chaos Sea farm: on", 1, true) and text:find("Farm settings: level 5, deadly", 1, true)
       and text:find("Farm restart: none", 1, true) and text:find("Waiting for: nothing", 1, true))
 end
 
@@ -966,24 +985,139 @@ end
 
 do
   local e = engine()
-  e.as.chaossea_farm_start(5, "risky")
+  e.restart_farm(5, "risky")
   e.info({n = 0}); e.contents({}, nil, true)
   e.info({s = 0}); e.contents({}, nil, true, {cask})
-  e.as.chaossea_setup(0, "risky")
+  e.command("chaossea farm off")
   local text = status_text(e)
-  check("switching to ordinary setup does not report the cancelled farm timer as a restart",
+  check("disabling farm does not report the cancelled timer as a restart",
     text:find("Chaos Sea farm: off", 1, true) and text:find("Farm restart: none", 1, true))
   e.as.stop()
 end
 
 do
   local e = engine()
-  e.as.chaossea_farm_start(5, "risky")
+  e.restart_farm(5, "risky")
   e.info({}); e.contents({}, nil, true)
   local text = status_text(e)
   check("exhausted farm reports no automatic restart despite the retained farm setting",
     text:find("Running: no", 1, true) and text:find("Chaos Sea farm: on", 1, true)
       and text:find("Farm restart: none", 1, true))
+end
+
+-- Farm configuration never issues gameplay commands or starts a run.
+do
+  local e = engine()
+  e.command("chaossea farm 5 deadly")
+  local text = status_text(e)
+  check("farm command configures without starting exploration",
+    not e.as.is_running() and not e.mode.active() and #e.sent == 0 and #e.requests == 0)
+  check("idle configured farm reports no pending restart",
+    text:find("Chaos Sea farm: on", 1, true) and text:find("Farm settings: level 5, deadly", 1, true)
+      and text:find("Farm restart: none", 1, true) and text:find("Waiting for: nothing", 1, true))
+  e.advance(10000)
+  check("configuration schedules no work or push", #e.sent == 0 and #e.pushes == 0)
+  for _, args in ipairs({"chaossea", "chaossea 5 deadly", "chaossea setup 5 deadly",
+      "chaossea off", "cs", "cs farm 5 deadly", "chaossea farm", "chaossea farm 5",
+      "chaossea farm 5 impossible", "chaossea farm -1 deadly", "chaossea farm 2.5 deadly",
+      "chaossea farm 5deadly", "chaossea farm 5 deadly extra", "chaossea farm off extra"}) do
+    e.command(args)
+    text = status_text(e)
+    check("invalid form leaves configuration and run unchanged: " .. args,
+      not e.as.is_running() and #e.sent == 0 and #e.requests == 0
+        and text:find("Chaos Sea farm: on", 1, true)
+        and text:find("Farm settings: level 5, deadly", 1, true))
+  end
+  e.command("chaossea farm off")
+  text = status_text(e)
+  check("farm off disables configuration without starting",
+    not e.as.is_running() and #e.sent == 0 and text:find("Chaos Sea farm: off", 1, true))
+end
+
+for _, start in ipairs({"explore", "explore chaossea"}) do
+  local e = engine()
+  e.info({n = 0}); e.contents({boss})
+  e.command("chaossea farm 5 risky")
+  e.command(start)
+  check(start .. " starts in the current sea with an initial refresh",
+    e.as.is_running() and #e.sent == 0 and #e.requests == 1)
+  e.contents({boss})
+  check(start .. " attacks the current room before restarting", e.sent[1] == "kill mutant")
+  local sent, requested, pos = #e.sent, #e.requests, e.pos()
+  e.command("chaossea farm 7 deadly")
+  check("changing farm settings does not interrupt combat",
+    e.as.get_state() == "fighting" and #e.sent == sent and #e.requests == requested and e.pos() == pos)
+  e.deliver("Char.Combat", {attacker = ""}); e.contents({}, nil, false, {cask})
+  check("farm config alone has sent no restart push", #e.pushes == 1 and e.pushes[1].channel == "chaossea_cask")
+  e.command("chaossea farm 4 alarming")
+  e.advance(1000)
+  check("pending restart uses the latest farm configuration",
+    table.concat(e.sent, ",", 2) == "open cask,enter portal,unsetsea,setsea 4 alarming,enter sea"
+      and #e.pushes == 2 and e.pushes[2].channel == "chaossea_farm")
+  e.as.stop()
+  local text = status_text(e)
+  check("stop keeps farm configuration but cancels work",
+    text:find("Chaos Sea farm: on", 1, true) and text:find("Farm restart: none", 1, true))
+end
+
+do
+  local e = engine()
+  e.command("chaossea farm 5 risky")
+  e.begin({n = 0}, {boss})
+  local sent = #e.sent
+  e.command("chaossea farm off")
+  check("disabling farm does not interrupt the current fight",
+    e.as.is_running() and e.as.get_state() == "fighting" and #e.sent == sent)
+  e.deliver("Char.Combat", {attacker = ""}); e.contents({}, nil, false, {cask})
+  e.advance(1000)
+  check("disabled farm stops at the cask without restarting", not e.as.is_running() and #e.sent == sent)
+end
+
+for _, cancel in ipairs({"chaossea farm off", "stop"}) do
+  local e = engine()
+  e.command("chaossea farm 5 risky")
+  e.begin({n = 0}, {})
+  e.info({s = 0}); e.contents({}, nil, true, {cask})
+  local sent, pushes = #e.sent, #e.pushes
+  e.command(cancel)
+  e.advance(1000)
+  check(cancel .. " cancels the pending farm restart", #e.sent == sent and #e.pushes == pushes)
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {boss})
+  e.command("chaossea farm 3 alarming")
+  e.deliver("Char.Combat", {attacker = ""}); e.contents({}, nil, false, {cask})
+  e.advance(1000)
+  check("enabling farm during exploration applies at its next cask",
+    table.concat(e.sent, ",", 2) == "open cask,enter portal,unsetsea,setsea 3 alarming,enter sea")
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {boss})
+  e.as.stop()
+  local sent, rooms, pos = #e.sent, e.mode.stats().rooms, e.pos()
+  e.command("chaossea farm 5 risky")
+  check("configuring a paused run preserves its map and stopped state",
+    not e.as.is_running() and e.mode.retained() and e.mode.stats().rooms == rooms
+      and e.pos() == pos and #e.sent == sent)
+  e.command("explore")
+  e.contents({boss})
+  check("explore resumes the paused map with the configured farm",
+    e.as.get_state() == "fighting" and e.mode.stats().rooms == rooms and e.pos() == pos)
+  e.deliver("Char.Combat", {attacker = ""}); e.contents({}, nil, false, {cask})
+  sent = #e.sent
+  e.command("explore")
+  e.advance(1000)
+  check("explicit resume replaces the pending restart with a fresh contents wait",
+    #e.sent == sent and status_text(e):find("Waiting for: initial room contents", 1, true))
+  e.contents({boss}, nil, false, {cask})
+  check("a cancelled restart cannot bypass a boss found after resume", e.sent[sent + 1] == "kill mutant")
+  e.command("chaossea   farm   off")
+  check("farm off accepts ordinary command whitespace",
+    status_text(e):find("Chaos Sea farm: off", 1, true) and e.as.is_running())
 end
 
 print(string.format("%d checks, %d failures", checks, failures))
