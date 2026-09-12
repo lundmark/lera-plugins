@@ -572,6 +572,15 @@ local function write_cityplan(parts)
   local rec = parts.cityplan
   if type(rec) ~= "table" then return end
 
+  -- Carried forward from the plan already held, so a delta that omits a key
+  -- leaves that part of the plan alone instead of blanking it. A composite
+  -- writer is invoked with whichever halves the frame had
+  -- (protocol.lua:58-63), and the terrain, building and placeable lists are
+  -- each big enough to arrive in a frame of their own -- so rebuilding all
+  -- three from scratch on every call meant any frame without the building
+  -- list wiped the buildings and drew the grid as bare terrain.
+  local prev = S.city_plan or {}
+
   local plan = {
     enabled = (tonumber(rec.enabled) or 0) == 1,
     dim     = tonumber(rec.dim) or 12,
@@ -584,12 +593,21 @@ local function write_cityplan(parts)
     mood    = tonumber(rec.mood_delta) or 0,
     margin  = tonumber(rec.margin) or 3,
     rows = {}, blds = {}, unplaced = {},
-    -- Sent only when there are any, so its absence means none.
+    -- Sent only when there are any, and this writer only runs on a frame that
+    -- carried the plan record, so absence here really does mean none.
     perks = tostring(parts.cityplan_perks or ""),
   }
 
-  for i, row in ipairs(parts.cityplan_terrain or {}) do
-    plan.rows[i] = tostring(row)
+  if parts.cityplan_terrain ~= nil then
+    for i, row in ipairs(parts.cityplan_terrain) do
+      plan.rows[i] = tostring(row)
+    end
+  else
+    plan.rows = prev.rows or {}
+  end
+
+  if parts.cityplan_buildings == nil then
+    plan.blds = prev.blds or {}
   end
   for _, b in ipairs(parts.cityplan_buildings or {}) do
     if type(b) == "table" and b.id ~= nil and tostring(b.id) ~= "" then
@@ -603,6 +621,9 @@ local function write_cityplan(parts)
         name = (name ~= "") and name or id,
       }
     end
+  end
+  if parts.cityplan_placeable == nil then
+    plan.unplaced = prev.unplaced or {}
   end
   for _, b in ipairs(parts.cityplan_placeable or {}) do
     if type(b) == "table" and b.id ~= nil and tostring(b.id) ~= "" then
