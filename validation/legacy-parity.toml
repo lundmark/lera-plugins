@@ -732,7 +732,7 @@ key = "channel_visibility_state"
 category = "state"
 status = "plugin_gap"
 summary = "Legacy channel discovery, visibility, and per-channel state remain incomplete."
-current_refs = ["3scapes/chat_monitor.lua:362", "3scapes/chat_monitor.lua:399"]
+current_refs = ["3scapes/chat_monitor.lua:363", "3scapes/chat_monitor.lua:400"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -763,7 +763,7 @@ key = "color_preferences"
 category = "state"
 status = "plugin_gap"
 summary = "Legacy color conversion, presets, and saved color preferences remain incomplete."
-current_refs = ["3scapes/chat_monitor.lua:429", "3scapes/chat_monitor.lua:666"]
+current_refs = ["3scapes/chat_monitor.lua:430", "3scapes/chat_monitor.lua:843"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -808,7 +808,7 @@ key = "dynamic_event_registration"
 category = "callback"
 status = "plugin_gap"
 summary = "Legacy dynamic chatline triggers and event attachment remain incomplete."
-current_refs = ["3scapes/chat_monitor.lua:729", "3scapes/chat_monitor.lua:730", "3scapes/chat_monitor.lua:731"]
+current_refs = ["3scapes/chat_monitor.lua:906", "3scapes/chat_monitor.lua:907", "3scapes/chat_monitor.lua:908"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -823,7 +823,7 @@ key = "filtering_and_gagging"
 category = "trigger"
 status = "plugin_gap"
 summary = "Current type filtering and gags do not cover the full legacy filtering contract."
-current_refs = ["3scapes/chat_monitor.lua:98", "3scapes/chat_monitor.lua:104", "3scapes/chat_monitor.lua:440"]
+current_refs = ["3scapes/chat_monitor.lua:98", "3scapes/chat_monitor.lua:104", "3scapes/chat_monitor.lua:441"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -838,7 +838,7 @@ key = "host_lifecycle"
 category = "callback"
 status = "plugin_gap"
 summary = "Legacy host, plugin-list, connection, and enablement lifecycle behavior remains incomplete."
-current_refs = ["3scapes/chat_monitor.lua:708", "3scapes/chat_monitor.lua:737"]
+current_refs = ["3scapes/chat_monitor.lua:885", "3scapes/chat_monitor.lua:914"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -916,7 +916,7 @@ key = "message_capture_dispatch"
 category = "protocol"
 status = "plugin_gap"
 summary = "Current MIP capture covers useful subsets but not the complete legacy dispatch contract."
-current_refs = ["3scapes/chat_monitor.lua:282", "3scapes/chat_monitor.lua:295", "3scapes/chat_monitor.lua:332"]
+current_refs = ["3scapes/chat_monitor.lua:283", "3scapes/chat_monitor.lua:296", "3scapes/chat_monitor.lua:333"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -931,7 +931,7 @@ key = "message_wrapping_buffering"
 category = "state"
 status = "plugin_gap"
 summary = "Character wrapping and bounded history do not reproduce legacy styled pixel-width buffering."
-current_refs = ["3scapes/chat_monitor.lua:121", "3scapes/chat_monitor.lua:222"]
+current_refs = ["3scapes/chat_monitor.lua:121", "3scapes/chat_monitor.lua:223"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -962,7 +962,7 @@ key = "persistence"
 category = "persistence"
 status = "plugin_gap"
 summary = "Current stored history and type settings do not cover all legacy persistent state."
-current_refs = ["3scapes/chat_monitor.lua:708", "3scapes/chat_monitor.lua:742", "3scapes/chat_monitor.lua:751"]
+current_refs = ["3scapes/chat_monitor.lua:885", "3scapes/chat_monitor.lua:919", "3scapes/chat_monitor.lua:933"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -993,7 +993,7 @@ key = "scroll_and_autofollow"
 category = "state"
 status = "plugin_gap"
 summary = "Current wrapped-row scrolling does not reproduce all legacy scrollbar and autofollow behavior."
-current_refs = ["3scapes/chat_monitor.lua:481", "3scapes/chat_monitor.lua:485"]
+current_refs = ["3scapes/chat_monitor.lua:482", "3scapes/chat_monitor.lua:486"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -1008,7 +1008,7 @@ key = "visual_chat_rendering"
 category = "rendering"
 status = "plugin_gap"
 summary = "ANSI pane rendering does not reproduce the complete legacy styled miniwindow presentation."
-current_refs = ["3scapes/chat_monitor.lua:553", "3scapes/chat_monitor.lua:603"]
+current_refs = ["3scapes/chat_monitor.lua:708", "3scapes/chat_monitor.lua:758"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
