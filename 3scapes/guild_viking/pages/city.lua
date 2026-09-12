@@ -229,7 +229,10 @@ end
 -- gated show_city_warehouse)
 -- ---------------------------------------------------------------------------
 
-local WH_CAP = { [1] = 400, [2] = 1000, [3] = 1750, [4] = 3000, [5] = 5250 }
+-- Fallback only: S.wh_cap from the server is preferred below. Refreshed to
+-- match trade_daemon.c:544-551 (warehouse_capacity), which gained +25% per
+-- tier; these were still the pre-2024 numbers.
+local WH_CAP = { [1] = 500, [2] = 1250, [3] = 2188, [4] = 3750, [5] = 6563 }
 local REFINERY_NAMES = {
   salting_house = "Salting House", bakehouse = "Bakehouse",
   furriers_lodge = "Furrier's Lodge", smelter = "Smelter", smithy = "Smithy",
