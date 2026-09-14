@@ -336,6 +336,7 @@ end
 -- Wrapped-line cache: a deque so trimming old messages never shifts the array.
 -- Rebuilt in full when the render width changes; appended to incrementally.
 -- Entries: { text, color_code, is_continuation }
+local selection_revision = 0
 local wrapped = { width = nil, lines = {}, first = 1, last = 0 }
 
 local sc = wm.make_scroller({
@@ -1143,11 +1144,13 @@ local pointer_border = 1
 
 -- Scroll the chat pane by wrapped rows. delta < 0 = up/older.
 function M.scroll(delta)
+  selection_revision = selection_revision + 1
   link_capture = nil
   sc.scroll(delta)
 end
 
 function M.scroll_to_bottom()
+  selection_revision = selection_revision + 1
   link_capture = nil
   sc.scroll_to_bottom()
 end
@@ -1328,6 +1331,40 @@ local function link_at(event)
       return link
     end
   end
+end
+
+-- Optional wm history-selection provider. Keep row objects as identities for
+-- returning to the live cache; snapshot strings survive append/trim unchanged.
+function M.selection_source(rect)
+  local border = pointer_border
+  local b = {x=rect.x+border, y=rect.y+border,
+    w=rect.w-2*border, h=rect.h-2*border}
+  if b.w <= 0 or b.h <= 0 then return nil end
+  wrapped_ensure(b.w)
+  local rows, identities = {}, {}
+  for i = wrapped.first, wrapped.last do
+    local row = wrapped.lines[i]
+    identities[#identities+1] = row
+    rows[#rows+1] = {text=row.color_code .. string.rep(" ", row.indent or (row.is_continuation and math.min(2, b.w-1) or 0))
+        .. row.text .. colors.reset}
+  end
+  local offset, revision = sc.offset(), selection_revision
+  local function valid()
+    return revision == selection_revision and wrapped.width == b.w
+  end
+  return {bounds=b, rows=rows, bottom=#rows-offset, valid=valid,
+    finish=function(s, kind)
+      if not s.moved or not valid() then return end
+      if kind == "escape" and offset == 0 then sc.scroll_to_bottom(); return end
+      local target = identities[s.bottom]
+      for i = wrapped.first, wrapped.last do
+        if wrapped.lines[i] == target then
+          sc.scroll(sc.offset() - (wrapped.last-i))
+          return
+        end
+      end
+      sc.scroll(-wrapped.last) -- selected row was trimmed: oldest retained row
+    end}
 end
 
 function M.on_pointer(event)
