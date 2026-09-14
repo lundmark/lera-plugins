@@ -9,14 +9,6 @@ local util = require("util")
 local gmcp_grid = require("gmcp_grid")
 
 local M = {}
-M.VRELICS = function(val)
-  S.mip_voyage_seen = true
-  S.voyage_relics = {}
-  for entry in val:gmatch("[^;]+") do
-    if #S.voyage_relics >= 50 then break end
-    S.voyage_relics[#S.voyage_relics + 1] = entry
-  end
-end
 
 -- MIP keys the server still sends and this plugin no longer reads. Declaring
 -- them keeps protocol.ingest's accounting honest: they are counted `retired`
@@ -415,6 +407,46 @@ local function count_map_writer(field)
   end
 end
 
+-- vrelics is the same shape as count_map_writer's input -- id -> count -- but
+-- the Sea popup renders finished "Name xN" strings, which MIP built on the
+-- server in _mip_serialize_relics(). GMCP sends raw relic ids, so the names
+-- arrive beside them in `vrelic_names` (id -> name, the same ids) and the
+-- rendering happens here.
+--
+-- Both halves are optional on a delta frame: a count that changed without the
+-- name table being resent still has to render, so a missing name falls back to
+-- the id rather than dropping the relic. Sorted by display name -- the server
+-- sorted by id, but the reader sees names, and an unsorted pairs() walk would
+-- reorder the list between frames with nothing in the data to explain it.
+local function write_vrelics(parts)
+  local counts = parts.vrelics
+  if type(counts) ~= "table" then return end
+  S.mip_voyage_seen = true
+  if type(parts.vrelic_names) == "table" then
+    local names = {}
+    for id, name in pairs(parts.vrelic_names) do names[tostring(id)] = tostring(name) end
+    S.voyage_relic_names = names
+  end
+  local known = S.voyage_relic_names or {}
+  local rows = {}
+  for id, count in pairs(counts) do
+    count = tonumber(count) or 0
+    if count > 0 then
+      rows[#rows + 1] = { name = known[tostring(id)] or tostring(id), count = count }
+    end
+  end
+  table.sort(rows, function(a, b)
+    if a.name == b.name then return a.count > b.count end
+    return a.name < b.name
+  end)
+  local out = {}
+  for _, row in ipairs(rows) do
+    if #out >= 50 then break end
+    out[#out + 1] = row.name .. " x" .. row.count
+  end
+  S.voyage_relics = out
+end
+
 -- vboons is a flags mapping over GMCP where MIP sent the finished display
 -- string, so the phrasing has to live here now.
 --
@@ -532,6 +564,7 @@ M._gmcp = {
   VGOODS       = count_map_writer("voyage_goods"),
   VAIDS        = count_map_writer("voyage_aids"),
   VRUNES       = count_map_writer("voyage_runes"),
+  VRELICS      = write_vrelics,
   VBOONS       = write_vboons,
   VSAILED      = write_vsailed,
   VSPOILS      = write_vspoils,

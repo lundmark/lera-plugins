@@ -102,21 +102,20 @@ local kingdom = require("handlers.kingdom")
 -- MIP is either fed by a GMCP writer instead or declared retired, and
 -- protocol.ingest counts both as `retired` rather than `unknown`.
 --
--- Two are left. VRELICS has a GMCP key but a lossy one -- it carries relic ids
--- where MIP carried resolved display names, and the mudlib keeps that lookup
--- in the MIP serializer deliberately. CELLAR has no emitter anywhere in the
--- mudlib and is simply dead.
+-- None are left. The last two went together: VRELICS was MIP-only because GMCP
+-- carried relic ids and only the MIP serializer knew their display names --
+-- the payload carries those names now, in vrelic_names -- and CELLAR had no
+-- emitter anywhere in the mudlib and was simply dead.
 --
--- TGOODS and the Sea Chart (VCHART/VCHH plus the VCR row pattern) used to be
--- here too. Their GMCP sources landed -- Guild.TradeGoods, and Guild.Voyage's
--- voyage_chart/voyage_chart_rows -- so they moved to writers like everything
--- else.
-local EXPECTED_EXACT_KEYS = {
-  -- trade.lua
-  "CELLAR",
-  -- voyage.lua
-  "VRELICS",
-}
+-- TGOODS and the Sea Chart (VCHART/VCHH plus the VCR row pattern) were here
+-- before them. Their GMCP sources landed -- Guild.TradeGoods, and
+-- Guild.Voyage's voyage_chart/voyage_chart_rows -- so they moved to writers
+-- like everything else.
+--
+-- An empty list is the point, not an oversight: it is what licenses the plugin
+-- to stop reading MIP at all. Anything appearing here again means a payload
+-- regressed to MIP-only and the BBE intake would have to come back.
+local EXPECTED_EXACT_KEYS = {}
 
 -- No pattern-dispatched MIP key has a handler any more. The territory map's
 -- rows and edges, the city plan's terrain, the campaign map's terrain and the
@@ -170,7 +169,7 @@ end
 local actual_keys = collect_exact_keys()
 local ok_keys, err_keys = same_set(actual_keys, EXPECTED_EXACT_KEYS)
 check("census exact keys match hardcoded list", ok_keys, err_keys)
-check("census exact key count is 2", #actual_keys == 2, #actual_keys)
+check("census exact key count is 0", #actual_keys == 0, #actual_keys)
 
 -- ---- Census: which MIP keys have a GMCP writer ----------------------------
 -- The migration's own progress bar. A key listed here is fed by GMCP when the
@@ -200,12 +199,11 @@ local EXPECTED_GMCP_WRITERS = {
   "BUILDS", "BUILDINGS", "MONUMENTS", "BLOT", "FARM", "DCYCLE", "NEXTTICK",
   "CDTIME", "PRODUCTION", "ERRAND", "MISSIONS", "RBUILD", "UPKEEP", "RUPKEEP",
   "HEAT", "BDMG", "RAID", "PATROL", "GARRISON", "WEATHER", "CPLAN",
-  -- Guild.Voyage (18, the Sea Chart included; VRELICS deliberately stays
-  -- MIP-only -- GMCP carries relic ids and the display-name lookup is
-  -- server-side)
+  -- Guild.Voyage (19, the Sea Chart included; VRELICS is a composite over
+  -- vrelics and vrelic_names, which is what let it stop being MIP-only)
   "VOYAGE", "LONGSHIP", "VOYAGE_WAIT", "VOFFERS", "VRESOLVE", "VQPATH",
   "VSAGA", "VMEM", "VCURIOS", "VGOODS", "VAIDS", "VRUNES", "VBOONS",
-  "VSAILED", "VSPOILS", "VREAGENT", "FLEET_RENOWN", "VCHART",
+  "VSAILED", "VSPOILS", "VREAGENT", "FLEET_RENOWN", "VCHART", "VRELICS",
   -- Guild.Kingdom (9, including the campaign war map -- one composite where
   -- MIP spread it over WMAP/WMR/WMO/WMQ/WMU/WMP/WMPL/WSG/WSPOIL) and
   -- Guild.War (BATTLE, routed as a whole package)

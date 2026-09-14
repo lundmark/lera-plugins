@@ -55,6 +55,10 @@ M.COMPOSITE = {
   -- record and sends each as its own key -- per ship, keyed by `id`. voffers
   -- likewise splits the ship name off the offer list MIP packed together.
   VOYAGE    = { "voyage", "voyage_crew_traits", "voyage_ship_traits" },
+  -- vrelics travels as raw relic ids; the display names the Sea popup renders
+  -- arrive beside it in vrelic_names, keyed by those same ids. Composite so
+  -- one writer sees whichever halves a delta frame carried.
+  VRELICS   = { "vrelics", "vrelic_names" },
   LONGSHIP  = { "longship", "longship_crew_traits", "longship_ship_traits" },
   VOFFERS   = { "voffers", "voffers_ship" },
   -- The Sea Chart: a width/height/mode record plus its rows, which a record
@@ -212,10 +216,9 @@ local MAP = {
   tgoods_9 = "TGOODS", tgoods_10 = "TGOODS", tgoods_11 = "TGOODS",
   tgoods_12 = "TGOODS", tgoods_13 = "TGOODS", tgoods_14 = "TGOODS",
 
-  -- Guild.Voyage. vrelics is deliberately absent: GMCP carries relic IDs and
-  -- the display-name lookup is server-side logic the mudlib keeps in the MIP
-  -- serializer alone, so consuming it here would render raw ids. It stays on
-  -- MIP until the payload carries names.
+  -- Guild.Voyage. vrelics used to sit out here, because GMCP carried relic ids
+  -- and only the MIP serializer knew their display names. The payload carries
+  -- the names now, in vrelic_names, so it is a composite like the rest.
   voyage = "VOYAGE", voyage_crew_traits = "VOYAGE", voyage_ship_traits = "VOYAGE",
   longship = "LONGSHIP", longship_crew_traits = "LONGSHIP",
   longship_ship_traits = "LONGSHIP",
@@ -224,6 +227,7 @@ local MAP = {
   voyage_wait = "VOYAGE_WAIT", vresolve = "VRESOLVE", vqpath = "VQPATH",
   vsaga = "VSAGA", vmem = "VMEM", vcurios = "VCURIOS", vgoods = "VGOODS",
   vaids = "VAIDS", vrunes = "VRUNES", vboons = "VBOONS", vsailed = "VSAILED",
+  vrelics = "VRELICS", vrelic_names = "VRELICS",
   vspoils = "VSPOILS", vreagent = "VREAGENT", fleet_renown = "FLEET_RENOWN",
 
   -- Guild.Fleet
