@@ -137,22 +137,8 @@ local protocol = require("protocol")
 local RESERVED_KEYS = { _market_seam = true, _patterns = true, _gmcp = true,
                         _retired_keys = true, _retired_patterns = true }
 local voyage_h = require("handlers.voyage")
-for key, fn in pairs(voyage_h) do
-  if not RESERVED_KEYS[key] then
-    protocol.handler(key, fn)
-  end
-end
-for _, p in ipairs(voyage_h._patterns or {}) do
-  protocol.pattern_handler(p.pattern, p.fn)
-end
 for key, fn in pairs(voyage_h._gmcp or {}) do
   protocol.gmcp_handler(key, fn)
-end
-for _, k in ipairs(voyage_h._retired_keys or {}) do
-  protocol.retired_key(k)
-end
-for _, pat in ipairs(voyage_h._retired_patterns or {}) do
-  protocol.retired_pattern(pat)
 end
 
 local S = state.S
@@ -513,7 +499,8 @@ page_opts.set("show_sea_memory", true)
 gv({ vboons = { storm_charm_ready = 1, favorable_current_steps = 2 } })
 gv({ vspoils = 450, vgoods = { furs = 5 }, vaids = { storm_charm = 1 },
      vrunes = { ansuz = 2 } })
-protocol.ingest("VRELICS", "Horn of Heimdall")
+gv({ vrelics = { horn_of_heimdall = 1 },
+     vrelic_names = { horn_of_heimdall = "Horn of Heimdall" } })
 gv({ vcurios = { "Sea Glass Bead" } })
 gv({ vreagent = 2 })
 

@@ -1,11 +1,15 @@
--- GMCP payload key -> MIP handler key, and the shared MIP decoder.
+-- GMCP payload key -> the internal handler key it routes to.
+--
+-- The handler keys are still the uppercase spellings the MIP wire used. That
+-- is deliberate: they are load-bearing in every handler module and in the
+-- census, and renaming them buys nothing behavioural. The MIP wire decoder
+-- that used to live at the bottom of this file is gone with the transport.
 --
 -- The map is a table of explicit entries rather than a naming rule because
 -- three keys break the rule: `queue` is renamed, and MONUMENTS and SROLES are
 -- each split across two GMCP keys. Everything else is the uppercase of its
 -- GMCP key, listed anyway so an unrecognized key is unmapped by construction
 -- and therefore counted rather than routed somewhere plausible.
-local util = require("util")
 
 local M = {}
 
@@ -263,33 +267,6 @@ local MAP = {
 
 function M.mip_key(gmcp_key)
   return MAP[tostring(gmcp_key)]
-end
-
--- Decode MIP's wire form against a declared key order: records joined with
--- ";", fields with "|". This mirrors the server's _v_join(records, order),
--- which is what produces the string, so one decoder covers every key whose
--- MIP encoder is _v_join. A flat key is a one-record list.
---
--- A trailing ";" or a doubled ";;" makes util.split(val, ";") yield an empty
--- chunk -- unlike LEGACY's own val:gmatch("[^;]+"), which never produced one.
--- An empty chunk is skipped so it doesn't become a phantom empty record
--- (e.g. a trailing ";" on a SEVENTS/SPROJ value must not insert a blank
--- card). This is a record-level check only: an empty *field* within a real
--- chunk -- "1||" is one record with two empty fields -- is untouched.
-function M.zip(order, val)
-  local out = {}
-  if type(val) ~= "string" or val == "" then return out end
-  for _, chunk in ipairs(util.split(val, ";")) do
-    if chunk ~= "" then
-      local fields = util.split(chunk, "|")
-      local rec = {}
-      for i, name in ipairs(order) do
-        rec[name] = fields[i] or ""
-      end
-      out[#out + 1] = rec
-    end
-  end
-  return out
 end
 
 return M

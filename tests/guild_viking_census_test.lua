@@ -67,40 +67,26 @@ require = function(name)
 end
 
 local protocol = require("protocol")
--- init.lua's RESERVED set: the module-level convention fields, not MIP keys.
-local RESERVED_KEYS = { _market_seam = true, _patterns = true, _gmcp = true,
-                        _retired_keys = true, _retired_patterns = true }
+-- init.lua's RESERVED set: the module-level convention fields. Only two are
+-- left now that the MIP-era members went with the transport.
+local RESERVED_KEYS = { _market_seam = true, _gmcp = true }
 local S = require("state").S
 local city = require("handlers.city")
-for key, fn in pairs(city) do
-  if not RESERVED_KEYS[key] then
-    protocol.handler(key, fn)
-  end
-end
-for _, p in ipairs(city._patterns or {}) do
-  protocol.pattern_handler(p.pattern, p.fn)
-end
 for key, fn in pairs(city._gmcp or {}) do
   protocol.gmcp_handler(key, fn)
 end
-for _, k in ipairs(city._retired_keys or {}) do
-  protocol.retired_key(k)
-end
-for _, pat in ipairs(city._retired_patterns or {}) do
-  protocol.retired_pattern(pat)
-end
 
--- BLOT (LEGACY 1683): blot_state|reset_in|filled|total
-protocol.ingest("BLOT", "open|300|4|9")
+-- BLOT, over the transport that carries it: state/reset_in/filled/total.
+protocol.on_gmcp("Guild.City", { guild = "viking", full = 1,
+  blot = { state = "open", reset_in = 300, filled = 4, total = 9 } })
 
 -- ---- Census: porting-completeness lock across all four handler modules ---
 local trade = require("handlers.trade")
 local voyage = require("handlers.voyage")
 local kingdom = require("handlers.kingdom")
 
--- The MIP keys that still have a handler. Everything else the guild sends over
--- MIP is either fed by a GMCP writer instead or declared retired, and
--- protocol.ingest counts both as `retired` rather than `unknown`.
+-- The MIP keys that still have a handler -- the thing this census exists to
+-- keep at zero, now that the plugin has no MIP intake to fall back on.
 --
 -- None are left. The last two went together: VRELICS was MIP-only because GMCP
 -- carried relic ids and only the MIP serializer knew their display names --
@@ -127,12 +113,10 @@ local function collect_exact_keys()
   local keys = {}
   for _, mod in ipairs({ trade, voyage, kingdom, city }) do
     for key, _ in pairs(mod) do
-      -- The module-level convention fields, not MIP keys. `_gmcp` is
-      -- censused separately below: counting it here made this census churn by
-      -- one every time a handler module gained its first GMCP writer, which
-      -- says nothing about MIP porting completeness -- what this census is
-      -- for. The two `_retired_*` declarations are skipped for the same
-      -- reason.
+      -- The module-level convention fields. `_gmcp` is censused separately
+      -- below: counting it here made this census churn by one every time a
+      -- handler module gained its first GMCP writer, which says nothing about
+      -- porting completeness -- what this census is for.
       if not RESERVED_KEYS[key] then
         keys[#keys + 1] = key
       end

@@ -10,23 +10,6 @@ local gmcp_grid = require("gmcp_grid")
 
 local M = {}
 
--- MIP keys the server still sends and this plugin no longer reads. Declaring
--- them keeps protocol.ingest's accounting honest: they are counted `retired`
--- rather than `unknown`, which /vik status reports as "keys nobody has taught
--- this client about yet". A key with a GMCP writer is recognised by name and
--- needs no entry here; these are the ones a composite absorbed, or whose data
--- moved wholesale, so no writer carries their name.
-M._retired_keys = { "VMAPH", "VMAPL", "VMAPL_END", "VCHART", "VCHH" }
-
--- Pattern-dispatched keys (LEGACY matches these with key:match(...) rather
--- than an exact elseif branch). Registered by init.lua via
--- protocol.pattern_handler, not protocol.handler -- these fn's receive the
--- key itself (to extract the embedded row index) as well as the value.
-
--- The Sea Chart's rows arrived as a numbered VCR%02d burst over MIP;
--- Guild.Voyage carries the whole chart in one frame.
-M._retired_patterns = { "^VMR%d%d$", "^MEE%d%d$", "^MES%d%d$", "^VCR%d%d$" }
-
 
 -- ---------------------------------------------------------------------------
 -- Guild.Map -- the territory map, GMCP only.

@@ -9,18 +9,6 @@ local util = require("util")
 
 local M = {}
 
--- Pattern-dispatched key (LEGACY matches this with key:match(...) rather
--- than an exact elseif branch). Registered by init.lua via
--- protocol.pattern_handler, not protocol.handler -- fn receives the key
--- itself (to extract the embedded row index) as well as the value.
-
--- The campaign map's terrain rows arrived as a numbered WMR%02d burst over
--- MIP; Guild.Kingdom carries the whole campaign in one frame.
-M._retired_patterns = { "^WMR%d%d$" }
-
-M._retired_keys = { "WMU", "WMP", "WMPL", "WMO", "WMQ", "WMEND", "WSG",
-                    "WSPOIL" }
-
 -- ---------------------------------------------------------------------------
 -- Guild.Fleet writers
 -- ---------------------------------------------------------------------------
