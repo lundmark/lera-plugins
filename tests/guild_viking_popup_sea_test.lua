@@ -221,9 +221,9 @@ check("sea popup has its own header", sea_lines[1]:find("Sea Chart", 1, true) ~=
 check("voyage popup has its own DISTINCT header (not 'Voyage Status', to avoid the dup fixed below)",
   voyage_lines[1] == pagelib.header(WIDTH, "Voyage"), voyage_lines[1])
 check("sea popup shows the no-data gate",
-  find_plain(sea_lines, "No data - enable with: vtoggle mip_voyage"))
+  find_plain(sea_lines, "No data yet -- voyage status arrives while a voyage is live"))
 check("voyage popup shows the no-data gate",
-  find_plain(voyage_lines, "No data - enable with: vtoggle mip_voyage"))
+  find_plain(voyage_lines, "No data yet -- voyage status arrives while a voyage is live"))
 
 -- =============================================================================
 -- show_sea_voyage master gate: whole-body hidden, header only, in both popups

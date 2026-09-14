@@ -2,7 +2,7 @@
 -- guild_viking.lua (github.com/.../3s_scripts_old, read-only reference).
 -- Each parser body transcribes its LEGACY `elseif key == "..."` branch:
 -- string.split -> util.split, state. -> S. (module-local alias). Display
--- calls (viking_window.*, ColourNote) are dropped -- protocol.ingest already
+-- calls (viking_window.*, ColourNote) are dropped -- the protocol layer already
 -- marks ui.dirty(); parsers never do.
 local S = require("state").S
 local util = require("util")
