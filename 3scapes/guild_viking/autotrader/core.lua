@@ -168,9 +168,10 @@ end
 -- full" here using a cap lower than its actual one, which could only ever
 -- make wh_full trigger too early, never too late).
 function M.warehouse_pct()
-  -- Fallback only: S.wh_cap from the server is preferred below. Refreshed to
-  -- match trade_daemon.c:544-551 (warehouse_capacity), which gained +25% per
-  -- tier; these were still the pre-2024 numbers.
+  -- Fallback only: S.wh_cap from the server is preferred below. These mirror
+  -- trade_daemon.c's warehouse_capacity(), which gained +25% per tier when the
+  -- goods list grew (ore, iron, tools, salted fish, bread, fine furs,
+  -- gemstones); the table still held the pre-2024 numbers.
   local WH_CAP_BY_TIER = { [1] = 500, [2] = 1250, [3] = 2188, [4] = 3750, [5] = 6563 }
   local wh_tier = (S.buildings and S.buildings.warehouse) or 0
   local cap = S.wh_cap or WH_CAP_BY_TIER[wh_tier] or 0
