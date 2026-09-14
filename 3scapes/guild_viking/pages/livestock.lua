@@ -445,15 +445,28 @@ local function needs_lines(add, width)
     add(pagelib.trunc(C.dim .. "None" .. pagelib.RESET, width))
     return
   end
+  -- "Understocked", not "Current/Cap": the server's _v_lneeds() skips any
+  -- species already at its cap (`if(current >= cap) continue; // fully
+  -- stocked`), so this is a list of what needs restocking and never a herd
+  -- inventory. Titled as the latter it reads as if a full pen has vanished --
+  -- which is exactly how it was read. The Herds section above is the roster.
+  --
+  -- The shortfall is spelled out rather than left to be subtracted from
+  -- "71/80", and coloured by how close to cap the species is, so the pen that
+  -- needs attention most stands out in a list where every row is "low".
   local rows = {}
   for _, n in ipairs(S.lneeds) do
+    local cur, cap = n.current or 0, n.cap or 0
+    local short = cap - cur
     rows[#rows + 1] = {
       SP_DISP[n.species] or cc.cap_first(n.species or "?"),
-      string.format("%d/%d", n.current or 0, n.cap or 0),
+      pagelib.pct_color(cur, cap > 0 and cap or 100) .. cur .. "/" .. cap .. pagelib.RESET,
+      (short > 0) and (C.yellow .. "-" .. short .. pagelib.RESET) or "",
     }
   end
   for _, l in ipairs(pagelib.columns(width, {
-    { title = "Species", w = 12 }, { title = "Current/Cap", w = "*" },
+    { title = "Species", w = 12 }, { title = "Understocked", w = 14 },
+    { title = "Short", w = "*" },
   }, rows)) do add(l) end
 end
 

@@ -156,4 +156,24 @@ if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
 end
+-- ---- Needs table -----------------------------------------------------------
+-- The server's _v_lneeds() skips any species already at cap, so this table is
+-- a restocking list and never a herd inventory -- titling it "Current/Cap"
+-- made a full pen look like a missing one. The shortfall is spelled out so it
+-- does not have to be subtracted by eye.
+do
+  S.lneeds = {
+    { species = "sheep", current = 71, cap = 80 },
+    { species = "horses", current = 39, cap = 40 },
+  }
+  page_opts.set("show_stock_needs", true)
+  local text = plain(80)
+  check("needs: the table is titled as understocked, not as an inventory",
+        text:find("Understocked", 1, true) ~= nil
+        and text:find("Current/Cap", 1, true) == nil, text)
+  check("needs: the shortfall is shown rather than left to be subtracted",
+        text:find("-9", 1, true) ~= nil and text:find("-1", 1, true) ~= nil, text)
+  S.lneeds = {}
+end
+
 print("all livestock page cases passed")
