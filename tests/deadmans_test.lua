@@ -255,9 +255,14 @@ print = real_print
 
 check("push_registers_both_channels",
       push_channels.deadman_warning ~= nil and push_channels.deadman_triggered ~= nil)
-check("push_trigger_channel_has_priority",
-      push_channels.deadman_triggered and push_channels.deadman_triggered.priority == 1,
-      push_channels.deadman_triggered and push_channels.deadman_triggered.priority)
+-- Both HIGH, like push_notify's own disconnect alert: normal priority is
+-- subject to quiet hours, which is precisely when an unattended client idles
+-- out and you most need to be told.
+check("push_both_channels_are_high_priority",
+      push_channels.deadman_warning and push_channels.deadman_warning.priority == 1
+      and push_channels.deadman_triggered and push_channels.deadman_triggered.priority == 1,
+      (push_channels.deadman_warning and push_channels.deadman_warning.priority)
+        .. "/" .. (push_channels.deadman_triggered and push_channels.deadman_triggered.priority))
 
 local function idle_for(seconds)
   now = BASE + seconds

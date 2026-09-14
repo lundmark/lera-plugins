@@ -38,9 +38,11 @@ local function get_push_notify()
   if current ~= pushn then
     pushn = current
     if pushn and pushn.register_channel then
-      -- priority 1 on the trigger: by the time it fires, automation has
-      -- already stopped, which is the one a sleeping phone should wake for.
-      pushn.register_channel("deadman_warning")
+      -- Both HIGH (Pushover priority 1), matching push_notify's own
+      -- disconnect alert: these are the two events you need to hear about
+      -- while away from the machine, and normal priority is subject to
+      -- quiet hours -- which is exactly when an unattended client idles out.
+      pushn.register_channel("deadman_warning", { priority = 1 })
       pushn.register_channel("deadman_triggered", { priority = 1 })
     end
   end
