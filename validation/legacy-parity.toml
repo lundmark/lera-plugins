@@ -9852,7 +9852,7 @@ key = "capture_finalization"
 category = "callback"
 status = "plugin_gap"
 summary = "Legacy map finalization sequencing is not fully reproduced by the current plugin."
-current_refs = ["3scapes/minimap.lua:105", "3scapes/minimap.lua:331"]
+current_refs = ["3scapes/minimap.lua:92", "3scapes/minimap.lua:380"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9867,7 +9867,7 @@ key = "command_aliases"
 category = "alias"
 status = "plugin_gap"
 summary = "Legacy minimap command aliases are not completely equivalent in the current plugin."
-current_refs = ["3scapes/minimap.lua:274", "3scapes/minimap.lua:370"]
+current_refs = ["3scapes/minimap.lua:204", "3scapes/minimap.lua:283"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9882,7 +9882,7 @@ key = "display_mode_controls"
 category = "command"
 status = "plugin_gap"
 summary = "Legacy map display-mode controls are not completely equivalent in the current plugin."
-current_refs = ["3scapes/minimap.lua:274", "3scapes/minimap.lua:280"]
+current_refs = ["3scapes/minimap.lua:204", "3scapes/minimap.lua:503", "3scapes/minimap.lua:508", "3scapes/minimap.lua:513"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9929,7 +9929,7 @@ key = "map_line_detection_and_capture"
 category = "protocol"
 status = "plugin_gap"
 summary = "Legacy map-line detection and styled capture are not completely equivalent."
-current_refs = ["3scapes/minimap.lua:48", "3scapes/minimap.lua:97", "3scapes/minimap.lua:331"]
+current_refs = ["3scapes/minimap.lua:51", "3scapes/minimap.lua:92", "3scapes/minimap.lua:490"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9944,7 +9944,7 @@ key = "metadata"
 category = "state"
 status = "plugin_gap"
 summary = "Legacy minimap metadata has no complete current semantic equivalent."
-current_refs = ["3scapes/minimap.lua:6"]
+current_refs = ["3scapes/minimap.lua:17"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9959,7 +9959,7 @@ key = "output_omission_controls"
 category = "command"
 status = "plugin_gap"
 summary = "Legacy runtime map-output omission control is not completely equivalent in the current plugin."
-current_refs = ["3scapes/minimap.lua:331"]
+current_refs = ["3scapes/minimap.lua:92", "3scapes/minimap.lua:204"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9974,7 +9974,7 @@ key = "path_highlighting"
 category = "rendering"
 status = "plugin_gap"
 summary = "Legacy path expansion and styled highlighting are not completely equivalent."
-current_refs = ["3scapes/minimap.lua:137", "3scapes/minimap.lua:151", "3scapes/minimap.lua:189", "3scapes/minimap.lua:238"]
+current_refs = ["3scapes/minimap.lua:118", "3scapes/minimap.lua:130", "3scapes/minimap.lua:165", "3scapes/minimap.lua:390"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -9989,7 +9989,7 @@ key = "persistence_and_lifecycle"
 category = "persistence"
 status = "plugin_gap"
 summary = "Legacy minimap lifecycle and persisted state are not fully reproduced."
-current_refs = ["3scapes/minimap.lua:359", "3scapes/minimap.lua:382"]
+current_refs = ["3scapes/minimap.lua:272", "3scapes/minimap.lua:308"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -10036,7 +10036,7 @@ key = "rendering"
 category = "rendering"
 status = "plugin_gap"
 summary = "Legacy styled miniwindow rendering is not fully reproduced by the current pane renderer."
-current_refs = ["3scapes/minimap.lua:399", "3scapes/minimap.lua:530"]
+current_refs = ["3scapes/minimap.lua:337", "3scapes/minimap.lua:410", "3scapes/minimap.lua:420"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -10051,7 +10051,7 @@ key = "room_exit_capture"
 category = "protocol"
 status = "plugin_gap"
 summary = "Legacy room and exit capture variants are not completely reproduced."
-current_refs = ["3scapes/minimap.lua:339", "3scapes/minimap.lua:582", "3scapes/minimap.lua:595"]
+current_refs = ["3scapes/minimap.lua:460", "3scapes/minimap.lua:467", "3scapes/minimap.lua:477"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -10066,7 +10066,7 @@ key = "room_status_api"
 category = "public_api"
 status = "plugin_gap"
 summary = "Legacy predictive room-status APIs and events are not reproduced completely."
-current_refs = ["3scapes/minimap.lua:573", "3scapes/minimap.lua:595"]
+current_refs = ["3scapes/minimap.lua:496", "3scapes/minimap.lua:533", "3scapes/minimap.lua:545"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -10081,7 +10081,7 @@ key = "speedwalk_integration"
 category = "callback"
 status = "plugin_gap"
 summary = "Legacy speedwalk event integration is not completely equivalent."
-current_refs = ["3scapes/minimap.lua:424", "3scapes/minimap.lua:493"]
+current_refs = ["3scapes/minimap.lua:328", "3scapes/minimap.lua:371", "3scapes/minimap.lua:390", "3scapes/minimap.lua:438"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -10096,7 +10096,7 @@ key = "state_bootstrap"
 category = "state"
 status = "plugin_gap"
 summary = "Legacy bootstrap state and helper dependencies are not completely reproduced."
-current_refs = ["3scapes/minimap.lua:14", "3scapes/minimap.lua:20", "3scapes/minimap.lua:123"]
+current_refs = ["3scapes/minimap.lua:25", "3scapes/minimap.lua:31", "3scapes/minimap.lua:36", "3scapes/minimap.lua:104"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -10111,7 +10111,7 @@ key = "trigger_registration"
 category = "trigger"
 status = "plugin_gap"
 summary = "Legacy minimap trigger registrations are not completely equivalent."
-current_refs = ["3scapes/minimap.lua:331"]
+current_refs = ["3scapes/minimap.lua:92", "3scapes/minimap.lua:272"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -10126,7 +10126,7 @@ key = "window_layout_controls"
 category = "rendering"
 status = "lera_blocker"
 summary = "Legacy movable independent-window layout behavior requires a client capability that is not available."
-current_refs = ["3scapes/minimap.lua:399"]
+current_refs = ["3scapes/minimap.lua:337"]
 capability = "movable_plugin_pane_layout"
 
 [legacy_targets.features.evidence]

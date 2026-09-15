@@ -37,6 +37,7 @@ local settings = {
   show_room_name = false,
   show_exits = false,
   show_steps = false,
+  show_next_steps = false,
 }
 
 --------------------------------------------------------------------------------
@@ -124,48 +125,8 @@ local function find_player_position(map_lines)
   return nil
 end
 
--- Expand speedwalk shorthand notation
--- "3e" -> {"e", "e", "e"}
--- "2(nw)" -> {"nw", "nw"}
--- "(portal)" -> {"portal"}
-local function expand_step(step)
-  local expanded = {}
-  local pos = 1
-
-  while pos <= #step do
-    -- Try: count + (direction)
-    local count_str, paren_dir, new_pos = step:match("^(%d*)%(([^)]+)%)()", pos)
-    if paren_dir then
-      local count = (count_str and count_str ~= "") and tonumber(count_str) or 1
-      for _ = 1, count do
-        table.insert(expanded, paren_dir)
-      end
-      pos = new_pos
-    else
-      -- Try: count + single char direction
-      local count_str2, dir, new_pos2 = step:match("^(%d*)([a-z])()", pos)
-      if dir then
-        local count = (count_str2 and count_str2 ~= "") and tonumber(count_str2) or 1
-        for _ = 1, count do
-          table.insert(expanded, dir)
-        end
-        pos = new_pos2
-      else
-        -- Can't parse, skip character
-        pos = pos + 1
-      end
-    end
-  end
-
-  if #expanded == 0 then
-    table.insert(expanded, step)
-  end
-
-  return expanded
-end
-
 -- Calculate path positions from player position following steps
--- steps: list of direction strings (may include shorthand like "3e")
+-- steps: parsed commands from speedwalk's step-list
 local function calculate_path(steps, start_pos, map_lines)
   if not start_pos or not steps or #steps == 0 then
     return {}
@@ -173,39 +134,25 @@ local function calculate_path(steps, start_pos, map_lines)
 
   local positions = {}
   local row, col = start_pos.row, start_pos.col
-  local step_num = 0
+  for step_num, dir in ipairs(steps) do
+    -- Vertical and custom commands leave the known 2D path.
+    if dir == "u" or dir == "d" or not known_directions[dir] then
+      return positions
+    end
 
-  for _, step in ipairs(steps) do
-    -- Expand shorthand notation
-    local expanded = expand_step(step)
+    local offset = direction_offsets[dir]
+    if offset then
+      row = row + offset[1]
+      col = col + offset[2]
 
-    for _, dir in ipairs(expanded) do
-      step_num = step_num + 1
-
-      -- Stop at vertical movement (changes level)
-      if dir == "u" or dir == "d" then
-        return positions
-      end
-
-      -- Stop at unknown/custom commands
-      if not known_directions[dir] then
-        return positions
-      end
-
-      local offset = direction_offsets[dir]
-      if offset then
-        row = row + offset[1]
-        col = col + offset[2]
-
-        -- Only add if within map bounds
-        if row >= 1 and row <= #map_lines and col >= 1 and col <= #map_lines[row] then
-          table.insert(positions, {
-            row = row,
-            col = col,
-            step_num = step_num,
-            direction = dir,
-          })
-        end
+      -- Only add if within map bounds
+      if row >= 1 and row <= #map_lines and col >= 1 and col <= #map_lines[row] then
+        table.insert(positions, {
+          row = row,
+          col = col,
+          step_num = step_num,
+          direction = dir,
+        })
       end
     end
   end
@@ -269,11 +216,27 @@ local function handle_minimap_command(args)
     settings.show_steps = not settings.show_steps
     print("[minimap] Steps: " .. (settings.show_steps and "ON" or "OFF"))
 
+  elseif cmd == "next" then
+    local value = args[2]
+    if value and value ~= "on" and value ~= "off" then
+      print("[minimap] Usage: /minimap next [on|off]")
+      return
+    end
+    if value then
+      settings.show_next_steps = value == "on"
+    else
+      settings.show_next_steps = not settings.show_next_steps
+    end
+    store.set({settings = settings})
+    store.save()
+    print("[minimap] Next steps: " .. (settings.show_next_steps and "ON" or "OFF"))
+
   elseif cmd == "status" then
     print("[minimap] Status:")
     print("  Room name: " .. (settings.show_room_name and "ON" or "OFF"))
     print("  Exits: " .. (settings.show_exits and "ON" or "OFF"))
     print("  Steps: " .. (settings.show_steps and "ON" or "OFF"))
+    print("  Next steps: " .. (settings.show_next_steps and "ON" or "OFF"))
     local grid = current_grid()
     print("  Has map: " .. (grid and ("Yes (" .. grid.h .. " lines)") or "No"))
 
@@ -295,6 +258,7 @@ local function handle_minimap_command(args)
     print("  /minimap room   - Toggle room name display")
     print("  /minimap exits  - Toggle exits display")
     print("  /minimap steps  - Toggle step path display")
+    print("  /minimap next [on|off] - Upcoming directions in minimap and mapview")
     print("  /minimap status - Show current status")
     print("  /minimap clear  - Clear map data")
   end
@@ -318,10 +282,10 @@ function M.on_load()
   if command then
     local id, err = command.register({
       name = "/minimap",
-      usage = "/minimap [room|exits|steps|status|clear]",
+      usage = "/minimap [room|exits|steps|next [on|off]|status|clear]",
       summary = "Compact minimap capture and display",
       description = "Captures the MUD's minimap output into a pane and toggles "
-        .. "the extra lines drawn with it: room name, exits and the step path.",
+        .. "the extra lines drawn with it: room name, exits, step path and upcoming directions.",
       accepts_args = true,
       handler = function(args)
         local words = {}
@@ -360,6 +324,16 @@ end
 -- Rendering
 --------------------------------------------------------------------------------
 
+-- Shared by the direct and hybrid renderers; never loads or advances a route.
+function M.next_steps_text()
+  if not settings.show_next_steps then return nil end
+  local sw = plugin.get("speedwalk")
+  if not sw or not sw.upcoming_steps then return nil end
+  local steps = sw.upcoming_steps(5)
+  if #steps == 0 then return nil end
+  return "Next: " .. table.concat(steps, ", ")
+end
+
 function M.render(rect, opts)
   opts = opts or {}
   local show_border = opts.show_border ~= false
@@ -391,35 +365,19 @@ function M.render(rect, opts)
   -- Get speedwalk info if available
   local speedwalk_plugin = plugin.get("speedwalk")
   local step_info = nil
-  local next_steps = {}
+  local next_text = M.next_steps_text()
 
   if speedwalk_plugin and settings.show_steps then
     step_info = speedwalk_plugin.step_info()
     if step_info and step_info.total > 0 then
-      step_height = step_height + 1  -- step counter line
-      -- Get next steps for display
-      local current_idx = step_info.current
-      for i = 1, 5 do
-        local idx = current_idx + i
-        if idx <= step_info.total then
-          -- We need to get the step from speedwalk - but we don't have direct access
-          -- For now just show the count
-        end
-      end
-      if #next_steps > 0 then
-        step_height = step_height + 1  -- next steps line
-      end
+      step_height = 1
     end
   end
 
-  local info_height = room_height + exits_height + step_height
-  local map_area_height = rh - info_height
+  local info_height = room_height + exits_height + step_height + (next_text and 1 or 0)
+  local map_area_height = math.max(0, rh - info_height)
 
-  local grid = current_grid()
-  if not grid then
-    ui.text(ui.rect(rx, ry, rw, 1), "No map data")
-    return
-  end
+  local grid = current_grid() or {rows = {"No map data"}, w = 11}
 
   local map_lines = {}
   for i, row in ipairs(grid.rows) do map_lines[i] = row end
@@ -429,31 +387,8 @@ function M.render(rect, opts)
   if speedwalk_plugin and settings.show_steps and step_info and step_info.total > 0 then
     local player_pos = find_player_position(map_lines)
     if player_pos then
-      -- Get next steps from speedwalk if available
-      local next_steps = {}
-
-      -- Try to get step commands from speedwalk
-      -- The speedwalk plugin exposes peek_step() and step_info()
-      -- We need to iterate through remaining steps
-      local remaining = step_info.total - step_info.current
-      if remaining > 0 then
-        -- Get current place's steps configuration
-        local place_config = speedwalk_plugin.get_place_config(step_info.place)
-        if place_config and place_config.steps then
-          -- Parse the steps string (pipe-separated)
-          local all_steps = {}
-          for step in place_config.steps:gmatch("[^|]+") do
-            step = step:match("^%s*(.-)%s*$")
-            if step ~= "" then
-              table.insert(all_steps, step)
-            end
-          end
-          -- Get steps from current position onward (up to 10 for display)
-          for i = step_info.current + 1, math.min(step_info.current + 10, #all_steps) do
-            table.insert(next_steps, all_steps[i])
-          end
-        end
-      end
+      local next_steps = speedwalk_plugin.upcoming_steps
+        and speedwalk_plugin.upcoming_steps(10) or {}
 
       if #next_steps > 0 then
         local path_positions = calculate_path(next_steps, player_pos, map_lines)
@@ -482,7 +417,7 @@ function M.render(rect, opts)
   -- Draw info below map
   local info_y = ry + map_area_height
 
-  if settings.show_room_name and room_name ~= "" then
+  if settings.show_room_name and room_name ~= "" and info_y < ry + rh then
     local room_str = room_name
     if #room_str > rw then
       room_str = room_str:sub(1, rw - 1) .. "~"
@@ -491,7 +426,7 @@ function M.render(rect, opts)
     info_y = info_y + 1
   end
 
-  if settings.show_exits and exits_text ~= "" then
+  if settings.show_exits and exits_text ~= "" and info_y < ry + rh then
     local exits_str = exits_text
     if #exits_str > rw then
       exits_str = exits_str:sub(1, rw - 1) .. "~"
@@ -500,7 +435,7 @@ function M.render(rect, opts)
     info_y = info_y + 1
   end
 
-  if settings.show_steps and step_info and step_info.total > 0 then
+  if settings.show_steps and step_info and step_info.total > 0 and info_y < ry + rh then
     local step_str = string.format("%s [%d/%d]",
       step_info.place or "?",
       step_info.current,
@@ -509,6 +444,11 @@ function M.render(rect, opts)
       step_str = step_str:sub(1, rw - 1) .. "~"
     end
     ui.text(ui.rect(rx, info_y, rw, 1), step_str)
+    info_y = info_y + 1
+  end
+  if next_text and info_y < ry + rh then
+    if #next_text > rw then next_text = next_text:sub(1, rw - 1) .. "~" end
+    ui.text(ui.rect(rx, info_y, rw, 1), next_text)
   end
 end
 
@@ -581,6 +521,7 @@ function M.get_settings()
     show_room_name = settings.show_room_name,
     show_exits = settings.show_exits,
     show_steps = settings.show_steps,
+    show_next_steps = settings.show_next_steps,
   }
 end
 

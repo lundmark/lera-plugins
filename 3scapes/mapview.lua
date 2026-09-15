@@ -345,12 +345,25 @@ function M.render(rect, opts)
   local mapper = plugin.get("mapper")
   local roominfo = plugin.get("roominfo")
 
-  -- Fallback: if no minimap, use mapper's render
+  local next_text = minimap and minimap.next_steps_text and minimap.next_steps_text()
+
+  -- Keep the preview available even before a Room.Map packet arrives.
   if not minimap or not minimap.has_map() then
+    local map_height = rh - (next_text and 1 or 0)
     if mapper then
-      mapper.render(rect, opts)
-    else
-      ui.text(ui.rect(rx, ry, rw, 1), "No map data")
+      if next_text then
+        if map_height > 0 then
+          mapper.render(ui.rect(rx, ry, rw, map_height), {show_border = false})
+        end
+      else
+        mapper.render(rect, opts)
+      end
+    elseif map_height > 0 then
+      ui.text(ui.rect(rx, ry, rw, 1), ("No map data"):sub(1, rw))
+    end
+    if next_text then
+      if #next_text > rw then next_text = next_text:sub(1, rw - 1) .. "~" end
+      ui.text(ui.rect(rx, ry + rh - 1, rw, 1), next_text)
     end
     return
   end
@@ -520,6 +533,8 @@ function M.render(rect, opts)
       end
     end
   end
+
+  if next_text then add_line(next_text) end
 
   -- Room contents from roominfo, one line per occupant: names are sentences on
   -- this mud and a comma-joined run of them is unreadable. The colour IS the
