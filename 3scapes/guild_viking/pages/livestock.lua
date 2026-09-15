@@ -446,25 +446,41 @@ local function market_lines(add, width)
 end
 
 -- ---------------------------------------------------------------------------
--- Needs (LEGACY explicitly omits this from its miniwindow -- guild_viking.lua:
--- 10178; gated show_stock_needs)
+-- Pens: every built livestock building, at cap or not (LEGACY explicitly
+-- omits this from its miniwindow -- guild_viking.lua:10178; gated
+-- show_stock_needs, whose key keeps its original name so a saved profile is
+-- not silently reset by the rename)
 -- ---------------------------------------------------------------------------
 
 local function needs_lines(add, width)
-  add(pagelib.header(width, "Needs"))
+  add(pagelib.header(width, "Pens"))
   if not S.lneeds or #S.lneeds == 0 then
-    add(pagelib.trunc(C.dim .. "None" .. pagelib.RESET, width))
+    -- No rows now means no livestock BUILDING, not "nothing needed".
+    add(pagelib.trunc(C.dim .. "No livestock buildings" .. pagelib.RESET, width))
     return
   end
+  -- Every BUILT pen is listed, at cap or not. The server used to drop fully
+  -- stocked species here, which made a pen at cap indistinguishable from a
+  -- pen that had been wiped out -- both simply had no row. A roster answers
+  -- "where are my pigs"; a filtered list cannot.
+  --
+  -- The shortfall is spelled out rather than left to be subtracted from
+  -- "71/80", and a pen at cap says so, so the rows that want attention are
+  -- the ones that stand out.
   local rows = {}
   for _, n in ipairs(S.lneeds) do
+    local cur, cap = n.current or 0, n.cap or 0
+    local short = cap - cur
     rows[#rows + 1] = {
       SP_DISP[n.species] or cc.cap_first(n.species or "?"),
-      string.format("%d/%d", n.current or 0, n.cap or 0),
+      pagelib.pct_color(cur, cap > 0 and cap or 100) .. cur .. "/" .. cap .. pagelib.RESET,
+      (short > 0) and (C.yellow .. "-" .. short .. pagelib.RESET)
+        or (C.bright_green .. "full" .. pagelib.RESET),
     }
   end
   for _, l in ipairs(pagelib.columns(width, {
-    { title = "Species", w = 12 }, { title = "Current/Cap", w = "*" },
+    { title = "Species", w = 12 }, { title = "Stock", w = 14 },
+    { title = "Short", w = "*" },
   }, rows)) do add(l) end
 end
 
