@@ -511,6 +511,7 @@ events or payloads for a plugin to consume.
 |--------|----------|-------------|
 | `autostepper` | `/step`, `-` `-.` `->` `-!` | Automatic speedwalk execution |
 | `chat_monitor` | `/chat` | Chat channel monitoring and logging (MIP or GMCP) |
+| `combat_notify` | `/combatnotify` | Push alert after a configurable time out of combat |
 | `guild_druid` | `/dauto`, `/resetgxp` | Druid guild utilities |
 | `guild_viking` | `/vik`, `resetvikxp` | Vikings guild: guild state over MIP and GMCP (`Guild.Settlement` keys only so far; see guild sources below), a 12-page tab-bar pane (`/vik <page>` or `/vik page <key>`), popup board overlays (`/vik map\|sea\|voyage\|cityplan\|war`), detached-page parity (`/vik pop <page>`), map pathfinding with point-of-interest travel and mission/errand dispatch (always available, no setting), and three client-side automations (auto-trade, auto-raid, auto-voyage; see below), which ship off by default |
 | `kill_trigger` | `/killers` | Combat automation triggers |
@@ -522,6 +523,53 @@ events or payloads for a plugin to consume.
 | `roominfo` | *(none)* | Room information display |
 | `speedwalk` | `/speedwalk`, `.` `..` `.,` `.place` | Speedwalk path management |
 | `stats_window` | *(none)* | Statistics window UI |
+
+### Out-of-combat push notifications
+
+Load `push_notify` and `combat_notify` from your plugin search path:
+
+```text
+/plugins load push_notify
+/plugins load combat_notify
+```
+
+If you run directly from this repository, you can pass the full paths to
+`generic/push_notify.lua` and `3scapes/combat_notify.lua` instead. Add the loads
+to your profile configuration to keep them across client restarts.
+
+With Pushover credentials already configured through `/pushn set`, configure
+and enable the alert:
+
+```text
+/combatnotify delay 300
+/pushn enable
+/pushn toggle out_of_combat
+/combatnotify status
+```
+
+The default delay is **300 seconds (five minutes)**. `/combatnotify delay`
+accepts whole seconds from 1 to 86400 and saves the setting immediately.
+`out_of_combat` defaults off; `/pushn toggle` shows its current state, and
+toggling an enabled channel disables it again.
+
+The timer starts with the first fresh idle `Char.Combat` snapshot, including
+an initial idle snapshot after login. Loading the plugin during a session waits
+for the next combat snapshot. Combat resumption, disconnect/reconnect, loss of
+GMCP, or reloading the producer resets the timer. Repeated idle snapshots do
+not restart it. You receive one notification per idle period, with the elapsed
+seconds; changing the delay preserves elapsed time and does not repeat an
+already submitted alert.
+
+Existing activity grace, global enable and rate limits apply. A due alert keeps
+trying once per second until it is submitted or the idle period ends, including
+when the push plugin is loaded later. Failed queue submissions can retry;
+remote delivery failures are reported by `push_notify` and do not trigger
+another alert in the same idle period.
+
+Activity grace uses Lera's `on_user_input` hook, which requires a client version
+that supports it: actual submissions, including empty lines and local commands,
+count as activity; automated commands do not reset grace. `/pushn grace` still
+controls that separate grace period.
 
 ### Autostepper room entry
 

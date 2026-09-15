@@ -7,7 +7,7 @@
 -- Producer API:
 --   pushn = plugin.get("push_notify")          -- in your plugin's on_setup
 --   pushn.register_channel("tells", { priority = 1 })
---   pushn.notify("tells", "Bob tells you: hi") -- true if a push was sent
+--   pushn.notify("tells", "Bob tells you: hi") -- true if a push was queued
 --
 -- Channels default to disabled; the user opts in per channel with
 -- '/pushn toggle <channel>'. A notify() on an unknown channel auto-registers
@@ -324,10 +324,10 @@ function M.on_unload()
   store.save()
 end
 
-function M.on_input(text)
-  -- Track user activity for grace period
+function M.on_user_input(_)
+  -- Actual submissions include empty/local commands. on_input also receives
+  -- mud.execute automation, which must not keep suppressing push alerts.
   last_user_input = lera.time()
-  return text
 end
 
 function M.on_disconnect()
@@ -349,7 +349,8 @@ function M.register_channel(name, opts)
   register(name, opts)
 end
 
--- Send a push notification on a channel. Returns true if a push was sent.
+-- Submit a push notification on a channel. Returns true if it was queued;
+-- remote delivery failures are reported asynchronously through the callback.
 -- An unknown channel is auto-registered disabled so it appears in
 -- '/pushn toggle' for the user to opt in.
 function M.notify(channel, text)
@@ -372,7 +373,7 @@ function M.notify(channel, text)
     msg = msg:sub(1, 197) .. "..."
   end
 
-  push.send(msg, {
+  local request_id = push.send(msg, {
     title = channel:upper(),
     priority = ch.priority or 0,
     sound = config.sound,
@@ -382,6 +383,10 @@ function M.notify(channel, text)
       end
     end
   })
+
+  -- A full queue or other submission failure must remain retryable and must
+  -- not consume this channel's rate limit. Delivery errors use the callback.
+  if not request_id then return false end
 
   push.record_send(channel)
   return true
