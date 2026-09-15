@@ -204,6 +204,7 @@ local config = {
   max_lines = 32768,      -- Max lines to keep in scrollback (32k default)
   default_color = "white",
   timestamps = true,      -- Prepend a timestamp to every message
+  padding = true,         -- Compact flattened prose padding at ingestion
   timestamp_format = "%H:%M",
   timestamp_color = "white",
   -- Body colour for a line that has a lead-in: the prefix carries the line
@@ -492,7 +493,161 @@ local function resolve_prefix(type_cfg, msg)
   return "[" .. (msg.sender or msg.type) .. "] "
 end
 
+-- Fold single indented continuations, not arbitrary runs of spaces. Keep SGR
+-- in order even inside indentation. Unindented line breaks and blank paragraphs
+-- (including their indentation) are explicit layout, not inferred wrapping.
+
+local function fold_continuations(text)
+  if not text:find("[\r\n]") then return text end
+  text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
+  local out, pending, breaks, visible = {}, {}, 0, false
+  local function flush(at_end)
+    if #pending == 0 then return end
+    local gap = table.concat(pending)
+    if breaks > 0 then
+      local whitespace = gap:gsub("\27%[[0-9;]*m", "")
+      local continuation = breaks == 1 and whitespace:match("\n[ \t]+$")
+      if not visible or at_end or continuation then
+        if visible and not at_end then out[#out + 1] = " " end
+        gap = gap:gsub("[ \t\n]", "")
+      end
+    end
+    out[#out + 1] = gap
+    pending, breaks = {}, 0
+  end
+  local i = 1
+  while i <= #text do
+    local sgr = text:match("^\27%[[0-9;]*m", i)
+    local c = text:sub(i, i)
+    if sgr then
+      pending[#pending + 1] = sgr
+      i = i + #sgr
+    elseif c == " " or c == "\t" or c == "\n" then
+      pending[#pending + 1] = c
+      if c == "\n" then breaks = breaks + 1 end
+      i = i + 1
+    else
+      flush(false)
+      out[#out + 1] = c
+      visible = true
+      i = i + 1
+    end
+  end
+  flush(true)
+  return table.concat(out)
+end
+
+-- Treat SGR as zero-width inside a gap, retaining every escape in order.
+-- Only internal ASCII-space runs count; tabs and leading/trailing layout do not.
+local function compact_padding(text)
+  local out, pending, spaces, visible = {}, {}, 0, false
+  local function flush(internal)
+    local gap = table.concat(pending)
+    if internal and visible and spaces >= 8 then
+      local kept = false
+      gap = gap:gsub(" ", function()
+        if not kept then kept = true; return " " end
+        return ""
+      end)
+    end
+    out[#out + 1] = gap
+    pending, spaces = {}, 0
+  end
+  local i = 1
+  while i <= #text do
+    local sgr = text:match("^\27%[[0-9;]*m", i)
+    local c = text:sub(i, i)
+    if sgr then
+      pending[#pending + 1] = sgr
+      i = i + #sgr
+    elseif c == " " then
+      pending[#pending + 1] = c
+      spaces = spaces + 1
+      i = i + 1
+    else
+      flush(not c:match("%s"))
+      out[#out + 1] = c
+      visible = not c:match("%s")
+      i = i + 1
+    end
+  end
+  flush(false)
+  return table.concat(out)
+end
+
+local function normalize_prose(msg_type, text)
+  local prose = msg_type == "tell_in" or msg_type == "tell_out"
+    or msg_type == "emote_in" or msg_type == "emote_out" or msg_type:match("^chat_")
+  if not prose then return text end
+  if text:find("[\r\n]") then
+    -- Do not turn multiline alignment into single-line padding that a relay
+    -- would compact on its second pass. Indented first lines are layout too.
+    local plain = text:gsub("\27%[[0-9;]*m", "")
+    if plain:match("^[ \t]+%S") then return text end
+    local lines = plain:gsub("\r\n", "\n"):gsub("\r", "\n")
+    if lines:match("%S.-\n[ \t]*\n.-%S") or lines:match("%S.-\n%S") then
+      return text:gsub("\r\n", "\n"):gsub("\r", "\n")
+    end
+    for line in text:gmatch("[^\r\n]+") do
+      if compact_padding(line) ~= line then return text end
+    end
+    return fold_continuations(text)
+  end
+  return config.padding and compact_padding(text) or text
+end
+
+-- Diagnostics retain only numeric metadata and fixed labels, never input text.
+local spacing_enabled, spacing_records = false, {}
+local function spacing_measure(text, with_runs)
+  local lf, cr, runs = 0, 0, {}
+  for c in text:gmatch("[\r\n]") do
+    if c == "\n" then lf = lf + 1 else cr = cr + 1 end
+  end
+  if with_runs then
+    local start = 1
+    while true do
+      local first, last = text:find("  +", start)
+      if not first then break end
+      if #runs == 10 then runs[#runs + 1] = "..."; break end
+      runs[#runs + 1] = string.format("%d:%d", first, last - first + 1)
+      start = last + 1
+    end
+  end
+  return string.format("bytes=%d lf=%d cr=%d", #text, lf, cr)
+    .. (with_runs and (" spaces=[" .. table.concat(runs, ",") .. "]") or "")
+end
+
+local function spacing_capture(msg_type, opts, raw, normalized)
+  local category = "other"
+  if msg_type == "tell_in" or msg_type == "tell_out" then category = msg_type
+  elseif msg_type == "emote_in" or msg_type == "emote_out" then category = msg_type
+  elseif msg_type:match("^chat_") then category = "channel" end
+  local origin = opts and opts.remote and "relay"
+    or (opts and opts.structured and "gmcp" or "mip")
+  if #spacing_records == 20 then table.remove(spacing_records, 1) end
+  spacing_records[#spacing_records + 1] = origin .. " " .. category
+    .. " raw{" .. raw .. "} normalized{" .. spacing_measure(normalized, true) .. "}"
+end
+
+local function spacing_command(action, extra)
+  if extra or (action ~= "on" and action ~= "report" and action ~= "off") then
+    return print("Usage: /chat spacing on|report|off")
+  end
+  if action ~= "report" then
+    spacing_enabled, spacing_records = action == "on", {}
+    return print("[chat spacing] " .. (spacing_enabled and "on" or "off") .. "; records cleared")
+  end
+  print(string.format("[chat spacing] %s; records=%d/20; bytes include ANSI/UTF-8; spaces=1-based byte position:length (first 10 runs >=2; ...=more)",
+    spacing_enabled and "on" or "off", #spacing_records))
+  for i, record in ipairs(spacing_records) do
+    print(string.format("[chat spacing] %d %s", i, record))
+  end
+end
+
 local function add_message(msg_type, sender, text, opts)
+  local spacing_raw = spacing_enabled and spacing_measure(text, true)
+  text = normalize_prose(msg_type, text)
+  if spacing_raw then spacing_capture(msg_type, opts, spacing_raw, text) end
   local structured = opts and opts.structured or false
   local prefix_text = opts and opts.prefix or nil
   local prefix_from_server = opts and opts.prefix_from_server or false
@@ -605,9 +760,12 @@ end
 -- each line consumed. They differ whenever a break space is dropped, and colour
 -- spans are mapped back onto the wrapped output by source offset, so the count
 -- has to be exact rather than inferred from the line lengths.
-local function word_wrap(text, width)
+local function wrap_line(text, width, continuation, indent)
   if width <= 0 then return { text }, { #text } end
-  if #url_links.cells(text) <= width then return { text }, { #text } end
+  indent = indent or 0
+  if #url_links.cells(text) <= width - (continuation and indent or 0) then
+    return { text }, { #text }
+  end
 
   local lines = {}
   local consumed = {}
@@ -615,7 +773,7 @@ local function word_wrap(text, width)
 
   while #remaining > 0 do
     local cells = url_links.cells(remaining)
-    local row_width = math.max(1, width - (#lines > 0 and math.min(2, width-1) or 0))
+    local row_width = math.max(1, width - ((continuation or #lines > 0) and indent or 0))
     if #cells <= row_width then
       table.insert(lines, remaining)
       table.insert(consumed, #remaining)
@@ -655,6 +813,25 @@ local function word_wrap(text, width)
     remaining = remaining:sub(break_pos + 1)
   end
 
+  return lines, consumed
+end
+
+-- Paragraph separators consume source bytes too: link and colour offsets on
+-- subsequent rows must include them, even though they are not painted.
+local function word_wrap(text, width, indent)
+  if not text:find("\n", 1, true) then return wrap_line(text, width, false, indent) end
+  local lines, consumed, start = {}, {}, 1
+  while true do
+    local boundary = text:find("\n", start, true)
+    local rows, counts = wrap_line(text:sub(start, boundary and boundary - 1), width, #lines > 0, indent)
+    for i, row in ipairs(rows) do
+      lines[#lines + 1] = row
+      consumed[#consumed + 1] = counts[i]
+    end
+    if not boundary then break end
+    consumed[#consumed] = consumed[#consumed] + 1
+    start = boundary + 1
+  end
   return lines, consumed
 end
 
@@ -740,12 +917,17 @@ local function logical_message(msg)
     { len = #stamp, code = get_color(config.timestamp_color) },
     { len = #lead - #stamp, code = color_code },
     { len = #msg.text, code = body_code },
-  }
+  }, #url_links.cells(lead)
 end
 
 local function wrap_msg(msg, width)
-  local color_code, source, spans = logical_message(msg)
-  local lines, consumed = word_wrap(source, width)
+  local color_code, source, spans, indent = logical_message(msg)
+  -- Hang continuation rows under the message body, not under the timestamp.
+  -- A narrow pane still needs useful text space when the prefix nearly fills it.
+  if indent > math.max(0, width - 8) then
+    indent = math.min(2, math.max(0, width - 1))
+  end
+  local lines, consumed = word_wrap(source, width, indent)
   local detected, row_links, offset = url_links.find(source), {}, 0
   for i, line in ipairs(lines) do
     row_links[i] = {}
@@ -767,18 +949,19 @@ local function wrap_msg(msg, width)
   for i, line in ipairs(painted) do
     painted[i] = url_links.highlight(line, nil, row_links[i])
   end
-  return color_code, painted, row_links
+  return color_code, painted, row_links, indent
 end
 
 -- Wrap one message and append its rows to the cache. Returns the row count,
 -- which is also recorded on the message for trim accounting.
 function wrapped_append(msg, width)
-  local color_code, lines, row_links = wrap_msg(msg, width)
+  local color_code, lines, row_links, indent = wrap_msg(msg, width)
   for j = 1, #lines do
     wrapped.last = wrapped.last + 1
     wrapped.lines[wrapped.last] = {
       text = lines[j],
       links = row_links[j],
+      indent = j > 1 and indent or 0,
       color_code = color_code,
       is_continuation = (j > 1),
     }
@@ -1265,17 +1448,14 @@ function M.companion_source() return companion_provider end
 
 -- Shared by local/remote rendering and immutable selection snapshots so color
 -- and continuation indentation stay identical.
-local function row_text(line, width)
-  if line.is_continuation then
-    return line.color_code .. string.rep(" ", math.min(2, math.max(0, width-1)))
-        .. line.text .. colors.reset
-  end
-  return line.color_code .. line.text .. colors.reset
+local function row_text(line)
+  return line.color_code .. string.rep(" ", line.indent or 0)
+      .. line.text .. colors.reset
 end
 
 local function draw_row(x, y, w, line)
   if not line then return end
-  ui.text_ansi(ui.rect(x, y, w, 1), row_text(line, w), nil)
+  ui.text_ansi(ui.rect(x, y, w, 1), row_text(line), nil)
 end
 
 function M.selection_source(rect)
@@ -1294,7 +1474,7 @@ function M.selection_source(rect)
   for i = wrapped.first, wrapped.last do
     -- These are independently formatted display rows: continuation indentation
     -- and word-wrap spacing prevent treating them as unmodified soft wraps.
-    rows[#rows+1] = {text=row_text(wrapped.lines[i], b.w)}
+    rows[#rows+1] = {text=row_text(wrapped.lines[i])}
     entries[#rows] = wrapped.lines[i]
   end
   local generation = selection_generation
@@ -1333,10 +1513,11 @@ end
 local function build_transient(width, need_rows)
   local list = {}
   for i = #messages, 1, -1 do
-    local color_code, lines = wrap_msg(messages[i], width)
+    local color_code, lines, _, indent = wrap_msg(messages[i], width)
     for j = #lines, 1, -1 do
       list[#list + 1] = {
         text = lines[j],
+        indent = j > 1 and indent or 0,
         color_code = color_code,
         is_continuation = (j > 1),
       }
@@ -1366,7 +1547,7 @@ local function link_at(event)
   local index = wrapped.last - offset - (h-1-y)
   local row = index >= wrapped.first and wrapped.lines[index]
   if not row then return nil end
-  x = x - (row.is_continuation and math.min(2, w-1) or 0)
+  x = x - (row.indent or 0)
   if trace then
     local _, plain = url_links.cells(row.text)
     local _, www = plain:lower():gsub("www%.", "")
@@ -1594,6 +1775,8 @@ end
 local function chat_help()
   print("Chat monitor commands:")
   print("  /chat source [mip|gmcp|auto] - Show or pin the channel source")
+  print("  /chat spacing on|report|off - Temporary metadata-only spacing diagnostics")
+  print("  /chat padding [on|off] - Compact internal 8+ spaces in new single-line prose (default on)")
   print("  /chat types           - List all chat line types")
   print("  /chat toggle <type>   - Toggle a line type on/off")
   print("  /chat enable <type>   - Enable a line type")
@@ -1615,6 +1798,14 @@ local function chat_command(args)
 
   if subcmd == "" or subcmd == "help" then
     chat_help()
+  elseif subcmd == "spacing" then
+    spacing_command(parts[2], parts[3])
+  elseif subcmd == "padding" then
+    if parts[3] or (parts[2] and parts[2] ~= "on" and parts[2] ~= "off") then
+      return print("Usage: /chat padding [on|off]")
+    end
+    if parts[2] then config.padding = parts[2] == "on" end
+    print("[chat] padding: " .. (config.padding and "on" or "off") .. "; new single-line prose only")
   elseif subcmd == "source" then
     if parts[2] then
       local ok, err = M.set_source(parts[2]:lower())
@@ -1727,6 +1918,7 @@ function M.on_load()
       if data.config.timestamp_format then config.timestamp_format = data.config.timestamp_format end
       if data.config.timestamp_color then config.timestamp_color = data.config.timestamp_color end
       if data.config.text_color then config.text_color = data.config.text_color end
+      if type(data.config.padding) == "boolean" then config.padding = data.config.padding end
       local mode = data.config.source_mode
       if mode == "auto" or mode == "mip" or mode == "gmcp" then
         source.mode = mode
@@ -1771,6 +1963,7 @@ end
 -- re-prove GMCP rather than inherit the last session's answer. The counters
 -- describe the session too, so they reset with it.
 function M.on_disconnect()
+  spacing_enabled, spacing_records = false, {}
   -- The per-connection latch goes, the memory of having seen GMCP does not:
   -- otherwise every reconnect re-earns its duplicate first line.
   if source.mode == "auto" then
@@ -1787,6 +1980,7 @@ function M.on_setup()
 end
 
 function M.on_unload()
+  spacing_enabled, spacing_records = false, {}
   for _, id in ipairs(push_trigger_ids) do trigger.remove(id) end
   push_trigger_ids = {}
   pushn = nil
@@ -1818,6 +2012,7 @@ function M.on_unload()
       timestamp_format = config.timestamp_format,
       timestamp_color = config.timestamp_color,
       text_color = config.text_color,
+      padding = config.padding,
       source_mode = source.mode,
       gmcp_chat_seen = source.gmcp_seen,
     },

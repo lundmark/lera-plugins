@@ -274,7 +274,19 @@ end
 local function staff_lines(add, width)
   local list = S.staff_list or {}
   if #list == 0 then return end
-  add(pagelib.header(width, "Hired Folk"))
+  -- The roster is capped on the wire -- a full one does not fit a package's
+  -- page budget -- so say so when it is. A partial list that reads as complete
+  -- is the failure this whole mechanism exists to avoid: you would otherwise
+  -- look at 28 of 64 staff and conclude the other 36 had wandered off.
+  -- The roster arrives one rotating slice per push, so the first few frames
+  -- after a connect show a partial list. Say so rather than letting it read as
+  -- a complete roster that happens to be short.
+  local total = tonumber(S.staff_total) or 0
+  if total > 0 and #list < total then
+    add(pagelib.header(width, "Hired Folk (" .. #list .. " of " .. total .. ")"))
+  else
+    add(pagelib.header(width, "Hired Folk"))
+  end
   for _, sf in ipairs(list) do
     add(pagelib.trunc(C.bright_green .. (sf.name or "?") .. pagelib.RESET, width))
 

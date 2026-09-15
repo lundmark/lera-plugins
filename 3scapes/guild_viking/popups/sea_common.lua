@@ -63,7 +63,7 @@ end
 -- 0x666666 (guild_viking.lua:13216) -> R=66,G=66,B=66, mid-gray -> C.dim.
 -- ---------------------------------------------------------------------------
 function M.mip_gate_lines(width)
-  return { pagelib.trunc(C.dim .. "No data - enable with: vtoggle mip_voyage" .. RESET, width) }
+  return { pagelib.trunc(C.dim .. "No data yet -- voyage status arrives while a voyage is live" .. RESET, width) }
 end
 
 -- ---------------------------------------------------------------------------
@@ -346,7 +346,9 @@ function M.open_actions_menu()
   require("menu").open({
     items = items,
     title = "Voyage Actions",
-    on_select = function(value) mud.send(value) end,
+    -- Guarded: a menu item whose value never got built would otherwise
+    -- reach the MUD as a bare prompt line.
+    on_select = function(value) require("util").send(value, "sea popup") end,
   })
   return true
 end

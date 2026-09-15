@@ -32,13 +32,18 @@ local sent = {}          -- push.send calls: { msg = ..., opts = ... }
 local limited = {}       -- channel ids currently rate limited
 local recorded = {}      -- record_send calls
 local push_on = true
+local queue_full = false
 push = {
   init = function() end,
   enable = function() push_on = true end,
   disable = function() push_on = false end,
   enabled = function() return push_on end,
   pending = function() return 0 end,
-  send = function(msg, opts) sent[#sent + 1] = { msg = msg, opts = opts or {} } return #sent end,
+  send = function(msg, opts)
+    if queue_full then return nil, "queue full" end
+    sent[#sent + 1] = { msg = msg, opts = opts or {} }
+    return #sent
+  end,
   alert = function() end,
   set_rate_limit = function() end,
   is_rate_limited = function(id) return limited[id] == true end,
@@ -153,11 +158,34 @@ push_on = true
 
 -- ---- grace period: recent user input blocks -------------------------------------
 sent = {}
-pushn.on_input("look")            -- user active at now=1000
+check("observes_actual_user_input", type(pushn.on_user_input) == "function")
+if pushn.on_user_input then pushn.on_user_input("look") end
 now = 1030
 check("grace_period_blocks", not quiet(pushn.notify, "tells", "x") and #sent == 0)
 now = 1061
 check("grace_period_expires", quiet(pushn.notify, "tells", "x") and #sent == 1)
+
+-- Local commands and empty submissions are activity; scripted commands are not.
+for _, input in ipairs({ "/local-command", "" }) do
+  sent = {}
+  now = now + 100
+  if pushn.on_user_input then pushn.on_user_input(input) end
+  now = now + 30
+  check("local_or_empty_user_input_blocks", not quiet(pushn.notify, "tells", "x") and #sent == 0)
+  if pushn.on_input then pushn.on_input("scripted command") end
+  now = now + 30
+  check("automation_does_not_extend_grace", quiet(pushn.notify, "tells", "x") and #sent == 1)
+end
+now = now + 100
+
+-- A rejected submission must stay retryable and must not consume a rate slot.
+sent = {}
+local before_recorded = #recorded
+queue_full = true
+check("queue_rejection_returns_false", not quiet(pushn.notify, "tells", "x"))
+check("queue_rejection_does_not_record_send", #recorded == before_recorded and #sent == 0)
+queue_full = false
+check("retry_after_queue_rejection_succeeds", quiet(pushn.notify, "tells", "x") and #sent == 1)
 
 -- ---- rate limit blocks -----------------------------------------------------------
 sent = {}

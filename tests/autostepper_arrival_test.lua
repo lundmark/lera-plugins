@@ -869,7 +869,10 @@ do
     set_rate_limit = function() end,
     is_rate_limited = function(channel) return limited[channel] == true end,
     record_send = function(channel) limited[channel] = true end,
-    send = function(message, opts) delivered[#delivered + 1] = {message = message, title = opts.title} end,
+    send = function(message, opts)
+      delivered[#delivered + 1] = {message = message, title = opts.title}
+      return #delivered
+    end,
   }
   package.loaded.push_notify = nil
   local sink = require("push_notify")

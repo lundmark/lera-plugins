@@ -66,6 +66,13 @@ check("herd shows head against cap", withherd:find("9", 1, true) ~= nil
 check("herd trait is named, not printed raw",
       withherd:find("Prolific", 1, true) ~= nil)
 
+check("positive herd age is displayed", plain(100):find("Age:12", 1, true) ~= nil)
+S.herds.sheepfold.age_ticks = 0
+check("newborn average age is explicitly zero", plain(100):find("Age:0", 1, true) ~= nil)
+S.herds.sheepfold.age_ticks = nil
+check("missing age is unknown, not newborn", plain(100):find("Age:?", 1, true) ~= nil)
+S.herds.sheepfold.age_ticks = 12
+
 -- A section toggled off must vanish entirely.
 page_opts.set("show_stock_herds", false)
 check("herds section respects its toggle",
@@ -152,8 +159,47 @@ check("feed section respects its toggle",
       plain(80):find("Per tick:", 1, true) == nil)
 page_opts.set("show_stock_feed", true)
 
+require("handlers.livestock")._gmcp.HERDS({ { bldg = "stable", head = 9,
+  management = "20;2;9;9;0;0;4050;825;5001,5025,5100,5200,5300,5400" } })
+local compact = plain(140)
+check("management cap overrides mirrored tier", compact:find("9/20", 1, true) ~= nil)
+check("fractional herd stats and generation visible", compact:find("H:50.01", 1, true)
+  and compact:find("Gen:8.25", 1, true))
+check("fractional age visible", compact:find("Age:40.50", 1, true) ~= nil)
+check("concise pen safety metadata visible", compact:find("Penfree:9  pending:2  protected:9  auto-cull:off", 1, true) ~= nil)
+for _, line in ipairs(page.lines(40)) do
+  check("compact page stays within narrow width", #(line:gsub("\027%[[%d;]*m", "")) <= 40)
+end
+
 if failures > 0 then
   print(failures .. " FAILURE(S)")
   os.exit(1)
 end
+-- ---- Pens table ------------------------------------------------------------
+-- Every BUILT pen is listed, at cap or not. The server used to drop fully
+-- stocked species, which made a pen at cap indistinguishable from a pen that
+-- had been wiped out -- both simply had no row, and "where are my pigs" had no
+-- answer. The at-cap row is the case this exists for, so it is asserted first.
+do
+  S.lneeds = {
+    { species = "sheep", current = 71, cap = 80 },
+    { species = "horses", current = 39, cap = 40 },
+    { species = "pigs", current = 40, cap = 40 },
+  }
+  page_opts.set("show_stock_needs", true)
+  local text = plain(80)
+  check("pens: a species at cap is still listed", text:find("Pigs", 1, true) ~= nil, text)
+  check("pens: an at-cap row reads full rather than showing a shortfall",
+        text:find("40/40", 1, true) ~= nil and text:find("full", 1, true) ~= nil, text)
+  check("pens: the shortfall is shown rather than left to be subtracted",
+        text:find("-9", 1, true) ~= nil and text:find("-1", 1, true) ~= nil, text)
+  check("pens: the section is not titled as an inventory of current/cap",
+        text:find("Current/Cap", 1, true) == nil, text)
+  -- An empty table now means no livestock BUILDING, not "nothing needed", and
+  -- must not read as the latter.
+  S.lneeds = {}
+  check("pens: the empty state names the real reason",
+        plain(80):find("No livestock buildings", 1, true) ~= nil, plain(80))
+end
+
 print("all livestock page cases passed")

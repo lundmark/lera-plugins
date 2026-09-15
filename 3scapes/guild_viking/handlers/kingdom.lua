@@ -2,24 +2,12 @@
 -- LEGACY guild_viking.lua (github.com/.../3s_scripts_old, read-only
 -- reference). Each parser body transcribes its LEGACY `elseif key == "..."`
 -- branch: string.split -> util.split, state. -> S. (module-local alias).
--- Display calls (viking_window.*, ColourNote) are dropped -- protocol.ingest
+-- Display calls (viking_window.*, ColourNote) are dropped -- the protocol layer
 -- already marks ui.dirty(); parsers never do.
 local S = require("state").S
 local util = require("util")
 
 local M = {}
-
--- Pattern-dispatched key (LEGACY matches this with key:match(...) rather
--- than an exact elseif branch). Registered by init.lua via
--- protocol.pattern_handler, not protocol.handler -- fn receives the key
--- itself (to extract the embedded row index) as well as the value.
-
--- The campaign map's terrain rows arrived as a numbered WMR%02d burst over
--- MIP; Guild.Kingdom carries the whole campaign in one frame.
-M._retired_patterns = { "^WMR%d%d$" }
-
-M._retired_keys = { "WMU", "WMP", "WMPL", "WMO", "WMQ", "WMEND", "WSG",
-                    "WSPOIL" }
 
 -- ---------------------------------------------------------------------------
 -- Guild.Fleet writers
@@ -136,8 +124,39 @@ end
 -- `mode` is normalised the same way MIP normalised it: anything that is not
 -- "offensive" or "defensive" is "neutral", so an unfamiliar mode reads as the
 -- harmless one rather than reaching the pages verbatim.
-local function write_hird(records)
-  if type(records) ~= "table" then return end
+-- hird arrives as ONE ROTATING SLICE per push, the same way staff does and
+-- for the same reason: a package cannot carry the whole list inside its page
+-- budget, so the server walks a cursor and this accumulates the slices.
+--
+-- This is what the Bonds page resolves its pair ids against, so a half-filled
+-- accumulator renders "#7 + #8" -- which is exactly the symptom that started
+-- this. The list is rebuilt from every slice seen so far, in index order.
+local function write_hird(parts)
+  if type(parts) ~= "table" then return end
+
+  if parts.hird_total ~= nil then S.hird_total = tonumber(parts.hird_total) or 0 end
+  if parts.hird_slices ~= nil then S.hird_slices = tonumber(parts.hird_slices) or 0 end
+
+  S.hird_by_slice = S.hird_by_slice or {}
+  local carried = false
+  for i = 0, 3 do
+    local slice = parts["hird_" .. i]
+    if type(slice) == "table" then
+      S.hird_by_slice[i] = slice
+      carried = true
+    end
+  end
+  if not carried then return end
+
+  for i in pairs(S.hird_by_slice) do
+    if i >= (S.hird_slices or 0) then S.hird_by_slice[i] = nil end
+  end
+
+  local records = {}
+  for i = 0, (S.hird_slices or 0) - 1 do
+    for _, r in ipairs(S.hird_by_slice[i] or {}) do records[#records + 1] = r end
+  end
+
   S.hird_list = {}
   S.hird_by_id = {}
   for _, r in ipairs(records) do

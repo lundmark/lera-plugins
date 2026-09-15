@@ -68,7 +68,6 @@ local state = {
   ships      = {},   -- { name, tier, state, target, return_in, ship_id, crew }
   wstock     = {},   -- { good, amount, freshness_pct }
   wh_cap     = nil,  -- real warehouse capacity incl. steward/lager/star bonuses
-  cellar     = {},   -- { stock, cap, tier, lots={{qty, pct}, ...} }
   market_orders = {},  -- { id, buyer, good, remaining, price, age_secs }
   vfind = { tier = 0, postings = {}, offers = {}, auctions = {} },
   incoming_fills = {},  -- { good, seller, amount, arrives_in }
@@ -161,8 +160,14 @@ local state = {
   mission_new_left = -1,  -- newbie errands remaining this period (-1 = unknown)
   bdmg     = {},   -- { bldg_id, pct }
   staff_list = {},  -- { name, assigned_to, stat_key, stats={combat=N,...}, trait, loyalty, age, arrive_at }
+  staff_total = 0,     -- how many staff the guild has
+  staff_slices = 0,    -- how many rotating slices that list is sent in
+  staff_by_slice = {}, -- [index] = slice, accumulated across pushes
   hird_list  = {},  -- { name, status, level, mode }
-  hird_by_id = {},  -- [id] = hird record (populated when server sends id-prefixed HIRD packet)
+  hird_by_id = {},    -- [id] = hird record; what Bonds resolves pair ids against
+  hird_total = 0,     -- how many hirdmadrs the guild has
+  hird_slices = 0,    -- how many rotating slices that list is sent in
+  hird_by_slice = {}, -- [index] = slice, accumulated across pushes
   bonds_list  = {},  -- { id_a, id_b, ticks, tier }
   standings   = {},  -- { [lin_id] = { name, score, label, is_own } }
   village_rep = {},  -- { [lin_id] = { name, rep, rank, next_at } }
@@ -212,7 +217,8 @@ local state = {
   voyage_goods = {},
   voyage_aids = {},
   voyage_runes = {},
-  voyage_relics = {},
+  voyage_relics = {},        -- rendered "Name xN" strings
+  voyage_relic_names = {},  -- relic id -> display name, from Guild.Voyage
   voyage_curios = {},
   voyage_reagents = 0,  -- Nikr's Bile phials secured this voyage (VREAGENT)
   -- Territory map (from send_mip_map / vtoggle mip_map)
@@ -266,6 +272,8 @@ function M.reset_connection()
   -- Guild data itself is deliberately preserved across a reconnect, but the
   -- claim that it has ARRIVED this connection is not -- see the field comment.
   state.livestock_seen = false
+  state.herd_connection_epoch = (state.herd_connection_epoch or 0) + 1
+  state.herd_observed = {}
   -- The map planes themselves are left standing (a reconnect redraws them on
   -- the next Guild.Map push, and a blank map in the meantime helps nobody),
   -- but their decoding context is not: see the field comments above.

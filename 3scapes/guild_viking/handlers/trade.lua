@@ -2,9 +2,10 @@
 -- guild_viking.lua (github.com/.../3s_scripts_old, read-only reference).
 -- Each parser body transcribes its LEGACY `elseif key == "..."` branch:
 -- string.split -> util.split, state. -> S. (module-local alias). Display
--- calls (viking_window.*, ColourNote) are dropped -- protocol.ingest already
+-- calls (viking_window.*, ColourNote) are dropped -- the protocol layer already
 -- marks ui.dirty(); parsers never do.
 local S = require("state").S
+local observe = require("herd_observe")
 local util = require("util")
 
 local M = {}
@@ -43,27 +44,6 @@ local GOOD_SHORT = {
 -- STAFF stat-slot order (LEGACY guild_viking.lua:2348).
 local STAFF_STAT_ORDER = { "combat", "trade", "craft", "sea", "wild", "land", "charm" }
 
--- LEGACY 1437
-M.CELLAR = function(val)
-  local stock, cap, tier = val:match("^([^|]+)|([^|]+)|([^|;]+)")
-  S.cellar = {
-    stock = tonumber(stock) or 0,
-    cap = tonumber(cap) or 0,
-    tier = tonumber(tier) or 0,
-    lots = {}
-  }
-  -- Parse per-quality-bracket entries after header
-  local lots_part = val:match("^[^|]+|[^|]+|[^|;]+;(.*)$")
-  if lots_part then
-    for lot_entry in lots_part:gmatch("[^;]+") do
-      local qty, pct = lot_entry:match("^([^|]+)|([^|]+)$")
-      if qty then
-        table.insert(S.cellar.lots, { qty=tonumber(qty) or 0, pct=tonumber(pct) or 100 })
-      end
-    end
-  end
-end
-
 -- ---------------------------------------------------------------------------
 -- Guild.TradeGoods
 -- ---------------------------------------------------------------------------
@@ -81,6 +61,7 @@ local TGOODS_MIN_LIN = 0
 local TGOODS_MAX_LIN = 13
 local TGOODS_MAX_COUNT = 14
 local tgoods_stream = {
+  connection_epoch = S.herd_connection_epoch or 0,
   expected = nil,
   pending = nil,
   seen = nil,
@@ -88,6 +69,26 @@ local tgoods_stream = {
   last_lin = nil,
   complete = false,
 }
+
+-- Detached scalars only: querying progress must neither publish pending prices
+-- nor create receipt evidence. A reset invalidates the view immediately, even
+-- before the next frame arrives to discard the old decoding context.
+local function tgoods_status()
+  local epoch = S.herd_connection_epoch or 0
+  if tgoods_stream.connection_epoch ~= epoch then
+    return { received = 0, complete = false, ever_complete = false,
+             connection_epoch = epoch }
+  end
+  return {
+    received = tgoods_stream.complete and tgoods_stream.expected or tgoods_stream.count,
+    expected = tgoods_stream.expected,
+    complete = tgoods_stream.complete,
+    ever_complete = tgoods_stream.last_complete_at ~= nil,
+    last_complete_at = tgoods_stream.last_complete_at,
+    last_lin = tgoods_stream.last_lin,
+    connection_epoch = epoch,
+  }
+end
 
 local function decode_tgoods_records(records)
   if type(records) ~= "table" then error("TGOODS goods must be a table") end
@@ -97,6 +98,7 @@ local function decode_tgoods_records(records)
       local abbr = tostring(r.good)
       local good = GOOD_SHORT[abbr] or abbr
       goods[good] = {
+        _received_at = os.time(),
         score  = tonumber(r.score) or 0,
         supply = tonumber(r.sup) or 0,
         demand = tonumber(r.dem) or 0,
@@ -143,6 +145,10 @@ local function start_tgoods_stream()
 end
 
 local function write_streamed_tgoods(parts, full)
+  local epoch = S.herd_connection_epoch or 0
+  if tgoods_stream.connection_epoch ~= epoch then
+    tgoods_stream = { connection_epoch = epoch, count = 0, complete = false }
+  end
   local lin = parts.lin
   local supplied_expected = parts.lin_count
   if not is_tgoods_integer(lin) or lin < TGOODS_MIN_LIN or lin > TGOODS_MAX_LIN then
@@ -176,11 +182,13 @@ local function write_streamed_tgoods(parts, full)
 
   if tgoods_stream.count == tgoods_stream.expected then
     S.trade_goods = tgoods_stream.pending
+    observe.record("prices")
     record_tgoods_grid_history(S.trade_goods)
     tgoods_stream.pending = nil
     tgoods_stream.seen = nil
     tgoods_stream.count = 0
     tgoods_stream.complete = true
+    tgoods_stream.last_complete_at = os.time()
   end
 end
 
@@ -206,6 +214,7 @@ local function write_tgoods(parts, full)
     if lin and type(records) == "table" then
       local goods = decode_tgoods_records(records)
       S.trade_goods[lin] = goods
+      observe.record("prices")
       record_tgoods_history(lin, goods)
     end
   end
@@ -216,34 +225,67 @@ end
 -- parsed here exactly as the MIP handler parses it, against the same
 -- STAFF_STAT_ORDER. The record also carries `id` and `best_stat`, which MIP
 -- never sent and nothing reads; they are ignored rather than stored.
-local function write_staff(records)
-  if type(records) ~= "table" then return end
+-- staff arrives as ONE ROTATING SLICE per push, not the whole list: a full
+-- roster does not fit a package's page budget, so the server walks a cursor
+-- and this accumulates the slices. Slices are keyed by INDEX, so a re-sent
+-- slice replaces rather than appends and the list cannot drift as staff are
+-- hired or die.
+--
+-- The list is rebuilt from every slice seen so far, in index order, so it
+-- fills in over the first few pushes and stays complete after that. A frame
+-- carrying no slice at all (only the counters) leaves it alone.
+local function write_staff(parts)
+  if type(parts) ~= "table" then return end
+
+  if parts.staff_total ~= nil then S.staff_total = tonumber(parts.staff_total) or 0 end
+  if parts.staff_slices ~= nil then S.staff_slices = tonumber(parts.staff_slices) or 0 end
+
+  S.staff_by_slice = S.staff_by_slice or {}
+  local carried = false
+  for i = 0, 7 do
+    local slice = parts["staff_" .. i]
+    if type(slice) == "table" then
+      S.staff_by_slice[i] = slice
+      carried = true
+    end
+  end
+  if not carried then return end
+
+  -- Drop slices past the current count: a roster that shrank must not leave a
+  -- stale tail behind.
+  for i in pairs(S.staff_by_slice) do
+    if i >= (S.staff_slices or 0) then S.staff_by_slice[i] = nil end
+  end
+
   S.staff_list = {}
-  for _, r in ipairs(records) do
-    if #S.staff_list >= 50 then break end
-    if type(r) == "table" then
-      local stats = {}
-      local i = 0
-      for v in tostring(r.stats or ""):gmatch("[^,]+") do
-        i = i + 1
-        if STAFF_STAT_ORDER[i] then stats[STAFF_STAT_ORDER[i]] = tonumber(v) or 0 end
+  for i = 0, (S.staff_slices or 0) - 1 do
+    for _, r in ipairs(S.staff_by_slice[i] or {}) do
+      if #S.staff_list >= 80 then break end
+      if type(r) == "table" then
+        local stats = {}
+        local si = 0
+        for v in tostring(r.stats or ""):gmatch("[^,]+") do
+          si = si + 1
+          if STAFF_STAT_ORDER[si] then stats[STAFF_STAT_ORDER[si]] = tonumber(v) or 0 end
+        end
+        table.insert(S.staff_list, {
+          name        = tostring(r.name or ""),
+          -- `assigned` -> assigned_to, `stat` -> stat_key, `arrive` -> arrive_at.
+          assigned_to = tostring(r.assigned or "0"),
+          stat_key    = tostring(r.stat or ""),
+          stats       = stats,
+          trait       = tostring(r.trait or "0"),
+          loyalty     = tonumber(r.loyalty) or 3,
+          age         = tostring(r.age or "veteran"),
+          arrive_at   = tonumber(r.arrive) or 0,
+        })
       end
-      table.insert(S.staff_list, {
-        name        = tostring(r.name or ""),
-        -- `assigned` -> assigned_to, `stat` -> stat_key, `arrive` -> arrive_at.
-        assigned_to = tostring(r.assigned or "0"),
-        stat_key    = tostring(r.stat or ""),
-        stats       = stats,
-        trait       = tostring(r.trait or "0"),
-        loyalty     = tonumber(r.loyalty) or 3,
-        age         = tostring(r.age or "veteran"),
-        arrive_at   = tonumber(r.arrive) or 0,
-      })
     end
   end
 end
 
--- bonds. `a`/`b` are the two staff ids the bond joins.
+-- bonds. `a`/`b` are HIRD ids, not staff ids -- the Bonds page resolves them
+-- against S.hird_by_id, which write_hird in handlers/kingdom.lua fills.
 local function write_bonds(records)
   if type(records) ~= "table" then return end
   S.bonds_list = {}
@@ -644,18 +686,42 @@ end
 
 -- refinery + refinery_grades, foreign-keyed by `bldg`. The building id is
 -- `bldg` on both halves and `id` in state.
+-- refinery and refinery_grades are two halves of one composite, and the
+-- protocol layer only re-sends a key that CHANGED. Refinery stock moves every
+-- tick; the grade rows change far less often -- so the overwhelmingly common
+-- delta carries `refinery` alone. Rebuilding the grade list from a nil
+-- `refinery_grades` wiped every grade row on that frame, which is why the
+-- Refineries section collapsed to bare "name [stock / cap]" lines within a
+-- tick of the last full push.
+--
+-- MIP hid this: it had no delta cache and re-sent the whole REFINERY string,
+-- grades included, on every push. The bug arrived with the GMCP migration and
+-- only became visible once MIP stopped covering for it.
+--
+-- So a missing half means "unchanged", not "gone": carry the grades already in
+-- state across. Same shape as write_wstock's `wstock_cap` presence test.
 local function write_refinery(parts)
   if type(parts) ~= "table" then return end
   if type(parts.refinery) ~= "table" then return end
+  local carried_grades = type(parts.refinery_grades) == "table"
   local grades_by_bldg = group_by(parts.refinery_grades, "bldg")
+  local previous = {}
+  if not carried_grades then
+    for _, r in ipairs(S.refineries or {}) do previous[r.id] = r.grades end
+  end
   S.refineries = {}
   for _, r in ipairs(parts.refinery) do
     if type(r) == "table" then
-      local grades = {}
-      for _, g in ipairs(grades_by_bldg[r.bldg] or {}) do
-        grades[#grades + 1] = { name = tostring(g.grade or ""),
-                                qty = tonumber(g.qty) or 0,
-                                pct = tonumber(g.pct) or 100 }
+      local grades
+      if carried_grades then
+        grades = {}
+        for _, g in ipairs(grades_by_bldg[r.bldg] or {}) do
+          grades[#grades + 1] = { name = tostring(g.grade or ""),
+                                  qty = tonumber(g.qty) or 0,
+                                  pct = tonumber(g.pct) or 100 }
+        end
+      else
+        grades = previous[tostring(r.bldg or "")] or {}
       end
       S.refineries[#S.refineries + 1] = {
         id    = tostring(r.bldg or ""),
@@ -712,8 +778,20 @@ end
 -- an empty grade label stays nil so the pages can test it for presence.
 local function write_wstock(parts)
   if type(parts) ~= "table" then return end
+  -- The cap is written BEFORE the entry-list guard below, and only when this
+  -- frame actually carried it. A composite writer is invoked with whichever
+  -- halves the frame had (protocol.lua:58-63), so a delta carrying only
+  -- `wstock_cap` is normal -- and returning early on a missing entry list
+  -- discarded it, leaving S.wh_cap nil so pages/city.lua and autotrader fell
+  -- back to their static per-tier tables. Those hold the pre-2024 base
+  -- capacity, so a T5 warehouse displayed 5250 instead of the real
+  -- query_warehouse_capacity() figure (9056 with steward/lager/star bonuses).
+  -- Testing for presence rather than assigning unconditionally also stops an
+  -- entries-only delta from nil-ing out a cap that had already arrived.
+  if parts.wstock_cap ~= nil then
+    S.wh_cap = tonumber(parts.wstock_cap)
+  end
   if type(parts.wstock) ~= "table" then return end
-  S.wh_cap = tonumber(parts.wstock_cap)
   S.wstock = {}
   S.wstock_by_good = {}
   for _, r in ipairs(parts.wstock) do
@@ -794,7 +872,10 @@ local function write_heat(values)
 end
 
 -- Guild.State: banked daler. Its MIP twin lives here, so its writer does too.
-local function write_daler(v) S.daler = tonumber(v) or 0 end
+local function write_daler(v)
+  S.daler = tonumber(v) or 0
+  observe.record("daler")
+end
 
 M._gmcp = {
   STAFF    = write_staff,
@@ -821,4 +902,8 @@ M._gmcp = {
   TGOODS   = write_tgoods,
 }
 
-return M
+-- init.register_handlers enumerates every non-reserved field as a MIP key;
+-- an underscore alone is NOT reserved. Keep this read-only API lookup-only.
+return setmetatable(M, { __index = function(_, key)
+  if key == "_tgoods_status" then return tgoods_status end
+end })

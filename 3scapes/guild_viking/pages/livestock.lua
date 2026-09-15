@@ -171,7 +171,8 @@ end
 
 local function herd_head_row(width, bldg, herd)
   local label = SP_LABEL[bldg] or cc.cap_first(bldg)
-  local cap = herd_cap(bldg)
+  local cap = herd.management and herd.management.cap or herd_cap(bldg)
+    if herd.management_present and not herd.management then cap = nil end
   local hc = cap and string.format("%d/%d", herd.head or 0, cap) or tostring(herd.head or 0)
   return pagelib.trunc(string.format("%s%-10s%s %s%s%s",
     SP_ANSI[bldg] or C.white, label, pagelib.RESET, C.yellow, hc, pagelib.RESET), width)
@@ -184,7 +185,8 @@ end
 -- for its own brown-ish entries (e.g. furs).
 local function herd_stats_row(width, herd)
   local raw = string.format(
-    "%sH:%d%s %sF:%d%s %sY:%d%s %sV:%d%s %sC:%d%s  Gen:%d",
+    herd.management and "%sH:%.2f%s %sF:%.2f%s %sY:%.2f%s %sV:%.2f%s %sC:%.2f%s  Gen:%.2f"
+          or "%sH:%d%s %sF:%d%s %sY:%d%s %sV:%d%s %sC:%d%s  Gen:%d",
     C.green, herd.hard or 0, pagelib.RESET,
     C.magenta, herd.fert or 0, pagelib.RESET,
     C.yellow, herd.yield or 0, pagelib.RESET,
@@ -194,8 +196,10 @@ local function herd_stats_row(width, herd)
   if (herd.hv or 0) > 0 then
     raw = raw .. string.format("  %s+HV:%d%s", C.bright_green, herd.hv, pagelib.RESET)
   end
-  if (herd.age_ticks or 0) > 0 then
-    raw = raw .. string.format("  Age:%d", herd.age_ticks)
+  if herd.age_ticks ~= nil then
+    raw = raw .. string.format(herd.management and "  Age:%.2f" or "  Age:%d", herd.age_ticks)
+  else
+    raw = raw .. "  Age:?"
   end
   raw = raw .. trait_tag(herd.trait)
   return pagelib.trunc(raw, width)
@@ -212,6 +216,13 @@ local function herds_lines(add, width)
     if herd and (herd.head or 0) > 0 then
       add(herd_head_row(width, bldg, herd))
       add(herd_stats_row(width, herd))
+      local mg = herd.management
+      if mg then
+        add(pagelib.trunc(string.format("Penfree:%d  pending:%d  protected:%d  auto-cull:%s",
+          mg.free, mg.pending, mg.protected, mg.auto_slaughter == 1 and "on" or "off"), width))
+      elseif herd.management_present then
+        add(pagelib.trunc("Management:? (invalid metadata; auto-buy paused)", width))
+      end
     end
   end
 end
@@ -435,25 +446,41 @@ local function market_lines(add, width)
 end
 
 -- ---------------------------------------------------------------------------
--- Needs (LEGACY explicitly omits this from its miniwindow -- guild_viking.lua:
--- 10178; gated show_stock_needs)
+-- Pens: every built livestock building, at cap or not (LEGACY explicitly
+-- omits this from its miniwindow -- guild_viking.lua:10178; gated
+-- show_stock_needs, whose key keeps its original name so a saved profile is
+-- not silently reset by the rename)
 -- ---------------------------------------------------------------------------
 
 local function needs_lines(add, width)
-  add(pagelib.header(width, "Needs"))
+  add(pagelib.header(width, "Pens"))
   if not S.lneeds or #S.lneeds == 0 then
-    add(pagelib.trunc(C.dim .. "None" .. pagelib.RESET, width))
+    -- No rows now means no livestock BUILDING, not "nothing needed".
+    add(pagelib.trunc(C.dim .. "No livestock buildings" .. pagelib.RESET, width))
     return
   end
+  -- Every BUILT pen is listed, at cap or not. The server used to drop fully
+  -- stocked species here, which made a pen at cap indistinguishable from a
+  -- pen that had been wiped out -- both simply had no row. A roster answers
+  -- "where are my pigs"; a filtered list cannot.
+  --
+  -- The shortfall is spelled out rather than left to be subtracted from
+  -- "71/80", and a pen at cap says so, so the rows that want attention are
+  -- the ones that stand out.
   local rows = {}
   for _, n in ipairs(S.lneeds) do
+    local cur, cap = n.current or 0, n.cap or 0
+    local short = cap - cur
     rows[#rows + 1] = {
       SP_DISP[n.species] or cc.cap_first(n.species or "?"),
-      string.format("%d/%d", n.current or 0, n.cap or 0),
+      pagelib.pct_color(cur, cap > 0 and cap or 100) .. cur .. "/" .. cap .. pagelib.RESET,
+      (short > 0) and (C.yellow .. "-" .. short .. pagelib.RESET)
+        or (C.bright_green .. "full" .. pagelib.RESET),
     }
   end
   for _, l in ipairs(pagelib.columns(width, {
-    { title = "Species", w = 12 }, { title = "Current/Cap", w = "*" },
+    { title = "Species", w = 12 }, { title = "Stock", w = 14 },
+    { title = "Short", w = "*" },
   }, rows)) do add(l) end
 end
 

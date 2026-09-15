@@ -29,20 +29,8 @@ local RESERVED = RESERVED_KEYS
 for _, name in ipairs({ "handlers.trade", "handlers.kingdom", "handlers.voyage",
                         "handlers.city" }) do
   local mod = require(name)
-  for key, fn in pairs(mod) do
-    if not RESERVED[key] then protocol.handler(key, fn) end
-  end
-  for _, pat in ipairs(mod._patterns or {}) do
-    protocol.pattern_handler(pat.pattern, pat.fn)
-  end
   for key, fn in pairs(mod._gmcp or {}) do
     protocol.gmcp_handler(key, fn)
-  end
-  for _, k in ipairs(mod._retired_keys or {}) do
-    protocol.retired_key(k)
-  end
-  for _, pat in ipairs(mod._retired_patterns or {}) do
-    protocol.retired_pattern(pat)
   end
 end
 
@@ -129,12 +117,92 @@ check("a zero cdtime clears the deadline rather than setting one now",
       S.dispatch_cd == 0 and S.dispatch_cd_expires_at == nil)
 
 -- ---- production ------------------------------------------------------------
--- Amounts are signed: a negative is net consumption, so a decoder that took
--- the absolute value would invert the meaning.
+-- Production is raw uncapped output, not net consumption. Legacy signed
+-- display values remain readable, but must never authorize the herd planner.
 city({ production = { { good = "timber", amount = 12 },
                       { good = "grain", amount = -4 } } })
 check("production becomes a signed good -> amount lookup",
       S.production.timber == 12 and S.production.grain == -4)
+
+do
+  local real_time, now = os.time, 20000
+  os.time = function() return now end
+  require("state").reset_connection()
+  local function evidence(at, seq)
+    local e = (S.herd_observed or {}).production
+    return e and e.at == at and e.seq == seq
+  end
+  local function fresh()
+    city({ production = { { good = "grain", amount = 12 },
+                          { good = "salted_fish", amount = 0 } } })
+  end
+  fresh()
+  check("production writer records receipt and raw output",
+    evidence(20000, 1) and S.production.grain == 12 and S.production.salted_fish == 0)
+  now = 20010
+  city({ nexttick = 30 })
+  city({})
+  protocol.on_gmcp("Guild.City", { guild = "berserker", production = {} })
+  check("omitted or foreign production does not refresh evidence", evidence(20000, 1))
+  fresh()
+  check("identical production advances receipt", evidence(20010, 2))
+  fresh()
+  check("same-second production advances sequence", evidence(20010, 3))
+  city({ production = {} })
+  check("empty actual array confirms complete zero production",
+    next(S.production) == nil and evidence(20010, 4))
+
+  local malformed = {
+    { "false", false },
+    { "string", "grain:12" },
+    { "number", 12 },
+    { "mapping", { grain = 12 } },
+    { "mixed keys", { { good = "grain", amount = 12 }, extra = true } },
+    { "hole", { [1] = { good = "grain", amount = 12 },
+                  [3] = { good = "fish", amount = 2 } } },
+    { "zero index", { [0] = { good = "grain", amount = 12 } } },
+    { "fractional index", { [1.5] = { good = "grain", amount = 12 } } },
+    { "non-record", { false } },
+    { "missing good", { { amount = 12 } } },
+    { "empty good", { { good = "", amount = 12 } } },
+    { "whitespace good", { { good = " grain ", amount = 12 } } },
+    { "numeric good", { { good = 1, amount = 12 } } },
+    { "duplicate good", { { good = "grain", amount = 12 },
+                           { good = "grain", amount = 13 } } },
+    { "missing amount", { { good = "grain" } } },
+    { "string amount", { { good = "grain", amount = "12" } } },
+    { "boolean amount", { { good = "grain", amount = false } } },
+    { "negative", { { good = "grain", amount = -4 } } },
+    { "NaN", { { good = "grain", amount = 0 / 0 } } },
+    { "infinity", { { good = "grain", amount = math.huge } } },
+    { "negative infinity", { { good = "grain", amount = -math.huge } } },
+    { "partially valid", { { good = "grain", amount = 12 }, { good = "fish" } } },
+  }
+  for _, case in ipairs(malformed) do
+    fresh()
+    check("valid production restores proof before " .. case[1],
+      (S.herd_observed or {}).production ~= nil)
+    now = now + 1
+    city({ production = case[2] })
+    check("invalid production clears proof: " .. case[1], S.herd_observed.production == nil)
+    city({ nexttick = 20 })
+    check("omission cannot restore proof after " .. case[1], S.herd_observed.production == nil)
+  end
+  city({ production = { { good = "grain", amount = -4 } } })
+  check("negative legacy display does not authorize planner",
+    S.production.grain == -4 and S.herd_observed.production == nil)
+  fresh()
+  local displayed = S.production
+  require("state").reset_connection()
+  check("reconnect retains display but clears production proof",
+    S.production == displayed and S.herd_observed.production == nil)
+  now = now + 10
+  city({ nexttick = 10 })
+  check("reconnect omission cannot authorize retained production", S.herd_observed.production == nil)
+  fresh()
+  check("fresh production after reconnect establishes new proof", evidence(now, 1))
+  os.time = real_time
+end
 
 -- ---- errand ----------------------------------------------------------------
 city({ errand = { id = 7, label = "Deliver mead", reward = 250, secs = 1800,
@@ -257,9 +325,12 @@ check("placed buildings", #cp.blds == 2 and cp.blds[1].id == "BLDG_SMITHY"
       and cp.blds[1].x == 2 and cp.blds[1].y == 3 and cp.blds[1].w == 2
       and cp.blds[1].h == 2 and cp.blds[1].pal == "r"
       and cp.blds[1].glyph == "S" and cp.blds[1].name == "Smithy")
--- A building with no name renders under its own id, as it did over MIP.
-check("a nameless building falls back to its id",
-      cp.blds[2].name == "BLDG_APIARY" and cp.blds[2].w == 1
+-- The wire no longer carries `name` for every building: _cp_name() is a pure
+-- Title-Case render of the id (city_plan.h), so the client rebuilds it and the
+-- server saves ~40% of the frame. capitalize() only touches the first letter of
+-- each word, so an already-upper id comes back unchanged bar the underscore.
+check("a nameless building is rebuilt from its id, server-style",
+      cp.blds[2].name == "BLDG APIARY" and cp.blds[2].w == 1
       and cp.blds[2].pal == "e" and cp.blds[2].glyph == "?")
 check("placeable buildings", #cp.unplaced == 1
       and cp.unplaced[1].id == "BLDG_MOAT" and cp.unplaced[1].name == "Moat")
