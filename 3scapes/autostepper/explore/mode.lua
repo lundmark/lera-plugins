@@ -362,7 +362,11 @@ function M.next_step()
     dive_dirs = profile and profile.dive_dirs,
     defer_dirs = profile and profile.defer_dirs,
   })
-  if not path or #path == 0 then return nil end
+  if not path or #path == 0 then
+    -- A resumed run may still hold the reason from a completed leave.
+    stop_reason_val = "exhausted"
+    return nil
+  end
   -- BFS traverses recorded rooms only; the last direction enters the frontier.
   -- Keep our own copy so each arriving entry can commit exactly one direction.
   pending_dirs = {}

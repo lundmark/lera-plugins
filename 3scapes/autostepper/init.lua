@@ -155,6 +155,7 @@ local function get_push_notify()
       -- Separate channels let discovery and restart arrive close together.
       pushn.register_channel("chaossea_cask")
       pushn.register_channel("chaossea_farm")
+      pushn.register_channel("explore_exhausted")
     end
   end
   return pushn
@@ -795,6 +796,10 @@ local function do_step(monsters)
       -- next "-." would re-enter explore mode, instantly re-exhaust the same
       -- map and never reach route mode at all.
       if explore.stop then explore.stop() end
+      if not at_completion and reason == "exhausted" then
+        push_event("explore_exhausted",
+          "Autostepper: exploration stopped; no unvisited exits remain.")
+      end
       notify(on_complete_callbacks)
       return false
     end
@@ -980,6 +985,7 @@ local function show_help()
   log("Farm restarts wait through the portal lobby for confirmed entry into the new maze.")
   log("Push alerts: /pushn toggle chaossea_cask and /pushn toggle chaossea_farm (default off).")
   log("Cask alerts fire on discovery, before combat; farm alerts fire when setup commands are sent.")
+  log("/pushn toggle explore_exhausted alerts when exploration runs out of reachable unvisited rooms (default off).")
 end
 
 -- The movement shorthands stay raw aliases: "-", "-.", "->" and "-!" are input
@@ -1200,7 +1206,8 @@ local function register_command()
       .. "clearing non-ignored mobs; farm mode then starts the next instance, waiting "
       .. "through the portal lobby for confirmed entry into the new maze. "
       .. "Push channels 'chaossea_cask' (discovery, before combat) and 'chaossea_farm' "
-      .. "(each automatic restart) default off; enable them with "
+      .. "(each automatic restart), plus 'explore_exhausted' (no reachable unvisited rooms), "
+      .. "default off; enable them with "
       .. "'/pushn toggle <channel>'. Existing push grace and rate limits apply. Otherwise "
       .. "exploration stops once every reachable exit leads somewhere already "
       .. "mapped. 'explore off' stops it early, "

@@ -57,18 +57,26 @@ Settings last until changed or the plugin is reloaded.
 Bare `/step chaossea`, its old level/setup/off forms, and the `/step cs` shorthand
 are no longer accepted. Use `/step explore` to start and the farm commands to configure.
 
-## Chaos Sea push notifications
+## Exploration push notifications
 
-Enable the two channels in the existing `push_notify` plugin:
+Enable the channels you want in the existing `push_notify` plugin:
 
 ```
+/pushn toggle explore_exhausted
 /pushn toggle chaossea_cask
 /pushn toggle chaossea_farm
 ```
 
-Both channels default off. `/pushn toggle` lists their current states; toggling
+All channels default off. `/pushn toggle` lists their current states; toggling
 an enabled channel turns it off again. Global push enable, credentials, activity
 grace and rate limits remain controlled by `push_notify`.
+
+`explore_exhausted` announces when exploration stops because no reachable
+unvisited rooms remain. It fires once at that stop, including when farming is
+configured. Manual stops, returning to the origin with `explore leave`, movement
+failures, stored-route completion and reaching the Chaos Sea cask/portal do not
+trigger it. A new exploration run can send another alert, subject to the normal
+push settings; suppressed events are not queued or replayed.
 
 `chaossea_cask` announces a cask once per fresh exploration run, when a complete
 contents list shows it, before fighting its boss. It means the cask was found,
