@@ -148,6 +148,77 @@ local function construction_lines(add, width)
 end
 
 -- ---------------------------------------------------------------------------
+-- Siege Park -- NOT a LEGACY section. 'vsiege build' used to refuse an order
+-- it could not pay for outright, so there was nothing to queue and nothing to
+-- draw; it now takes an order and fills it from deliveries exactly the way
+-- set_pending_build() does for Construction above, which is what earns it a
+-- place on this page rather than a single engines-held line on the war page.
+--
+-- The server sends no recipe, only `next_needs` (the shortfall on the NEXT
+-- engine's bill) and `reserved` (what the warehouse has already set aside), so
+-- a bill is reconstructed here as reserved+shortfall per good. When an order's
+-- goods are covered the shortfall is 0 and the row reads full, which is the
+-- honest reading: what blocks such an order is daler, not materials. Coin is
+-- deliberately never reserved (see try_fill_siege_orders()), so it is reported
+-- as a per-engine price, not as progress toward one.
+-- ---------------------------------------------------------------------------
+
+local SIEGE_GOODS = { "timber", "iron", "tools" }
+
+local function siege_lines(add, width)
+  local sg = S.siege
+  -- Gate on the park existing at all (a Siege Workshop has been built), the
+  -- same `cap > 0` test pages/war.lua uses. A guild with no workshop gets no
+  -- header, matching Ship Upgrades rather than Construction.
+  if not sg or (sg.cap or 0) <= 0 then return end
+
+  add(pagelib.header(width, string.format("Siege Park  (%d/%d engines)",
+    sg.engines or 0, sg.cap or 0)))
+
+  local forging, ordered = sg.forging or 0, sg.ordered or 0
+
+  if forging > 0 then
+    add(pagelib.trunc(string.format("%sForging: %d%s  -- materials paid, engines under construction%s",
+      C.bright_green, forging,
+      (sg.queue_max or 0) > 0 and ("/" .. sg.queue_max) or "",
+      pagelib.RESET), width))
+  end
+
+  if ordered > 0 then
+    add(pagelib.trunc(string.format("%sOrdered: %d%s  -- waiting on deliveries%s",
+      C.yellow, ordered,
+      (sg.order_max or 0) > 0 and ("/" .. sg.order_max) or "",
+      pagelib.RESET), width))
+
+    -- The next engine's bill. Rows are drawn through the same mat_row the
+    -- Construction and Ship Upgrades sections use, so a siege order reads
+    -- like every other unfinished project on the page.
+    local rows = {}
+    for _, good in ipairs(SIEGE_GOODS) do
+      local short = (sg.next_needs or {})[good] or 0
+      local held = (sg.reserved or {})[good] or 0
+      local need = held + short
+      if need > 0 then
+        rows[#rows + 1] = { good = good, done = held, need = need }
+      end
+    end
+    for _, mg in ipairs(rows) do add(mat_row(width, mg)) end
+
+    if (sg.daler_each or 0) > 0 then
+      -- Not a mat_row: daler is fungible and never reserved, so there is no
+      -- done/need ratio to draw -- only the price each engine pays on start.
+      add(pagelib.trunc("  " .. C.dim .. "Daler is taken when an engine starts, not reserved: "
+        .. pagelib.RESET .. C.bright_green .. pagelib.fmt_num(sg.daler_each)
+        .. "d" .. pagelib.RESET .. C.dim .. " each" .. pagelib.RESET, width))
+    end
+  end
+
+  if forging == 0 and ordered == 0 then
+    add(pagelib.trunc(C.dim .. "No engines on order -- 'vsiege build <n>'" .. pagelib.RESET, width))
+  end
+end
+
+-- ---------------------------------------------------------------------------
 -- Ship Upgrades (guild_viking.lua:9522-9589, gated show_builds_upgrades AND
 -- a non-empty list -- unlike Construction, LEGACY prints nothing at all when
 -- there are no ship upgrades, not even a section header)
@@ -330,6 +401,10 @@ function M.lines(width)
 
   if page_opts.get("show_builds_construction") then
     construction_lines(add, width)
+  end
+
+  if page_opts.get("show_builds_siege") then
+    siege_lines(add, width)
   end
 
   if page_opts.get("show_builds_upgrades") then

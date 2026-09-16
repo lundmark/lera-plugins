@@ -1,8 +1,10 @@
 -- guild_viking Guild.Kingdom writers unit tests. Run from the lera-plugins
 -- repo root with LERA_ROOT pointing at a built Lera checkout.
 --
--- The campaign war-map cluster (BATTLE and the WM* keys) is not covered here;
--- it has no GMCP writer yet.
+-- The campaign war-map cluster (BATTLE and the WM* keys) is largely not covered
+-- here. The exception is campaign_siege: the siege park outlives a campaign and
+-- is decoded before write_campaign's active check, so it can be driven with an
+-- inactive campaign record and no war map at all.
 package.path = "3scapes/guild_viking/?.lua;" .. package.path
 
 local failures = 0
@@ -231,6 +233,41 @@ check("vitals groups are gathered into VITALS, not counted individually",
         and unk["ledung"] == nil,
       table.concat({ tostring(unk["VITALS"]), tostring(unk["hp"]),
                      tostring(unk["points"]), tostring(unk["ledung"]) }, "/"))
+
+-- ---- siege park ------------------------------------------------------------
+-- Held, forging and ordered are three different states; decoding only
+-- engines/capacity -- which this handler did until the build queue landed --
+-- collapses them, and a park with orders outstanding then reads as an idle
+-- one. `active = 0` is deliberate: the park is decoded ahead of write_campaign's
+-- active check precisely because it outlives a campaign.
+kd({ campaign = { active = 0 },
+     campaign_siege = { engines = 1, capacity = 4, forging = 1, queue_max = 3,
+                        ordered = 2, order_max = 6,
+                        reserved = { timber = 20, iron = 45, tools = 30 },
+                        next_needs = { timber = 40, iron = 0, tools = 0 },
+                        daler_each = 6000 } })
+check("siege: capacity is stored as cap, matching prison's own rename",
+      S.siege.engines == 1 and S.siege.cap == 4,
+      tostring(S.siege.engines) .. "/" .. tostring(S.siege.cap))
+check("siege: the queue and order counters survive decoding",
+      S.siege.forging == 1 and S.siege.queue_max == 3
+      and S.siege.ordered == 2 and S.siege.order_max == 6)
+check("siege: reserved and next_needs are decoded per good",
+      S.siege.reserved.timber == 20 and S.siege.reserved.iron == 45
+      and S.siege.next_needs.timber == 40 and S.siege.next_needs.tools == 0,
+      tostring(S.siege.reserved.timber) .. "/" .. tostring(S.siege.next_needs.timber))
+check("siege: daler_each survives decoding", S.siege.daler_each == 6000)
+
+-- An older server that still sends only the original two fields must not
+-- produce nil counters the pages would then index into.
+kd({ campaign = { active = 0 },
+     campaign_siege = { engines = 2, capacity = 4 } })
+check("siege: absent counters decode as zero, not nil",
+      S.siege.forging == 0 and S.siege.ordered == 0
+      and S.siege.daler_each == 0)
+check("siege: absent good mappings decode as empty tables, not nil",
+      type(S.siege.reserved) == "table" and next(S.siege.reserved) == nil
+      and type(S.siege.next_needs) == "table")
 
 -- ---- envelope --------------------------------------------------------------
 protocol.on_gmcp("Guild.Kingdom", { guild = "berserker",

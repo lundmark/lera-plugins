@@ -24,7 +24,8 @@ page_opts.defaults = {
                      -- (Task 4); added here now, like auto_trade/auto_raid/
                      -- auto_voyage before it, since it authorises spending
                      -- and must default off.
-  show_builds_construction=true, show_builds_upgrades=true,
+  show_builds_construction=true, show_builds_siege=true,
+  show_builds_upgrades=true,
   show_builds_damage=true, show_builds_staff=true,
   show_people_settlers=true, show_people_garrison=true, show_people_raids=true,
   show_people_designations=true,

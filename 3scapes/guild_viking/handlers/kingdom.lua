@@ -556,9 +556,36 @@ local function write_campaign(parts)
       roster = roster,
     }
   end
+  -- The siege park. Engines HELD, engines FORGING and engines merely ORDERED
+  -- are three different states (gmcp.h's campaign_siege block): a park reading
+  -- 0/4 with three on order is not an empty one, and reading only
+  -- engines/capacity -- which this did until the build queue landed -- cannot
+  -- tell them apart. `reserved` (already set aside for outstanding orders) and
+  -- `next_needs` (per-good shortfall on the NEXT engine's bill) are flat
+  -- good -> int mappings, so they are copied key-by-key rather than kept as the
+  -- decoder's own table; a good the server omits is simply absent, which the
+  -- pages read as zero.
   if type(parts.campaign_siege) == "table" then
-    S.siege = { engines = tonumber(parts.campaign_siege.engines) or 0,
-                cap = tonumber(parts.campaign_siege.capacity) or 0 }
+    local sg = parts.campaign_siege
+    local function goods_map(v)
+      local out = {}
+      if type(v) == "table" then
+        for good, amt in pairs(v) do out[tostring(good)] = tonumber(amt) or 0 end
+      end
+      return out
+    end
+    S.siege = {
+      engines = tonumber(sg.engines) or 0,
+      -- `capacity` -> cap.
+      cap = tonumber(sg.capacity) or 0,
+      forging = tonumber(sg.forging) or 0,
+      queue_max = tonumber(sg.queue_max) or 0,
+      ordered = tonumber(sg.ordered) or 0,
+      order_max = tonumber(sg.order_max) or 0,
+      reserved = goods_map(sg.reserved),
+      next_needs = goods_map(sg.next_needs),
+      daler_each = tonumber(sg.daler_each) or 0,
+    }
   end
 
   if (tonumber(rec.active) or 0) ~= 1 then

@@ -196,21 +196,30 @@ local function prison_lines(add, width)
       pr.pend_cmd and ", commander" or "", pagelib.RESET), width))
   end
 
-  -- Captive roster: id, name, size and ransom were concatenated, so the
-  -- ransom column slid with the length of each captive's name. Fixed columns,
-  -- ransom right-aligned so the figures stack; commanders flagged in colour
-  -- rather than as a trailing ", cmdr" that pushed everything further right.
+  -- Captive roster in fixed columns: the fields used to be concatenated, so
+  -- the ransom slid with the length of each captive's name. Names are
+  -- title-cased the same way raid/campaign targets are (cc.tcase), the size
+  -- and ransom are right-aligned so the figures stack, and the per-row
+  -- "ransom" label is gone -- the header below names every column once.
+  if #(pr.roster or {}) > 0 then
+    add(pagelib.trunc(C.dim .. "  " .. pagelib.trunc("#", 5)
+      .. pagelib.trunc("Captive", 30) .. pagelib.rjust("Size", 6)
+      .. "  " .. pagelib.trunc("Rank", 6) .. pagelib.rjust("Ransom", 10)
+      .. pagelib.RESET, width))
+  end
+
   for _, p in ipairs(pr.roster or {}) do
-    local ransom = string.format("%dd", p.val or 0)
     add(pagelib.trunc(
       "  " .. pagelib.trunc(C.dim .. tostring(p.id or 0) .. ")" .. pagelib.RESET, 5)
-      .. pagelib.trunc((p.cmd and C.yellow or C.white) .. (p.name or "?")
-                       .. pagelib.RESET, 22)
-      .. pagelib.trunc(C.dim .. "x" .. tostring(p.size or 0) .. pagelib.RESET, 6)
-      .. pagelib.trunc(p.cmd and (C.yellow .. "cmdr" .. pagelib.RESET) or "", 6)
-      .. C.dim .. "ransom " .. pagelib.RESET
-      .. string.rep(" ", math.max(0, 8 - #ransom))
-      .. C.bright_green .. ransom .. pagelib.RESET, width))
+      -- Truncate the name at 29 but hold a 30-wide column, so a name that
+      -- fills the cell still leaves a gap before the size instead of
+      -- running into it ("The Village Of Haugnesx6").
+      .. pagelib.trunc(pagelib.trunc((p.cmd and C.yellow or C.white)
+                       .. cc.tcase(p.name or "?") .. pagelib.RESET, 29), 30)
+      .. pagelib.rjust(C.dim .. "x" .. tostring(p.size or 0) .. pagelib.RESET, 6)
+      .. "  " .. pagelib.trunc(p.cmd and (C.yellow .. "Cmdr" .. pagelib.RESET) or "", 6)
+      .. pagelib.rjust(C.bright_green .. pagelib.fmt_num(p.val or 0) .. "d"
+                       .. pagelib.RESET, 10), width))
   end
 
   if (pr.kin or 0) > 0 then
@@ -219,10 +228,25 @@ local function prison_lines(add, width)
       C.red, pr.kin, pagelib.RESET), width))
   end
 
+  -- Engines held, forging and ordered are three different states -- see
+  -- gmcp.h's campaign_siege block. This line reported only the first, which
+  -- read identically whether three engines were on order or none had ever
+  -- been asked for. The bill and the per-good progress stay on the Builds
+  -- page's Siege Park section; what a war needs here is how many engines can
+  -- march now and how many are still coming.
   if have_siege then
+    local pending = {}
+    if (sg.forging or 0) > 0 then
+      pending[#pending + 1] = string.format("%d forging", sg.forging)
+    end
+    if (sg.ordered or 0) > 0 then
+      pending[#pending + 1] = string.format("%d on order", sg.ordered)
+    end
     add(pagelib.trunc(string.format(
-      "%sSiege engines: %d/%d  -- 'vsiege build'; a garrison holds its walls, so breach them%s",
-      C.yellow, sg.engines or 0, sg.cap or 0, pagelib.RESET), width))
+      "%sSiege engines: %d/%d%s  -- 'vsiege build'; engines breach a garrison's walls%s",
+      C.yellow, sg.engines or 0, sg.cap or 0,
+      #pending > 0 and ("  (" .. table.concat(pending, ", ") .. ")") or "",
+      pagelib.RESET), width))
   end
 end
 

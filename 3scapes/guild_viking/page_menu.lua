@@ -110,6 +110,7 @@ local PAGE_MENUS = {
   -- LEGACY [4]
   builds = {
     { key = "show_builds_construction", label = "Show Construction" },
+    { key = "show_builds_siege",        label = "Show Siege Park" },
     { key = "show_builds_upgrades",     label = "Show Ship Upgrades" },
     { key = "show_builds_damage",       label = "Show Damage" },
     { key = "show_builds_staff",        label = "Show Hired Folk" },

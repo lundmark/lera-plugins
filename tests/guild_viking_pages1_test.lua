@@ -463,6 +463,15 @@ S.ship_upgrades = {
     mats = { { good = "iron", done = 2, need = 5 } } },
 }
 S.bdmg = { { bldg_id = "palisade", pct = 72 } }
+-- A park holding one engine of four, one already forging and two more ordered
+-- and short of timber. Reconstructing the bill as reserved+shortfall makes the
+-- next engine's timber row read 20/60 -- the server sends no recipe.
+S.siege = {
+  engines = 1, cap = 4, forging = 1, queue_max = 3, ordered = 2, order_max = 6,
+  reserved = { timber = 20, iron = 45, tools = 30 },
+  next_needs = { timber = 40, iron = 0, tools = 0 },
+  daler_each = 6000,
+}
 S.staff_list = {
   { name = "Ragnar", assigned_to = "0", stat_key = "combat",
     stats = { combat = 10, trade = 2 }, trait = "berserker", loyalty = 4,
@@ -470,6 +479,7 @@ S.staff_list = {
 }
 
 page_opts.set("show_builds_construction", true)
+page_opts.set("show_builds_siege", true)
 page_opts.set("show_builds_upgrades", true)
 page_opts.set("show_builds_damage", true)
 page_opts.set("show_builds_staff", true)
@@ -504,6 +514,49 @@ check("builds: timber mat row (3/10) matches the exact pagelib.bar output",
       find_line(builds_lines, expected_mat_row) ~= nil, builds_all)
 check("builds: pct_color(3,10) is the 'red' tier (0.3 is > 0.25, <= 0.5)",
       expected_mat_color == C.red, expected_mat_color)
+
+-- ---- Siege Park section -----------------------------------------------------
+-- Not a LEGACY section: 'vsiege build' could not queue an order until the
+-- build queue landed, so there was nothing to draw. Held, forging and ordered
+-- are three distinct states and the page has to separate them -- a park at
+-- 1/4 with two on order is not the same as one nobody has ordered from.
+check("builds: Siege Park header carries engines held over capacity",
+      builds_all:find("Siege Park  (1/4 engines)", 1, true) ~= nil, builds_all)
+check("builds: forging count is shown against the queue cap",
+      builds_all:find("Forging: 1/3", 1, true) ~= nil, builds_all)
+check("builds: ordered count is shown against the order cap",
+      builds_all:find("Ordered: 2/6", 1, true) ~= nil, builds_all)
+check("builds: the next engine's timber bill reads reserved/(reserved+shortfall)",
+      builds_all:find("20/60", 1, true) ~= nil, builds_all)
+check("builds: a good already covered reads as full rather than as missing",
+      builds_all:find("45/45", 1, true) ~= nil, builds_all)
+-- Coin is never reserved (try_fill_siege_orders()), so it must not be drawn as
+-- progress toward an engine the way the material rows are.
+check("builds: daler is reported as a per-engine price, not a progress row",
+      builds_all:find("6,000d", 1, true) ~= nil
+      and builds_all:find("not reserved", 1, true) ~= nil, builds_all)
+
+do
+  local saved = S.siege
+  S.siege = { engines = 0, cap = 4, forging = 0, ordered = 0 }
+  local idle = joined(builds_page.lines(WIDTH))
+  check("builds: an empty park prompts the command instead of an empty bill",
+        idle:find("No engines on order", 1, true) ~= nil, idle)
+  check("builds: an empty park draws no material rows",
+        idle:find("6,000d", 1, true) == nil, idle)
+
+  -- No Siege Workshop built: cap 0. Like Ship Upgrades, and unlike
+  -- Construction, the section prints nothing at all rather than an empty one.
+  S.siege = nil
+  check("builds: no Siege Park header at all when the guild has no workshop",
+        find_line(builds_page.lines(WIDTH), "Siege Park") == nil)
+  S.siege = saved
+end
+
+page_opts.set("show_builds_siege", false)
+check("builds: Siege Park header disappears when show_builds_siege is off",
+      find_line(builds_page.lines(WIDTH), "Siege Park") == nil)
+page_opts.set("show_builds_siege", true)
 
 page_opts.set("show_builds_construction", false)
 local builds_no_constr = builds_page.lines(WIDTH)
