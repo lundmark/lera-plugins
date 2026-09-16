@@ -1,16 +1,15 @@
 -- Deadmans Switch Plugin for Lera
 -- Prevents automated sends (triggers/timers) when user has been idle too long.
--- Shows warning overlay when idle, blocks sends when deadmans is active.
+-- Warns after 10 minutes and blocks after 15 minutes; thresholds are fixed.
 
 local M = {}
 M.name = "deadmans"
 M.version = "1.0"
 M.priority = 1  -- Run first to intercept automated sends
 
--- Configuration
+-- Fixed thresholds and display settings. Saved configuration is not used.
 local config = {
   warning_time = 10 * 60,  -- 10 minutes: start showing yellow warning
-  antiidle_time = 5 * 60,
   block_time = 15 * 60,    -- 15 minutes: activate deadmans (block sends)
   -- How often a push repeats while you stay in the same state. The overlay is
   -- only useful if you are looking at the window, which is exactly what being
@@ -53,9 +52,6 @@ end
 local last_user_input = 0  -- Timestamp of last user input
 local blocked_count = 0     -- Number of sends blocked this session
 local update_timer = nil    -- Timer for updating the display
-local antiidle_enabled = false -- Arm after login; never send into a password prompt.
-local antiidle_last = 0
-local antiidle_sent = 0
 local command_id = nil      -- Registered command ID for cleanup
 local pushn                 -- push_notify consumer, resolved late (see below)
 local push_stage = nil      -- nil | "warning" | "blocked": what was last pushed
@@ -68,19 +64,6 @@ local colors = {
   black_fg = 16,     -- Black
   white_fg = 231,    -- White
 }
-
--- Persist the thresholds. Called on every change rather than only at unload:
--- on_unload runs on a clean exit, so a killed process used to lose the setting.
-local function save_config()
-  store.set({
-    config = {
-      warning_time = config.warning_time,
-      block_time = config.block_time,
-      antiidle_time = config.antiidle_time,
-    }
-  })
-  store.save()
-end
 
 -- Get current time in seconds
 local function get_time()
@@ -123,16 +106,6 @@ end
 -- Commands
 --------------------------------------------------------------------------------
 
-local function show_help()
-  print("[deadmans] Commands:")
-  print("  /deadmans               - Show status and help")
-  print("  /deadmans status        - Show current status")
-  print("  /deadmans antiidle on|off|status|<minutes> - Post-login keepalive")
-  print("  /deadmans reset         - Reset idle timer (re-enable sends)")
-  print("  /deadmans warning <min> - Set warning time (minutes)")
-  print("  /deadmans set <min>     - Set block time (minutes)")
-end
-
 local function show_status()
   local idle = get_idle_time()
   local state = "OK"
@@ -158,84 +131,17 @@ local function show_status()
   end
 end
 
--- The registry hands the handler everything after the command name, so the
--- subcommand split and its validation happen here rather than in a regex.
-local function split_subcommand(args)
-  local sub, rest = tostring(args or ""):match("^%s*(%S*)%s*(.-)%s*$")
-  return sub:lower(), rest
-end
-
--- The usage line echoes the subcommand the user typed, so "block" reports
--- itself rather than pointing at a name they did not use.
-local function set_minutes(sub, rest)
-  local minutes = tonumber(rest:match("^%d+$"))
-  if not minutes then
-    print("[deadmans] Usage: /deadmans " .. sub .. " <minutes>")
-  elseif sub == "warning" then
-    M.set_warning_time(minutes)
-  else
-    M.set_block_time(minutes)
-  end
-end
-
-local function dispatch(args)
-  local sub, rest = split_subcommand(args)
-
-  if sub == "" then
-    show_status()
-    print("")
-    show_help()
-  elseif sub == "help" then
-    show_help()
-  elseif sub == "status" then
-    show_status()
-  elseif sub == "antiidle" then
-    local value = rest:lower()
-    local minutes = tonumber(value:match("^%d+$"))
-    if value == "off" then
-      antiidle_enabled = false
-    elseif value == "on" then
-      if mud.state() ~= "connected" then
-        print("[antiidle] Connect and log in before enabling anti-idle.")
-        return
-      end
-      antiidle_enabled = true
-      antiidle_last = get_time()
-    elseif minutes and minutes >= 1 and minutes <= 60 then
-      config.antiidle_time = minutes * 60
-      antiidle_last = get_time()
-      save_config()
-    elseif value ~= "status" and value ~= "" then
-      print("Usage: /deadmans antiidle on|off|status|<1-60 minutes>")
-      return
-    end
-    print(string.format("[antiidle] %s; interval %d minutes; sent %d blank lines. Enable only after login. Disarms on disconnect.",
-      antiidle_enabled and "ON" or "OFF", config.antiidle_time / 60, antiidle_sent))
-  elseif sub == "reset" then
-    M.reset()
-  elseif sub == "warning" or sub == "set" or sub == "block" then
-    -- "block" predates "set" and stays accepted; only "set" is advertised.
-    set_minutes(sub, rest)
-  else
-    print("[deadmans] Unknown subcommand: " .. sub)
-    show_help()
-  end
-end
-
 local function register_command()
   if not command then return end
   local id, err = command.register({
     name = "/deadmans",
-    usage = "/deadmans [status|reset|warning <min>|set <min>|antiidle on|off|status|<min>]",
-    summary = "Idle detection and automated-send blocking",
-    description = "Tracks how long it has been since you last typed something. "
-      .. "After the warning time an overlay appears; after the block time "
-      .. "automated sends from triggers and timers are suppressed until you "
-      .. "type again. 'set <minutes>' changes the block time and 'warning "
-      .. "<minutes>' the warning time; both are saved as soon as they change. "
-      .. "'reset' clears the idle timer by hand.",
-    accepts_args = true,
-    handler = dispatch,
+    usage = "/deadmans",
+    summary = "Show the fixed 15-minute deadman status",
+    description = "Warns after 10 minutes without user input and blocks automated "
+      .. "sends after 15 minutes, until you type again. The timeout is fixed. "
+      .. "This command only shows status.",
+    accepts_args = false,
+    handler = show_status,
   })
   if id then
     command_id = id
@@ -362,11 +268,6 @@ function M.on_render()
   ui.text(ui.rect(box_x + math.floor((box_w - #status_text) / 2), center_y + 2, #status_text, 1), status_text)
 end
 
--- Timer callback to refresh display when idle
-function M.on_disconnect()
-  antiidle_enabled = false
-end
-
 -- Push the state change, and keep pushing while it lasts.
 --
 -- Driven from the one-second tick rather than from on_render: on_render only
@@ -412,18 +313,6 @@ local function update_push(now)
 end
 
 local function update_display()
-  if antiidle_enabled then
-    if mud.state() ~= "connected" then
-      antiidle_enabled = false
-    elseif get_time() - math.max(antiidle_last, last_user_input) >= config.antiidle_time then
-      antiidle_last = get_time()
-      -- Only this fixed blank line bypasses deadmans. It must never count as
-      -- human input or permit triggers/timers to resume while unattended.
-      if mud.send_raw("") then
-        antiidle_sent = antiidle_sent + 1
-      end
-    end
-  end
   update_push(get_time())
   if is_warning() or is_active() then
     -- Force screen redraw to update the overlay
@@ -435,18 +324,6 @@ function M.on_load()
   -- Initialize timestamp
   last_user_input = get_time()
 
-  -- Load saved config
-  store.load()
-  local data = store.get()
-  if data and data.config then
-    if data.config.warning_time then config.warning_time = data.config.warning_time end
-    if data.config.block_time then config.block_time = data.config.block_time end
-    local interval = tonumber(data.config.antiidle_time)
-    if interval and interval >= 60 and interval <= 3600 and interval == math.floor(interval) then
-      config.antiidle_time = interval
-    end
-  end
-
   register_command()
 
   -- Start update timer (every second when warning/active)
@@ -454,7 +331,7 @@ function M.on_load()
 
   print("[deadmans] Loaded - warning at " .. math.floor(config.warning_time / 60) ..
         "m, blocking at " .. math.floor(config.block_time / 60) .. "m")
-  print("[deadmans] Type '/deadmans' for commands")
+  print("[deadmans] Type '/deadmans' for status")
 end
 
 function M.on_setup()
@@ -470,27 +347,11 @@ function M.on_unload()
     timer.cancel(update_timer)
     update_timer = nil
   end
-
-  save_config()
 end
 
 --------------------------------------------------------------------------------
 -- Public API
 --------------------------------------------------------------------------------
-
--- Set warning time (in minutes)
-function M.set_warning_time(minutes)
-  config.warning_time = minutes * 60
-  save_config()
-  print("[deadmans] Warning time set to " .. minutes .. " minutes")
-end
-
--- Set block time (in minutes)
-function M.set_block_time(minutes)
-  config.block_time = minutes * 60
-  save_config()
-  print("[deadmans] Block time set to " .. minutes .. " minutes")
-end
 
 -- Get current idle time in seconds
 function M.get_idle_time()
@@ -505,13 +366,6 @@ end
 -- Check if in warning state
 function M.is_warning()
   return is_warning()
-end
-
--- Reset the idle timer (as if user just pressed enter)
-function M.reset()
-  last_user_input = get_time()
-  blocked_count = 0
-  print("[deadmans] Timer reset")
 end
 
 -- Get number of blocked sends
