@@ -179,11 +179,23 @@ end
 -- War Captives (guild_viking.lua:14020-14058, UNGATED -- data-gated)
 -- ---------------------------------------------------------------------------
 
+-- Captive roster column widths. The name column is the only one that can
+-- overflow, so its text is cut one short (ROSTER_NAME_W - 1) and a literal
+-- space appended -- see the comment in the loop.
+-- Bill goods, in the order the server lists them.
+local SIEGE_GOODS = { "timber", "iron", "tools" }
+
+local ROSTER_ID_W, ROSTER_NAME_W = 5, 30
+local ROSTER_SIZE_W, ROSTER_RANK_W, ROSTER_RANSOM_W = 6, 6, 9
+
 local function prison_lines(add, width)
   local pr = S.prison
   local sg = S.siege
   local have_prison = pr and ((pr.held or 0) > 0 or (pr.kin or 0) > 0 or pr.pending or (pr.cap or 0) > 0)
-  local have_siege = sg and (sg.cap or 0) > 0
+  -- Gate on anything the park holds OR has committed: with cap alone, a
+  -- demolished/downgraded Siege Workshop hides engines still on order.
+  local have_siege = sg and ((sg.cap or 0) > 0 or (sg.engines or 0) > 0
+                             or (sg.forging or 0) > 0 or (sg.ordered or 0) > 0)
   if not have_prison and not have_siege then return end
   if not pr then pr = { held = 0, cap = 0, kin = 0 } end
 
@@ -196,21 +208,33 @@ local function prison_lines(add, width)
       pr.pend_cmd and ", commander" or "", pagelib.RESET), width))
   end
 
-  -- Captive roster: id, name, size and ransom were concatenated, so the
-  -- ransom column slid with the length of each captive's name. Fixed columns,
-  -- ransom right-aligned so the figures stack; commanders flagged in colour
-  -- rather than as a trailing ", cmdr" that pushed everything further right.
+  -- Captive roster as fixed columns with a header. trunc() pads to EXACTLY
+  -- the width it is given, so a name that fills its column leaves no gap and
+  -- the size field abuts it ("the village of Haugnesx6" -- that name is
+  -- exactly 22 cells). Every text cell is therefore truncated one short and
+  -- given an explicit separator space. Names are title-cased, the rank reads
+  -- "Cmdr" in its own column rather than as a trailing ", cmdr" that pushed
+  -- the ransom around, and the ransom is right-aligned and comma-grouped so
+  -- the figures stack.
+  if #(pr.roster or {}) > 0 then
+    add(pagelib.trunc("  " .. C.dim
+      .. pagelib.trunc("#", ROSTER_ID_W)
+      .. pagelib.trunc("Captive", ROSTER_NAME_W)
+      .. pagelib.trunc("Size", ROSTER_SIZE_W)
+      .. pagelib.trunc("Rank", ROSTER_RANK_W)
+      .. "Ransom" .. pagelib.RESET, width))
+  end
   for _, p in ipairs(pr.roster or {}) do
-    local ransom = string.format("%dd", p.val or 0)
+    local ransom = pagelib.fmt_num(p.val or 0) .. "d"
     add(pagelib.trunc(
-      "  " .. pagelib.trunc(C.dim .. tostring(p.id or 0) .. ")" .. pagelib.RESET, 5)
-      .. pagelib.trunc((p.cmd and C.yellow or C.white) .. (p.name or "?")
-                       .. pagelib.RESET, 22)
-      .. pagelib.trunc(C.dim .. "x" .. tostring(p.size or 0) .. pagelib.RESET, 6)
-      .. pagelib.trunc(p.cmd and (C.yellow .. "cmdr" .. pagelib.RESET) or "", 6)
-      .. C.dim .. "ransom " .. pagelib.RESET
-      .. string.rep(" ", math.max(0, 8 - #ransom))
-      .. C.bright_green .. ransom .. pagelib.RESET, width))
+      "  "
+      .. C.dim .. pagelib.trunc(tostring(p.id or 0) .. ")", ROSTER_ID_W) .. pagelib.RESET
+      .. (p.cmd and C.yellow or C.white)
+      .. pagelib.trunc(cc.tcase(p.name or "?"), ROSTER_NAME_W - 1) .. pagelib.RESET .. " "
+      .. C.dim .. pagelib.trunc("x" .. tostring(p.size or 0), ROSTER_SIZE_W) .. pagelib.RESET
+      .. (p.cmd and (C.yellow .. pagelib.trunc("Cmdr", ROSTER_RANK_W) .. pagelib.RESET)
+                 or string.rep(" ", ROSTER_RANK_W))
+      .. C.bright_green .. pagelib.rjust(ransom, ROSTER_RANSOM_W) .. pagelib.RESET, width))
   end
 
   if (pr.kin or 0) > 0 then
@@ -220,9 +244,44 @@ local function prison_lines(add, width)
   end
 
   if have_siege then
+    -- Held / forging / on order are distinct states (gmcp.h:322-329); this
+    -- line used to print engines/cap alone, so a park with engines on the
+    -- forge line or waiting on materials read as empty. The headline stays
+    -- short enough not to be clipped at 80 columns, and the other two states
+    -- get their own line only when they are non-zero.
     add(pagelib.trunc(string.format(
-      "%sSiege engines: %d/%d  -- 'vsiege build'; a garrison holds its walls, so breach them%s",
+      "%sSiege engines: %d/%d held%s -- 'vsiege build' to breach a garrison's walls",
       C.yellow, sg.engines or 0, sg.cap or 0, pagelib.RESET), width))
+    -- Engines on the forge line, each with its own clock (campaign_siege_queue).
+    for _, e in ipairs(sg.queue or {}) do
+      local eta = e.eta or 0
+      add(pagelib.trunc("  "
+        .. pagelib.trunc(C.dim .. "Engine " .. tostring(e.slot or "?")
+                         .. pagelib.RESET, 11)
+        .. (eta <= 0 and (C.bright_green .. "Finalizing...")
+                     or (C.white .. cc.fmt_time(eta))) .. pagelib.RESET, width))
+    end
+
+    -- Materials pulled toward the NEXT engine, as delivered/needed per good.
+    -- The server sends `reserved` (already pulled) and `next_needs` (the
+    -- shortfall); _reserve_for_one_engine() (set.h:9706) never reserves more
+    -- than one engine's bill, so needed = reserved + next_needs exactly, and
+    -- no separate recipe key is required.
+    if (sg.ordered or 0) > 0 then
+      add(pagelib.trunc(string.format("  %s%d on order%s -- materials pulled:",
+        C.yellow, sg.ordered, pagelib.RESET), width))
+      for _, g in ipairs(SIEGE_GOODS) do
+        local got  = (sg.reserved or {})[g] or 0
+        local need = got + ((sg.next_needs or {})[g] or 0)
+        if need > 0 then
+          add(pagelib.trunc("    "
+            .. pagelib.trunc(C.white .. g .. pagelib.RESET, 10)
+            .. pagelib.pct_color(got, need) .. got .. "/" .. need .. pagelib.RESET
+            .. (got >= need and (C.bright_green .. "  done" .. pagelib.RESET) or ""),
+            width))
+        end
+      end
+    end
   end
 end
 
