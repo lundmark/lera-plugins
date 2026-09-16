@@ -804,8 +804,9 @@ end
 
 do
   local e = engine()
-  check("autostepper registers both push channels during setup",
-    e.channels.chaossea_cask ~= nil and e.channels.chaossea_farm ~= nil)
+  check("autostepper registers its push channels during setup",
+    e.channels.chaossea_cask ~= nil and e.channels.chaossea_farm ~= nil
+      and e.channels.explore_exhausted ~= nil)
   e.begin({n = 0}, {})
   e.info({s = 0})
   e.deliver("Room.Contents", {full = 1, entry = 1, page = 1, pages = 2,
@@ -818,6 +819,97 @@ do
   assert(e.as.start(false))
   e.contents({boss}, nil, false, {cask})
   check("pause and resume do not announce the same cask twice", #e.pushes == 1)
+end
+
+do
+  local e = engine()
+  local completed = 0
+  e.as.on_complete(function() completed = completed + 1 end)
+  e.begin({n = 0}, {})
+  check("exploration with a frontier sends no exhaustion alert", #e.pushes == 0)
+  e.info({s = 0}); e.contents({}, nil, true)
+  check("running out of reachable rooms sends an exhaustion alert",
+    #e.pushes == 1 and e.pushes[1].channel == "explore_exhausted"
+      and e.pushes[1].message == "Autostepper: exploration stopped; no unvisited exits remain.")
+  check("exhaustion still stops and completes the run",
+    not e.as.is_running() and not e.mode.active() and completed == 1)
+  e.contents({}, nil, true)
+  e.deliver("Char.Combat", {attacker = ""})
+  e.advance(30000)
+  check("duplicate frames and old timers do not repeat exhaustion alerts", #e.pushes == 1)
+  e.begin({}, {})
+  check("a fresh exploration can announce exhaustion again", #e.pushes == 2)
+end
+
+for _, action in ipairs({"stop", "disconnect", "timeout", "outside"}) do
+  local e = engine()
+  e.begin({n = 0}, {})
+  if action == "stop" then e.as.stop()
+  elseif action == "disconnect" then e.as.on_disconnect()
+  elseif action == "outside" then
+    e.deliver("Room.Info", {num = 99, name = "Outside the Sea", exits = {s = 0}})
+    e.contents({}, nil, true)
+  end
+  e.advance(30000)
+  check(action .. " does not announce exhausted exploration",
+    not e.as.is_running() and #e.pushes == 0)
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {})
+  e.info({s = 0, n = 0}); e.contents({boss}, nil, true)
+  assert(e.as.explore_leave())
+  e.deliver("Char.Combat", {attacker = ""}); e.contents({})
+  e.info({n = 0}); e.contents({}, nil, true)
+  check("returning to the origin is not exhaustion",
+    not e.as.is_running() and e.mode.stop_reason() == "at origin" and #e.pushes == 0)
+  e.command("explore"); e.contents({})
+  e.info({s = 0, n = 0}); e.contents({}, nil, true)
+  e.info({s = 0}); e.contents({}, nil, true)
+  check("exhaustion after leave and resume replaces the old stop reason",
+    not e.as.is_running() and e.pos() == "0,2,0" and e.mode.stop_reason() == "exhausted")
+  check("exhaustion after leave and resume sends its alert",
+    #e.pushes == 1 and e.pushes[1].channel == "explore_exhausted")
+end
+
+do
+  local e = engine()
+  e.begin({n = 0}, {})
+  e.info({s = 0}); e.contents({}, nil, true, {cask})
+  check("cask completion sends only the existing cask alert",
+    not e.as.is_running() and #e.pushes == 1 and e.pushes[1].channel == "chaossea_cask")
+end
+
+do
+  local e = engine()
+  e.routes = {{raw = "n", commands = {"n"}}}
+  e.info({n = 0}); e.contents({})
+  assert(e.as.start(false)); e.contents({})
+  e.info({s = 0}); e.contents({}, nil, true)
+  check("stored-route completion does not announce exhausted exploration",
+    not e.as.is_running() and #e.pushes == 0)
+end
+
+do
+  local e = engine()
+  e.push_sink = nil
+  e.begin({}, {})
+  check("missing consumer does not prevent exhausted exploration stopping",
+    not e.as.is_running() and #e.pushes == 0)
+  local calls, channels = 0, {}
+  e.push_sink = {
+    register_channel = function(name) channels[name] = true end,
+    notify = function(channel)
+      if channel == "explore_exhausted" then calls = calls + 1 end
+      return false
+    end,
+  }
+  e.begin({}, {})
+  check("exhaustion discovers and registers a replacement consumer",
+    calls == 1 and channels.explore_exhausted and not e.as.is_running())
+  e.contents({}); e.advance(30000)
+  check("declined exhaustion alert is not queued or replayed", calls == 1)
 end
 
 do
@@ -896,6 +988,22 @@ do
   check("real consumer delivers both nearby events on distinct rate-limit channels",
     #delivered == 2 and delivered[1].title == "CHAOSSEA_CASK" and delivered[2].title == "CHAOSSEA_FARM")
   e.as.stop()
+  e.begin({}, {})
+  check("real consumer keeps exhaustion alerts opt-in", #delivered == 2)
+  print = function() end
+  sink.enable_channel("explore_exhausted", true)
+  sink.set_grace_period(60)
+  print = output
+  sink.on_user_input("")
+  e.begin({}, {})
+  check("real consumer applies activity grace to exhaustion", #delivered == 2)
+  e.advance(61000)
+  check("grace-suppressed exhaustion is not replayed", #delivered == 2)
+  e.begin({}, {})
+  check("enabled exhaustion channel delivers after grace",
+    #delivered == 3 and delivered[3].title == "EXPLORE_EXHAUSTED")
+  e.begin({}, {})
+  check("real consumer rate-limits repeated exploration exhaustion", #delivered == 3)
   store, push = old_store, old_push
   package.loaded.push_notify = nil
 end
