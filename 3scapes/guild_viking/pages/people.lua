@@ -355,17 +355,28 @@ local function settlers_lines(add, width)
       local tier = cb[cid] or 0
       if tier > 0 then parts[#parts + 1] = bldg_display(cid) .. " T" .. tier end
     end
-    if #parts > 0 then
-      add(pagelib.kv(width, "Civic Buildings:", table.concat(parts, ", ")))
+    for _, line in ipairs(pagelib.wrap_parts(width, "Civic Buildings:", parts)) do
+      add(line)
     end
   end
 
-  add(pagelib.trunc(string.format(
-    "Grain: %s   Fish: %s   %sBread:%s %s   %sSalted Fish:%s %s   Mead: %s",
-    pagelib.fmt_num(stock_total("grain")), pagelib.fmt_num(stock_total("fish")),
-    C.yellow, pagelib.RESET, pagelib.fmt_num(stock_total("bread")),
-    C.bright_cyan, pagelib.RESET, pagelib.fmt_num(stock_total("salted_fish")),
-    pagelib.fmt_num(stock_total("mead"))), width))
+  -- Every good coloured from city_common's shared palette. This row used to
+  -- hand-pick a colour for two of the five and leave Grain, Fish and Mead
+  -- plain -- and its Salted Fish (bright_cyan) did not even match the
+  -- palette's entry (bright_blue), so the same good was two colours
+  -- depending on which row you read it from.
+  do
+    local parts = {}
+    for _, g in ipairs({ "grain", "fish", "bread", "salted_fish", "mead" }) do
+      -- Colon INSIDE the coloured span, as the hand-rolled row had it
+      -- ("%sBread:%s"): label and colon are one visual unit.
+      parts[#parts + 1] = cc.good_color(g) .. cc.good_label(g) .. ":" .. pagelib.RESET
+        .. " " .. pagelib.fmt_num(stock_total(g))
+    end
+    for _, line in ipairs(pagelib.wrap_parts(width, "Stock:", parts, "   ")) do
+      add(line)
+    end
+  end
 
   do
     local spoils = stock_total("spoils")
@@ -381,8 +392,8 @@ local function settlers_lines(add, width)
         parts[#parts + 1] = cc.good_color(good) .. cc.good_label(good) .. pagelib.RESET .. ":-" .. amt
       end
     end
-    if #parts > 0 then
-      add(pagelib.trunc(C.dim .. "Consumption/tick: " .. pagelib.RESET .. table.concat(parts, ", "), width))
+    for _, line in ipairs(pagelib.wrap_parts(width, "Consumption/tick:", parts)) do
+      add(line)
     end
   end
 
@@ -441,6 +452,13 @@ end
 -- ---------------------------------------------------------------------------
 
 local LOY_LABELS = { [1] = "Wavering", [2] = "Uneasy", [3] = "Steady", [4] = "Loyal", [5] = "Devoted" }
+-- The MUD renders loyalty flat white (vroster.c:307, 371) -- a deliberate
+-- divergence. Five levels map onto pct_color()'s five bands exactly, so the
+-- column reads on the same red->bright_green ladder as every other graded
+-- figure on these pages rather than inventing a second scale.
+local LOY_COLORS = {
+  [1] = C.bright_red, [2] = C.red, [3] = C.yellow, [4] = C.green, [5] = C.bright_green,
+}
 -- "unit_leader" had no entry, so the RAW key fell through the
 -- `LABELS[status] or status` fallback below -- 11 cells into an 8-wide
 -- column, shoving every later column right on exactly those rows. It is a
@@ -458,13 +476,21 @@ local HIRD_MODE_COLORS = { neutral = C.white, offensive = C.red, defensive = C.c
 
 -- Ported from LEGACY's pip_bar (guild_viking.lua:10217-10225): val is 1-10,
 -- mapped to 1-5 pips.
+--
+-- Graded to match the MUD's own roster. vroster.c's skill_color() keys off
+-- the PIP COUNT, not the raw stat -- its skill_bar() fills `i < sk` over five
+-- cells, so its `sk` is already 1-5 where ours is 1-10. Colouring by `pips`
+-- (post-halving) rather than `val` is what keeps the two in agreement;
+-- thresholds are skill_color()'s, with C.dim standing in for @viking_muted@.
+local PIP_COLORS = { [5] = C.white, [4] = C.bright_green, [3] = C.yellow }
+
 local function pip_bar(val, max_pips)
   local pips = math.floor(((val or 0) + 1) / 2)
   if pips < 1 then pips = 1 end
   if pips > max_pips then pips = max_pips end
   local s = "["
   for i = 1, max_pips do s = s .. (i <= pips and "*" or "-") end
-  return s .. "]"
+  return (PIP_COLORS[pips] or C.dim) .. s .. "]" .. pagelib.RESET
 end
 
 -- Fixed-width fields (name 14, loyalty/status 8, age 7, mode 9 -- the
@@ -481,6 +507,7 @@ local function hird_row(width, hm)
   -- silently dropped champion flag does not.
   local display_name = (is_champ and "[C] " or "") .. (hm.name or "?")
   local loy = LOY_LABELS[hm.loyalty] or "Steady"
+  local loy_color = LOY_COLORS[hm.loyalty] or C.yellow
   local age_label = (hm.age_phase == "veteran") and "Veteran"
     or (hm.age_phase == "elder") and "Elder" or "Young"
   local age_color = (hm.age_phase == "veteran") and C.white
@@ -498,7 +525,7 @@ local function hird_row(width, hm)
   return pagelib.trunc(
     pagelib.trunc(name_color .. display_name .. pagelib.RESET, 16)
     .. " " .. pip_bar(hm.atk, 5) .. " " .. pip_bar(hm.def, 5)
-    .. " " .. string.format("%-8s", loy)
+    .. " " .. loy_color .. string.format("%-8s", loy) .. pagelib.RESET
     .. " " .. age_color .. string.format("%-7s", age_label) .. pagelib.RESET
     .. string.format(" Lv%-2d", hm.level or 0) .. gear
     .. "  " .. pagelib.trunc(status_color .. status_label .. pagelib.RESET, 8)
