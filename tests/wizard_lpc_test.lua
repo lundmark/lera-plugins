@@ -98,6 +98,32 @@ check("lexer: hex is one number, not 0 then x1f",
 check("lexer: a digit inside an identifier is not a number",
       count(one("foo2 = bar;"), C.number) == 0, one("foo2 = bar;"))
 
+-- Most of a mudlib file is calls and macros; a highlighter that paints only
+-- keywords leaves an area file nearly plain, which is what these cover.
+check("lexer: an identifier being called is a call",
+      one("set_name(x);"):find(C.func .. "set_name" .. RESET, 1, true) == 1,
+      one("set_name(x);"))
+check("lexer: a bare identifier is not",
+      count(one("foo = 1;"), C.func) == 0, one("foo = 1;"))
+check("lexer: a call through :: is still a call",
+      one("::create();"):find(C.func .. "create" .. RESET, 1, true) ~= nil,
+      one("::create();"))
+check("lexer: whitespace before the paren does not hide a call",
+      one("set_name ();"):find(C.func, 1, true) ~= nil, one("set_name ();"))
+check("lexer: ALL_CAPS is a macro",
+      one("inherit ANGPATH_MONSTER_INHERIT;"):find(C.macro .. "ANGPATH_MONSTER_INHERIT" .. RESET,
+                                                   1, true) ~= nil,
+      one("inherit ANGPATH_MONSTER_INHERIT;"))
+check("lexer: a macro wins over the call colour when it is called",
+      one("SETMINE(x);"):find(C.macro .. "SETMINE" .. RESET, 1, true) == 1,
+      one("SETMINE(x);"))
+-- $N$ in a combat message is not a macro, and neither is a single capital.
+check("lexer: one capital letter is not a macro",
+      count(one("x = N;"), C.macro) == 0, one("x = N;"))
+check("lexer: a keyword still beats both",
+      one("return foo();"):find(C.keyword .. "return" .. RESET, 1, true) == 1,
+      one("return foo();"))
+
 check("lexer: a preprocessor directive is painted",
       one("#include <files.h>"):find(C.preproc .. "#include" .. RESET, 1, true) == 1,
       one("#include <files.h>"))
@@ -153,6 +179,31 @@ check("view: file lines come back painted",
 check("view: the pager's own status line is never painted",
       actions.on_line("More: [x] Line: [1/26] Cmds: [u/d/q]") ==
       "More: [x] Line: [1/26] Cmds: [u/d/q]")
+
+-- `more` writes its status without a newline, so the next page's first line
+-- arrives JOINED to it. Treating the whole line as furniture left the first
+-- line of every page after the first unpainted.
+do
+  local joined = actions.on_line(
+    "More: [x.c] Line: [48/48] Cmds: [u/d/q] #pragma strict_types")
+  check("view: content sharing the status line is still painted",
+        joined:find(C.preproc .. "#pragma" .. RESET, 1, true) ~= nil, joined)
+  check("view: and the status itself is left plain",
+        joined:find("More: [x.c] Line: [48/48] Cmds: [u/d/q] ", 1, true) == 1, joined)
+end
+
+-- Same shape, but the page ended: the tail is the last of the file and is
+-- worth colouring before the filter stops.
+do
+  local tail = actions.on_line("More: [x.c] Line: [48/48] Cmds: [u/d/q] EOF")
+  check("view: an EOF status ends the view", actions.viewing() == nil, tail)
+  actions.view("/x/foo.c")
+  local last = actions.on_line("More: [x.c] Line: [48/48] Cmds: [u/d/q] EOF int x;")
+  check("view: content after EOF on the same line is painted too",
+        last:find(C.type .. "int" .. RESET, 1, true) ~= nil, last)
+  check("view: and the view still ends there", actions.viewing() == nil)
+  actions.view("/players/shaman/include/daemon_helper.h")
+end
 
 -- A line that already carries colour belongs to something else.
 check("view: an already-coloured line is passed through untouched",

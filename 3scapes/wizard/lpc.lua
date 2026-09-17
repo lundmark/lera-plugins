@@ -27,6 +27,13 @@ M.COLORS = {
   number  = "\27[36m",   -- cyan
   keyword = "\27[94m",   -- bright blue: control flow
   type    = "\27[96m",   -- bright cyan: types and modifiers
+  -- Most of a mudlib file is CALLS -- set_name, add_clone, ::create -- and a
+  -- highlighter that paints only keywords leaves those pages nearly plain.
+  func    = "\27[93m",   -- bright yellow: an identifier being called
+  -- ALL_CAPS is the mudlib's macro convention (ANGPATH_ROOM, MAX_PRIV), and
+  -- knowing at a glance which names come from a header is most of reading an
+  -- area file.
+  macro   = "\27[35m",   -- magenta
 }
 
 -- Control flow and the statement words. Split from types below purely so the
@@ -130,8 +137,17 @@ function M.line(text, state)
 
       elseif c:match("[%a_]") then
         local word = text:match("^[%w_]+", i)
+        -- What follows decides between a call and a bare name, so look past
+        -- any spaces to the next character.
+        local after = text:match("^%s*(.)", i + #word)
         if KEYWORDS[word] then paint(out, C.keyword, word)
         elseif TYPES[word] then paint(out, C.type, word)
+        -- A macro is ALL_CAPS with no lower-case letter in it. Digits and
+        -- underscores are allowed (GOOD_IRON, LSTOCK_TRAIT_PCT_R1); a single
+        -- capital is not, since `N` in a $N$ message is not a macro.
+        elseif #word > 1 and word:match("^[A-Z][A-Z0-9_]*$") then
+          paint(out, C.macro, word)
+        elseif after == "(" then paint(out, C.func, word)
         else paint(out, nil, word) end
         i = i + #word
 

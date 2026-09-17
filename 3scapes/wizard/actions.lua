@@ -258,7 +258,28 @@ M.FILE_ACTIONS = {
 local MAX_VIEW_LINES = 20000
 
 -- The pager's status line: "More: [path] Line: [26/26] Cmds: [u/d/q] EOF".
+--
+-- It is not always a line of its own. `more` writes the status without a
+-- trailing newline, so the next page's FIRST line arrives joined to it:
+--
+--   More: [x.c] Line: [48/48] Cmds: [u/d/q] #pragma strict_types
+--
+-- Treating the whole thing as furniture -- which is what matching only the
+-- prefix did -- left that line, and so the first line of every page after the
+-- first, unpainted. Split it instead: the status stays plain and whatever
+-- follows is file content like any other.
 local PAGER_STATUS = "^More: %["
+
+-- Returns the status run and the rest of the line, or nil when this is not a
+-- status line at all. The rest is "" for a status line that does stand alone.
+local function split_pager(line)
+  if not line:match(PAGER_STATUS) then return nil end
+  -- Anchored on the LAST bracketed field (Cmds), so a path containing "] "
+  -- cannot end the match early.
+  local head, rest = line:match("^(More: %[.*Cmds: %[[^%]]*%]%s*)(.*)$")
+  if not head then return line, "" end
+  return head, rest
+end
 
 -- What `more` reads at its prompt. Anything else the wizard types means they
 -- have moved on, whatever the pager thinks.
@@ -293,11 +314,25 @@ end
 function M.on_line(line)
   if not viewing or type(line) ~= "string" then return line end
 
-  if line:match(PAGER_STATUS) then
-    -- The pager's own furniture is never painted, and its EOF marker is the
-    -- clean end of the file.
-    if line:find("EOF", 1, true) then stop_viewing() end
-    return line
+  local head, rest = split_pager(line)
+  if head then
+    -- EOF, when present, sits immediately after the status and marks the clean
+    -- end of the file. Anything after THAT is still content.
+    local eof = rest:match("^EOF%s*")
+    if eof then
+      head = head .. eof
+      rest = rest:sub(#eof + 1)
+    end
+
+    local painted = rest
+    if viewing.paint and rest ~= "" and not rest:find("\27", 1, true) then
+      painted, viewing.state = lpc.line(rest, viewing.state)
+    end
+
+    -- Stop AFTER painting the tail: the content on an EOF line is the last of
+    -- the file and deserves colour as much as the rest of it.
+    if eof then stop_viewing() end
+    return head .. painted
   end
 
   viewing.lines = viewing.lines + 1
