@@ -175,8 +175,11 @@ local ROLE_EFF_NEG = { smidir = true, hasetar = true }
 local function role_row(width, label, pct, tgt, eff_text, eff_color, muted)
   local p = math.max(0, math.min(100, tonumber(pct) or 0))
   local bar_color = muted and C.dim or pagelib.pct_color(p, 100)
-  local out = string.format("%s%-11s%s %s %d%%",
-    muted and C.dim or C.white, label, pagelib.RESET, pagelib.bar(14, p, 100, bar_color), p)
+  -- Percentage RIGHT-aligned: it was a bare %d%%, so "5%" and "10%" pushed the
+  -- effect column one cell apart and the effects could not be read down.
+  local out = string.format("%s%-11s%s %s %s",
+    muted and C.dim or C.white, label, pagelib.RESET, pagelib.bar(14, p, 100, bar_color),
+    pagelib.rjust(p .. "%", 4))
   if tgt and tgt ~= p then
     local rising = tgt > p
     out = out .. string.format(" %s%s%d%%%s",
@@ -438,11 +441,17 @@ end
 -- ---------------------------------------------------------------------------
 
 local LOY_LABELS = { [1] = "Wavering", [2] = "Uneasy", [3] = "Steady", [4] = "Loyal", [5] = "Devoted" }
+-- "unit_leader" had no entry, so the RAW key fell through the
+-- `LABELS[status] or status` fallback below -- 11 cells into an 8-wide
+-- column, shoving every later column right on exactly those rows. It is a
+-- missing label, not a column that needs widening.
 local HIRD_STATUS_LABELS = {
   personal_guard = "Guard", garrison = "Garrison", city_pool = "Pool", wounded = "Wounded",
+  unit_leader = "Leader",
 }
 local HIRD_STATUS_COLORS = {
   personal_guard = C.bright_green, garrison = C.yellow, city_pool = C.dim, wounded = C.red,
+  unit_leader = C.cyan,
 }
 local HIRD_MODE_LABELS = { neutral = "Neutral", offensive = "Offensive", defensive = "Defensive" }
 local HIRD_MODE_COLORS = { neutral = C.white, offensive = C.red, defensive = C.cyan }
@@ -461,12 +470,16 @@ end
 -- Fixed-width fields (name 14, loyalty/status 8, age 7, mode 9 -- the
 -- widest label in each set) so every row lines up and none of the fixed
 -- vocabulary (e.g. "Offensive", "Garrison") is ever truncated at width 80;
--- total visible width is 14+7+1+7+1+8+1+7+1+4+8+1+8+1+9 = 78, with room to
+-- total visible width is 16+1+7+1+7+1+8+1+7+4+2+8+1+9 = 73, with room to
 -- spare for the optional gear tag.
 local function hird_row(width, hm)
   local is_champ = (hm.champ or 0) ~= 0
   local name_color = is_champ and C.bright_cyan or C.bright_green
-  local display_name = (hm.name or "?") .. (is_champ and " [C]" or "")
+  -- Champion marker LEADS the name: it used to trail it, and a name that
+  -- filled the column took the marker with it when the cell truncated
+  -- ("Haldor Brandsson" is exactly 16). A trimmed name still reads; a
+  -- silently dropped champion flag does not.
+  local display_name = (is_champ and "[C] " or "") .. (hm.name or "?")
   local loy = LOY_LABELS[hm.loyalty] or "Steady"
   local age_label = (hm.age_phase == "veteran") and "Veteran"
     or (hm.age_phase == "elder") and "Elder" or "Young"
@@ -477,12 +490,20 @@ local function hird_row(width, hm)
   local mode_key = (hm.mode == "offensive" or hm.mode == "defensive") and hm.mode or "neutral"
   local gear = ((hm.wpn or 0) > 0 or (hm.arm or 0) > 0)
     and string.format(" %sW%d/A%d%s", C.magenta, hm.wpn or 0, hm.arm or 0, pagelib.RESET) or ""
-  return pagelib.trunc(string.format(
-    "%s%-14s%s %s %s %-8s %s%-7s%s Lv%-2d%s  %s%-8s%s %s%-9s%s",
-    name_color, display_name, pagelib.RESET, pip_bar(hm.atk, 5), pip_bar(hm.def, 5), loy,
-    age_color, age_label, pagelib.RESET, hm.level or 0, gear,
-    status_color, status_label, pagelib.RESET,
-    HIRD_MODE_COLORS[mode_key], HIRD_MODE_LABELS[mode_key], pagelib.RESET), width)
+  -- Name and status go through trunc(), which pads AND truncates; the %-14s
+  -- and %-8s they replace only padded. Real names run to 18 cells
+  -- ("Steinulf Brandsson"), a champion's " [C]" adds four more, and
+  -- "unit_leader" is 11 -- so both fields overflowed and shoved every column
+  -- after them right, by a different amount on each row.
+  return pagelib.trunc(
+    pagelib.trunc(name_color .. display_name .. pagelib.RESET, 16)
+    .. " " .. pip_bar(hm.atk, 5) .. " " .. pip_bar(hm.def, 5)
+    .. " " .. string.format("%-8s", loy)
+    .. " " .. age_color .. string.format("%-7s", age_label) .. pagelib.RESET
+    .. string.format(" Lv%-2d", hm.level or 0) .. gear
+    .. "  " .. pagelib.trunc(status_color .. status_label .. pagelib.RESET, 8)
+    .. " " .. HIRD_MODE_COLORS[mode_key] .. HIRD_MODE_LABELS[mode_key]
+    .. pagelib.RESET, width)
 end
 
 local function varangian_lines(add, width)
