@@ -201,7 +201,8 @@ check("blocks become a good -> amount lookup",
 -- ---- refinery + refinery_grades --------------------------------------------
 -- Foreign-keyed by `bldg`, and the building id is `id` in state.
 trade({
-  refinery = { { bldg = "smelter", tier = 2, stock = 60, cap = 100 },
+  refinery = { { bldg = "smelter", tier = 2, stock = 60, cap = 100,
+                 ["in"] = "ore", out = "iron", wstock = 0 },
                { bldg = "bakehouse", tier = 1, stock = 10, cap = 40 } },
   refinery_grades = {
     { bldg = "bakehouse", grade = "coarse", qty = 4, pct = 60 },
@@ -220,6 +221,20 @@ check("grades group on their own building",
       and #S.refineries[2].grades == 1
       and S.refineries[2].grades[1].name == "coarse",
       #S.refineries[1].grades .. "/" .. #S.refineries[2].grades)
+
+-- in/out/wstock: the chain a refinery runs and the warehouse units of its
+-- INPUT good. The server carried these once, dropped them for Guild.Trade's
+-- page budget, and restored them when refinery moved to Guild.Refinery -- so
+-- a client must read them when present AND stay correct when they are not.
+check("refinery carries the chain it runs",
+      S.refineries[1].input == "ore" and S.refineries[1].output == "iron",
+      tostring(S.refineries[1].input) .. "->" .. tostring(S.refineries[1].output))
+check("refinery carries the input good's warehouse stock",
+      S.refineries[1].wstock == 0, tostring(S.refineries[1].wstock))
+check("a record without the chain fields degrades to empty, not nil",
+      S.refineries[2].input == "" and S.refineries[2].output == ""
+      and S.refineries[2].wstock == 0,
+      tostring(S.refineries[2].input) .. "/" .. tostring(S.refineries[2].wstock))
 
 -- The delta that broke this in the field: refinery stock ticks constantly
 -- while the grade rows rarely change, so the protocol layer re-sends
