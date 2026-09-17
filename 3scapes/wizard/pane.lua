@@ -127,12 +127,21 @@ local function buttons(w, h)
   return cells, 1
 end
 
--- Where ".." and "~" go. Absolute, resolved here: the MUD would resolve a
--- bare ".." against its own cwd, and the pane's cwd is the one being browsed.
-local function nav_target(key)
-  local cwd, home = protocol.cwd(), protocol.home()
-  if key == "home" then return home end
-  if key == "up" then return protocol.resolve("..", cwd, home) end
+-- The command each navigation button sends.
+--
+-- "~" sends a BARE `cd`, which is the MUD's own way home: wiz.h's cd defaults
+-- its argument to "~" (secure/pinc/wiz.h:15). Sending the command rather than
+-- a resolved path also means the button works before the pane has learned
+-- where home is -- Files.List seeds that, and it may not have arrived yet.
+--
+-- ".." is resolved here instead, and sent absolute: the MUD would resolve a
+-- bare ".." against ITS cwd, and the pane's is the directory being browsed.
+local function nav_command(key)
+  if key == "home" then return "cd" end
+  if key == "up" then
+    local target = protocol.resolve("..", protocol.cwd(), protocol.home())
+    return target and ("cd " .. target) or nil
+  end
   return nil
 end
 
@@ -341,9 +350,9 @@ function M.on_pointer(event)
       -- The label itself, not the gap after it.
       if lx >= cells[i].x and lx < cells[i].x + #cells[i].text then
         if cells[i].nav then
-          local target = nav_target(cells[i].nav)
-          if not target then return false end
-          mud.send("cd " .. target)
+          local command = nav_command(cells[i].nav)
+          if not command then return false end
+          mud.send(command)
           return true
         end
         local cwd = protocol.cwd()

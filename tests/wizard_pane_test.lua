@@ -281,8 +281,12 @@ check("nav: [..] cds to the parent, absolute",
 sent = {}
 pane.on_pointer({ kind = "down", button = "left", x = 7, y = 1,
                   inside = true, width = 30, height = 10 })
-check("nav: [~] cds home, absolute",
-      #sent == 1 and sent[1] == "cd /players/simon", tostring(sent[1]))
+-- A BARE cd: wiz.h's cd defaults its argument to "~", so this is the MUD's
+-- own way home, and it works before Files.List has told the pane where home
+-- is.
+check("nav: [~] sends a bare cd",
+      #sent == 1 and sent[1] == "cd", tostring(sent[1]))
+
 
 sent = {}
 local consumed_btn = pane.on_pointer({ kind = "down", button = "left", x = 12, y = 1,
