@@ -250,10 +250,7 @@ end
 -- gated show_city_warehouse)
 -- ---------------------------------------------------------------------------
 
--- Fallback only: S.wh_cap from the server is preferred below. Refreshed to
--- match trade_daemon.c:544-551 (warehouse_capacity), which gained +25% per
--- tier; these were still the pre-2024 numbers.
-local WH_CAP = { [1] = 500, [2] = 1250, [3] = 2188, [4] = 3750, [5] = 6563 }
+local WH_CAP = { [1] = 400, [2] = 1000, [3] = 1750, [4] = 3000, [5] = 5250 }
 local REFINERY_NAMES = {
   salting_house = "Salting House", bakehouse = "Bakehouse",
   furriers_lodge = "Furrier's Lodge", smelter = "Smelter", smithy = "Smithy",
@@ -315,6 +312,22 @@ local function warehouse_lines(add, width)
     for _, r in ipairs(S.refineries) do
       add(pagelib.trunc(string.format("%-16s [%d / %d]",
         REFINERY_NAMES[r.id] or r.id, r.stock or 0, r.cap or 0), width))
+
+      -- What the chain actually makes, and why it might be idle. The server
+      -- sends in/out/wstock on Guild.Refinery; an older server omits them, so
+      -- both lines are gated on the data being present rather than assumed.
+      if r.input ~= nil and r.input ~= "" then
+        add(pagelib.trunc("    " .. C.dim .. cc.good_label(r.input)
+          .. " -> " .. pagelib.RESET .. C.white
+          .. cc.good_label(r.output or "") .. pagelib.RESET, width))
+        -- Zero input in the warehouse is the usual reason a refinery with
+        -- capacity produces nothing, so it is coloured as a problem.
+        local have = r.wstock or 0
+        add(pagelib.trunc("    " .. C.dim .. "Warehouse: " .. pagelib.RESET
+          .. (have > 0 and C.bright_green or C.red) .. have .. pagelib.RESET
+          .. " " .. C.dim .. cc.good_label(r.input) .. pagelib.RESET, width))
+      end
+
       for _, g in ipairs(r.grades or {}) do
         local col = pagelib.pct_color(g.pct or 100, 100)
         add(pagelib.trunc(string.format("  %s%-14s%s %3d  %s",
