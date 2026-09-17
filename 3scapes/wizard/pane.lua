@@ -13,6 +13,9 @@
 
 local wm = require("wm")
 local protocol = require("protocol")
+local actions = require("actions")
+local theme = require("theme")
+local overlay = require("overlay")
 
 local M = {}
 
@@ -77,6 +80,60 @@ end
 function M.notice()
   local _, message = listing()
   return message
+end
+
+-- ---- the button row --------------------------------------------------------
+
+-- One row at the top of the pane carrying an action per command, run against
+-- the CURRENT directory. Laid out by the same discipline as the border inset:
+-- one function that both render() and on_pointer() call, so a button can never
+-- be drawn in one place and clicked in another.
+--
+-- Returns the cells and the number of rows they occupy (0 when the pane is too
+-- small, or when there is no directory to act on -- a button that would send
+-- `uall nil` is worse than no button).
+local BUTTON_GAP = 2
+
+-- Navigation first, then the directory actions. The two groups are coloured
+-- differently (see render): moving somewhere and recompiling something should
+-- not look alike on a row two characters apart.
+--
+-- ".." and "~" are here rather than as entries in the listing because the
+-- listing is what the SERVER said is in this directory -- keeping synthetic
+-- rows out of it leaves entries(), the column maths and the sort alone.
+local NAV = {
+  { key = "up",   label = "[..]" },
+  { key = "home", label = "[~]" },
+}
+
+local function buttons(w, h)
+  if not w or w <= 0 or not h or h < 2 then return {}, 0 end
+  if not protocol.available() or not protocol.cwd() then return {}, 0 end
+
+  local cells, x = {}, 0
+  for i = 1, #NAV do
+    local label = NAV[i].label
+    if x + #label > w then break end
+    cells[#cells + 1] = { x = x, text = label, nav = NAV[i].key }
+    x = x + #label + BUTTON_GAP
+  end
+  for i = 1, #actions.COMMANDS do
+    local label = actions.COMMANDS[i].label
+    if x + #label > w then break end
+    cells[#cells + 1] = { x = x, text = label, cmd = actions.COMMANDS[i].cmd }
+    x = x + #label + BUTTON_GAP
+  end
+  if #cells == 0 then return {}, 0 end
+  return cells, 1
+end
+
+-- Where ".." and "~" go. Absolute, resolved here: the MUD would resolve a
+-- bare ".." against its own cwd, and the pane's cwd is the one being browsed.
+local function nav_target(key)
+  local cwd, home = protocol.cwd(), protocol.home()
+  if key == "home" then return home end
+  if key == "up" then return protocol.resolve("..", cwd, home) end
+  return nil
 end
 
 -- ---- layout ----------------------------------------------------------------
@@ -185,13 +242,27 @@ function M.render(rect, opts)
   last_w = w
   reset_scroll_on_new_listing()
 
+  local cells, brows = buttons(w, h)
+  for i = 1, #cells do
+    -- Navigation takes the directory colour, so the two buttons that MOVE you
+    -- read as the same kind of thing as the folders below them.
+    local color = cells[i].nav and theme.DIR or theme.BUTTON
+    ui.text_ansi(ui.rect(x + cells[i].x, y, #cells[i].text, 1),
+                 theme.paint(cells[i].text, color))
+  end
+
+  -- The grid gets what the button row leaves. Only the VISIBLE height changes:
+  -- the scroller counts content rows, which the buttons are not part of.
+  local gh = h - brows
+  if gh <= 0 then return end
+
   local notice = M.notice()
   local entries, cols, rows, cell = grid(w)
-  local start = first_visible(h, rows + (notice and 1 or 0))
+  local start = first_visible(gh, rows + (notice and 1 or 0))
 
   local line = 0
   for r = start, rows do
-    if line >= h then break end
+    if line >= gh then break end
     for c = 0, cols - 1 do
       -- Column-major: a column runs the full grid height before the next
       -- begins, so entry order reads DOWN a column, as plain `ls` does.
@@ -202,20 +273,46 @@ function M.render(rect, opts)
         if avail > 0 then
           local text = e.text
           if #text > avail then text = text:sub(1, avail) end
-          ui.text(ui.rect(x + cx, y + line, #text, 1), text)
+          -- Truncation happens on the plain text, and the colour is applied
+          -- after: an escape costs no cells, so measuring the painted string
+          -- would cut the name short by the length of its own colour code.
+          ui.text_ansi(ui.rect(x + cx, y + brows + line, #text, 1),
+                       theme.paint(text, theme.color(e)))
         end
       end
     end
     line = line + 1
   end
 
-  if notice and line < h then
-    ui.text(ui.rect(x, y + line, w, 1), notice)
+  if notice and line < gh then
+    ui.text_ansi(ui.rect(x, y + brows + line, w, 1),
+                 theme.paint(notice, theme.NOTICE))
   end
+
+  -- Last, so it sits over the listing rather than under it. Coordinates are
+  -- content-relative; the pane adds its own origin here, which is the only
+  -- place overlay geometry meets the screen.
+  overlay.render(w, h,
+    function(bx, by, bw, bh, title)
+      ui.box(ui.rect(x + bx, y + by, bw, bh), "single", title)
+    end,
+    function(tx, ty, text)
+      ui.text_ansi(ui.rect(x + tx, y + ty, #text, 1),
+                   theme.paint(text, theme.BUTTON))
+    end)
+end
+
+-- The absolute path of an entry in the current listing. Everything a click
+-- sends is absolute: the MUD resolves a bare name against ITS cwd, and the
+-- pane's idea of the directory is the thing being clicked in.
+local function entry_path(e)
+  return protocol.resolve(e.name, protocol.cwd(), protocol.home())
 end
 
 function M.on_pointer(event)
-  if event.kind ~= "down" or event.button ~= "left" then return false end
+  if event.kind ~= "down" then return false end
+  local button = event.button
+  if button ~= "left" and button ~= "right" then return false end
 
   -- event.x/event.y are pane-local and include the border; run them through the
   -- same inset render() used so a click lands on the cell it visually points
@@ -225,6 +322,44 @@ function M.on_pointer(event)
   local lx = (event.x or 0) - ox
   local ly = (event.y or 0) - oy
   if lx < 0 or lx >= ow or ly < 0 or ly >= oh then return false end
+
+  -- An open menu owns every click in the pane: one on an item chooses it, one
+  -- anywhere else dismisses. Nothing falls through to the listing underneath,
+  -- which would navigate away from the very thing being asked about.
+  if overlay.active() then
+    overlay.on_click(lx, ly, ow, oh)
+    if ui and ui.dirty then ui.dirty() end
+    return true
+  end
+
+  -- The button row, when there is one. Same call render() makes, so the hit
+  -- boxes are the drawn ones.
+  local cells, brows = buttons(ow, oh)
+  if brows > 0 and ly == 0 then
+    if button ~= "left" then return false end
+    for i = 1, #cells do
+      -- The label itself, not the gap after it.
+      if lx >= cells[i].x and lx < cells[i].x + #cells[i].text then
+        if cells[i].nav then
+          local target = nav_target(cells[i].nav)
+          if not target then return false end
+          mud.send("cd " .. target)
+          return true
+        end
+        local cwd = protocol.cwd()
+        if not cwd then return false end
+        -- Flat or recursive, then the confirmation: the toolbar acts on the
+        -- directory you are IN, which is exactly where "and everything under
+        -- it" is most often wanted.
+        actions.command_menu(cells[i].cmd, cwd, { x = lx, y = ly + 1 })
+        return true
+      end
+    end
+    return false
+  end
+  ly = ly - brows
+  oh = oh - brows
+  if oh <= 0 then return false end
 
   local notice = M.notice()
   local entries, cols, rows, cell = grid(ow)
@@ -239,13 +374,31 @@ function M.on_pointer(event)
   -- the whole grid, so scrolling changes which rows show, not how a column is
   -- numbered.
   local e = entries[col * rows + row]
-  if not e or not e.is_dir then return false end
+  if not e then return false end
   -- Only the text itself is clickable, not the gutter padding after it.
   if (lx - col * cell) >= #e.text then return false end
 
-  -- A real cd, so the confirmation line updates the cwd exactly as a typed one
-  -- would. There is deliberately no second source of truth here.
-  mud.send("cd " .. e.name)
+  if e.is_dir then
+    -- Right-click narrows the directory ACTIONS to this folder; left-click
+    -- still just walks into it.
+    if button == "right" then
+      local path = entry_path(e)
+      if not path then return false end
+      actions.dir_menu(path, { x = lx, y = ly + brows })
+      return true
+    end
+    -- A real cd, so the confirmation line updates the cwd exactly as a typed
+    -- one would. There is deliberately no second source of truth here.
+    mud.send("cd " .. e.name)
+    return true
+  end
+
+  -- A file: offer what can be done to it. Either button opens the same menu --
+  -- there is no default action on a file worth firing off a bare click, since
+  -- ul destructs a live object and view floods the output pane.
+  local path = entry_path(e)
+  if not path then return false end
+  actions.file_menu(path, { x = lx, y = ly + brows })
   return true
 end
 

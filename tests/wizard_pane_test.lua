@@ -49,8 +49,15 @@ local boxes = {}
 ui = {
   dirty = function() end,
   -- Records position as well as text: a column layout is only testable if the
-  -- x of each cell is observable.
-  text = function(rect, s) drawn[#drawn + 1] = { x = rect.x, y = rect.y, text = s } end,
+  -- x of each cell is observable. `text` is the STRIPPED string so the layout
+  -- cases stay about layout; `raw` keeps the escapes for the colour cases.
+  text = function(rect, s) drawn[#drawn + 1] = { x = rect.x, y = rect.y, text = s, raw = s } end,
+  text_ansi = function(rect, s)
+    drawn[#drawn + 1] = {
+      x = rect.x, y = rect.y, raw = s,
+      text = (s:gsub("\27%[[%d;]*m", "")),
+    }
+  end,
   box = function(_, style, title) boxes[#boxes + 1] = { style = style, title = title } end,
   -- Real rects are userdata with method accessors; the stub returns the plain
   -- table form the renderer also has to accept.
@@ -58,11 +65,44 @@ ui = {
 }
 local sent = {}
 mud = { send = function(t) sent[#sent + 1] = t end }
-gmcp = { on = function() return 1 end, send = function() return true end,
-         enabled = function() return true end }
 
 local protocol = require("protocol")
 local pane = require("pane")
+
+-- The menus are the pane's own overlay now, so they are answered by CLICKING
+-- a row rather than by calling a stub's callback: the test drives the same
+-- path a user does, hit-testing included.
+local overlay = require("overlay")
+local actions_reset = require("actions").reset
+
+-- Click the row carrying `label`, in a pane of content size w x h. Returns
+-- false when the overlay is closed or has no such row.
+local function pick_overlay(label, pane_w, pane_h)
+  if not overlay.active() then return false end
+  local ow, oh = pane_w - 2, pane_h - 2       -- the border inset render() uses
+  local rect = overlay.layout(ow, oh)
+  local items = overlay.items()
+  for i = 1, rect.rows do
+    local it = items[i]
+    local l = type(it) == "table" and it.label or tostring(it)
+    if l:find(label, 1, true) then
+      -- +1 for the pane border, +1 again for the box's own border row.
+      return pane.on_pointer({ kind = "down", button = "left",
+                               x = rect.x + 1 + 1, y = rect.y + i + 1,
+                               inside = true, width = pane_w, height = pane_h })
+    end
+  end
+  return false
+end
+
+local triggers = {}
+trigger = {
+  add = function(pattern, fn) triggers[#triggers + 1] = { pattern = pattern, fn = fn }
+                              return #triggers end,
+  remove = function() end,
+}
+gmcp = { on = function() return 1 end, send = function() return true end,
+         enabled = function() return true end }
 
 local function drawn_text(x, y)
   for i = 1, #drawn do
@@ -74,6 +114,13 @@ end
 local function has_text(s)
   for i = 1, #drawn do if drawn[i].text == s then return true end end
   return false
+end
+
+local function drawn_raw(x, y)
+  for i = 1, #drawn do
+    if drawn[i].x == x and drawn[i].y == y then return drawn[i].raw end
+  end
+  return nil
 end
 
 -- ---- entries ---------------------------------------------------------------
@@ -148,47 +195,266 @@ protocol.store("/players/simon", {
 
 drawn = {}
 pane.render({ x = 0, y = 0, w = 30, h = 10 }, { title = "Files" })
-check("layout: six entries draw six cells", #drawn == 6, #drawn)
-check("layout: column 0 starts at the content x", drawn_text(1, 1) == "archive/",
-      tostring(drawn_text(1, 1)))
-check("layout: column 1 is one cell width across", drawn_text(12, 1) == "zebra/",
-      tostring(drawn_text(12, 1)))
-check("layout: column-major fills DOWN column 0 first",
-      drawn_text(1, 2) == "areas/" and drawn_text(1, 3) == "mmm/",
-      "row-major would put zebra/ at (1,2); got "
-        .. tostring(drawn_text(1, 2)))
-check("layout: column 1 continues the sequence",
-      drawn_text(12, 2) == "arena.c" and drawn_text(12, 3) == "notes.txt",
+-- Six cells plus the two action buttons, which occupy content row 0. Every
+-- grid row below is therefore one lower than the content origin.
+-- Six cells, plus four toolbar buttons: [..] [~] [uall] [lall].
+check("layout: six entries draw six cells, under the button row", #drawn == 10, #drawn)
+check("layout: column 0 starts at the content x", drawn_text(1, 2) == "archive/",
+      tostring(drawn_text(1, 2)))
+check("layout: column 1 is one cell width across", drawn_text(12, 2) == "zebra/",
       tostring(drawn_text(12, 2)))
+check("layout: column-major fills DOWN column 0 first",
+      drawn_text(1, 3) == "areas/" and drawn_text(1, 4) == "mmm/",
+      "row-major would put zebra/ at (1,3); got "
+        .. tostring(drawn_text(1, 3)))
+check("layout: column 1 continues the sequence",
+      drawn_text(12, 3) == "arena.c" and drawn_text(12, 4) == "notes.txt",
+      tostring(drawn_text(12, 3)))
+
+-- ---- colours ---------------------------------------------------------------
+--
+-- Type before name, the way a shell's ls reads. The mapping itself is asserted
+-- against theme directly; these two cases prove the pane actually applies it.
+
+do
+  local theme = require("theme")
+  check("colour: a directory is painted, and its escape wraps the whole cell",
+        drawn_raw(1, 2) == theme.DIR .. "archive/" .. theme.RESET,
+        tostring(drawn_raw(1, 2)))
+  check("colour: a .c file takes the source colour",
+        drawn_raw(12, 3) == theme.SOURCE .. "arena.c" .. theme.RESET,
+        tostring(drawn_raw(12, 3)))
+
+  check("theme: .h is the header colour, distinct from .c",
+        theme.color({ name = "path.h" }) == theme.HEADER and theme.HEADER ~= theme.SOURCE)
+  check("theme: .o recedes as data",
+        theme.color({ name = "gather_daemon.o" }) == theme.DATA)
+  check("theme: a script is runnable-green",
+        theme.color({ name = "rebuild_help.ps1" }) == theme.SCRIPT)
+  check("theme: a doc is plain white",
+        theme.color({ name = "NOTES.md" }) == theme.DOC)
+  check("theme: an unknown extension is left at the terminal default",
+        theme.color({ name = "core.dump" }) == theme.PLAIN)
+  check("theme: no extension at all is left alone",
+        theme.color({ name = "Makefile" }) == theme.PLAIN)
+  check("theme: a directory wins over whatever its name looks like",
+        theme.color({ name = "include.h", is_dir = true }) == theme.DIR,
+        "a directory called include.h is still a directory")
+
+  -- Backups are a SUFFIX convention here as often as an extension, so all
+  -- three shapes this tree actually uses must land on the backup colour.
+  check("theme: foo.c.bak is a backup, not a source file",
+        theme.color({ name = "shgather.c.bak" }) == theme.BACKUP)
+  check("theme: an editor tilde file is a backup",
+        theme.color({ name = "threshold.c~" }) == theme.BACKUP)
+  check("theme: the .before-<date> convention is a backup",
+        theme.color({ name = "deadmans.lua.before-user-activity-20260907" }) == theme.BACKUP)
+
+  check("theme: paint is a no-op for the default colour, costing no escapes",
+        theme.paint("plain", theme.PLAIN) == "plain")
+end
+
+-- ---- the button row --------------------------------------------------------
+
+check("buttons: navigation comes first on the toolbar row",
+      drawn_text(1, 1) == "[..]" and drawn_text(7, 1) == "[~]",
+      tostring(drawn_text(1, 1)) .. "," .. tostring(drawn_text(7, 1)))
+check("buttons: then the directory actions",
+      drawn_text(12, 1) == "[uall]" and drawn_text(20, 1) == "[lall]",
+      tostring(drawn_text(12, 1)) .. "," .. tostring(drawn_text(20, 1)))
+do
+  local theme = require("theme")
+  check("buttons: navigation is coloured as navigation, actions as actions",
+        drawn_raw(1, 1):find(theme.DIR, 1, true) ~= nil and
+        drawn_raw(12, 1):find(theme.BUTTON, 1, true) ~= nil,
+        "moving somewhere and recompiling something must not look alike")
+end
+
+-- ---- navigating up and home ------------------------------------------------
+
+sent = {}
+pane.on_pointer({ kind = "down", button = "left", x = 1, y = 1,
+                  inside = true, width = 30, height = 10 })
+check("nav: [..] cds to the parent, absolute",
+      #sent == 1 and sent[1] == "cd /players", tostring(sent[1]))
+
+sent = {}
+pane.on_pointer({ kind = "down", button = "left", x = 7, y = 1,
+                  inside = true, width = 30, height = 10 })
+check("nav: [~] cds home, absolute",
+      #sent == 1 and sent[1] == "cd /players/simon", tostring(sent[1]))
+
+sent = {}
+local consumed_btn = pane.on_pointer({ kind = "down", button = "left", x = 12, y = 1,
+                                       inside = true, width = 30, height = 10 })
+check("buttons: clicking uall asks before sending anything",
+      consumed_btn == true and #sent == 0 and overlay.active(), tostring(sent[1]))
+check("buttons: the box names the command and the directory",
+      (overlay.title() or ""):find("uall", 1, true) ~= nil and
+      (overlay.title() or ""):find("simon", 1, true) ~= nil, tostring(overlay.title()))
+
+-- "this directory and everything in it" has to be reachable for the directory
+-- you are STANDING IN, not only for a folder listed below.
+check("buttons: the toolbar offers flat or recursive",
+      #overlay.items() == 2 and overlay.items()[1].value == "uall" and
+      overlay.items()[2].value == "uall -r", overlay.items()[2].value)
+
+pick_overlay("this folder", 30, 10)
+check("buttons: choosing still asks before sending", #sent == 0 and overlay.active())
+check("buttons: No is the row nearest the pointer",
+      overlay.items()[1].label == "No", tostring(overlay.items()[1].label))
+
+pick_overlay("No", 30, 10)
+check("buttons: answering No sends nothing and closes the box",
+      #sent == 0 and not overlay.active(), tostring(sent[1]))
+
+pane.on_pointer({ kind = "down", button = "left", x = 12, y = 1,
+                  inside = true, width = 30, height = 10 })
+pick_overlay("this folder", 30, 10)
+pick_overlay("Yes", 30, 10)
+check("buttons: answering Yes runs it against the cwd",
+      #sent == 1 and sent[1] == "uall /players/simon", tostring(sent[1]))
+
+-- The recursive path from the toolbar: cwd first, then everything under it.
+sent = {}
+pane.on_pointer({ kind = "down", button = "left", x = 12, y = 1,
+                  inside = true, width = 30, height = 10 })
+pick_overlay("and subfolders", 30, 10)
+pick_overlay("Yes", 30, 10)
+check("buttons: the recursive choice walks from the cwd",
+      #sent >= 1 and sent[1] == "uall /players/simon", tostring(sent[1]))
+-- The cwd holds four folders, so a recursive run is the cwd plus those four.
+-- Their own listings are not cached, so the walk stops there rather than
+-- inventing depth it has not been told about.
+check("buttons: and reaches every folder listed in it",
+      #sent == 5 and sent[1] == "uall /players/simon", table.concat(sent, " | "))
+do
+  local joined = table.concat(sent, " | ")
+  check("buttons: including the one clicked on elsewhere in these cases",
+        joined:find("uall /players/simon/archive", 1, true) ~= nil, joined)
+end
+
+-- A walk still waiting on listings must not block the next one.
+actions_reset()
+
+-- Kills a button row that is drawn but hit-tested at the old offset: a click
+-- on the gap between the labels must not fire the nearest one.
+sent = {}
+pane.on_pointer({ kind = "down", button = "left", x = 11, y = 1,
+                  inside = true, width = 30, height = 10 })
+check("buttons: the gap between labels is not a button",
+      not overlay.active() and #sent == 0)
 
 -- ---- pointer over columns --------------------------------------------------
 
 sent = {}
-local consumed = pane.on_pointer({ kind = "down", button = "left", x = 1, y = 1,
+local consumed = pane.on_pointer({ kind = "down", button = "left", x = 1, y = 2,
                                    inside = true, width = 30, height = 10 })
 check("pointer: a click in column 0 navigates", #sent == 1 and sent[1] == "cd archive",
       tostring(sent[1]))
 check("pointer: a consumed down returns literal true", consumed == true)
 
 sent = {}
-pane.on_pointer({ kind = "down", button = "left", x = 12, y = 1,
+pane.on_pointer({ kind = "down", button = "left", x = 12, y = 2,
                   inside = true, width = 30, height = 10 })
 check("pointer: a click in column 1 resolves COLUMN-MAJOR",
       #sent == 1 and sent[1] == "cd zebra",
       "row-major would resolve areas/ here; got " .. tostring(sent[1]))
 
 sent = {}
-pane.on_pointer({ kind = "down", button = "left", x = 1, y = 3,
+pane.on_pointer({ kind = "down", button = "left", x = 1, y = 4,
                   inside = true, width = 30, height = 10 })
 check("pointer: the third row of column 0 is the third entry",
       #sent == 1 and sent[1] == "cd mmm", tostring(sent[1]))
 
+-- ---- clicking a file -------------------------------------------------------
+
 sent = {}
-consumed = pane.on_pointer({ kind = "down", button = "left", x = 12, y = 2,
+consumed = pane.on_pointer({ kind = "down", button = "left", x = 12, y = 3,
                              inside = true, width = 30, height = 10 })
-check("pointer: a click on a file sends nothing", #sent == 0, tostring(sent[1]))
-check("pointer: an unconsumed down does not return true", consumed ~= true,
-      "so a left drag can still start a text selection")
+check("file: a click offers a menu rather than firing a command",
+      consumed == true and #sent == 0 and overlay.active(), tostring(sent[1]))
+check("file: the menu is titled with the file, not the whole path",
+      overlay.title() == "arena.c", tostring(overlay.title()))
+check("file: it offers view and ul", #overlay.items() == 2, #overlay.items())
+
+-- The box opens AT the click, which is the whole point of drawing it here
+-- rather than above the input bar.
+do
+  local rect = overlay.layout(28, 8)
+  check("file: the box opens at the click, not at a fixed corner",
+        rect.x <= 11 and rect.x + rect.w >= 11,
+        "clicked column 11; box spans " .. rect.x .. ".." .. (rect.x + rect.w))
+end
+
+pick_overlay("view", 30, 10)
+check("file: view pages the file, absolute",
+      #sent == 1 and sent[1] == "more /players/simon/arena.c", tostring(sent[1]))
+check("file: choosing closes the box", not overlay.active())
+
+sent = {}
+pane.on_pointer({ kind = "down", button = "left", x = 12, y = 3,
+                  inside = true, width = 30, height = 10 })
+pick_overlay("ul", 30, 10)
+check("file: ul updates and loads that one file",
+      #sent == 1 and sent[1] == "ul /players/simon/arena.c", tostring(sent[1]))
+
+-- A click outside the box dismisses it and does NOT fall through to whatever
+-- entry is underneath.
+sent = {}
+pane.on_pointer({ kind = "down", button = "left", x = 12, y = 3,
+                  inside = true, width = 30, height = 10 })
+local dismissed = pane.on_pointer({ kind = "down", button = "left", x = 1, y = 8,
+                                    inside = true, width = 30, height = 10 })
+check("file: clicking away closes the menu and navigates nowhere",
+      dismissed == true and not overlay.active() and #sent == 0, tostring(sent[1]))
+
+-- A pointer callback runs OUTSIDE the plugin's capability (wm invokes it
+-- directly), where require() raises "plugin capability is inactive". This is
+-- the case that catches a lazy require creeping back into a click path: the
+-- stubs above would otherwise let one pass unnoticed.
+do
+  local real_require = require
+  require = function(name)
+    error("a pointer callback must not require('" .. tostring(name) .. "') -- "
+          .. "capture the module at load instead")
+  end
+  local ok, err = pcall(pane.on_pointer, { kind = "down", button = "left", x = 12, y = 3,
+                                           inside = true, width = 30, height = 10 })
+  require = real_require
+  check("click: a file click requires no module at callback time", ok, tostring(err))
+  check("click: and still opened its menu", overlay.active(), "no menu opened")
+  overlay.close()
+end
+
+-- ---- right-clicking a directory --------------------------------------------
+
+sent = {}
+pane.on_pointer({ kind = "down", button = "right", x = 1, y = 2,
+                  inside = true, width = 30, height = 10 })
+check("dir: right-click offers the directory actions, flat and recursive",
+      overlay.active() and #overlay.items() == 4 and #sent == 0, tostring(sent[1]))
+check("dir: the box names the clicked folder",
+      overlay.title() == "archive", tostring(overlay.title()))
+check("dir: each command is offered with and without subfolders",
+      overlay.items()[1].value == "uall" and overlay.items()[2].value == "uall -r" and
+      overlay.items()[3].value == "lall" and overlay.items()[4].value == "lall -r",
+      overlay.items()[2].value)
+
+pick_overlay("lall -r", 30, 10)
+check("dir: choosing one still asks before sending", #sent == 0, tostring(sent[1]))
+check("dir: and the question replaces it in the same place", overlay.active())
+pick_overlay("Yes", 30, 10)
+check("dir: confirming a recursive run walks from that folder",
+      #sent >= 1 and sent[1] == "lall /players/simon/archive", tostring(sent[1]))
+
+sent = {}
+pane.on_pointer({ kind = "down", button = "right", x = 1, y = 2,
+                  inside = true, width = 30, height = 10 })
+pick_overlay("lall", 30, 10)
+pick_overlay("Yes", 30, 10)
+check("dir: the flat variant sends exactly one command",
+      #sent == 1 and sent[1] == "lall /players/simon/archive", tostring(sent[1]))
 
 sent = {}
 pane.on_pointer({ kind = "down", button = "left", x = 1, y = 0,
@@ -196,10 +462,11 @@ pane.on_pointer({ kind = "down", button = "left", x = 1, y = 0,
 check("pointer: a click on the top border does not navigate", #sent == 0)
 
 sent = {}
-pane.on_pointer({ kind = "down", button = "left", x = 0, y = 1,
+menus = {}
+pane.on_pointer({ kind = "down", button = "left", x = 0, y = 2,
                   inside = true, width = 30, height = 10 })
-check("pointer: a click on the left border does not navigate", #sent == 0,
-      "x=0 is the border column, not content")
+check("pointer: a click on the left border does not navigate",
+      #sent == 0 and not overlay.active(), "x=0 is the border column, not content")
 
 sent = {}
 pane.on_pointer({ kind = "down", button = "left", x = 1, y = 40,
@@ -207,14 +474,23 @@ pane.on_pointer({ kind = "down", button = "left", x = 1, y = 40,
 check("pointer: a click past the last row sends nothing", #sent == 0)
 
 sent = {}
-pane.on_pointer({ kind = "move", button = "left", x = 1, y = 1,
+menus = {}
+pane.on_pointer({ kind = "move", button = "left", x = 1, y = 2,
                   inside = true, width = 30, height = 10 })
-check("pointer: only a down navigates", #sent == 0)
+check("pointer: only a down acts", #sent == 0 and not overlay.active())
 
 sent = {}
+menus = {}
+pane.on_pointer({ kind = "down", button = "middle", x = 1, y = 2,
+                  inside = true, width = 30, height = 10 })
+check("pointer: the middle button does nothing", #sent == 0 and not overlay.active())
+
+sent = {}
+menus = {}
 pane.on_pointer({ kind = "down", button = "right", x = 1, y = 1,
                   inside = true, width = 30, height = 10 })
-check("pointer: only the left button navigates", #sent == 0)
+check("pointer: the buttons take LEFT clicks only", #sent == 0 and not overlay.active(),
+      "a right-click on the toolbar must not confirm anything")
 
 -- An empty cell: column 1 of a 5-entry grid has a hole at its last row.
 protocol.store("/players/simon", {
@@ -224,10 +500,11 @@ protocol.store("/players/simon", {
 -- sorted: archive/ areas/ mmm/ arena.c notes.txt -> 5 entries, cols 2, rows 3
 -- column 0: archive/ areas/ mmm/   column 1: arena.c notes.txt (row 3 empty)
 sent = {}
-pane.on_pointer({ kind = "down", button = "left", x = 12, y = 3,
+menus = {}
+pane.on_pointer({ kind = "down", button = "left", x = 12, y = 4,
                   inside = true, width = 30, height = 10 })
-check("pointer: a click on an empty grid cell does nothing", #sent == 0,
-      tostring(sent[1]))
+check("pointer: a click on an empty grid cell does nothing",
+      #sent == 0 and not overlay.active(), tostring(sent[1]))
 
 -- ---- narrow pane -----------------------------------------------------------
 
@@ -238,16 +515,21 @@ protocol.store("/players/simon", {
 drawn = {}
 pane.render({ x = 0, y = 0, w = 10, h = 10 })
 check("narrow: a pane too small for two columns falls back to one",
-      drawn_text(1, 1) == "archive/" and drawn_text(1, 2) ~= nil,
+      drawn_text(1, 2) == "archive/" and drawn_text(1, 3) ~= nil,
       "entries must stack, not sit side by side")
 check("narrow: an over-long name is truncated to the content width",
-      #(drawn_text(1, 2) or "") <= 8,
-      "content width is 8; got " .. tostring(drawn_text(1, 2)))
+      #(drawn_text(1, 3) or "") <= 8,
+      "content width is 8; got " .. tostring(drawn_text(1, 3)))
 
 -- ---- scrolling and top anchoring -------------------------------------------
 --
--- Six single-column entries in a pane with two content rows. A file listing
--- must open at the TOP, unlike a chat pane which opens at its tail.
+-- Six single-column entries in a pane with two GRID rows. h=5 insets to 3
+-- content rows, one of which the button row takes -- so the scrolling maths
+-- below is unchanged from before the toolbar existed, which is the point: the
+-- scroller counts CONTENT rows and knows nothing about the buttons.
+--
+-- The content is 6 columns wide, so only the first toolbar button fits. A
+-- button that would be drawn off the edge is not drawn at all.
 
 protocol.store("/players/simon", {
   dirs = { "d1", "d2", "d3", "d4", "d5", "d6" }, files = {},
@@ -255,31 +537,36 @@ protocol.store("/players/simon", {
 })
 offset = 0
 drawn = {}
-pane.render({ x = 0, y = 0, w = 8, h = 4 })
+pane.render({ x = 0, y = 0, w = 8, h = 5 })
 check("scroll: a fresh listing opens at the TOP, not the tail",
       has_text("d1/") and has_text("d2/"),
       "tail-anchored would show d5/,d6/")
-check("scroll: only the visible rows are drawn", #drawn == 2, #drawn)
+check("scroll: only the visible rows are drawn, plus the one button that fits",
+      #drawn == 3, #drawn)
+-- Content is 6 columns: "[..]" fits, and everything after it (from "[~]" at
+-- column 6) does not.
+check("buttons: a label too wide for the pane is dropped, not truncated",
+      has_text("[..]") and not has_text("[~]") and not has_text("[uall]"))
 
 pane.scroll_to_bottom()
 drawn = {}
-pane.render({ x = 0, y = 0, w = 8, h = 4 })
+pane.render({ x = 0, y = 0, w = 8, h = 5 })
 check("scroll: scroll_to_bottom shows the last entries",
       has_text("d5/") and has_text("d6/"),
-      "got " .. tostring(drawn[1] and drawn[1].text))
+      "got " .. tostring(drawn[2] and drawn[2].text))
 
 sent = {}
-pane.on_pointer({ kind = "down", button = "left", x = 1, y = 1,
-                  inside = true, width = 8, height = 4 })
+pane.on_pointer({ kind = "down", button = "left", x = 1, y = 2,
+                  inside = true, width = 8, height = 5 })
 check("scroll: a click follows the scrolled view",
       #sent == 1 and sent[1] == "cd d5", tostring(sent[1]))
 
 pane.scroll(-1)
 drawn = {}
-pane.render({ x = 0, y = 0, w = 8, h = 4 })
+pane.render({ x = 0, y = 0, w = 8, h = 5 })
 check("scroll: scrolling up one row moves the view up one entry",
       has_text("d4/") and has_text("d5/"),
-      "got " .. tostring(drawn[1] and drawn[1].text))
+      "got " .. tostring(drawn[2] and drawn[2].text))
 
 check("scroll: following_tail is false once scrolled back",
       pane.following_tail() == false)

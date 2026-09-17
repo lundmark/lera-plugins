@@ -10,8 +10,16 @@ M.name = "wizard"
 M.version = "1.0"
 M.priority = 50
 
+local actions = require("actions")
 local complete = require("complete")
 local protocol = require("protocol")
+-- Captured at load for the same reason actions.lua does it: offer() below runs
+-- from M.complete(), which the profile drives from a `bind` -- trusted code,
+-- outside this plugin's capability, where a call-time require() raises "plugin
+-- capability is inactive". The completion menu only opens for an AMBIGUOUS
+-- prefix, so this had gone unnoticed: an unambiguous tab inserts and never
+-- reaches the menu.
+local menu = require("menu")
 
 M.pane = require("pane")
 
@@ -52,7 +60,12 @@ local function arm_if_cd(text)
   return text
 end
 
-function M.on_input(text) return arm_if_cd(text) end
+function M.on_input(text)
+  -- A view started from the pane is a filter over output; typing anything that
+  -- is not a pager key ends it (actions.on_input decides which).
+  actions.on_input(text)
+  return arm_if_cd(text)
+end
 function M.on_send(text) return arm_if_cd(text) end
 
 function M.on_line(line)
@@ -62,7 +75,10 @@ function M.on_line(line)
       cd_pending = false
     end
   end
-  return line
+  -- Syntax highlighting for a file being paged through `more`, and a no-op at
+  -- every other moment. Last, so the cwd tracking above always sees the line
+  -- exactly as the MUD sent it.
+  return actions.on_line(line)
 end
 
 -- The confirmation: cd writes exactly "/<resolved path>" and nothing else on
@@ -110,7 +126,7 @@ local function offer(ctx, prefix, entry, kind)
   end
 
   local line = input.text()
-  require("menu").open({
+  menu.open({
     items = decision.items,
     title = "Complete",
     restore_input = line,
@@ -211,6 +227,9 @@ function M.on_load()
   gmcp_ids[#gmcp_ids + 1] = gmcp.on("Files.List", protocol.on_message)
   gmcp_ids[#gmcp_ids + 1] = gmcp.on("Core.Supported", on_core_supported)
   trigger_ids[#trigger_ids + 1] = trigger.add("^(/\\S*)$", on_cd_confirmed)
+  -- Owns its own trigger (uall's confirmation prompt); registered here so the
+  -- plugin has one load/unload story.
+  actions.install()
 
   if command and not command.get("/wiz") then
     local id, err = command.register({
@@ -237,11 +256,14 @@ function M.on_disconnect()
   -- availability would all be claims we can no longer support.
   protocol.reset()
   cd_pending = false
+  -- An armed uall must not answer the first prompt of the NEXT session.
+  actions.reset()
 end
 
 function M.on_unload()
   for i = 1, #gmcp_ids do gmcp.remove(gmcp_ids[i]) end
   for i = 1, #trigger_ids do trigger.remove(trigger_ids[i]) end
+  actions.remove()
   if command and command_id then command.unregister(command_id) end
 end
 
