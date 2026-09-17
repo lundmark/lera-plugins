@@ -125,7 +125,13 @@ local STFX_CAT_ANSI = {
 -- Each returns nil in the public base, where the module is not installed.
 local function auto_mod(name) return require("util").optional_require(name) end
 local function trade_status()
-  local m = auto_mod("autotrader.tick"); return m and m.status()
+  -- `return m and m.status()` truncated status()'s FIVE return values to one,
+  -- so trade_pending arrived nil and the "pending=%d" format below killed the
+  -- whole stats render. `and` adjusts a call on its right to a single value;
+  -- a plain tail call does not.
+  local m = auto_mod("autotrader.tick")
+  if not m then return nil end
+  return m.status()
 end
 local function raid_settings()
   local m = auto_mod("autoraid"); return m and m.settings()
