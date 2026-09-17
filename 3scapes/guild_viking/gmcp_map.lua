@@ -108,7 +108,7 @@ M.COMPOSITE = {
   -- reason CPEND is.
   WMAP      = { "campaign", "campaign_terrain", "campaign_units",
                 "campaign_queue", "campaign_prison", "campaign_prison_roster",
-                "campaign_siege" },
+                "campaign_siege", "campaign_siege_queue" },
   -- Guild.Map is composite in full, not per key. Its planes cannot be read
   -- without `enc` (which encoding packed them) and `legend` (what each code
   -- means), and its rows cannot be sized without `w` -- so routing the keys
@@ -228,6 +228,7 @@ local MAP = {
   campaign = "WMAP", campaign_terrain = "WMAP", campaign_units = "WMAP",
   campaign_queue = "WMAP", campaign_prison = "WMAP",
   campaign_prison_roster = "WMAP", campaign_siege = "WMAP",
+  campaign_siege_queue = "WMAP",
 
 
   -- Guild.TradeGoods. One key per lineage rather than one array: the flat list
