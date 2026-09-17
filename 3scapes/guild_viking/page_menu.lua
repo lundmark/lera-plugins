@@ -176,6 +176,7 @@ local PAGE_MENUS = {
   army = {
     { key = "show_army_levy",  label = "Show Levy" },
     { key = "show_army_units", label = "Show Units" },
+    { key = "show_army_siege", label = "Show Siege Park" },
   },
   -- LEGACY [13]
   war = {
