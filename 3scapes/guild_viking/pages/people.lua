@@ -270,10 +270,47 @@ local function projects_lines(add, width)
   end
 end
 
+-- One "Label: value" cell: dim label, coloured value, same convention as
+-- pagelib.kv() -- which is this shape with exactly one cell on the row.
+-- The Settlers block was drawn entirely plain, so a full city, a starving
+-- job market and a healthy water store all read as the same grey text.
+local function cell(label, value, color)
+  return C.dim .. label .. pagelib.RESET .. " " ..
+         (color or C.white) .. tostring(value) .. pagelib.RESET
+end
+
+-- Headroom, not fill: a city housed to its cap cannot grow, so the warning
+-- colour belongs at HIGH occupancy -- the opposite sense to pct_color, which
+-- is why this is spelled out rather than reusing it.
+local function headroom_color(free, cap)
+  if cap <= 0 then return C.dim end
+  if free <= 0 then return C.bright_red end       -- full: no room to settle
+  if free * 10 <= cap then return C.yellow end    -- under 10% spare
+  return C.bright_green
+end
+
 local function settlers_lines(add, width)
   add(pagelib.header(width, "Settlers"))
-  add(pagelib.trunc(string.format("Population: %s   Tax: %s   Water: %s",
-    pagelib.fmt_num(S.settlers), tax_label(S.settler_tax), pagelib.fmt_num(S.city_water)), width))
+
+  -- Population against its own housing cap, on one row. The two numbers used
+  -- to sit three rows apart ("Population: 550" here, "Housing: 550 cap"
+  -- below), so the single most important fact about a city -- that it is
+  -- full -- was something you had to go and check.
+  do
+    local pop  = S.settlers or 0
+    local cap  = S.settler_housing_cap or 0
+    local free = cap - pop
+    if free < 0 then free = 0 end
+    local tax  = tax_label(S.settler_tax)
+    add(pagelib.trunc(table.concat({
+      cell("Population:", pagelib.fmt_num(pop) .. C.dim .. " / " .. pagelib.RESET ..
+           C.white .. pagelib.fmt_num(cap) .. C.dim .. " housed",
+           headroom_color(free, cap)),
+      -- No Tax is the neutral default; any rate set is a lever pulled.
+      cell("Tax:", tax, tax == "No Tax" and C.dim or C.yellow),
+      cell("Water:", pagelib.fmt_num(S.city_water), C.bright_cyan),
+    }, "   "), width))
+  end
 
   do
     local edict_val, edict_color = "Ready", C.dim
@@ -287,9 +324,17 @@ local function settlers_lines(add, width)
     add(pagelib.kv(width, "Edict:", edict_val, edict_color))
   end
 
-  add(pagelib.trunc(string.format("Housing: %s cap   Plots: %s   Avg Tier: %s",
-    pagelib.fmt_num(S.settler_housing_cap), pagelib.fmt_num(S.settler_housing_plots),
-    string.format("%.2f", (S.settler_housing_avg or 0) / 100)), width))
+  do
+    -- Housing cap moved up to the Population row, where it means something.
+    -- What is left here is the estate itself: how many plots, and how good.
+    local avg = (S.settler_housing_avg or 0) / 100
+    add(pagelib.trunc(table.concat({
+      cell("Plots:", pagelib.fmt_num(S.settler_housing_plots), C.white),
+      cell("Avg Tier:", string.format("%.2f", avg),
+           cc.tier_color(math.floor(avg + 0.5))),
+      cell("Housing:", pagelib.fmt_num(S.settler_housing_cap) .. C.dim .. " cap", C.white),
+    }, "   "), width))
+  end
 
   do
     local hpt = S.settler_housing_plot_tiers or {}
@@ -300,22 +345,44 @@ local function settlers_lines(add, width)
     local total = (hpt.t1 or 0) + (hpt.t2 or 0) + (hpt.t3 or 0) + (hpt.t4 or 0)
                   + (hpt.t5 or 0)
     if total > 0 then
+      -- Each tier in its own rung of the shared 1-5 ladder (cc.tier_color),
+      -- so the shape of the estate is legible at a glance instead of being
+      -- five numbers in one grey run.
       local parts = {}
-      if (hpt.t1 or 0) > 0 then parts[#parts + 1] = "T1:" .. hpt.t1 end
-      if (hpt.t2 or 0) > 0 then parts[#parts + 1] = "T2:" .. hpt.t2 end
-      if (hpt.t3 or 0) > 0 then parts[#parts + 1] = "T3:" .. hpt.t3 end
-      if (hpt.t4 or 0) > 0 then parts[#parts + 1] = "T4:" .. hpt.t4 end
-      if (hpt.t5 or 0) > 0 then parts[#parts + 1] = "T5:" .. hpt.t5 end
+      for tier = 1, 5 do
+        local n = hpt["t" .. tier] or 0
+        if n > 0 then
+          parts[#parts + 1] = cc.tier_color(tier) .. "T" .. tier .. ":" .. n .. pagelib.RESET
+        end
+      end
       add(pagelib.kv(width, "Plot Tiers:", table.concat(parts, "  ")))
     end
   end
 
-  add(pagelib.trunc(string.format("Housing Upkeep: %s/tick   Community Upkeep: %s/tick",
-    pagelib.fmt_num(S.settler_housing_upkeep), pagelib.fmt_num(S.settler_community_upkeep)), width))
+  -- Upkeep is money leaving every tick: the same yellow this client uses for
+  -- a cost everywhere else (a build's "Cost: N daler", the siege bill).
+  add(pagelib.trunc(table.concat({
+    cell("Housing Upkeep:", pagelib.fmt_num(S.settler_housing_upkeep) ..
+         C.dim .. "/tick", C.yellow),
+    cell("Community Upkeep:", pagelib.fmt_num(S.settler_community_upkeep) ..
+         C.dim .. "/tick", C.yellow),
+  }, "   "), width))
 
-  add(pagelib.trunc(string.format("Jobs: %s   Employed: %s   Market Staffed: %s",
-    pagelib.fmt_num(S.settler_jobs), pagelib.fmt_num(S.settler_employed),
-    pagelib.fmt_num(S.settler_market_staffed)), width))
+  do
+    -- Employment is a ratio, so it gets the standard ratio colour; an idle
+    -- workforce is the thing worth spotting here. Market staffing is a plain
+    -- presence check -- someone minding the stalls, or nobody.
+    local jobs     = S.settler_jobs or 0
+    local employed = S.settler_employed or 0
+    local staffed  = S.settler_market_staffed or 0
+    add(pagelib.trunc(table.concat({
+      cell("Jobs:", pagelib.fmt_num(jobs), C.white),
+      cell("Employed:", pagelib.fmt_num(employed),
+           jobs > 0 and pagelib.pct_color(employed, jobs) or C.dim),
+      cell("Market Staffed:", pagelib.fmt_num(staffed),
+           staffed > 0 and C.bright_green or C.red),
+    }, "   "), width))
+  end
 
   add(metric_bar_line(width, "Mood", S.settler_mood))
   add(metric_bar_line(width, "  Housing", S.settler_housing_quality))

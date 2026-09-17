@@ -135,9 +135,14 @@ end
 -- (grey -> white -> yellow -> cyan -> bright cyan) rather than its literal
 -- BGR values.
 M.CART_TIER_NAMES = { [1] = "Basic", [2] = "Reinforced", [3] = "Heavy", [4] = "Armored", [5] = "War-cart" }
-local CART_TIER_ANSI = { [1] = C.dim, [2] = C.white, [3] = C.yellow, [4] = C.cyan, [5] = C.bright_cyan }
+-- The ladder reads the same for anything tiered 1-5, so housing plots take
+-- it too rather than inventing a second five-colour scale for the same idea.
+local TIER_ANSI = { [1] = C.dim, [2] = C.white, [3] = C.yellow, [4] = C.cyan, [5] = C.bright_cyan }
+function M.tier_color(tier)
+  return TIER_ANSI[tier] or C.dim
+end
 function M.cart_tier_color(tier)
-  return CART_TIER_ANSI[tier] or C.dim
+  return M.tier_color(tier)
 end
 
 -- Max horses per cart tier -- ported from world/trade_goods.h's

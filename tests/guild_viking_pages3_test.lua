@@ -72,6 +72,14 @@ local function find_line(lines, needle)
   return nil
 end
 
+-- Escapes stripped, for assertions on a row's CONTENT. The Settlers rows put
+-- a dim label and a coloured value either side of the colon (pagelib.kv's
+-- convention), so "Jobs: 30" is not one contiguous run in the raw text --
+-- the same reason the roster tests carry their own stripper.
+local function plain(s)
+  return (s or ""):gsub("\27%[[%d;]*m", "")
+end
+
 -- =============================================================================
 -- pages/people.lua (Task 6) -- LEGACY draw_page5 (guild_viking.lua:9748-10663)
 -- =============================================================================
@@ -181,13 +189,36 @@ do
   S.settler_housing_plot_tiers = saved
 end
 
+local settlers_plain = plain(settlers_all)
 check("people: housing upkeep (15) and community upkeep (8) present",
-      settlers_all:find("Housing Upkeep: 15", 1, true) ~= nil
-      and settlers_all:find("Community Upkeep: 8", 1, true) ~= nil, settlers_all)
+      settlers_plain:find("Housing Upkeep: 15", 1, true) ~= nil
+      and settlers_plain:find("Community Upkeep: 8", 1, true) ~= nil, settlers_plain)
 check("people: jobs/employed/staffed (30/25/3) present",
-      settlers_all:find("Jobs: 30", 1, true) ~= nil
-      and settlers_all:find("Employed: 25", 1, true) ~= nil
-      and settlers_all:find("Market Staffed: 3", 1, true) ~= nil, settlers_all)
+      settlers_plain:find("Jobs: 30", 1, true) ~= nil
+      and settlers_plain:find("Employed: 25", 1, true) ~= nil
+      and settlers_plain:find("Market Staffed: 3", 1, true) ~= nil, settlers_plain)
+
+-- Population and its housing cap belong on ONE row: a city housed to its cap
+-- cannot grow, and that was previously three rows apart from the population.
+do
+  local pop_idx = find_line(settlers_lines, "Population:")
+  check("people: population row carries the housing cap (42 / 300 housed)",
+        pop_idx ~= nil and plain(settlers_lines[pop_idx]):find("42 / 300 housed", 1, true) ~= nil,
+        pop_idx and plain(settlers_lines[pop_idx]))
+end
+
+-- A full city is the warning state, so the population value turns red -- the
+-- opposite sense to pct_color, which is why headroom_color exists.
+do
+  local saved = S.settlers
+  S.settlers = S.settler_housing_cap
+  local full_lines = people_page.lines(WIDTH)
+  local full_idx = find_line(full_lines, "Population:")
+  check("people: a city housed to its cap colours the population bright_red",
+        full_idx ~= nil and full_lines[full_idx]:find(C.bright_red, 1, true) ~= nil,
+        full_idx and full_lines[full_idx])
+  S.settlers = saved
+end
 
 -- Exact metric-bar assertion for Mood (82%): pagelib.bar(20, 82, 100, pct_color(82,100)).
 local expected_mood_bar = pagelib.bar(20, 82, 100, pagelib.pct_color(82, 100))
