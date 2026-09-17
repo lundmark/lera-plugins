@@ -35,4 +35,19 @@ function util.send(cmd, who)
   return true
 end
 
+-- Load a module that ships only in the PRIVATE plugin repo (3s-lera), which
+-- carries this same base plus the auto* automation modules. In the public
+-- repo those files are absent, and the sandbox's require() raises rather than
+-- returning nil, so every call site that wants one has to come through here
+-- and branch on the result.
+--
+-- The base is deliberately identical in both repos: only the presence of the
+-- auto* files differs, so a diff between the two copies stays empty for every
+-- file that is not an automation module.
+function util.optional_require(name)
+  local ok, mod = pcall(require, name)
+  if ok and mod then return mod end
+  return nil
+end
+
 return util

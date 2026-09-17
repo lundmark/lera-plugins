@@ -122,17 +122,26 @@ local STFX_CAT_ANSI = {
 -- same way. Calling require() from inside a function instead defers it
 -- until the first actual render, long after every module has finished
 -- loading.
+-- Each returns nil in the public base, where the module is not installed.
+local function auto_mod(name) return require("util").optional_require(name) end
 local function trade_status()
-  return require("autotrader.tick").status()
+  local m = auto_mod("autotrader.tick"); return m and m.status()
 end
 local function raid_settings()
-  return require("autoraid").settings()
+  local m = auto_mod("autoraid"); return m and m.settings()
 end
 local function voyage_settings()
-  return require("autovoyage").settings()
+  local m = auto_mod("autovoyage"); return m and m.settings()
 end
 local function herd_settings()
-  return require("autoherd").settings()
+  local m = auto_mod("autoherd"); return m and m.settings()
+end
+-- The Automation section is entirely automation: with none of the modules
+-- installed there is nothing to report, so the public base omits the header
+-- rather than drawing four "off" rows for features it does not have.
+local function automation_available()
+  return auto_mod("autotrader.tick") or auto_mod("autoraid")
+      or auto_mod("autovoyage") or auto_mod("autoherd")
 end
 
 function M.lines(width)
@@ -334,17 +343,23 @@ function M.lines(width)
 
   -- ---- Automation (lera-only, gated show_stats_automation) -- see the -----
   -- module comment above for the disclosure and the deferred-require note.
-  if page_opts.get("show_stats_automation") then
+  if page_opts.get("show_stats_automation") and automation_available() then
     add(pagelib.header(width, "Automation"))
 
+    -- Each row is gated on its OWN module, not just on the section: the
+    -- modules are installed as a set today, but one missing member must
+    -- drop its row rather than nil-format the whole page.
     local trade_phase, trade_pending = trade_status()
-    local trade_on = page_opts.get("auto_trade")
-    add(pagelib.kv(width, "Auto-Trade:",
-      string.format("%s (phase=%s pending=%d)", trade_on and "ON" or "off",
-        trade_phase, trade_pending),
-      trade_on and C.bright_green or C.dim))
+    if trade_phase then
+      local trade_on = page_opts.get("auto_trade")
+      add(pagelib.kv(width, "Auto-Trade:",
+        string.format("%s (phase=%s pending=%d)", trade_on and "ON" or "off",
+          trade_phase, trade_pending),
+        trade_on and C.bright_green or C.dim))
+    end
 
     local ar = raid_settings()
+    if ar then
     local raid_on = page_opts.get("auto_raid")
     local raid_last = "none"
     if ar.last_dispatch then
@@ -354,19 +369,23 @@ function M.lines(width)
     add(pagelib.kv(width, "Auto-Raid:",
       string.format("%s (last: %s)", raid_on and "ON" or "off", raid_last),
       raid_on and C.bright_green or C.dim))
+    end
 
     local av = voyage_settings()
+    if av then
     local voyage_on = page_opts.get("auto_voyage")
     local voyage_last = (av.log and #av.log > 0) and av.log[#av.log] or "none"
     add(pagelib.kv(width, "Auto-Voyage:",
       string.format("%s (last: %s)", voyage_on and "ON" or "off", voyage_last),
       voyage_on and C.bright_green or C.dim))
+    end
 
     -- Auto-Herd, mirroring the three rows above. Its log entries are
     -- { t = "HH:MM", desc = ... } records rather than Auto-Voyage's plain
     -- strings, hence the join. It is the one automation that SPENDS the
     -- player's daler and was the one missing from both status surfaces.
     local ah = herd_settings()
+    if ah then
     local herd_on = page_opts.get("auto_herd")
     local herd_last = "none"
     if ah.log and #ah.log > 0 then
@@ -376,6 +395,7 @@ function M.lines(width)
     add(pagelib.kv(width, "Auto-Herd:",
       string.format("%s (last: %s)", herd_on and "ON" or "off", herd_last),
       herd_on and C.bright_green or C.dim))
+    end
   end
 
   return lines

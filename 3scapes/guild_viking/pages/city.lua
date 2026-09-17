@@ -22,7 +22,8 @@ local pagelib = require("pagelib")
 local state = require("state")
 local page_opts = require("page_opts")
 local cc = require("pages.city_common")
-local autoraid = require("autoraid")
+-- Private-repo module; nil in the public base (see util.optional_require).
+local autoraid = require("util").optional_require("autoraid")
 
 local S = state.S
 local C = pagelib.C
@@ -190,7 +191,10 @@ local function raids_lines(add, width)
   local ar = S.autoraid or {}
   local on = page_opts.get("auto_raid")
   local ships_txt = (ar.ships == "all") and "All Ships"
-    or (tostring(math.min(tonumber(ar.ships) or 2, autoraid.max_ships())) .. " Ships")
+    -- Without autoraid installed there is no Dock-derived cap to clamp to, so
+    -- the configured ship count stands on its own.
+    or (tostring(autoraid and math.min(tonumber(ar.ships) or 2, autoraid.max_ships())
+                 or (tonumber(ar.ships) or 2)) .. " Ships")
   local convoy_txt = ar.convoy and " convoy" or ""
   local has_tgt = ar.target and ar.target ~= ""
   local target_txt = has_tgt and cc.tcase(ar.target) or "(no target)"

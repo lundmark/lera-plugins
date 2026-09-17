@@ -30,11 +30,15 @@
 -- (page_opts' auto_herd = false) and its own first line re-checks that gate,
 -- so adding this call sends nothing until a user opts in.
 local S = require("state").S
-local autotrade_tick = require("autotrader.tick")
-local autoraid = require("autoraid")
-local autovoyage = require("autovoyage")
-local autoherd = require("autoherd")
-local autowar = require("autowar")
+-- The five automation modules ship only in the private plugin repo; see
+-- util.optional_require. Each is nil in the public base, and every call site
+-- below branches on that.
+local optional_require = require("util").optional_require
+local autotrade_tick = optional_require("autotrader.tick")
+local autoraid = optional_require("autoraid")
+local autovoyage = optional_require("autovoyage")
+local autoherd = optional_require("autoherd")
+local autowar = optional_require("autowar")
 
 local M = {}
 
@@ -370,11 +374,11 @@ function M.countdown_tick()
   -- LEGACY guild_viking.lua:3232-3240 (trade, raid, voyage, vfind, herd
   -- order; the older "2885-2890" citation is corrected in this function's
   -- header). No auto-vfind in this plugin, so herd follows voyage.
-  autotrade_tick.tick()
-  autoraid.tick()
-  autovoyage.tick()
-  autoherd.tick()
-  autowar.tick()
+  if autotrade_tick then autotrade_tick.tick() end
+  if autoraid then autoraid.tick() end
+  if autovoyage then autovoyage.tick() end
+  if autoherd then autoherd.tick() end
+  if autowar then autowar.tick() end
 end
 
 return M
