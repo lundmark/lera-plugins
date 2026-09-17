@@ -418,9 +418,15 @@ local function settlers_lines(add, width)
   if #(S.settler_actions or {}) > 0 then
     local parts = {}
     for _, act in ipairs(S.settler_actions) do
-      parts[#parts + 1] = act.name .. " " .. cc.fmt_time(act.secs)
+      -- kv()'s value_color used to paint the whole joined value yellow;
+      -- wrap_parts takes pre-coloured parts, so each carries its own.
+      parts[#parts + 1] = C.yellow .. act.name .. " " .. cc.fmt_time(act.secs) .. pagelib.RESET
     end
-    add(pagelib.kv(width, "Actions:", table.concat(parts, ", "), C.yellow))
+    -- Server-supplied and unbounded, so kv()'s truncation lost the tail the
+    -- same way Civic Buildings did.
+    for _, line in ipairs(pagelib.wrap_parts(width, "Actions:", parts)) do
+      add(line)
+    end
   end
 
   if #(S.settler_projects or {}) > 0 then

@@ -275,7 +275,7 @@ local function prison_lines(add, width)
         local need = got + ((sg.next_needs or {})[g] or 0)
         if need > 0 then
           add(pagelib.trunc("    "
-            .. pagelib.trunc(C.white .. g .. pagelib.RESET, 10)
+            .. pagelib.trunc(cc.good_color(g) .. cc.good_label(g) .. pagelib.RESET, 10)
             .. pagelib.pct_color(got, need) .. got .. "/" .. need .. pagelib.RESET
             .. (got >= need and (C.bright_green .. "  done" .. pagelib.RESET) or ""),
             width))
