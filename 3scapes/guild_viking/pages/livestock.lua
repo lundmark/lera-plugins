@@ -229,9 +229,9 @@ local function management_row(mg)
     or (C.dim .. "off" .. pagelib.RESET)
   return table.concat({
     C.dim .. "Penfree:" .. pagelib.RESET .. free,
-    count_cell("pending", mg.pending, C.cyan),
-    count_cell("protected", mg.protected, C.bright_cyan),
-    C.dim .. "auto-cull:" .. pagelib.RESET .. auto,
+    count_cell("Pending", mg.pending, C.cyan),
+    count_cell("Protected", mg.protected, C.bright_cyan),
+    C.dim .. "Auto-cull:" .. pagelib.RESET .. auto,
   }, "  ")
 end
 
