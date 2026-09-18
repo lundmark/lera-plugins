@@ -13,6 +13,7 @@
 
 local wm = require("wm")
 local protocol = require("protocol")
+local ferry_actions = require("ferry_actions")
 
 local M = {}
 
@@ -50,8 +51,7 @@ local function listing()
 end
 
 -- Sorted so a grid scans predictably. Directories stay grouped ahead of files
--- -- the grouping is the useful part, and mixing them would scatter the only
--- rows that are clickable.
+-- -- the grouping keeps left-click navigation predictable.
 function M.entries()
   local entry = listing()
   if not entry then return {} end
@@ -215,7 +215,18 @@ function M.render(rect, opts)
 end
 
 function M.on_pointer(event)
-  if event.kind ~= "down" or event.button ~= "left" then return false end
+  if event.kind ~= "down" or (event.button ~= "left" and event.button ~= "right") then
+    return false
+  end
+  local right = event.button == "right"
+  if right then
+    local x, y = event.x or 0, event.y or 0
+    if event.inside == false or x < 0 or y < 0
+        or x >= (event.width or 0) or y >= (event.height or 0) then return false end
+    -- A running wizard job can be cancelled from anywhere inside the pane,
+    -- including blank space, notices and the border.
+    if ferry_actions.running() then return ferry_actions.open_cancel() end
+  end
 
   -- event.x/event.y are pane-local and include the border; run them through the
   -- same inset render() used so a click lands on the cell it visually points
@@ -239,9 +250,12 @@ function M.on_pointer(event)
   -- the whole grid, so scrolling changes which rows show, not how a column is
   -- numbered.
   local e = entries[col * rows + row]
-  if not e or not e.is_dir then return false end
+  if not e then return false end
   -- Only the text itself is clickable, not the gutter padding after it.
   if (lx - col * cell) >= #e.text then return false end
+
+  if right then return ferry_actions.open(e) end
+  if not e.is_dir then return false end
 
   -- A real cd, so the confirmation line updates the cwd exactly as a typed one
   -- would. There is deliberately no second source of truth here.

@@ -49,7 +49,8 @@ package.loaded["wm"] = {
              on_append = function() end, on_trim = function() end }
   end,
 }
-package.loaded["command"] = { register = function() return 1 end, unregister = function() return true end,
+local registered_command
+package.loaded["command"] = { register = function(spec) registered_command = spec; return 1 end, unregister = function() return true end,
                               get = function() return nil end }
 
 ui = { dirty = function() end, text = function() end, box = function() end }
@@ -257,6 +258,27 @@ wizard.complete()
 check("tab: nothing happens when Files.List is unavailable",
       input_text == "cd archi" and #sent == 0,
       input_text .. " / " .. #sent)
+
+-- /wiz must also explain whether native Ferry actions can be used, including
+-- when this plugin runs on an older Lera that has no Ferry global.
+local function wiz_status()
+  local old_print, lines = print, {}
+  print = function(line) lines[#lines + 1] = line end
+  registered_command.handler("")
+  print = old_print
+  return table.concat(lines, "\n")
+end
+ferry = nil
+check("status: older Lera reports Ferry unavailable",
+      wiz_status():find("Ferry: unavailable", 1, true) ~= nil)
+ferry = {available = function() return false, "mirror not configured" end}
+check("status: unavailable reason is visible",
+      wiz_status():find("mirror not configured", 1, true) ~= nil)
+ferry = {available = function() return true end}
+check("status: configured Ferry is available",
+      wiz_status():find("Ferry: available", 1, true) ~= nil)
+ferry = nil
+wizard.on_unload()
 
 print(failures == 0 and "ALL PASS" or (failures .. " FAILURE(S)"))
 os.exit(failures == 0 and 0 or 1)

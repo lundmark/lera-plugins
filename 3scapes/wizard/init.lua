@@ -12,6 +12,7 @@ M.priority = 50
 
 local complete = require("complete")
 local protocol = require("protocol")
+local ferry_actions = require("ferry_actions")
 
 M.pane = require("pane")
 
@@ -167,6 +168,9 @@ local function wiz_command(args)
     print("[wizard] home: " .. (protocol.home() or "(unknown)"))
     print("[wizard] Files.List: " ..
           (protocol.available() and "available" or "unavailable (not a wizard?)"))
+    local available, reason = ferry_actions.available()
+    print("[wizard] Ferry: " .. (available and "available" or
+          "unavailable (" .. tostring(reason) .. ")"))
     return
   end
 
@@ -217,7 +221,7 @@ function M.on_load()
       name = "/wiz",
       usage = "/wiz [refresh | cd <path> | ls [path]]",
       summary = "Wizard file browser",
-      description = "Show the tracked working directory and Files.List "
+      description = "Show the tracked working directory and Files.List/Ferry "
         .. "availability, refresh the file pane, change directory, or print a "
         .. "listing to the output buffer.",
       accepts_args = true,
@@ -240,6 +244,7 @@ function M.on_disconnect()
 end
 
 function M.on_unload()
+  ferry_actions.cleanup()
   for i = 1, #gmcp_ids do gmcp.remove(gmcp_ids[i]) end
   for i = 1, #trigger_ids do trigger.remove(trigger_ids[i]) end
   if command and command_id then command.unregister(command_id) end
