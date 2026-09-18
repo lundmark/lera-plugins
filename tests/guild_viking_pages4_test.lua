@@ -498,9 +498,34 @@ check("war: pending-judgement line names the captive and 'commander'",
 -- without pinning the spacing.
 local prison_flat = strip_ansi(prison_all):gsub("%s+", " ")
 check("war: roster row shows id/name/size/ransom",
-      prison_flat:find("1) Thrall A x3 ransom 50d", 1, true) ~= nil, prison_flat)
+      prison_flat:find("1) Thrall A x3 50d", 1, true) ~= nil, prison_flat)
+check("war: roster carries a column header",
+      prison_flat:find("# Captive Size Rank Ransom", 1, true) ~= nil, prison_flat)
 check("war: kin-held-by-foe line", prison_all:find("Our kin held by the foe: 1", 1, true) ~= nil, prison_all)
 check("war: siege engines line", prison_all:find("Siege engines: 2/4", 1, true) ~= nil, prison_all)
+check("war: siege engines line is not clipped",
+      prison_all:find("breach a garrison's walls", 1, true) ~= nil, prison_all)
+
+-- A name that exactly fills the 22-wide name column used to run straight into
+-- the size field ("the village of Haugnesx6").
+S.prison = {
+  held = 1, cap = 5,
+  roster = { { id = 1, name = "the village of Haugnes", size = 6, cmd = true, val = 1540 } },
+}
+local long_name_flat = strip_ansi(joined(war_page.lines(WIDTH))):gsub("%s+", " ")
+check("war: a captive name is title-cased and keeps a gap before the size",
+      long_name_flat:find("The Village Of Haugnes x6", 1, true) ~= nil, long_name_flat)
+check("war: a commander's rank reads as 'Cmdr' and the ransom is grouped",
+      long_name_flat:find("x6 Cmdr 1,540d", 1, true) ~= nil, long_name_flat)
+
+-- A name longer than the 30-wide column still must not touch the size.
+S.prison = {
+  held = 1, cap = 5,
+  roster = { { id = 1, name = "the fortified steading of Raudrnes", size = 9, val = 4210 } },
+}
+local over_flat = strip_ansi(joined(war_page.lines(WIDTH))):gsub("%s+", " ")
+check("war: an over-wide captive name keeps a gap before the size",
+      over_flat:find("The Fortified Steading Of Rau x9", 1, true) ~= nil, over_flat)
 
 S.prison = nil
 S.siege = nil

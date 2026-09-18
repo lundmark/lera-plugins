@@ -728,6 +728,14 @@ local function write_refinery(parts)
         tier  = tonumber(r.tier) or 0,
         stock = tonumber(r.stock) or 0,
         cap   = tonumber(r.cap) or 0,
+        -- in/out are good ids and wstock the warehouse units of the INPUT
+        -- good. The server carried these once, dropped them for Guild.Trade's
+        -- page budget, and restored them when refinery moved to its own
+        -- Guild.Refinery sub-package. Absent on an older server: the fields
+        -- are simply empty and the page omits the line.
+        input  = tostring(r["in"] or ""),
+        output = tostring(r.out or ""),
+        wstock = tonumber(r.wstock) or 0,
         grades = grades,
       }
     end
