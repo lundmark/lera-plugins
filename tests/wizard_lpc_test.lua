@@ -364,8 +364,15 @@ do
     end
   end
 
+  -- Both transfers ask first: a pull overwrites what is on disk, a push
+  -- overwrites what is on the MUD.
   pick("ferry-pull")
-  check("ferry: pull goes straight out as one request",
+  check("ferry: pull asks before overwriting local files",
+        #sent_msgs == 0 and overlay.active(), #sent_msgs)
+
+  items = overlay.items()
+  pick("yes")
+  check("ferry: and goes out as one request once confirmed",
         #sent_msgs == 1 and sent_msgs[1].op == "pull"
         and sent_msgs[1].path == "/players/x/foo.c",
         sent_msgs[1] and sent_msgs[1].op)
@@ -432,4 +439,68 @@ do
         select(2, joined:gsub("pushed a%.c", "")) == 1, joined)
   check("progress: but anything NOT already shown is",
         joined:find("b.c was skipped", 1, true) ~= nil, joined)
+end
+
+-- ---- abort, and asking first ----------------------------------------------
+
+do
+  -- pane pulls in wm for its scroller; this suite has no screen, so stub it
+  -- the way the pane suite does.
+  package.loaded["wm"] = package.loaded["wm"] or {
+    make_scroller = function(opts)
+      return {
+        offset = function() return 0 end,
+        scroll = function() end,
+        scroll_to_bottom = function() end,
+        following_tail = function() return true end,
+        count = opts.count,
+      }
+    end,
+  }
+  ui.rect = ui.rect or function(x, y, w, h) return { x = x, y = y, w = w, h = h } end
+  ui.text_ansi = ui.text_ansi or function() end
+  ui.box = ui.box or function() end
+
+  local ferry = require("ferry")
+  local pane = require("pane")
+  local overlay = require("overlay")
+  listed = { "ferry-bridge" }
+
+  local sent_msgs = {}
+  ipc.send = function(_, msg) sent_msgs[#sent_msgs + 1] = msg; return true end
+
+  -- Nothing running: a right-click is a menu, not an abort.
+  check("abort: nothing to abort when nothing runs", ferry.running() == nil)
+
+  ferry.run("pull", "/players/x")
+  check("abort: a running command is visible to the pane",
+        (ferry.running() or ""):find("pull", 1, true) ~= nil, tostring(ferry.running()))
+
+  overlay.close()
+  local consumed = pane.on_pointer({ kind = "down", button = "right", x = 1, y = 2,
+                                     inside = true, width = 30, height = 16 })
+  check("abort: a right-click anywhere sends cancel, and opens no menu",
+        consumed == true and not overlay.active()
+        and sent_msgs[#sent_msgs].op == "cancel",
+        tostring(sent_msgs[#sent_msgs] and sent_msgs[#sent_msgs].op))
+  check("abort: and the pane stops offering it", ferry.running() == nil)
+
+  -- Both transfers ask first now: a pull overwrites what is on disk just as a
+  -- push overwrites what is on the MUD.
+  local function confirms(list, key)
+    for _, spec in ipairs(list) do
+      if spec.key == key then return spec.confirm == true end
+    end
+    return nil
+  end
+  check("abort: pull asks before overwriting local files",
+        confirms(actions.FERRY_ACTIONS, "ferry-pull") == true)
+  check("abort: push asks too", confirms(actions.FERRY_ACTIONS, "ferry-push") == true)
+  check("abort: cc does not -- it changes nothing",
+        confirms(actions.FERRY_ACTIONS, "ferry-cc") == false)
+
+  -- A directory push says what it will actually carry.
+  check("abort: the directory push confirmation names the .c/.h limit",
+        (actions.FERRY_DIR_SCOPE.push or ""):find("%.c/%.h") ~= nil,
+        actions.FERRY_DIR_SCOPE.push)
 end

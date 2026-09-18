@@ -27,6 +27,9 @@ local SELF = "lera-wizard"
 -- Lines already shown as progress, so the closing summary does not repeat
 -- them. Cleared when a command finishes.
 local seen_lines = {}
+-- What is in flight, so the pane can offer to abort it and refuse to start a
+-- second one on top.
+local running = nil
 local peer_idx = nil
 local started = false
 local next_id = 1
@@ -87,6 +90,11 @@ end
 on_message = function(peer, message)
   if peer ~= BRIDGE or type(message) ~= "table" then return end
 
+  if message.op == "cancel" then
+    note("cancel: " .. tostring(message.output or ""))
+    return
+  end
+
   -- A file went by while the command is still running.
   if message.progress then
     if message.line then seen_lines[message.line] = true end
@@ -98,6 +106,7 @@ on_message = function(peer, message)
   local cb = id and waiting[id]
   if id then waiting[id] = nil end
 
+  running = nil
   local line = (message.op or "ferry") .. " " .. (message.path or "")
   if message.ok then
     note(line .. " done")
@@ -163,7 +172,33 @@ function M.run(op, path, cb)
     note("could not reach the bridge")
     return false
   end
-  note(op .. " " .. path .. " ...")
+  running = { op = op, path = path }
+  note(op .. " " .. path .. " ... (right-click the pane to abort)")
+  return true
+end
+
+-- What is in flight, or nil. The pane asks before treating a right-click as
+-- an abort rather than as a menu.
+function M.running()
+  return running and (running.op .. " " .. running.path) or nil
+end
+
+-- Stop the command the bridge is running. The bridge answers this on its
+-- reading thread, so it lands while ferry is still going.
+function M.cancel()
+  if not running then return false end
+  if not peer_idx then
+    running = nil
+    return false
+  end
+  local ok = pcall(ipc.send, peer_idx, { id = next_id, op = "cancel" })
+  next_id = next_id + 1
+  if not ok then
+    peer_idx = nil
+    return false
+  end
+  note("aborting " .. running.op .. " " .. running.path .. " ...")
+  running = nil
   return true
 end
 
@@ -173,6 +208,8 @@ function M.reset()
   if peer_idx then pcall(ipc.disconnect, peer_idx) end
   peer_idx = nil
   waiting = {}
+  running = nil
+  seen_lines = {}
 end
 
 return M

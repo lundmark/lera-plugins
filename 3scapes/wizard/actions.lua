@@ -281,10 +281,34 @@ M.FILE_ACTIONS = {
 -- a wizard without one sees exactly the MUD-command menu and nothing that
 -- would fail if clicked.
 M.FERRY_ACTIONS = {
-  { key = "ferry-pull", label = "pull", desc = "ferry: MUD -> local mirror", op = "pull" },
+  { key = "ferry-pull", label = "pull", desc = "ferry: MUD -> local mirror", op = "pull",
+    confirm = true },
   { key = "ferry-push", label = "push", desc = "ferry: local mirror -> MUD",  op = "push",
     kind = "danger", confirm = true },
   { key = "ferry-cc",   label = "cc!",  desc = "ferry: compile-check remotely", op = "cc" },
+}
+
+-- The same three against a DIRECTORY. pull and push recurse in ferry itself,
+-- so "everything under it" is ferry's own behaviour rather than a walk this
+-- plugin drives -- unlike uall/lall, where the MUD has no recursion at all.
+--
+-- The bridge narrows two of them: a directory PUSH carries only .c/.h (the
+-- mirror also holds .o save files and generated data, which a click must not
+-- be able to put over the live MUD), and a directory CC is expanded to the .c
+-- files underneath because ferry cc takes files only.
+M.FERRY_DIR_ACTIONS = {
+  { key = "ferry-pull", label = "pull", desc = "ferry: this folder and below, MUD -> here",
+    op = "pull", confirm = true },
+  { key = "ferry-push", label = "push", desc = "ferry: .c/.h below this folder -> MUD",
+    op = "push", kind = "danger", confirm = true },
+  { key = "ferry-cc",   label = "cc!",  desc = "ferry: compile-check every .c below",
+    op = "cc" },
+}
+
+-- What the confirmation says the scope is, when a directory was clicked.
+M.FERRY_DIR_SCOPE = {
+  pull = "and everything under it",
+  push = "-- .c/.h under it, nothing else",
 }
 
 -- ---- viewing ---------------------------------------------------------------
@@ -504,6 +528,13 @@ function M.dir_menu(path, anchor)
     items[#items + 1] = { label = cmd .. " -r", value = cmd .. " -r",
                           desc = "...and every folder under it" }
   end
+  if ferry.available() then
+    for i = 1, #M.FERRY_DIR_ACTIONS do
+      local spec = M.FERRY_DIR_ACTIONS[i]
+      items[#items + 1] = { label = spec.label, desc = spec.desc,
+                            value = spec.key, kind = spec.kind }
+    end
+  end
   items[#items + 1] = { label = "cancel", desc = "close this menu",
                         value = "", kind = "cancel" }
 
@@ -515,6 +546,17 @@ function M.dir_menu(path, anchor)
     -- appears where the question was asked.
     on_select = function(value)
       if value == "" then return end
+      for i = 1, #M.FERRY_DIR_ACTIONS do
+        local spec = M.FERRY_DIR_ACTIONS[i]
+        if spec.key == value then
+          if spec.confirm then
+            M.confirm_ferry(spec.op, path, anchor, M.FERRY_DIR_SCOPE[spec.op])
+          else
+            ferry.run(spec.op, path)
+          end
+          return
+        end
+      end
       M.confirm(value, path, anchor)
     end,
   })

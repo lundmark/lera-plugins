@@ -33,6 +33,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -53,6 +54,41 @@ const VERBS: [&str; 3] = ["pull", "push", "cc"];
 
 fn log(msg: &str) {
     println!("[ferry-bridge] {msg}");
+}
+
+/// The command a connection currently has running, if any.
+///
+/// A cancel has to reach the child while it is still going, which means the
+/// frame that carries it must be READ while it is still going -- so the
+/// command runs on a worker thread and the connection keeps listening. This is
+/// what the two share.
+#[derive(Default)]
+struct Job {
+    child: Mutex<Option<Arc<Mutex<std::process::Child>>>>,
+    cancelled: AtomicBool,
+}
+
+impl Job {
+    fn set(&self, child: Arc<Mutex<std::process::Child>>) {
+        *self.child.lock().unwrap() = Some(child);
+    }
+
+    fn clear(&self) {
+        *self.child.lock().unwrap() = None;
+    }
+
+    /// Kill whatever is running. Returns what to tell the client.
+    fn cancel(&self) -> &'static str {
+        let guard = self.child.lock().unwrap();
+        match guard.as_ref() {
+            Some(child) => {
+                self.cancelled.store(true, Ordering::SeqCst);
+                let _ = child.lock().unwrap().kill();
+                "cancelled"
+            }
+            None => "nothing running",
+        }
+    }
 }
 
 // ---- the mirror -------------------------------------------------------------
@@ -138,16 +174,34 @@ fn local_path(root: &Path, mud_path: &str) -> Result<String, String> {
 
 // ---- running ferry ----------------------------------------------------------
 
+/// A directory operation only ever touches SOURCE.
+///
+/// Two reasons, and the second is the serious one:
+///
+///  * A mirror directory holds more than source -- .pyc, editor backups,
+///    generated files -- and `ferry push <dir>` would carry all of it up.
+///  * `.o` files in this tree are SAVE FILES. players/<guild>/data/*.o is live
+///    game state, and help/*.o is generated help data. Pushing a stale local
+///    copy of either over the running MUD is not something a click should be
+///    able to do.
+///
+/// A single file clicked in the pane is still transferred as asked -- the pane
+/// is showing it, so it was chosen deliberately. This is about what "and
+/// everything under it" is allowed to mean.
+const SOURCE_EXTS: [&str; 2] = ["c", "h"];
+
 /// `ferry cc` compile-checks FILES; handed a directory it looks for
-/// "<dir>.c" and fails. pull and push walk a directory themselves, so this is
-/// only cc's problem -- and the documented way round it is the one the mirror's
+/// "<dir>.c" and fails. The documented way round it is the one the mirror's
 /// own notes give: `find <area> -name '*.c' | xargs ferry cc`. Do that here, so
 /// "cc this folder" means what it says.
 ///
-/// Capped, because a cc of /players is not a thing anyone meant to ask for.
+/// Capped, because a cc -- or a push -- of /players is not a thing anyone
+/// meant to ask for.
 const CC_FILE_MAX: usize = 200;
 
-fn collect_c_files(dir: &Path, root: &Path, out: &mut Vec<String>) {
+/// Every file under `dir` whose extension is in `exts`, relative to `root`.
+/// Symlinks are not followed, here or anywhere else in this process.
+fn collect_files(dir: &Path, root: &Path, exts: &[&str], out: &mut Vec<String>) {
     if out.len() >= CC_FILE_MAX {
         return;
     }
@@ -170,10 +224,17 @@ fn collect_c_files(dir: &Path, root: &Path, out: &mut Vec<String>) {
             continue;
         }
         if meta.is_dir() {
-            collect_c_files(&path, root, out);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("c") {
-            if let Ok(rel) = path.strip_prefix(root) {
-                out.push(rel.to_string_lossy().into_owned());
+            collect_files(&path, root, exts, out);
+        } else {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_ascii_lowercase());
+            let wanted = ext.map(|e| exts.contains(&e.as_str())).unwrap_or(false);
+            if wanted {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    out.push(rel.to_string_lossy().into_owned());
+                }
             }
         }
     }
@@ -189,6 +250,7 @@ fn run_ferry_many(
     root: &Path,
     verb: &str,
     relatives: &[String],
+    job: &Job,
     on_line: &mut dyn FnMut(&str),
 ) -> (bool, String, i32) {
     let spawned = Command::new("ferry")
@@ -211,6 +273,7 @@ fn run_ferry_many(
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let child = Arc::new(Mutex::new(child));
+    job.set(Arc::clone(&child));
 
     // std has no wait-with-timeout, so a watchdog kills the child instead.
     // Without it a hung FTP connection would hold this thread forever.
@@ -270,6 +333,11 @@ fn run_ferry_many(
     let errors = stderr_thread.join().unwrap_or_default();
     collected.push_str(&errors);
 
+    job.clear();
+
+    if job.cancelled.load(Ordering::SeqCst) {
+        return (false, format!("ferry {verb} cancelled"), -1);
+    }
     if *timed_out.lock().unwrap() {
         return (
             false,
@@ -290,10 +358,10 @@ fn run_ferry_many(
 /// worth asking for a DIRECTORY -- a single file is one of one -- and only so
 /// the client can show a percentage rather than a rising count with no end in
 /// sight.
-fn count_work(root: &Path, verb: &str, relative: &str) -> Option<usize> {
+fn count_work(root: &Path, verb: &str, relative: &str, job: &Job) -> Option<usize> {
     let args = vec!["--dry-run".to_string(), relative.to_string()];
     let mut lines = 0usize;
-    let (_ok, _out, _status) = run_ferry_many(root, verb, &args, &mut |line| {
+    let (_ok, _out, _status) = run_ferry_many(root, verb, &args, job, &mut |line| {
         if line.starts_with("would ") {
             lines += 1;
         }
@@ -309,49 +377,66 @@ fn run_ferry(
     root: &Path,
     verb: &str,
     relative: &str,
+    job: &Job,
     on_progress: &mut dyn FnMut(usize, Option<usize>, &str),
 ) -> (bool, String, i32) {
     let full = root.join(relative);
 
-    if verb == "cc" && full.is_dir() {
+    // cc takes files, and a push of a directory is restricted to source (see
+    // SOURCE_EXTS). Both come down to the same thing: build the list here and
+    // hand ferry explicit paths.
+    if full.is_dir() && (verb == "cc" || verb == "push") {
+        let exts: &[&str] = if verb == "cc" { &["c"] } else { &SOURCE_EXTS };
         let mut files = Vec::new();
-        collect_c_files(&full, root, &mut files);
+        collect_files(&full, root, exts, &mut files);
         if files.is_empty() {
-            return (false, format!("no .c files under {relative}"), -1);
+            return (
+                false,
+                format!("no {} files under {relative}", exts.join("/.")),
+                -1,
+            );
         }
         let capped = files.len() >= CC_FILE_MAX;
-        // The total is known exactly here: it is the list just built.
+        // The total is known exactly here: it is the list just built. No
+        // --dry-run pre-pass needed.
         let total = Some(files.len());
         let mut done = 0usize;
-        let (ok, mut output, status) = run_ferry_many(root, verb, &files, &mut |line| {
+        let (ok, mut output, status) = run_ferry_many(root, verb, &files, job, &mut |line| {
             done += 1;
             on_progress(done, total, line);
         });
         if capped {
             output.push_str(&format!(
-                "\n(stopped at {CC_FILE_MAX} files -- cc a narrower directory for the rest)"
+                "\n(stopped at {CC_FILE_MAX} files -- narrow the directory for the rest)"
             ));
         }
         return (ok, output, status);
     }
 
-    // A directory transfer gets a count first, so progress can be a
-    // percentage. A single file does not need one.
+    // What is left is a pull, or a single file. A directory pull stays ferry's
+    // own recursion: the files worth having may not exist locally yet, which
+    // is the whole point, so there is no local list to filter. It writes only
+    // into the mirror, so the stakes are the other way round from a push.
     let total = if full.is_dir() {
-        count_work(root, verb, relative)
+        count_work(root, verb, relative, job)
     } else {
         Some(1)
     };
 
     let mut done = 0usize;
     let args = [relative.to_string()];
-    run_ferry_many(root, verb, &args, &mut |line| {
+    run_ferry_many(root, verb, &args, job, &mut |line| {
         done += 1;
         on_progress(done, total, line);
     })
 }
 
-fn handle(root: &Path, request: &Value, on_progress: &mut dyn FnMut(usize, Option<usize>, &str)) -> Value {
+fn handle(
+    root: &Path,
+    request: &Value,
+    job: &Job,
+    on_progress: &mut dyn FnMut(usize, Option<usize>, &str),
+) -> Value {
     let op = request.get("op").and_then(Value::as_str).unwrap_or("");
     if !VERBS.contains(&op) {
         return json!({ "ok": false, "output": format!("unknown op '{op}'") });
@@ -363,7 +448,7 @@ fn handle(root: &Path, request: &Value, on_progress: &mut dyn FnMut(usize, Optio
         Err(why) => return json!({ "ok": false, "op": op, "output": why }),
     };
 
-    let (ok, output, status) = run_ferry(root, op, &relative, on_progress);
+    let (ok, output, status) = run_ferry(root, op, &relative, job, on_progress);
     log(&format!(
         "{op} {relative} -> {}",
         if ok { "ok" } else { "FAILED" }
@@ -387,15 +472,30 @@ fn send(stream: &mut UnixStream, payload: &Value) -> bool {
     stream.write_all(&len).is_ok() && stream.write_all(body.as_bytes()).is_ok()
 }
 
-fn serve_peer(root: PathBuf, mut stream: UnixStream) {
+/// One frame at a time, on the CONNECTION thread. Work runs on a worker
+/// thread so this one stays free to read -- which is the only way a cancel can
+/// arrive while a command is still running.
+///
+/// One job at a time per connection: two overlapping transfers would interleave
+/// their progress and make "cancel" ambiguous.
+fn serve_peer(root: PathBuf, stream: UnixStream) {
+    let reader = stream;
+    let writer = match reader.try_clone() {
+        Ok(w) => Arc::new(Mutex::new(w)),
+        Err(_) => return,
+    };
+    let job = Arc::new(Job::default());
+    let busy = Arc::new(AtomicBool::new(false));
     let mut peer = String::from("?");
-    while let Some(header) = read_exactly(&mut stream, 4) {
+    let mut reader = reader;
+
+    while let Some(header) = read_exactly(&mut reader, 4) {
         let length = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
         if length == 0 || length > MAX_MSG {
             log(&format!("refusing a {length}-byte frame from {peer}"));
             break;
         }
-        let body = match read_exactly(&mut stream, length as usize) {
+        let body = match read_exactly(&mut reader, length as usize) {
             Some(b) => b,
             None => break,
         };
@@ -418,47 +518,82 @@ fn serve_peer(root: PathBuf, mut stream: UnixStream) {
             continue;
         }
 
-        let id = request.get("id").cloned();
         let op = request
             .get("op")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
+        let id = request.get("id").cloned();
 
-        // Progress goes out on the same socket, one frame per file, while the
-        // command is still running. `done`/`total` let the client show a
-        // percentage; `line` is ferry's own word for what it just did.
-        let mut progress_failed = false;
-        let mut reply = {
-            let stream = &mut stream;
-            let id = id.clone();
-            let op = op.clone();
-            let progress_failed = &mut progress_failed;
-            handle(&root, &request, &mut |done, total, line| {
-                if *progress_failed {
-                    return;
-                }
-                let mut frame = json!({
-                    "progress": true, "op": op, "done": done, "line": line,
-                });
-                if let Some(total) = total {
-                    frame["total"] = json!(total);
-                }
-                if let Some(id) = &id {
-                    frame["id"] = id.clone();
-                }
-                if !send(stream, &frame) {
-                    *progress_failed = true;
-                }
-            })
-        };
+        // Cancel is answered HERE, on the reading thread, while the worker is
+        // still inside ferry.
+        if op == "cancel" {
+            let what = job.cancel();
+            log(&format!("{peer} cancel -> {what}"));
+            let mut reply = json!({ "ok": true, "op": "cancel", "output": what });
+            if let Some(id) = id {
+                reply["id"] = id;
+            }
+            let mut w = writer.lock().unwrap();
+            if !send(&mut w, &reply) {
+                break;
+            }
+            continue;
+        }
 
-        if let Some(id) = id {
-            reply["id"] = id;
+        if busy.swap(true, Ordering::SeqCst) {
+            let mut reply = json!({
+                "ok": false, "op": op,
+                "output": "another ferry command is still running"
+            });
+            if let Some(id) = id {
+                reply["id"] = id;
+            }
+            let mut w = writer.lock().unwrap();
+            if !send(&mut w, &reply) {
+                break;
+            }
+            continue;
         }
-        if progress_failed || !send(&mut stream, &reply) {
-            break;
-        }
+
+        let root = root.clone();
+        let writer = Arc::clone(&writer);
+        let job = Arc::clone(&job);
+        let busy = Arc::clone(&busy);
+        thread::spawn(move || {
+            job.cancelled.store(false, Ordering::SeqCst);
+
+            // Progress goes out on the same socket, one frame per file, while
+            // the command is still running.
+            let mut reply = {
+                let writer = Arc::clone(&writer);
+                let id = id.clone();
+                let op = op.clone();
+                handle(&root, &request, &job, &mut |done, total, line| {
+                    let mut frame = json!({
+                        "progress": true, "op": op, "done": done, "line": line,
+                    });
+                    if let Some(total) = total {
+                        frame["total"] = json!(total);
+                    }
+                    if let Some(id) = &id {
+                        frame["id"] = id.clone();
+                    }
+                    let mut w = writer.lock().unwrap();
+                    let _ = send(&mut w, &frame);
+                })
+            };
+
+            if let Some(id) = id {
+                reply["id"] = id;
+            }
+            {
+                let mut w = writer.lock().unwrap();
+                let _ = send(&mut w, &reply);
+            }
+            job.clear();
+            busy.store(false, Ordering::SeqCst);
+        });
     }
     log(&format!("{peer} disconnected"));
 }
@@ -581,5 +716,112 @@ fn main() {
             }
             Err(e) => log(&format!("accept failed: {e}")),
         }
+    }
+}
+
+// ---- tests -----------------------------------------------------------------
+//
+// The two functions worth testing are the two that decide what this process is
+// allowed to touch. Everything else is plumbing around a subprocess.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ferry-bridge-test-{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn rejects_paths_that_leave_the_mirror() {
+        let root = scratch("escape");
+        assert!(local_path(&root, "/../etc/passwd").is_err());
+        assert!(local_path(&root, "/players/../../etc/passwd").is_err());
+        assert!(local_path(&root, "players/x.c").is_err(), "must be absolute");
+        assert!(local_path(&root, "/").is_err(), "the root is not a file");
+        assert!(local_path(&root, "/x\0y.c").is_err(), "no nulls");
+    }
+
+    #[test]
+    fn accepts_a_path_that_does_not_exist_yet() {
+        // A pull targets a file the mirror has never seen; refusing it because
+        // it is missing would make pull useless for exactly the case it is for.
+        let root = scratch("missing");
+        fs::create_dir_all(root.join("players/shaman/cmd")).unwrap();
+        assert_eq!(
+            local_path(&root, "/players/shaman/cmd/brand_new.c").unwrap(),
+            "players/shaman/cmd/brand_new.c"
+        );
+    }
+
+    #[test]
+    fn refuses_a_directory_symlinked_out_of_the_mirror() {
+        let root = scratch("symlink");
+        let outside = scratch("symlink-outside");
+        fs::write(outside.join("secret.c"), "x").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
+        assert!(local_path(&root, "/escape/secret.c").is_err());
+    }
+
+    #[test]
+    fn a_directory_push_takes_source_and_nothing_else() {
+        let root = scratch("collect");
+        let area = root.join("players/shaman");
+        fs::create_dir_all(area.join("data")).unwrap();
+        fs::create_dir_all(area.join("__pycache__")).unwrap();
+        for (path, _) in [
+            ("shgather.c", ()),
+            ("herbs.h", ()),
+            ("notes.txt", ()),
+            ("shgather.c.bak", ()),
+        ] {
+            fs::write(area.join(path), "x").unwrap();
+        }
+        // The dangerous ones: .o here is live save data, not build output.
+        fs::write(area.join("data/gather_daemon.o"), "x").unwrap();
+        fs::write(area.join("__pycache__/t.pyc"), "x").unwrap();
+
+        let mut found = Vec::new();
+        collect_files(&area, &root, &SOURCE_EXTS, &mut found);
+        found.sort();
+        assert_eq!(
+            found,
+            vec![
+                "players/shaman/herbs.h".to_string(),
+                "players/shaman/shgather.c".to_string(),
+            ],
+            "a directory push must not carry .o save files, .pyc or backups"
+        );
+    }
+
+    #[test]
+    fn a_directory_cc_takes_only_c_files() {
+        let root = scratch("cc");
+        let area = root.join("area");
+        fs::create_dir_all(&area).unwrap();
+        fs::write(area.join("room.c"), "x").unwrap();
+        fs::write(area.join("defs.h"), "x").unwrap();
+
+        let mut found = Vec::new();
+        collect_files(&area, &root, &["c"], &mut found);
+        assert_eq!(found, vec!["area/room.c".to_string()]);
+    }
+
+    #[test]
+    fn collection_does_not_follow_symlinks() {
+        let root = scratch("nofollow");
+        let area = root.join("area");
+        let outside = scratch("nofollow-outside");
+        fs::create_dir_all(&area).unwrap();
+        fs::write(outside.join("elsewhere.c"), "x").unwrap();
+        std::os::unix::fs::symlink(&outside, area.join("link")).unwrap();
+
+        let mut found = Vec::new();
+        collect_files(&area, &root, &SOURCE_EXTS, &mut found);
+        assert!(found.is_empty(), "walked through a symlink: {found:?}");
     }
 }

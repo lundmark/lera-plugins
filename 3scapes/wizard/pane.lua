@@ -14,6 +14,7 @@
 local wm = require("wm")
 local protocol = require("protocol")
 local actions = require("actions")
+local ferry = require("ferry")
 local theme = require("theme")
 local overlay = require("overlay")
 
@@ -341,6 +342,16 @@ function M.on_pointer(event)
   local lx = (event.x or 0) - ox
   local ly = (event.y or 0) - oy
   if lx < 0 or lx >= ow or ly < 0 or ly >= oh then return false end
+
+  -- While a ferry command is running, a right-click ANYWHERE in the pane
+  -- aborts it. An abort needs to be reachable without hunting for a target --
+  -- the thing you want to stop is not a row you can point at -- and a
+  -- right-click during a transfer is not plausibly a request for a menu.
+  if button == "right" and ferry.running() and not overlay.active() then
+    ferry.cancel()
+    if ui and ui.dirty then ui.dirty() end
+    return true
+  end
 
   -- An open menu owns every click in the pane: one on an item chooses it, one
   -- anywhere else dismisses. Nothing falls through to the listing underneath,
