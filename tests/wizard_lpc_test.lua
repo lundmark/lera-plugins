@@ -289,3 +289,89 @@ check("recursive: a fifth prompt is not ours to answer", #sent == before)
 protocol.store("/a", { dirs = { "b", "c" }, files = {}, complete = true })
 check("recursive: refuses to start a walk on top of nothing is fine",
       actions.run_recursive("lall", "") == false)
+
+-- ---- ferry entries ---------------------------------------------------------
+--
+-- The plugin sandbox has no disk and no shell, so ferry runs in a bridge
+-- process (tools/ferry-bridge) reached over ipc. The rule that matters here is
+-- that a wizard with no bridge running sees no ferry entries at all: an entry
+-- that cannot work should not invite the click.
+
+local overlay = require("overlay")
+
+local function ferry_rows()
+  local n = 0
+  for _, it in ipairs(overlay.items() or {}) do
+    if tostring(it.value):find("^ferry%-") then n = n + 1 end
+  end
+  return n
+end
+
+-- No ipc at all: the sandbox of a client built without it, or a session that
+-- never initialised one.
+ipc = nil
+actions.file_menu("/players/x/foo.c", { x = 0, y = 0 })
+check("ferry: no ipc means no ferry entries", ferry_rows() == 0, ferry_rows())
+check("ferry: and the MUD commands are still all there",
+      #overlay.items() == 10, #overlay.items())
+overlay.close()
+
+-- ipc present, but nothing listening.
+local listed = {}
+ipc = {
+  init = function() return true end,
+  on_message = function() end,
+  list = function() return listed end,
+  connect = function() return 0 end,
+  send = function() return true end,
+  disconnect = function() end,
+}
+package.loaded["ferry"] = nil
+package.loaded["actions"] = nil
+actions = require("actions")
+
+actions.file_menu("/players/x/foo.c", { x = 0, y = 0 })
+check("ferry: no bridge listening means no ferry entries", ferry_rows() == 0, ferry_rows())
+overlay.close()
+
+-- A bridge appears.
+listed = { "some-other-session", "ferry-bridge" }
+actions.file_menu("/players/x/foo.c", { x = 0, y = 0 })
+check("ferry: a listening bridge adds pull/push/cc", ferry_rows() == 3, ferry_rows())
+do
+  local labels = {}
+  for _, it in ipairs(overlay.items()) do labels[it.value] = it end
+  check("ferry: pull is offered and is not marked dangerous",
+        labels["ferry-pull"] ~= nil and labels["ferry-pull"].kind == nil)
+  check("ferry: push IS marked dangerous -- it overwrites the MUD",
+        labels["ferry-push"] ~= nil and labels["ferry-push"].kind == "danger")
+end
+
+-- Choosing pull sends one framed request; choosing push asks first.
+do
+  local sent_msgs = {}
+  ipc.send = function(peer, msg) sent_msgs[#sent_msgs + 1] = msg; return true end
+
+  local items = overlay.items()
+  local function pick(value)
+    for i, it in ipairs(items) do
+      if it.value == value then
+        local rect = overlay.layout(60, 20)
+        overlay.on_click(rect.x + 1, rect.y + (rect.bordered and 1 or 0) + i - 1, 60, 20)
+        return
+      end
+    end
+  end
+
+  pick("ferry-pull")
+  check("ferry: pull goes straight out as one request",
+        #sent_msgs == 1 and sent_msgs[1].op == "pull"
+        and sent_msgs[1].path == "/players/x/foo.c",
+        sent_msgs[1] and sent_msgs[1].op)
+
+  actions.file_menu("/players/x/foo.c", { x = 0, y = 0 })
+  items = overlay.items()
+  pick("ferry-push")
+  check("ferry: push asks before overwriting the MUD",
+        #sent_msgs == 1 and overlay.active(), #sent_msgs)
+end

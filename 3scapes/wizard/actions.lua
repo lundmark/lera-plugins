@@ -26,6 +26,7 @@ local lpc = require("lpc")
 -- the dispatcher calls -- and raises "plugin capability is inactive" anywhere
 -- else, which a wm pointer callback is. Any module a click path needs must
 -- therefore be captured at load, as these two are.)
+local ferry = require("ferry")
 local overlay = require("overlay")
 local protocol = require("protocol")
 
@@ -117,6 +118,7 @@ end
 function M.reset()
   disarm()
   stop_viewing()
+  ferry.reset()
   -- A walk whose replies never arrived (a dropped connection mid-walk) would
   -- otherwise refuse every later one as "already running".
   walk = nil
@@ -270,6 +272,21 @@ M.FILE_ACTIONS = {
     send = "rm", confirm = true, kind = "danger" },
 }
 
+-- ferry, for anyone running the bridge (tools/ferry-bridge). These are NOT
+-- MUD commands: they move the file between the MUD and a local mirror
+-- checkout, through a process outside Lera, because the plugin sandbox has no
+-- disk of its own.
+--
+-- They are appended to the menu only when a bridge is actually listening, so
+-- a wizard without one sees exactly the MUD-command menu and nothing that
+-- would fail if clicked.
+M.FERRY_ACTIONS = {
+  { key = "ferry-pull", label = "pull", desc = "ferry: MUD -> local mirror", op = "pull" },
+  { key = "ferry-push", label = "push", desc = "ferry: local mirror -> MUD",  op = "push",
+    kind = "danger", confirm = true },
+  { key = "ferry-cc",   label = "cc!",  desc = "ferry: compile-check remotely", op = "cc" },
+}
+
 -- ---- viewing ---------------------------------------------------------------
 
 -- `more` sends the file through the ordinary output stream, so highlighting it
@@ -392,6 +409,15 @@ function M.file_menu(path, anchor)
     local spec = M.FILE_ACTIONS[i]
     items[i] = { label = spec.label, desc = spec.desc, value = spec.key, kind = spec.kind }
   end
+  -- Only when a bridge answers. An entry that cannot work should not be on
+  -- the menu at all: a greyed-out row still invites the click.
+  if ferry.available() then
+    for i = 1, #M.FERRY_ACTIONS do
+      local spec = M.FERRY_ACTIONS[i]
+      items[#items + 1] = { label = spec.label, desc = spec.desc,
+                            value = spec.key, kind = spec.kind }
+    end
+  end
   -- Always a way out that does not depend on hitting the strip of pane
   -- outside the box -- which a full-width menu barely leaves -- and there is
   -- no Escape to fall back on: bind is not in the plugin sandbox.
@@ -406,6 +432,19 @@ function M.file_menu(path, anchor)
     items = items,
     on_select = function(value)
       if value == "" then return end
+      for i = 1, #M.FERRY_ACTIONS do
+        local spec = M.FERRY_ACTIONS[i]
+        if spec.key == value then
+          -- push overwrites what is on the MUD with what is on disk, which is
+          -- not a click's worth of consequence on its own.
+          if spec.confirm then
+            M.confirm_ferry(spec.op, path, anchor)
+          else
+            ferry.run(spec.op, path)
+          end
+          return
+        end
+      end
       for i = 1, #M.FILE_ACTIONS do
         local spec = M.FILE_ACTIONS[i]
         if spec.key == value then
@@ -500,6 +539,23 @@ function M.confirm_command(label, command, anchor)
     },
     on_select = function(value)
       if value == "yes" then mud.send(command) end
+    end,
+  })
+  return true
+end
+
+-- The same box as confirm_command, for a ferry verb rather than a MUD one.
+function M.confirm_ferry(op, path, anchor)
+  overlay.open({
+    title = "Are you sure?",
+    anchor = anchor,
+    items = {
+      { label = "no",  value = "no",  desc = "leave it alone", kind = "cancel" },
+      { label = "yes", value = "yes", kind = "danger",
+        desc = "ferry " .. op .. " " .. (path:match("([^/]+)$") or path) },
+    },
+    on_select = function(value)
+      if value == "yes" then ferry.run(op, path) end
     end,
   })
   return true

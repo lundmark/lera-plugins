@@ -264,10 +264,16 @@ check("buttons: then the directory actions",
       tostring(drawn_text(12, 1)) .. "," .. tostring(drawn_text(20, 1)))
 do
   local theme = require("theme")
-  check("buttons: navigation is coloured as navigation, actions as actions",
-        drawn_raw(1, 1):find(theme.DIR, 1, true) ~= nil and
-        drawn_raw(12, 1):find(theme.BUTTON, 1, true) ~= nil,
+  -- Dim brackets, coloured word: blue for the buttons that move you, white
+  -- for the ones that act. The toolbar is permanent furniture, so it recedes.
+  check("buttons: navigation and actions are coloured apart",
+        drawn_raw(1, 1):find(theme.NAV, 1, true) ~= nil and
+        drawn_raw(12, 1):find(theme.BUTTON, 1, true) ~= nil and
+        theme.NAV ~= theme.BUTTON,
         "moving somewhere and recompiling something must not look alike")
+  check("buttons: the brackets recede",
+        drawn_raw(1, 1):find(theme.BRACKET, 1, true) == 1,
+        tostring(drawn_raw(1, 1)))
 end
 
 -- ---- navigating up and home ------------------------------------------------

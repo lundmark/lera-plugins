@@ -42,7 +42,15 @@ M.BACKUP  = "\27[31m"   -- red
 M.PLAIN   = ""          -- terminal default
 
 -- Chrome, kept here so the pane has one palette rather than two.
-M.BUTTON  = "\27[93m"   -- bright yellow
+--
+-- Toned down deliberately: the toolbar is always on screen and never the
+-- thing you came to read. Its brackets recede to dim and only the word keeps
+-- a colour -- blue for the two that MOVE you, plain white for the two that DO
+-- something, matching the menu's own command colour. Bright yellow made a
+-- permanent row shout over the listing it sits above.
+M.BRACKET = "\27[90m"   -- dim: the [ ] around a button
+M.BUTTON  = "\27[37m"   -- white: an action button's word
+M.NAV     = "\27[34m"   -- blue: a navigation button's word
 M.NOTICE  = "\27[90m"   -- dim
 
 -- Menu rows are two columns: the command, then what it does. The command is

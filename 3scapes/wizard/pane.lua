@@ -253,11 +253,17 @@ function M.render(rect, opts)
 
   local cells, brows = buttons(w, h)
   for i = 1, #cells do
-    -- Navigation takes the directory colour, so the two buttons that MOVE you
-    -- read as the same kind of thing as the folders below them.
-    local color = cells[i].nav and theme.DIR or theme.BUTTON
-    ui.text_ansi(ui.rect(x + cells[i].x, y, #cells[i].text, 1),
-                 theme.paint(cells[i].text, color))
+    -- Brackets dim, word coloured: navigation blue, actions white. Drawn as
+    -- three runs rather than one so the punctuation can recede while the word
+    -- stays legible -- the toolbar is permanent furniture and should not
+    -- compete with the listing under it.
+    local cell = cells[i]
+    local word = cell.text:sub(2, #cell.text - 1)
+    local color = cell.nav and theme.NAV or theme.BUTTON
+    ui.text_ansi(ui.rect(x + cell.x, y, #cell.text, 1),
+                 theme.paint("[", theme.BRACKET) ..
+                 theme.paint(word, color) ..
+                 theme.paint("]", theme.BRACKET))
   end
 
   -- The grid gets what the button row leaves. Only the VISIBLE height changes:

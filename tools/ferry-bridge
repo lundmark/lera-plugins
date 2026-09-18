@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""ferry-bridge -- run ferry on behalf of Lera's wizard file pane.
+
+A Lera plugin cannot reach the disk or the network: its sandbox grants four
+os functions (time, date, clock, difftime) and no io, no os.execute
+(lera/src/script/plugin.c). What it does have is `ipc`, a Unix-domain socket
+transport, and this is the process on the other end of it -- the one thing
+with a shell.
+
+    Files pane  --ipc-->  ferry-bridge  --exec-->  ferry pull players/x/foo.c
+
+Run it from your mirror checkout, or point it at one:
+
+    cd ~/3S && ferry-bridge
+    ferry-bridge --root ~/3S
+    LERA_FERRY_ROOT=~/3S ferry-bridge
+
+It reads YOUR existing ferry setup rather than having one of its own: ferry
+resolves .ferry.toml from the working directory, so the bridge simply runs it
+there. No second config, no credentials passing through Lera.
+
+Protocol (lera/src/ipc/ipc.c): each message is a 4-byte big-endian length
+followed by JSON. A connecting peer introduces itself with {"_ipc_name":...}.
+
+    -> {"id": 7, "op": "pull", "path": "/players/shaman/cmd/shgather.c"}
+    <- {"id": 7, "ok": true, "op": "pull", "output": "pulled ...", "status": 0}
+
+Only three verbs are accepted, each with one path. There is deliberately no
+way to pass a command string: this process holds a shell and the pane does
+not get to use it.
+"""
+
+import argparse
+import json
+import os
+import socket
+import struct
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
+SOCKET_DIR = Path.home() / ".lera" / "ipc"
+DEFAULT_NAME = "ferry-bridge"
+HEADER = struct.Struct("!I")
+MAX_MSG = 64 * 1024          # IPC_MSG_MAX_SIZE
+TIMEOUT = 120                # a push of a large tree is slow, but not endless
+
+# The whole of what this process will run. A verb not in here is refused, and
+# nothing is ever passed to a shell -- every call below is an argv list.
+VERBS = {
+    "pull": ["pull"],
+    "push": ["push"],
+    "cc":   ["cc"],
+}
+
+
+def log(msg):
+    print(f"[ferry-bridge] {msg}", flush=True)
+
+
+def find_root(explicit):
+    """The mirror checkout: an explicit path, the env var, or the first
+    ancestor of the working directory holding a .ferry.toml -- the same file
+    ferry itself resolves."""
+    candidates = []
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+    env = os.environ.get("LERA_FERRY_ROOT")
+    if env:
+        candidates.append(Path(env).expanduser())
+
+    for candidate in candidates:
+        if (candidate / ".ferry.toml").is_file():
+            return candidate.resolve()
+        raise SystemExit(f"no .ferry.toml in {candidate}")
+
+    here = Path.cwd().resolve()
+    for directory in [here, *here.parents]:
+        if (directory / ".ferry.toml").is_file():
+            return directory
+    raise SystemExit(
+        "no .ferry.toml here or above. Run this from your mirror checkout, "
+        "or pass --root / set LERA_FERRY_ROOT."
+    )
+
+
+def local_path(root, mud_path):
+    """A MUD path as the pane knows it -> a path inside the mirror.
+
+    The mirror mirrors the MUD tree (remote_root = "/"), so this is just the
+    leading slash. The checking is the point: the path arrives from a GMCP
+    listing by way of a mouse click, and this process is the one that must not
+    trust it. Anything that resolves outside the root is refused, symlinks
+    included -- hence resolve() before the comparison.
+    """
+    if not isinstance(mud_path, str) or not mud_path.startswith("/"):
+        return None, "path must be absolute"
+    if "\0" in mud_path:
+        return None, "path contains a null"
+
+    relative = mud_path.lstrip("/")
+    if not relative:
+        return None, "path is the root"
+
+    resolved = (root / relative).resolve()
+    if resolved != root and root not in resolved.parents:
+        return None, "path resolves outside the mirror"
+    return relative, None
+
+
+def run_ferry(root, verb, relative):
+    argv = ["ferry", *VERBS[verb], relative]
+    try:
+        done = subprocess.run(
+            argv, cwd=root, capture_output=True, text=True, timeout=TIMEOUT
+        )
+    except FileNotFoundError:
+        return False, "ferry is not on PATH", -1
+    except subprocess.TimeoutExpired:
+        return False, f"ferry {verb} timed out after {TIMEOUT}s", -1
+
+    output = (done.stdout or "") + (done.stderr or "")
+    return done.returncode == 0, output.strip(), done.returncode
+
+
+def handle(root, request):
+    op = request.get("op")
+    if op not in VERBS:
+        return {"ok": False, "output": f"unknown op {op!r}"}
+
+    relative, why = local_path(root, request.get("path"))
+    if why:
+        return {"ok": False, "op": op, "output": why}
+
+    ok, output, status = run_ferry(root, op, relative)
+    log(f"{op} {relative} -> {'ok' if ok else 'FAILED'}")
+    return {"ok": ok, "op": op, "path": request.get("path"),
+            "output": output, "status": status}
+
+
+def read_exactly(conn, count):
+    chunks = b""
+    while len(chunks) < count:
+        piece = conn.recv(count - len(chunks))
+        if not piece:
+            return None
+        chunks += piece
+    return chunks
+
+
+def send(conn, payload):
+    body = json.dumps(payload).encode("utf-8")
+    conn.sendall(HEADER.pack(len(body)) + body)
+
+
+def serve_peer(root, conn):
+    peer = "?"
+    try:
+        while True:
+            header = read_exactly(conn, HEADER.size)
+            if header is None:
+                break
+            (length,) = HEADER.unpack(header)
+            if length == 0 or length > MAX_MSG:
+                log(f"refusing a {length}-byte frame from {peer}")
+                break
+            body = read_exactly(conn, length)
+            if body is None:
+                break
+
+            try:
+                request = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                log(f"unparseable frame from {peer}")
+                continue
+            if not isinstance(request, dict):
+                continue
+
+            # The introduction lera sends on connect, not a request.
+            if "_ipc_name" in request:
+                peer = str(request["_ipc_name"])[:64]
+                log(f"{peer} connected")
+                continue
+
+            reply = handle(root, request)
+            if "id" in request:
+                reply["id"] = request["id"]
+            send(conn, reply)
+    except (ConnectionResetError, BrokenPipeError, OSError):
+        pass
+    finally:
+        conn.close()
+        log(f"{peer} disconnected")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run ferry for Lera's file pane.")
+    parser.add_argument("--root", help="mirror checkout holding .ferry.toml")
+    parser.add_argument("--name", default=DEFAULT_NAME,
+                        help=f"IPC name (socket ~/.lera/ipc/<name>.sock, default {DEFAULT_NAME})")
+    args = parser.parse_args()
+
+    root = find_root(args.root)
+    SOCKET_DIR.mkdir(parents=True, exist_ok=True)
+    path = SOCKET_DIR / f"{args.name}.sock"
+
+    # A socket left behind by a crash would otherwise make the plugin think a
+    # bridge is listening. Probe before removing, so a live one is never
+    # yanked out from under a running session.
+    if path.exists():
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            probe.connect(str(path))
+        except OSError:
+            path.unlink()
+        else:
+            probe.close()
+            raise SystemExit(f"a bridge is already listening on {path}")
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(path))
+    os.chmod(path, 0o600)   # this process runs commands; keep it to its owner
+    server.listen(4)
+    log(f"mirror: {root}")
+    log(f"listening on {path} (verbs: {', '.join(sorted(VERBS))})")
+
+    try:
+        while True:
+            conn, _ = server.accept()
+            threading.Thread(target=serve_peer, args=(root, conn), daemon=True).start()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.close()
+        path.unlink(missing_ok=True)
+        log("stopped")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
