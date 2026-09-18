@@ -187,6 +187,38 @@ function pagelib.kv(width, label, value, value_color)
   return pagelib.trunc(raw, width)
 end
 
+-- Wrap a list of already-coloured parts under `label`, breaking BETWEEN
+-- parts so an escape sequence is never split and a name is never cut
+-- mid-word. Continuation lines are indented to the label's width, so the
+-- list reads as one block. Returns an array of lines.
+--
+-- kv() truncates, which is right for a single value but silently ate the
+-- tail of the long comma-joined lists (civic buildings, consumption) --
+-- "Poorhouse" arriving as "Poorhous" with the rest of the list gone.
+function pagelib.wrap_parts(width, label, parts, sep)
+  sep = sep or ", "
+  local lines = {}
+  if #parts == 0 then return lines end
+  local indent = string.rep(" ", #label + 1)
+  local head = pagelib.C.dim .. label .. pagelib.RESET .. " "
+  local cur, cur_w = head, #label + 1
+  local first = true
+  for _, part in ipairs(parts) do
+    local pw = pagelib.visible_width(part)
+    local sw = first and 0 or #sep
+    if not first and cur_w + sw + pw > width then
+      lines[#lines + 1] = cur
+      cur, cur_w = indent, #indent
+      sw = 0
+    end
+    cur = cur .. (sw > 0 and sep or "") .. part
+    cur_w = cur_w + sw + pw
+    first = false
+  end
+  if cur_w > #indent then lines[#lines + 1] = cur end
+  return lines
+end
+
 -- cols: array of { title = string, w = number | "*" } -- exactly one "*"
 -- column takes the leftover width. Returns an array: one header row
 -- (titles, dim) followed by one row per entry in `rows` (each entry an

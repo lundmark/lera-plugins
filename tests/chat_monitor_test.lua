@@ -39,10 +39,6 @@ trigger = {
   add = function() return 1 end,
   remove = function() end,
 }
-trigger = {
-  add = function() return 1 end,
-  remove = function() end,
-}
 local mip_handlers = {}
 mip = {
   on = function(code, fn) mip_handlers[code] = fn; return code end,
@@ -1170,6 +1166,233 @@ for y = 0, hanging_rect.h - 1 do
   check("hanging_remote_matches", remote_hanging[y] == hanging_rows[y])
 end
 render_pass = "local"
+
+-- Native GUI selection captures all locally formatted history rows, including
+-- rows above the visible pane. Remote rendering cannot replace that geometry.
+do
+  check("native_history_provider_exists", type(reloaded.selection_source) == "function")
+  if reloaded.selection_source then
+    local pane = {x=7, y=9, w=28, h=3}
+    reloaded.clear()
+    reloaded.set_timestamps(false)
+    reloaded.set_text_color("white")
+    reloaded.configure("tell_in", {color="bright_cyan"})
+    for i = 1, 7 do reloaded.receive("tell_in", "Bob", "native row " .. i, "Bob:") end
+    drawn = {}
+    reloaded.render(pane, {show_border=false})
+    local source = reloaded.selection_source(pane)
+    local b = source.bounds
+    check("native_history_borderless_bounds",
+          b.x == 7 and b.y == 9 and b.w == 28 and b.h == 3)
+    check("native_history_includes_offscreen_rows", #source.rows == 7, #source.rows)
+    check("native_history_oldest_first", plain(source.rows[1].text) == "Bob: native row 1",
+          plain(source.rows[1].text))
+    check("native_history_bottom_at_tail", source.bottom == 7, source.bottom)
+    check("native_history_matches_local_render", source.rows[7].text == drawn[11],
+          source.rows[7].text)
+    check("native_history_preserves_prefix_and_body_colors",
+          source.rows[7].text:find("\027[96mBob:", 1, true) and
+          source.rows[7].text:find("\027[37mnative row 7", 1, true), source.rows[7].text)
+    reloaded.scroll(-2)
+    source = reloaded.selection_source(pane)
+    check("native_history_bottom_uses_local_scroll", source.bottom == 5, source.bottom)
+
+    reloaded.scroll_to_bottom()
+    reloaded.render(pane, {show_border=true})
+    source = reloaded.selection_source(pane)
+    b = source.bounds
+    check("native_history_bordered_bounds",
+          b.x == 8 and b.y == 10 and b.w == 26 and b.h == 1)
+    local methods = {
+      x=function() return 7 end, y=function() return 9 end,
+      w=function() return 28 end, h=function() return 3 end,
+    }
+    local method_source = reloaded.selection_source(methods)
+    check("native_history_accepts_rect_methods", method_source.bounds.x == b.x and
+          method_source.bounds.y == b.y and method_source.bounds.w == b.w)
+    check("native_history_rejects_empty_content",
+          reloaded.selection_source({x=0,y=0,w=2,h=2}) == nil)
+
+    render_pass = "remote"
+    reloaded.render({x=0,y=0,w=10,h=5}, {show_border=false})
+    render_pass = "local"
+    local after_remote = reloaded.selection_source(pane)
+    check("native_history_remote_render_preserves_bounds",
+          after_remote.bounds.x == b.x and after_remote.bounds.w == b.w)
+    check("native_history_remote_render_preserves_rows",
+          after_remote.rows[7].text == source.rows[7].text and after_remote.bottom == source.bottom)
+
+    reloaded.clear()
+    reloaded.receive("tell_in", "Bob", "one two three four five six seven eight nine ten", "Bob:")
+    drawn = {}
+    reloaded.render(pane, {show_border=false})
+    source = reloaded.selection_source(pane)
+    local same_rows = true
+    for i, row in ipairs(source.rows) do
+      if row.text ~= drawn[pane.y+pane.h-#source.rows+i-1] then same_rows = false end
+      if row.group ~= nil then same_rows = false end
+    end
+    check("native_history_continuations_match_display_rows", #source.rows > 1 and same_rows)
+    check("native_history_preserves_continuation_indent",
+          plain(source.rows[2].text):sub(1,2) == "  ", plain(source.rows[2].text))
+
+    check("native_history_has_validity_contract", type(source.valid) == "function")
+    check("native_history_has_finish_contract", type(source.finish) == "function")
+    if source.valid and source.finish then
+      local function live_rows()
+        drawn = {}
+        reloaded.render(pane, {show_border=false})
+        return drawn
+      end
+      local function reset_history()
+        reloaded.clear()
+        reloaded.set_max_lines(100)
+        for i = 1, 8 do reloaded.receive("tell_in", "Bob", "history " .. i, "Bob:") end
+        live_rows()
+        return reloaded.selection_source(pane)
+      end
+      local function bottom_text()
+        return plain(live_rows()[pane.y+pane.h-1])
+      end
+
+      source = reset_history()
+      local history = real_require("history_selection")
+      local selection = history.new(source,
+          pane.x+#plain(source.rows[8].text)-1, pane.y+pane.h-1)
+      selection:scroll(-5)
+      selection:update(pane.x, pane.y)
+      local expected = {}
+      for i = 1, 8 do expected[i] = "Bob: history " .. i end
+      expected = table.concat(expected, "\n")
+      check("native_history_selection_copies_offscreen_rows", selection:copy() == expected,
+            selection:copy())
+      reloaded.set_max_lines(8)
+      reloaded.receive("tell_in", "Bob", "history 9", "Bob:")
+      check("native_history_automatic_append_trim_keeps_snapshot_valid", source.valid())
+      check("native_history_selection_copy_survives_eviction", selection:copy() == expected)
+      source.finish(selection, "cancel")
+      check("native_history_selection_restores_offscreen_view", bottom_text() == "Bob: history 3",
+            bottom_text())
+
+      source = reset_history()
+      local frozen_text = source.rows[1].text
+      reloaded.receive("tell_in", "Bob", "history 9", "Bob:")
+      check("native_history_append_keeps_snapshot_valid", source.valid())
+      check("native_history_append_keeps_snapshot_immutable",
+            #source.rows == 8 and source.rows[1].text == frozen_text)
+      reloaded.set_max_lines(6)
+      check("native_history_trim_keeps_snapshot_valid", source.valid())
+      check("native_history_trim_keeps_evicted_text", source.rows[1].text == frozen_text)
+      source.finish({bottom=5,moved=true}, "cancel")
+      check("native_history_finish_restores_retained_identity", bottom_text() == "Bob: history 5",
+            bottom_text())
+      check("native_history_finish_preserves_scrolled_state", not reloaded.following_tail())
+
+      source = reset_history()
+      reloaded.set_max_lines(3)
+      source.finish({bottom=3,moved=true}, "cancel")
+      check("native_history_finish_clamps_evicted_identity_to_oldest",
+            bottom_text() == "Bob: history 6", bottom_text())
+
+      source = reset_history()
+      reloaded.receive("tell_in", "Bob", "history 9", "Bob:")
+      source.finish({bottom=source.bottom,moved=false}, "cancel")
+      check("native_history_no_scroll_cancel_preserves_selected_view",
+            bottom_text() == "Bob: history 8" and not reloaded.following_tail(), bottom_text())
+
+      source = reset_history()
+      reloaded.receive("tell_in", "Bob", "history 9", "Bob:")
+      source.finish({bottom=source.bottom,moved=false}, "escape")
+      check("native_history_no_scroll_escape_returns_to_tail",
+            bottom_text() == "Bob: history 9" and reloaded.following_tail(), bottom_text())
+
+      source = reset_history()
+      reloaded.receive("tell_in", "Bob", "history 9", "Bob:")
+      source.finish({bottom=4,moved=true}, "escape")
+      check("native_history_scrolled_escape_returns_to_original_tail_mode",
+            bottom_text() == "Bob: history 9" and reloaded.following_tail(), bottom_text())
+
+      reset_history()
+      reloaded.scroll(-2)
+      source = reloaded.selection_source(pane)
+      reloaded.receive("tell_in", "Bob", "history 9", "Bob:")
+      source.finish({bottom=4,moved=true}, "escape")
+      check("native_history_escape_preserves_view_when_started_off_tail",
+            bottom_text() == "Bob: history 4" and not reloaded.following_tail(), bottom_text())
+
+      source = reset_history()
+      reloaded.scroll(-1)
+      check("native_history_explicit_scroll_invalidates", not source.valid())
+      source.finish({bottom=3,moved=true}, "cancel")
+      check("native_history_finish_respects_newer_explicit_scroll", bottom_text() == "Bob: history 7",
+            bottom_text())
+      source.finish({bottom=3,moved=true}, "escape")
+      check("native_history_escape_respects_newer_explicit_scroll", bottom_text() == "Bob: history 7")
+
+      source = reloaded.selection_source(pane)
+      reloaded.scroll_to_bottom()
+      check("native_history_explicit_tail_invalidates", not source.valid())
+      source.finish({bottom=3,moved=true}, "cancel")
+      check("native_history_finish_respects_explicit_tail", reloaded.following_tail())
+
+      source = reset_history()
+      reloaded.scroll_to_bottom()
+      check("native_history_explicit_tail_at_tail_still_invalidates", not source.valid())
+
+      source = reset_history()
+      reloaded.clear()
+      check("native_history_clear_invalidates", not source.valid())
+      reloaded.receive("tell_in", "Bob", "replacement", "Bob:")
+      live_rows()
+      source.finish({bottom=3,moved=true}, "cancel")
+      check("native_history_clear_cannot_restore_reused_cache_position",
+            bottom_text() == "Bob: replacement" and reloaded.following_tail())
+
+      source = reset_history()
+      local source_text = source.rows[8].text
+      reloaded.render({x=pane.x,y=pane.y,w=15,h=pane.h}, {show_border=false})
+      check("native_history_local_width_invalidates", not source.valid())
+      live_rows()
+      check("native_history_width_restore_does_not_revive_snapshot", not source.valid())
+      check("native_history_width_keeps_snapshot_text", source.rows[8].text == source_text)
+      source.finish({bottom=3,moved=true}, "cancel")
+      check("native_history_invalid_width_finish_does_not_scroll", reloaded.following_tail())
+
+      source = reset_history()
+      render_pass = "remote"
+      reloaded.render({x=0,y=0,w=10,h=4}, {show_border=true})
+      render_pass = "local"
+      check("native_history_remote_width_and_border_keep_snapshot_valid", source.valid())
+      check("native_history_remote_render_keeps_local_scroll", reloaded.following_tail())
+
+      reloaded.render(pane, {show_border=true})
+      check("native_history_local_border_change_invalidates", not source.valid())
+
+      local changes = {
+        {"type_color", function() reloaded.set_color("tell_in", "yellow") end},
+        {"prefix", function() reloaded.configure("tell_in", {prefix=function() return "CUSTOM:" end}) end},
+        {"timestamps", function() reloaded.set_timestamps(true) end},
+        {"body_color", function() reloaded.set_text_color("yellow") end},
+        {"type_enabled", function() reloaded.configure("tell_in", {enabled=true}) end},
+        {"channel_format", function() reloaded.add_chatline("wiz", {color="yellow"}) end},
+        {"channel_enabled", function() reloaded.add_chatline("wiz", {enabled=true}) end},
+        {"type_toggle", function() reloaded.enable("tell_in") end},
+        {"source", function() reloaded.set_source("mip") end},
+        {"add_gag", function() reloaded.add_gag("tell_in", "selection-test-gag") end},
+        {"remove_gag", function() reloaded.remove_gag("tell_in", "selection-test-gag") end},
+      }
+      for _, change in ipairs(changes) do
+        source = reset_history()
+        change[2]()
+        check("native_history_configuration_" .. change[1] .. "_invalidates", not source.valid())
+        live_rows()
+        source.finish({bottom=3,moved=true}, "cancel")
+        check("native_history_configuration_" .. change[1] .. "_finish_does_not_scroll",
+              reloaded.following_tail())
+      end
+    end
+  end
+end
 
 print(failures == 0 and "ALL PASS" or (failures .. " FAILURES"))
 os.exit(failures == 0 and 0 or 1)

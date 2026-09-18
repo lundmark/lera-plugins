@@ -337,8 +337,8 @@ end
 -- Wrapped-line cache: a deque so trimming old messages never shifts the array.
 -- Rebuilt in full when the render width changes; appended to incrementally.
 -- Entries: { text, color_code, is_continuation }
-local selection_revision = 0
 local wrapped = { width = nil, lines = {}, first = 1, last = 0 }
+local selection_generation = 0
 
 local sc = wm.make_scroller({
   count = function() return wrapped.last - wrapped.first + 1 end,
@@ -836,6 +836,7 @@ local function word_wrap(text, width, indent)
 end
 
 function wrapped_reset()
+  selection_generation = selection_generation + 1
   wrapped.width = nil
   wrapped.lines = {}
   wrapped.first = 1
@@ -1147,6 +1148,7 @@ end
 
 local function invalidate_wrapped_formatting()
   companion_epoch = companion_epoch + 1
+  selection_generation = selection_generation + 1
   wrapped.width = nil
 end
 
@@ -1174,6 +1176,7 @@ function M.set_source(mode)
   if mode ~= "auto" and mode ~= "mip" and mode ~= "gmcp" then
     return false, "source must be auto, mip or gmcp"
   end
+  selection_generation = selection_generation + 1
   source.mode = mode
   if mode == "mip" then
     source.active = "mip"
@@ -1197,6 +1200,7 @@ function M.configure(type_id, opts)
   if not line_types[type_id] then
     return false  -- Type doesn't exist
   end
+  selection_generation = selection_generation + 1
   if opts.color then line_types[type_id].color = opts.color end
   if opts.label then line_types[type_id].label = opts.label end
   if opts.prefix then line_types[type_id].prefix = opts.prefix end
@@ -1215,6 +1219,7 @@ end
 function M.add_chatline(id, opts)
   opts = opts or {}
   local type_id = "chat_" .. id
+  selection_generation = selection_generation + 1
 
   if line_types[type_id] then
     -- Update existing
@@ -1240,6 +1245,7 @@ end
 -- type_id: "tell_in", "tell_out", "emote_in", "emote_out", or "chat_<command>"
 function M.toggle(type_id, enabled)
   if line_types[type_id] then
+    selection_generation = selection_generation + 1
     if enabled == nil then
       line_types[type_id].enabled = not line_types[type_id].enabled
     else
@@ -1282,6 +1288,7 @@ end
 -- pattern: Lua pattern to match against sender or text
 function M.add_gag(type_id, pattern)
   if line_types[type_id] then
+    selection_generation = selection_generation + 1
     table.insert(line_types[type_id].gags, pattern)
     return true
   end
@@ -1293,6 +1300,7 @@ function M.remove_gag(type_id, pattern)
   if line_types[type_id] then
     for i, p in ipairs(line_types[type_id].gags) do
       if p == pattern then
+        selection_generation = selection_generation + 1
         table.remove(line_types[type_id].gags, i)
         return true
       end
@@ -1327,14 +1335,14 @@ local pointer_border = 1
 
 -- Scroll the chat pane by wrapped rows. delta < 0 = up/older.
 function M.scroll(delta)
-  selection_revision = selection_revision + 1
   link_capture = nil
+  selection_generation = selection_generation + 1
   sc.scroll(delta)
 end
 
 function M.scroll_to_bottom()
-  selection_revision = selection_revision + 1
   link_capture = nil
+  selection_generation = selection_generation + 1
   sc.scroll_to_bottom()
 end
 
@@ -1438,18 +1446,55 @@ function companion_provider.page(req)
 end
 function M.companion_source() return companion_provider end
 
--- Draw one already-wrapped row (or nothing, if line is nil) at screen row y.
--- Shared by the local (cached) and remote (transient) render paths so the
--- ANSI/indicator formatting can't drift between them.
+-- Shared by local/remote rendering and immutable selection snapshots so color
+-- and continuation indentation stay identical.
+local function row_text(line)
+  return line.color_code .. string.rep(" ", line.indent or 0)
+      .. line.text .. colors.reset
+end
+
 local function draw_row(x, y, w, line)
   if not line then return end
-  local display_text
-  if line.is_continuation then
-    display_text = line.color_code .. string.rep(" ", line.indent or 0) .. line.text .. colors.reset
+  ui.text_ansi(ui.rect(x, y, w, 1), row_text(line), nil)
+end
+
+function M.selection_source(rect)
+  local x, y, w, h
+  if type(rect.x) == "function" then
+    x, y, w, h = rect:x(), rect:y(), rect:w(), rect:h()
   else
-    display_text = line.color_code .. line.text .. colors.reset
+    x, y, w, h = rect.x, rect.y, rect.w, rect.h
   end
-  ui.text_ansi(ui.rect(x, y, w, 1), display_text, nil)
+  local border = pointer_border
+  local b = {x=x+border, y=y+border, w=w-2*border, h=h-2*border}
+  if b.w <= 0 or b.h <= 0 then return nil end
+  wrapped_ensure(b.w)
+  local rows, entries = {}, {}
+  local first, started_at_tail = wrapped.first, sc.following_tail()
+  for i = wrapped.first, wrapped.last do
+    -- These are independently formatted display rows: continuation indentation
+    -- and word-wrap spacing prevent treating them as unmodified soft wraps.
+    rows[#rows+1] = {text=row_text(wrapped.lines[i])}
+    entries[#rows] = wrapped.lines[i]
+  end
+  local generation = selection_generation
+  local function valid() return selection_generation == generation end
+  return {bounds=b, rows=rows, bottom=#rows-sc.offset(), valid=valid,
+    finish=function(selection, reason)
+      -- Reflow/configuration changes discard the old identities; an explicit
+      -- scroll owns its newer view. Append and trim leave this generation alone.
+      if not valid() then return end
+      if reason == "escape" and started_at_tail then
+        sc.scroll_to_bottom()
+        return
+      end
+      local index = first + selection.bottom - 1
+      if wrapped.lines[index] ~= entries[selection.bottom] then
+        index = wrapped.first  -- the selected bottom row was evicted
+      end
+      local offset = math.max(0, wrapped.last-index)
+      sc.scroll(sc.offset()-offset)
+    end}
 end
 
 -- Paint h rows bottom-up. get_row(screen_row) returns the wrapped-line entry
@@ -1517,40 +1562,6 @@ local function link_at(event)
   end
 end
 
--- Optional wm history-selection provider. Keep row objects as identities for
--- returning to the live cache; snapshot strings survive append/trim unchanged.
-function M.selection_source(rect)
-  local border = pointer_border
-  local b = {x=rect.x+border, y=rect.y+border,
-    w=rect.w-2*border, h=rect.h-2*border}
-  if b.w <= 0 or b.h <= 0 then return nil end
-  wrapped_ensure(b.w)
-  local rows, identities = {}, {}
-  for i = wrapped.first, wrapped.last do
-    local row = wrapped.lines[i]
-    identities[#identities+1] = row
-    rows[#rows+1] = {text=row.color_code .. string.rep(" ", row.indent or (row.is_continuation and math.min(2, b.w-1) or 0))
-        .. row.text .. colors.reset}
-  end
-  local offset, revision = sc.offset(), selection_revision
-  local function valid()
-    return revision == selection_revision and wrapped.width == b.w
-  end
-  return {bounds=b, rows=rows, bottom=#rows-offset, valid=valid,
-    finish=function(s, kind)
-      if not s.moved or not valid() then return end
-      if kind == "escape" and offset == 0 then sc.scroll_to_bottom(); return end
-      local target = identities[s.bottom]
-      for i = wrapped.first, wrapped.last do
-        if wrapped.lines[i] == target then
-          sc.scroll(sc.offset() - (wrapped.last-i))
-          return
-        end
-      end
-      sc.scroll(-wrapped.last) -- selected row was trimmed: oldest retained row
-    end}
-end
-
 function M.on_pointer(event)
   if event.kind == "cancel" then link_capture = nil; return false end
   if event.kind == "move" then
@@ -1597,7 +1608,11 @@ end
 function M.render(rect, opts)
   opts = opts or {}
   local show_border = opts.show_border ~= false
-  if lera.render_pass() ~= "remote" then pointer_border = show_border and 1 or 0 end
+  if lera.render_pass() ~= "remote" then
+    local border = show_border and 1 or 0
+    if pointer_border ~= border then selection_generation = selection_generation + 1 end
+    pointer_border = border
+  end
   local title = opts.title or "Chat"
 
   -- Get rect dimensions

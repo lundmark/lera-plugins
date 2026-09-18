@@ -16,7 +16,8 @@
 --     holding); per-tile upkeep; spoils-if-you-win.
 --   War Captives (UNGATED -- data-gated on state.prison/state.siege having
 --     anything to show, 14020-14058) -- held/cap header, a pending-judgement
---     line, the captive roster, kin held by the foe, and siege-engine count.
+--     line, the captive roster, and kin held by the foe. The siege park is
+--     the Army page's, not this one's.
 --     Persists even with no active campaign (LEGACY's own comment).
 --   Battle (show_war_battle, 14084-14603) -- deploy/turn header; the tactical
 --     grid (dropped); command budget + Fraegd (war points); either the
@@ -179,13 +180,22 @@ end
 -- War Captives (guild_viking.lua:14020-14058, UNGATED -- data-gated)
 -- ---------------------------------------------------------------------------
 
+-- Captive roster column widths. The name column is the only one that can
+-- overflow, so its text is cut one short (ROSTER_NAME_W - 1) and a literal
+-- space appended -- see the comment in the loop.
+local ROSTER_ID_W, ROSTER_NAME_W = 5, 30
+local ROSTER_SIZE_W, ROSTER_RANK_W, ROSTER_RANSOM_W = 6, 6, 9
+
 local function prison_lines(add, width)
   local pr = S.prison
-  local sg = S.siege
+  -- Captives only. The siege park used to render here as well as on the Army
+  -- page, which draws it in full (engines held, the forge queue with per-engine
+  -- clocks, and the materials bill) -- the same three things this section was
+  -- repeating. Gating on the park too meant a player with engines but no
+  -- captives got an empty "War Captives  (0/0 held)" header, so that goes with
+  -- it.
   local have_prison = pr and ((pr.held or 0) > 0 or (pr.kin or 0) > 0 or pr.pending or (pr.cap or 0) > 0)
-  local have_siege = sg and (sg.cap or 0) > 0
-  if not have_prison and not have_siege then return end
-  if not pr then pr = { held = 0, cap = 0, kin = 0 } end
+  if not have_prison then return end
 
   add(pagelib.header(width, string.format("War Captives  (%d/%d held)", pr.held or 0, pr.cap or 0)))
 
@@ -196,21 +206,33 @@ local function prison_lines(add, width)
       pr.pend_cmd and ", commander" or "", pagelib.RESET), width))
   end
 
-  -- Captive roster: id, name, size and ransom were concatenated, so the
-  -- ransom column slid with the length of each captive's name. Fixed columns,
-  -- ransom right-aligned so the figures stack; commanders flagged in colour
-  -- rather than as a trailing ", cmdr" that pushed everything further right.
+  -- Captive roster as fixed columns with a header. trunc() pads to EXACTLY
+  -- the width it is given, so a name that fills its column leaves no gap and
+  -- the size field abuts it ("the village of Haugnesx6" -- that name is
+  -- exactly 22 cells). Every text cell is therefore truncated one short and
+  -- given an explicit separator space. Names are title-cased, the rank reads
+  -- "Cmdr" in its own column rather than as a trailing ", cmdr" that pushed
+  -- the ransom around, and the ransom is right-aligned and comma-grouped so
+  -- the figures stack.
+  if #(pr.roster or {}) > 0 then
+    add(pagelib.trunc("  " .. C.dim
+      .. pagelib.trunc("#", ROSTER_ID_W)
+      .. pagelib.trunc("Captive", ROSTER_NAME_W)
+      .. pagelib.trunc("Size", ROSTER_SIZE_W)
+      .. pagelib.trunc("Rank", ROSTER_RANK_W)
+      .. "Ransom" .. pagelib.RESET, width))
+  end
   for _, p in ipairs(pr.roster or {}) do
-    local ransom = string.format("%dd", p.val or 0)
+    local ransom = pagelib.fmt_num(p.val or 0) .. "d"
     add(pagelib.trunc(
-      "  " .. pagelib.trunc(C.dim .. tostring(p.id or 0) .. ")" .. pagelib.RESET, 5)
-      .. pagelib.trunc((p.cmd and C.yellow or C.white) .. (p.name or "?")
-                       .. pagelib.RESET, 22)
-      .. pagelib.trunc(C.dim .. "x" .. tostring(p.size or 0) .. pagelib.RESET, 6)
-      .. pagelib.trunc(p.cmd and (C.yellow .. "cmdr" .. pagelib.RESET) or "", 6)
-      .. C.dim .. "ransom " .. pagelib.RESET
-      .. string.rep(" ", math.max(0, 8 - #ransom))
-      .. C.bright_green .. ransom .. pagelib.RESET, width))
+      "  "
+      .. C.dim .. pagelib.trunc(tostring(p.id or 0) .. ")", ROSTER_ID_W) .. pagelib.RESET
+      .. (p.cmd and C.yellow or C.white)
+      .. pagelib.trunc(cc.tcase(p.name or "?"), ROSTER_NAME_W - 1) .. pagelib.RESET .. " "
+      .. C.dim .. pagelib.trunc("x" .. tostring(p.size or 0), ROSTER_SIZE_W) .. pagelib.RESET
+      .. (p.cmd and (C.yellow .. pagelib.trunc("Cmdr", ROSTER_RANK_W) .. pagelib.RESET)
+                 or string.rep(" ", ROSTER_RANK_W))
+      .. C.bright_green .. pagelib.rjust(ransom, ROSTER_RANSOM_W) .. pagelib.RESET, width))
   end
 
   if (pr.kin or 0) > 0 then
@@ -219,11 +241,6 @@ local function prison_lines(add, width)
       C.red, pr.kin, pagelib.RESET), width))
   end
 
-  if have_siege then
-    add(pagelib.trunc(string.format(
-      "%sSiege engines: %d/%d  -- 'vsiege build'; a garrison holds its walls, so breach them%s",
-      C.yellow, sg.engines or 0, sg.cap or 0, pagelib.RESET), width))
-  end
 end
 
 -- ---------------------------------------------------------------------------

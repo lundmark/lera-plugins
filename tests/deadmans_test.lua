@@ -1,9 +1,4 @@
--- deadmans unit tests. Run from the lera-plugins repo root with LERA_ROOT
--- pointing at a built Lera checkout.
---
--- The subcommand parsing used to live in alias regexes ("^deadmans\s+warning
--- \s+(\d+)$"); it is hand-written Lua now, so the argument validation is what
--- these cases are really about.
+-- Fixed 15-minute deadmans tests. Run with LuaJIT from plugins/.
 package.path = "generic/?.lua;" .. package.path
 
 local failures = 0
@@ -17,7 +12,8 @@ local function check(name, ok, detail)
 end
 
 -- ---- stubs ------------------------------------------------------------------
-local stored_data = nil
+local stored_data = { config = { warning_time = 60, block_time = 7200, antiidle_time = 60 } }
+local initial_data = stored_data
 local saves = 0
 store = {
   load = function() end,
@@ -34,16 +30,17 @@ lera = {
 
 -- The one-second tick is where the push transitions are detected, so the test
 -- has to be able to drive it by hand.
-local tick_fn
+local tick_fn, cancelled
 timer = {
   every = function(_, fn) tick_fn = fn return 1 end,
-  cancel = function() end,
+  cancel = function(id) cancelled = id end,
 }
 
 local mud_state = "connected"
+local raw_sends = 0
 mud = {
   state = function() return mud_state end,
-  send_raw = function() return true end,
+  send_raw = function() raw_sends = raw_sends + 1 return true end,
 }
 
 -- Fake push_notify. Records what each channel was told, and which channels
@@ -111,141 +108,71 @@ local function run(args)
   return table.concat(printed, "\n")
 end
 
--- ---- registration -----------------------------------------------------------
+-- Read-only status and immutable thresholds, including stale saved settings.
 check("registers_command", spec ~= nil)
-check("takes_args", spec and spec.accepts_args == true)
-check("has_summary", spec and type(spec.summary) == "string" and #spec.summary > 0)
-check("usage_is_slash_form", spec and spec.usage:sub(1, 9) == "/deadmans", spec and spec.usage)
-
--- ---- bare and status --------------------------------------------------------
+check("takes_no_args", spec and spec.accepts_args == false)
+check("usage_is_status_only", spec and spec.usage == "/deadmans", spec and spec.usage)
 local out = run("")
 check("bare_shows_status", out:find("Status", 1, true) ~= nil, out)
-check("bare_shows_help", out:find("/deadmans reset", 1, true) ~= nil, out)
+check("status_advertises_fixed_timeout", out:find("Blocking at: 15 minutes", 1, true) ~= nil, out)
+check("no_setter_api", dm.set_warning_time == nil and dm.set_block_time == nil)
+check("no_manual_reset_api", dm.reset == nil)
+check("saved_thresholds_are_ignored", dm.get_config().warning_time == 600
+      and dm.get_config().block_time == 900)
+local config = dm.get_config()
+config.warning_time, config.block_time = 0, 0
+check("config_is_a_copy", dm.get_config().warning_time == 600 and dm.get_config().block_time == 900)
 
-out = run("status")
-check("status_shows_status", out:find("Status", 1, true) ~= nil, out)
-check("status_omits_help", out:find("/deadmans reset", 1, true) == nil, out)
+now = 1000 + 599
+check("no_warning_before_ten_minutes", not dm.is_warning() and not dm.is_active())
+check("automation_allowed_before_warning", dm.on_send("look") == "look")
+now = 1000 + 600
+check("warning_at_ten_minutes", dm.is_warning() and not dm.is_active())
+now = 1000 + 899
+check("automation_allowed_until_fifteen_minutes", dm.on_send("look") == "look")
+now = 1000 + 900
+check("blocks_at_exactly_fifteen_minutes", dm.is_active() and not dm.is_warning())
+check("automation_blocked_at_fifteen_minutes", dm.on_send("look") == nil)
+check("counts_blocked_sends", dm.blocked_count() == 1, dm.blocked_count())
 
-out = run("help")
-check("help_shows_help", out:find("/deadmans set", 1, true) ~= nil, out)
-check("help_advertises_set_not_block", out:find("/deadmans block", 1, true) == nil, out)
-check("usage_advertises_set", spec and spec.usage:find("set <min>", 1, true) ~= nil, spec and spec.usage)
+-- Even direct handler calls cannot change thresholds or reset the timer.
+for _, args in ipairs({ "set 120", "block 120", "warning 1", "reset", "antiidle on", "antiidle 1" }) do
+  run(args)
+  check("command_cannot_change_timeout_" .. args,
+        dm.get_config().warning_time == 600 and dm.get_config().block_time == 900)
+  check("command_cannot_reset_idle_" .. args, dm.get_idle_time() == 900)
+end
+now = 1000 + 3600
+tick_fn()
+check("never_sends_antiidle", raw_sends == 0, raw_sends)
+check("status_does_not_reset_idle", run(""):find("BLOCKING", 1, true) ~= nil
+      and dm.get_idle_time() == 3600)
 
--- ---- whitespace and case ----------------------------------------------------
-out = run("   status   ")
-check("trims_whitespace", out:find("Status", 1, true) ~= nil, out)
-
-out = run("STATUS")
-check("subcommand_is_case_insensitive", out:find("Status", 1, true) ~= nil, out)
-
--- ---- numeric arguments ------------------------------------------------------
-run("warning 5")
-check("warning_sets_time", dm.get_config().warning_time == 5 * 60,
-      dm.get_config().warning_time)
-
-run("block 20")
-check("block_sets_time", dm.get_config().block_time == 20 * 60,
-      dm.get_config().block_time)
-
-out = run("warning")
-check("warning_without_value_prints_usage", out:find("Usage: /deadmans warning", 1, true) ~= nil, out)
-check("warning_without_value_keeps_config", dm.get_config().warning_time == 5 * 60)
-
-out = run("block abc")
-check("block_rejects_non_numeric", out:find("Usage: /deadmans block", 1, true) ~= nil, out)
-check("block_rejects_non_numeric_keeps_config", dm.get_config().block_time == 20 * 60)
-
-out = run("warning 5 7")
-check("warning_rejects_extra_argument", out:find("Usage: /deadmans warning", 1, true) ~= nil, out)
-
--- ---- "set" is the documented name for the block threshold --------------------
-run("set 25")
-check("set_sets_block_time", dm.get_config().block_time == 25 * 60,
-      dm.get_config().block_time)
-check("set_leaves_warning_alone", dm.get_config().warning_time == 5 * 60,
-      dm.get_config().warning_time)
-
-out = run("set")
-check("set_without_value_prints_usage", out:find("Usage: /deadmans set", 1, true) ~= nil, out)
-check("set_without_value_keeps_config", dm.get_config().block_time == 25 * 60)
-
-out = run("set abc")
-check("set_rejects_non_numeric", out:find("Usage: /deadmans set", 1, true) ~= nil, out)
-check("set_rejects_non_numeric_keeps_config", dm.get_config().block_time == 25 * 60)
-
--- "block" stays accepted so an existing script or muscle-memory keeps working,
--- it is simply no longer what the help text names.
-run("block 30")
-check("block_still_accepted", dm.get_config().block_time == 30 * 60,
-      dm.get_config().block_time)
-run("set 25")
-
--- ---- a threshold change persists immediately, not only at unload ------------
-stored_data = nil
-saves = 0
-run("set 40")
-check("set_saves_immediately", saves == 1, "saves=" .. saves)
-check("set_persists_block_time", stored_data and stored_data.config
-      and stored_data.config.block_time == 40 * 60,
-      stored_data and stored_data.config and stored_data.config.block_time)
-check("set_persists_warning_time", stored_data and stored_data.config
-      and stored_data.config.warning_time == 5 * 60,
-      stored_data and stored_data.config and stored_data.config.warning_time)
-
-stored_data = nil
-saves = 0
-run("warning 8")
-check("warning_saves_immediately", saves == 1, "saves=" .. saves)
-check("warning_persists_both", stored_data and stored_data.config
-      and stored_data.config.warning_time == 8 * 60
-      and stored_data.config.block_time == 40 * 60)
-
--- A rejected argument must not write anything.
-stored_data = nil
-saves = 0
-run("set abc")
-check("rejected_value_does_not_save", saves == 0 and stored_data == nil, "saves=" .. saves)
-
-run("warning 5")
-run("set 20")
-
--- ---- activity hooks ---------------------------------------------------------
-now = 6000
+print = capture_print
 dm.on_user_input("/reconnect")
-check("local_command_counts_as_activity", dm.get_idle_time() == 0, dm.get_idle_time())
-now = 6001
+print = real_print
+check("local_command_counts_as_activity", dm.get_idle_time() == 0)
+check("input_resumes_automation", dm.on_send("look") == "look")
+check("input_clears_blocked_count", dm.blocked_count() == 0)
+now = now + 900
+print = capture_print
 dm.on_user_input("")
-check("empty_enter_counts_as_activity", dm.get_idle_time() == 0, dm.get_idle_time())
+print = real_print
+check("empty_enter_counts_as_activity", dm.get_idle_time() == 0)
 
--- ---- reset ------------------------------------------------------------------
-now = 5000
-out = run("reset")
-check("reset_reports", out:find("reset", 1, true) ~= nil, out)
-check("reset_clears_idle", dm.get_idle_time() == 0, dm.get_idle_time())
-
--- ---- unknown ----------------------------------------------------------------
-out = run("nonsense")
-check("unknown_subcommand_reported", out:find("Unknown subcommand: nonsense", 1, true) ~= nil, out)
-check("unknown_subcommand_shows_help", out:find("/deadmans status", 1, true) ~= nil, out)
-
--- ---- unload -----------------------------------------------------------------
 print = capture_print
 dm.on_unload()
 print = real_print
-check("unload_unregisters_command", #unregistered == 1, tostring(#unregistered))
-check("unload_persists_config", stored_data and stored_data.config
-      and stored_data.config.warning_time == 5 * 60
-      and stored_data.config.block_time == 20 * 60,
-      stored_data and stored_data.config and stored_data.config.block_time)
+check("unload_unregisters_command", #unregistered == 1, #unregistered)
+check("unload_cancels_timer", cancelled == 1)
+check("saved_config_is_untouched", saves == 0 and stored_data == initial_data
+      and initial_data.config.block_time == 7200)
 
 -- ---- push notifications -----------------------------------------------------
 -- The overlay is only useful to someone looking at the window, which being
 -- idle rules out. These cases are about the notification that goes out instead.
 --
--- on_unload above dropped the sink, so re-arm the plugin the way the loader
--- does. Thresholds are whatever the command cases persisted: warning at 5m,
--- blocking at 20m. The clock is re-anchored first, because on_load stamps
--- last_user_input from it and the cases above have moved it around.
+-- Reload starts a fresh idle period with the same fixed thresholds.
 local BASE = 100000
 now = BASE
 print = capture_print
@@ -274,44 +201,40 @@ local function last_push()
 end
 
 pushed = {}
-idle_for(4 * 60)
+idle_for(9 * 60)
 check("push_silent_before_the_warning", #pushed == 0, #pushed)
 
-idle_for(5 * 60)
+idle_for(10 * 60)
 check("push_on_entering_warning", #pushed == 1 and last_push().channel == "deadman_warning",
       last_push() and last_push().channel)
 check("warning_text_names_the_time_left",
-      last_push().text:find("automation stops in", 1, true) ~= nil, last_push().text)
+      last_push() and last_push().text:find("automation stops in", 1, true) ~= nil, last_push() and last_push().text)
 
-idle_for(5 * 60 + 240)
+idle_for(10 * 60 + 240)
 check("push_does_not_repeat_inside_the_interval", #pushed == 1, #pushed)
-
-idle_for(10 * 60)
-check("push_repeats_after_five_minutes", #pushed == 2
-      and last_push().channel == "deadman_warning", #pushed)
 
 -- Crossing into blocked is a state change, so it notifies at once rather than
 -- waiting out the warning channel's repeat clock.
 pushed = {}
-idle_for(20 * 60)
+idle_for(15 * 60)
 check("push_on_entering_blocked", #pushed == 1
       and last_push().channel == "deadman_triggered", last_push() and last_push().channel)
 check("triggered_text_says_sends_are_blocked",
-      last_push().text:find("blocked", 1, true) ~= nil, last_push().text)
+      last_push() and last_push().text:find("blocked", 1, true) ~= nil, last_push() and last_push().text)
 
-idle_for(20 * 60 + 60)
+idle_for(15 * 60 + 60)
 check("blocked_push_does_not_repeat_inside_the_interval", #pushed == 1, #pushed)
-idle_for(25 * 60)
+idle_for(20 * 60)
 check("blocked_push_repeats_after_five_minutes", #pushed == 2, #pushed)
 
 -- Typing ends the episode. The next idle period must notify from scratch
 -- rather than inheriting this one's repeat clock.
 pushed = {}
-now = BASE + 25 * 60
+now = BASE + 20 * 60
 print = capture_print
 dm.on_user_input("")
 print = real_print
-idle_for(25 * 60 + 5 * 60)
+idle_for(20 * 60 + 10 * 60)
 check("push_after_resume_starts_a_fresh_warning", #pushed == 1
       and last_push().channel == "deadman_warning", #pushed)
 
@@ -319,7 +242,7 @@ check("push_after_resume_starts_a_fresh_warning", #pushed == 1
 -- push_notify has its own disconnect alert.
 pushed = {}
 mud_state = "disconnected"
-idle_for(25 * 60 + 20 * 60)
+idle_for(20 * 60 + 15 * 60)
 check("push_silent_while_disconnected", #pushed == 0, #pushed)
 mud_state = "connected"
 

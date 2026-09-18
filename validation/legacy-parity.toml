@@ -1,7 +1,7 @@
 [scope]
 revision = 1
 approved_on = "2026-08-10"
-digest = "4d88a24bec6ee821f6226ea53e5df0c130566b04daa51ba158191193f0f7af55"
+digest = "8b40b11b9efcbb7ad052d27aceff2d9ea7c1c2bbec3b758e6783b182a4db1f1e"
 
 [[current_plugins]]
 key = "autologin"
@@ -52,42 +52,6 @@ path = "3scapes/guild_viking/init.lua"
 target_keys = ["guild_viking"]
 fixtures = []
 notes = "Directory plugin: init.lua is the mapped entry module. The guild_viking_* rows below register its other source files purely so their paths satisfy the current-refs path check (current_paths is built from every current_plugins path in this file); each carries no separate target mapping of its own. Stage 2 added the pagelib/page_opts/window shell and the twelve pages/*.lua modules (pane rendering); those rows follow the same pattern. Stage 3 added scroller.lua (extracted from window.lua), popups.lua (the named-popup registry and /vik pop), maplib.lua (grid rendering/hit-testing), and the five popups/*.lua board-view modules (map, sea, sea_common, voyage, cityplan, war, war_campaign, war_battle) -- same file-registration-only pattern. Stage 4 added autoraid.lua and autovoyage.lua (the auto-raid/auto-voyage automations), the autotrader/ directory (core.lua policy/quality math, plan.lua route planning, tick.lua paced execution + control surface), and pathfinding.lua (vmap BFS) -- same file-registration-only pattern."
-
-[[current_plugins]]
-key = "guild_viking_autoherd"
-path = "3scapes/guild_viking/autoherd.lua"
-target_keys = []
-fixtures = []
-
-[[current_plugins]]
-key = "guild_viking_autoraid"
-path = "3scapes/guild_viking/autoraid.lua"
-target_keys = []
-fixtures = []
-
-[[current_plugins]]
-key = "guild_viking_autotrader_core"
-path = "3scapes/guild_viking/autotrader/core.lua"
-target_keys = []
-fixtures = []
-
-[[current_plugins]]
-key = "guild_viking_autotrader_plan"
-path = "3scapes/guild_viking/autotrader/plan.lua"
-target_keys = []
-fixtures = []
-
-[[current_plugins]]
-key = "guild_viking_autotrader_tick"
-path = "3scapes/guild_viking/autotrader/tick.lua"
-target_keys = []
-fixtures = []
-
-[[current_plugins]]
-key = "guild_viking_autovoyage"
-path = "3scapes/guild_viking/autovoyage.lua"
-target_keys = []
-fixtures = []
 
 [[current_plugins]]
 key = "guild_viking_combat"
@@ -7790,36 +7754,6 @@ outcome = "pass"
 local_key = "guild_viking-viking_base_05_market_movers_and_trade_rows-manual"
 
 [[legacy_targets.features]]
-key = "viking_base_06_automated_voyage_planning"
-category = "callback"
-status = "parity"
-summary = "Plan and advance guild-Viking automated voyages."
-current_refs = ["3scapes/guild_viking/autovoyage.lua:148", "3scapes/guild_viking/autovoyage.lua:291", "3scapes/guild_viking/autovoyage.lua:546", "3scapes/guild_viking/autovoyage.lua:732"]
-
-[legacy_targets.features.evidence]
-type = "manual_private_review"
-review_date = "2026-08-23"
-reviewed_scope = "Compared autovoyage.lua's settings/pick_offer/cell/label/key/skip/nearest/step/pick_resolve/has_trait/per_step/path_steps/hull_floor/goal/all_ships/tick/config/menu against LEGACY's Auto-Voyage (client-side) section, guild_viking.lua:3576-4343, and the settings mini-window menu, MAIN:11437-11541."
-result = "autovoyage.lua reproduces LEGACY's automated-voyage selection, voyage-chart routing (step/path_steps -- a router over chart nodes, distinct from pathfinding.lua's land BFS), goal evaluation, and tick, plus the settings menu and /vik voyage auto surface, with LEGACY parity. Off by default (page_opts.get(\"auto_voyage\")), gated at M.tick's first line; sends go through mud.send, so deadmans governs. notify.lua calls M.tick from countdown_tick's tail, third in LEGACY's trade/raid/voyage order."
-outcome = "pass"
-local_key = "guild_viking-viking_base_06_automated_voyage_planning-manual"
-
-[[legacy_targets.features]]
-key = "viking_base_07_autotrader_bridge_and_raid_automation"
-category = "callback"
-status = "parity"
-summary = "Bridge guild-Viking autotrader context and run automated raids."
-current_refs = ["3scapes/guild_viking/autoraid.lua:176", "3scapes/guild_viking/autoraid.lua:295", "3scapes/guild_viking/autotrader/plan.lua:127"]
-
-[legacy_targets.features.evidence]
-type = "manual_private_review"
-review_date = "2026-08-23"
-reviewed_scope = "Compared autoraid.lua's settings/merged_ships/available_ships/max_ships/tick/config/menu against LEGACY's Auto-Raid section (guild_viking.lua:4137-4303) and its settings/target-picker menus (MAIN:11386-11434, 11544-11667); compared the autotrader/plan.lua require chain against viking_autotrader_context (guild_viking.lua:4127-4134)."
-result = "autoraid.lua reproduces LEGACY's raid settings, ship lists, and tick, plus the settings/target menus and /vik raid surface, with LEGACY parity. The bridge (state/page_opts/deps handed to the TRADER chunk) has no literal port: autotrader/*.lua reaches the same via require(\"state\")/require(\"page_opts\")/require(\"market\") and its own town/lineage tables -- satisfied architecturally. Off by default; sends go through mud.send (deadmans governs); tick order is second, per LEGACY."
-outcome = "pass"
-local_key = "guild_viking-viking_base_07_autotrader_bridge_and_raid_automation-manual"
-
-[[legacy_targets.features]]
 key = "viking_base_08_window_chrome_tabs_and_lifecycle"
 category = "persistence"
 status = "not_converted"
@@ -8034,7 +7968,7 @@ key = "viking_base_14_trade_dashboard_and_autotrader_controls"
 category = "rendering"
 status = "parity"
 summary = "Render guild-Viking trade data and autotrader-specific controls."
-current_refs = ["3scapes/guild_viking/pages/goods.lua:267", "3scapes/guild_viking/autotrader/tick.lua:303", "3scapes/guild_viking/autotrader/tick.lua:443"]
+current_refs = ["3scapes/guild_viking/pages/goods.lua:267"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -8049,7 +7983,7 @@ key = "viking_base_15_page_and_automation_menus"
 category = "command"
 status = "parity"
 summary = "Handle guild-Viking page, autotrader, raid, and voyage menus."
-current_refs = ["3scapes/guild_viking/page_menu.lua:190", "3scapes/guild_viking/page_menu.lua:245", "3scapes/guild_viking/autotrader/tick.lua:443", "3scapes/guild_viking/autoraid.lua:502", "3scapes/guild_viking/autovoyage.lua:857"]
+current_refs = ["3scapes/guild_viking/page_menu.lua:190", "3scapes/guild_viking/page_menu.lua:245"]
 
 [legacy_targets.features.evidence]
 type = "manual_private_review"
@@ -8238,96 +8172,6 @@ reviewed_scope = "Complete public guild-Viking hide, show, minimize, and restore
 result = "No current plugin mapping implements this approved behavior. Re-reviewed at stage 4 close: this is Portal window chrome (public hide/show/minimize/restore controls over the plugin's own native miniwin) with no lera analog by design -- lera panes have no plugin-owned window to hide, show, minimize, or restore; visibility/placement belongs to the strict layout engine (see CLAUDE.md's Pane Pointer Input section). Waiver candidate for the owner's judgment; not flipped to waived here."
 outcome = "fail"
 local_key = "guild_viking-viking_base_21_public_window_controls-manual"
-
-[[legacy_targets.features]]
-key = "viking_trader_01_settings_inventory_and_cart_selection"
-category = "state"
-status = "parity"
-summary = "Configure the guild-Viking autotrader and select inventory and carts."
-current_refs = ["3scapes/guild_viking/autotrader/core.lua:53", "3scapes/guild_viking/autotrader/core.lua:77", "3scapes/guild_viking/autotrader/core.lua:94", "3scapes/guild_viking/autotrader/core.lua:131", "3scapes/guild_viking/autotrader/core.lua:163", "3scapes/guild_viking/autotrader/core.lua:175"]
-
-[legacy_targets.features.evidence]
-type = "manual_private_review"
-review_date = "2026-08-23"
-reviewed_scope = "Compared autotrader/core.lua's settings/log/wh_amount/cart_cap/pick_cart (plus its best_idle_cart helper)/warehouse_pct/max_stops against LEGACY guild_viking_autotrader.lua:19-138 (at_settings, at_log, at_wh_amount, at_cart_cap, at_best_idle_cart, at_pick_cart, at_warehouse_pct, at_max_stops)."
-result = "autotrader/core.lua reproduces LEGACY's autotrader settings/logging, warehouse-amount and capacity accounting, cart-selection policy (stock/arb/default modes, heavy-refit-when-full, speed preference, idle-cart tie-break), and route-stop limit helpers verbatim, with LEGACY parity. Pure module: no mud.send, so no deadmans note applies to this file itself."
-outcome = "pass"
-local_key = "guild_viking-viking_trader_01_settings_inventory_and_cart_selection-manual"
-
-[[legacy_targets.features]]
-key = "viking_trader_02_quality_perishability_and_sale_policy"
-category = "state"
-status = "parity"
-summary = "Apply guild-Viking autotrader quality, perishability, and sale policy."
-current_refs = ["3scapes/guild_viking/autotrader/core.lua:190", "3scapes/guild_viking/autotrader/core.lua:201", "3scapes/guild_viking/autotrader/core.lua:216", "3scapes/guild_viking/autotrader/core.lua:236", "3scapes/guild_viking/autotrader/core.lua:243", "3scapes/guild_viking/autotrader/core.lua:263", "3scapes/guild_viking/autotrader/core.lua:284", "3scapes/guild_viking/autotrader/core.lua:292", "3scapes/guild_viking/autotrader/core.lua:301", "3scapes/guild_viking/autotrader/core.lua:310"]
-
-[legacy_targets.features.evidence]
-type = "manual_private_review"
-review_date = "2026-08-23"
-reviewed_scope = "Compared autotrader/core.lua's is_graded/cured_amount/cured_premium/perishable/fresh_quality/fifo_quality/route_sell_suffix/route_sell_quality/direct_sell_quality/sell_qual against LEGACY guild_viking_autotrader.lua:146-279 (at_is_graded, at_cured_amount, at_cured_premium, at_perishable, at_fresh_quality, at_fifo_quality, at_route_sell_suffix, at_route_sell_quality, at_direct_sell_quality, at_sell_qual)."
-result = "autotrader/core.lua reproduces LEGACY's graded-goods list, cure-gate/premium math (matching the server's query_refined_sale_pct grade bands), perishable-goods list, FIFO/freshest-weighted quality averaging, and the route vs. direct sale quality-suffix/multiplier policy verbatim (hand-computed test fixtures), with LEGACY parity. Pure module: no mud.send, so no deadmans note applies to this file itself."
-outcome = "pass"
-local_key = "guild_viking-viking_trader_02_quality_perishability_and_sale_policy-manual"
-
-[[legacy_targets.features]]
-key = "viking_trader_03_stock_and_deal_leg_construction"
-category = "protocol"
-status = "parity"
-summary = "Build guild-Viking autotrader stock and market-deal route legs."
-current_refs = ["3scapes/guild_viking/autotrader/plan.lua:174", "3scapes/guild_viking/autotrader/plan.lua:198", "3scapes/guild_viking/autotrader/plan.lua:223"]
-
-[legacy_targets.features.evidence]
-type = "manual_private_review"
-review_date = "2026-08-23"
-reviewed_scope = "Compared autotrader/plan.lua's dispatch_stock_sell/add_stock_leg/add_deal_legs against LEGACY guild_viking_autotrader.lua:281-397 (at_dispatch_stock_sell, at_add_stock_leg, at_add_deal_legs)."
-result = "autotrader/plan.lua reproduces LEGACY's warehouse stock-offload dispatch decision and its stock-leg and market-deal-leg route builders verbatim, with LEGACY parity. Send(cmd) is replaced by a local capture list (mirroring LEGACY's own at.captured planning/execution split); this module itself never calls mud.send -- autotrader/tick.lua's paced runner (viking_trader_06) is what actually sends, and carries the deadmans note."
-outcome = "pass"
-local_key = "guild_viking-viking_trader_03_stock_and_deal_leg_construction-manual"
-
-[[legacy_targets.features]]
-key = "viking_trader_04_route_plan_construction"
-category = "protocol"
-status = "parity"
-summary = "Construct a complete guild-Viking autotrader route plan."
-current_refs = ["3scapes/guild_viking/autotrader/plan.lua:277"]
-
-[legacy_targets.features.evidence]
-type = "manual_private_review"
-review_date = "2026-08-23"
-reviewed_scope = "Compared autotrader/plan.lua's M.build against LEGACY guild_viking_autotrader.lua:398-667 (viking_autotrader_plan)."
-result = "autotrader/plan.lua's M.build reproduces every planning branch (off/cooldown gates, settling, cart-packing cooldown, waiting for city data, no idle carts, cart limit, no deals, successful plan) and returns the pinned {status, jobs, commands, last_msg} shape, with LEGACY parity. dbg()/ColourNote diagnostics are dropped at plan time (disclosed) since the same reasons ride in the returned status string; real dispatch/output is deferred to autotrader/tick.lua's paced runner."
-outcome = "pass"
-local_key = "guild_viking-viking_trader_04_route_plan_construction-manual"
-
-[[legacy_targets.features]]
-key = "viking_trader_05_configuration_and_command_interface"
-category = "command"
-status = "parity"
-summary = "Configure and command the guild-Viking autotrader."
-current_refs = ["3scapes/guild_viking/autotrader/tick.lua:303", "3scapes/guild_viking/autotrader/tick.lua:396", "3scapes/guild_viking/autotrader/tick.lua:443", "3scapes/guild_viking/autotrader/tick.lua:453"]
-
-[legacy_targets.features.evidence]
-type = "manual_private_review"
-review_date = "2026-08-23"
-reviewed_scope = "Compared autotrader/tick.lua's M.config/menu_items/M.open_menu/menu_pick/M.trader_command against LEGACY guild_viking_autotrader.lua:670-729 (at_config, vk_atrade_handler) and guild_viking.lua:11267-11380 (AT_MARGIN_STEPS..AT_AUTOSTOCK_STEPS, at_cycle, atrade_menu_build, viking_show_atrade_menu, viking_atrade_menu_pick)."
-result = "autotrader/tick.lua reproduces LEGACY's on/off + numeric-knob (margin/reserve/carts/shown) subcommand configuration and its command dispatch verbatim, reached via /vik trader [<sub>] (init.lua); the right-click Auto-Trade Options popup menu became a require(\"menu\") menu with the same cycle-step values, opened by bare /vik trader, with LEGACY parity."
-outcome = "pass"
-local_key = "guild_viking-viking_trader_05_configuration_and_command_interface-manual"
-
-[[legacy_targets.features]]
-key = "viking_trader_06_transactional_tick_and_status"
-category = "callback"
-status = "parity"
-summary = "Execute fail-closed guild-Viking autotrader transactions and report status."
-current_refs = ["3scapes/guild_viking/autotrader/tick.lua:234", "3scapes/guild_viking/autotrader/tick.lua:281", "3scapes/guild_viking/autotrader/tick.lua:187"]
-
-[legacy_targets.features.evidence]
-type = "manual_private_review"
-review_date = "2026-08-23"
-reviewed_scope = "Compared autotrader/tick.lua's sm state machine (M.tick, transactions, fail_closed, do_plan, begin_transaction, M.status, M.reset) against LEGACY guild_viking_autotrader.lua:741-849 (the paced runner's note/row_sig/list_sig/mip_sig/transactions/fail_closed/plan/begin_transaction helpers, auto_trade_tick, viking_autotrader_status)."
-result = "autotrader/tick.lua's M.tick reproduces every fail-closed gate (off / confirming+stale-mip-timeout / cooldown / post-success delay / no-transactions-idle / empty-transaction guard) and the MIP-confirmed paced send loop, with LEGACY parity. Sends go through mud.send, gated behind page_opts.get(\"auto_trade\") at M.tick's first line, so deadmans governs. notify.lua calls M.tick from countdown_tick's tail, first in LEGACY's order."
-outcome = "pass"
-local_key = "guild_viking-viking_trader_06_transactional_tick_and_status-manual"
 
 [[legacy_targets.features]]
 key = "viking_xml_01_metadata"

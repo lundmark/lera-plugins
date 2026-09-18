@@ -557,8 +557,49 @@ local function write_campaign(parts)
     }
   end
   if type(parts.campaign_siege) == "table" then
-    S.siege = { engines = tonumber(parts.campaign_siege.engines) or 0,
-                cap = tonumber(parts.campaign_siege.capacity) or 0 }
+    local sg = parts.campaign_siege
+    -- Held, forging and merely ordered are three DIFFERENT states, and the
+    -- server says so in its own contract note (gmcp.h:322-329): "a park
+    -- reading 0/4 with three on order is not an empty one, and a client that
+    -- renders only engines/capacity cannot tell them apart". This used to
+    -- keep exactly those two fields and drop the other seven, so an order
+    -- waiting on iron looked identical to an empty park.
+    -- reserved/next_needs are flat good->int maps ("timber"/"iron"/"tools"),
+    -- so a shortfall readout needs no knowledge of the recipe.
+    local function goods(t)
+      local out = {}
+      if type(t) == "table" then
+        for k, v in pairs(t) do out[tostring(k)] = tonumber(v) or 0 end
+      end
+      return out
+    end
+    S.siege = {
+      engines    = tonumber(sg.engines) or 0,
+      -- `capacity` -> cap, the same rename S.prison does just above.
+      cap        = tonumber(sg.capacity) or 0,
+      forging    = tonumber(sg.forging) or 0,
+      queue_max  = tonumber(sg.queue_max) or 0,
+      ordered    = tonumber(sg.ordered) or 0,
+      order_max  = tonumber(sg.order_max) or 0,
+      reserved   = goods(sg.reserved),
+      next_needs = goods(sg.next_needs),
+      daler_each = tonumber(sg.daler_each) or 0,
+      -- Full forge time for one engine, the denominator for a progress bar.
+      build_secs = tonumber(sg.build_secs) or 0,
+      queue = {},
+    }
+    -- Per-engine forge clocks (sibling array, like campaign_prison_roster):
+    -- eta is seconds left and total the full forge time, so elapsed =
+    -- total - eta drives a bar exactly as pending_builds does for buildings.
+    for _, e in ipairs(parts.campaign_siege_queue or {}) do
+      if type(e) == "table" then
+        S.siege.queue[#S.siege.queue + 1] = {
+          slot  = tonumber(e.slot) or (#S.siege.queue + 1),
+          eta   = tonumber(e.eta) or 0,
+          total = tonumber(e.total) or S.siege.build_secs or 0,
+        }
+      end
+    end
   end
 
   if (tonumber(rec.active) or 0) ~= 1 then

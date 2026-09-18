@@ -64,6 +64,7 @@
 local pagelib = require("pagelib")
 local state = require("state")
 local page_opts = require("page_opts")
+local cc = require("pages.city_common")
 
 local S = state.S
 local C = pagelib.C
@@ -126,6 +127,90 @@ end
 
 -- ---------------------------------------------------------------------------
 
+local GOOD_ORDER = { "timber", "iron", "tools" }
+
+-- Siege park. Not in LEGACY's draw_page_army: the engine park only ever
+-- appeared as a single "Siege engines: n/n" line on the War page, which
+-- cannot distinguish a park that is empty from one with engines on order.
+-- The server sends the full record (gmcp.h:321-340) and warns about exactly
+-- that conflation, so it is rendered here beside the rest of the army --
+-- engines are built from a city building (Siege Workshop) like any other
+-- production line.
+local function siege_lines(add, width, sg)
+  if not sg then return end
+  if (sg.cap or 0) <= 0 and (sg.ordered or 0) <= 0 and (sg.forging or 0) <= 0 then return end
+
+  add(pagelib.header(width, string.format("Siege Engines  (%d / %d held)",
+    sg.engines or 0, sg.cap or 0)))
+
+  if (sg.forging or 0) > 0 then
+    add(pagelib.trunc(string.format("  %sForging:%s %d / %d on the line",
+      C.yellow, pagelib.RESET, sg.forging or 0, sg.queue_max or 0), width))
+
+    -- One row per engine on the line, drawn the way builds.lua draws a
+    -- building under construction: a label column, the ETA, and a progress
+    -- bar underneath from elapsed = total - eta. Falls back to the count
+    -- alone if the server sent no per-engine clocks.
+    for _, e in ipairs(sg.queue or {}) do
+      local eta   = e.eta or 0
+      local total = e.total or sg.build_secs or 0
+      add(pagelib.trunc(
+        "    " .. pagelib.trunc(C.dim .. "Engine " .. tostring(e.slot or "?")
+                                .. pagelib.RESET, 12)
+        .. (eta <= 0 and (C.bright_green .. "Finalizing...")
+                     or (C.white .. cc.fmt_time(eta))) .. pagelib.RESET, width))
+      if total > 0 and eta > 0 then
+        local elapsed = total - eta
+        if elapsed < 0 then elapsed = 0 end
+        local pct = math.floor(elapsed / total * 100 + 0.5)
+        add(pagelib.trunc("    "
+          .. pagelib.bar(width - 12, elapsed, total, C.bright_cyan)
+          .. " " .. pct .. "%", width))
+      end
+    end
+  end
+
+  if (sg.ordered or 0) > 0 then
+    add(pagelib.trunc(string.format("  %sOn order:%s %d / %d -- waiting on materials",
+      C.yellow, pagelib.RESET, sg.ordered or 0, sg.order_max or 0), width))
+
+    -- next_needs is the shortfall on the NEXT engine only; zero means that
+    -- good is already covered, so only the gaps are worth showing.
+    local short = {}
+    for _, g in ipairs(GOOD_ORDER) do
+      local n = (sg.next_needs or {})[g] or 0
+      -- Same palette and labels as every other tab: this printed the raw
+      -- wire id ("timber"), so the same good read three ways across the
+      -- client -- plain here, white on the War page, coloured and
+      -- title-cased on City/Goods/Trade.
+      if n > 0 then
+        short[#short + 1] = n .. " " .. cc.good_color(g) .. cc.good_label(g) .. pagelib.RESET
+      end
+    end
+    if #short > 0 then
+      add(pagelib.trunc("    " .. C.red .. "Next engine still needs: " .. pagelib.RESET
+        .. table.concat(short, ", "), width))
+    else
+      add(pagelib.trunc("    " .. C.bright_green .. "Materials ready" .. pagelib.RESET
+        .. C.dim .. " -- starts on the next tick" .. pagelib.RESET, width))
+    end
+
+    -- daler_each is taken UP FRONT, when the order is placed (gmcp.h:335,
+    -- add_siege_orders()), the same way vbuild commits a building's cost. So
+    -- an order on this panel is already paid for and waits only on materials
+    -- -- which is what the rows above are reporting.
+    if (sg.daler_each or 0) > 0 then
+      add(pagelib.trunc("    " .. C.dim .. string.format(
+        "%s daler each, paid when ordered", pagelib.fmt_num(sg.daler_each)) .. pagelib.RESET,
+        width))
+    end
+  end
+
+  if (sg.engines or 0) <= 0 and (sg.forging or 0) <= 0 and (sg.ordered or 0) <= 0 then
+    add(pagelib.trunc(C.dim .. "  (park empty -- 'vsiege build')" .. pagelib.RESET, width))
+  end
+end
+
 function M.lines(width)
   width = width or 80
   local lines = {}
@@ -144,6 +229,10 @@ function M.lines(width)
 
   if page_opts.get("show_army_units") then
     units_lines(add, width, a)
+  end
+
+  if page_opts.get("show_army_siege") then
+    siege_lines(add, width, S.siege)
   end
 
   return lines

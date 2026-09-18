@@ -52,7 +52,7 @@ page_opts.defaults = {
   show_bonds_list=true,
   show_ranks_standings=true, show_ranks_village_rep=true,
   show_court_consort=true, show_court_children=true,
-  show_army_levy=true, show_army_units=true,
+  show_army_levy=true, show_army_units=true, show_army_siege=true,
   show_war_battle=true, show_war_council=true, show_war_campaigns=true, show_war_houses=true,
   show_war_ascii=false,   -- War tab maps in plain ASCII like the in-game vcampaign/vbattle
                           -- text view (same glyphs + colours), instead of tiles/icons
