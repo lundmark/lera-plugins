@@ -1,0 +1,12 @@
+[package]
+name = "ferry-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "Runs ferry on behalf of Lera's wizard file pane, over a Unix socket."
+
+[dependencies]
+serde_json = "1"
+
+[profile.release]
+strip = true
+opt-level = "z"

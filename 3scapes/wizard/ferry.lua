@@ -1,10 +1,12 @@
 -- ferry, from the file pane, through a bridge process.
 --
 -- The sandbox has no disk and no shell -- four os functions and nothing else
--- (lera/src/script/plugin.c) -- so the plugin cannot run ferry itself. It can
--- open a Unix socket, though, and tools/ferry-bridge in this repo is the
--- process on the other end: it runs ferry in the mirror checkout and sends
--- back what happened.
+-- (lera/src/script/plugin.c), and plugins are Lua only: the loader resolves
+-- <name>.lua and there is no native ABI, so this cannot be pushed down into a
+-- compiled plugin either. It can open a Unix socket, though, and
+-- tools/ferry-bridge in this repo is the process on the other end: a small
+-- Rust binary that runs ferry in the mirror checkout and sends back what
+-- happened.
 --
 -- Everything here is best-effort and optional. A wizard with no bridge running
 -- sees no ferry entries at all (see available()), which is what lets this ship
@@ -90,7 +92,8 @@ end
 function M.run(op, path, cb)
   if type(op) ~= "string" or type(path) ~= "string" or path == "" then return false end
   if not ensure_connected() then
-    note("no bridge is running. Start tools/ferry-bridge in your mirror checkout.")
+    note("no bridge is running. Start tools/ferry-bridge (cargo build --release) "
+         .. "in your mirror checkout.")
     return false
   end
 

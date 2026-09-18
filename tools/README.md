@@ -23,12 +23,21 @@ ferry-bridge --root ~/3S
 LERA_FERRY_ROOT=~/3S ferry-bridge
 ```
 
+Rust rather than a script because ferry is Rust and this sits next to it: one
+static binary, no runtime to have installed. It is NOT part of ferry -- ferry
+is Simon's, and a socket server for one client does not belong in it.
+
 It uses **your existing ferry setup**: ferry resolves `.ferry.toml` from the
 working directory, so the bridge just runs it there. No second config, and no
 credentials pass through Lera. With no `--root` it walks up from the working
 directory looking for `.ferry.toml`, and refuses to start rather than guess.
 
-Python 3, standard library only. Nothing to build.
+Rust, one dependency (serde_json for the wire format). Build it once:
+
+```sh
+cd tools/ferry-bridge && cargo build --release
+# target/release/ferry-bridge
+```
 
 ## In the pane
 
