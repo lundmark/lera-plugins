@@ -87,6 +87,20 @@ local function ensure_connected()
   return true
 end
 
+-- A line for the session log, the way a plugin reports itself on load. The
+-- bridge is a process the wizard starts by hand, so "it isn't running" is a
+-- normal state that should be VISIBLE rather than silently expressed as a
+-- shorter menu -- which is indistinguishable from a bug.
+function M.status_line()
+  if not ipc or not ipc.init then
+    return "ferry: unavailable (this build has no ipc)"
+  end
+  if M.available() then
+    return "ferry: bridge ready -- pull/push/cc are on the file menu"
+  end
+  return "ferry: no bridge (start tools/ferry-bridge to get pull/push/cc)"
+end
+
 -- Send one verb for one path. Returns false when there is no bridge to send
 -- it to, so a caller can say so rather than appearing to have done something.
 function M.run(op, path, cb)

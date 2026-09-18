@@ -375,3 +375,24 @@ do
   check("ferry: push asks before overwriting the MUD",
         #sent_msgs == 1 and overlay.active(), #sent_msgs)
 end
+
+-- The bridge is a process the wizard starts by hand, so "not running" is a
+-- normal state. It has to be visible: three rows quietly missing from a menu
+-- looks exactly like something being broken.
+do
+  local ferry = require("ferry")
+
+  listed = {}
+  check("ferry: says so when no bridge is running",
+        ferry.status_line():find("no bridge", 1, true) ~= nil, ferry.status_line())
+
+  listed = { "ferry-bridge" }
+  check("ferry: says so when one is",
+        ferry.status_line():find("ready", 1, true) ~= nil, ferry.status_line())
+
+  local saved = ipc
+  ipc = nil
+  check("ferry: and says when the client has no ipc at all",
+        ferry.status_line():find("unavailable", 1, true) ~= nil, ferry.status_line())
+  ipc = saved
+end

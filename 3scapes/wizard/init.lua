@@ -11,6 +11,7 @@ M.version = "1.0"
 M.priority = 50
 
 local actions = require("actions")
+local ferry = require("ferry")
 local complete = require("complete")
 local protocol = require("protocol")
 -- Captured at load for the same reason actions.lua does it: offer() below runs
@@ -183,6 +184,7 @@ local function wiz_command(args)
     print("[wizard] home: " .. (protocol.home() or "(unknown)"))
     print("[wizard] Files.List: " ..
           (protocol.available() and "available" or "unavailable (not a wizard?)"))
+    print("[wizard] " .. ferry.status_line())
     return
   end
 
@@ -230,6 +232,12 @@ function M.on_load()
   -- Owns its own trigger (uall's confirmation prompt); registered here so the
   -- plugin has one load/unload story.
   actions.install()
+
+  -- Say once, on load, whether the ferry bridge is there. Everything else
+  -- about this plugin announces itself by existing -- the pane, the menus --
+  -- but a missing bridge shows up only as three rows that are not on a menu,
+  -- which looks exactly like something being broken.
+  print("[wizard] " .. ferry.status_line())
 
   if command and not command.get("/wiz") then
     local id, err = command.register({
