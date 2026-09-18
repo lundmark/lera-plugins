@@ -179,7 +179,13 @@ local function siege_lines(add, width, sg)
     local short = {}
     for _, g in ipairs(GOOD_ORDER) do
       local n = (sg.next_needs or {})[g] or 0
-      if n > 0 then short[#short + 1] = string.format("%d %s", n, g) end
+      -- Same palette and labels as every other tab: this printed the raw
+      -- wire id ("timber"), so the same good read three ways across the
+      -- client -- plain here, white on the War page, coloured and
+      -- title-cased on City/Goods/Trade.
+      if n > 0 then
+        short[#short + 1] = n .. " " .. cc.good_color(g) .. cc.good_label(g) .. pagelib.RESET
+      end
     end
     if #short > 0 then
       add(pagelib.trunc("    " .. C.red .. "Next engine still needs: " .. pagelib.RESET
@@ -189,11 +195,13 @@ local function siege_lines(add, width, sg)
         .. C.dim .. " -- starts on the next tick" .. pagelib.RESET, width))
     end
 
-    -- daler_each is taken when an engine STARTS and is deliberately not
-    -- reserved (gmcp.h:335), so a coin-poor order simply waits: worth saying.
+    -- daler_each is taken UP FRONT, when the order is placed (gmcp.h:335,
+    -- add_siege_orders()), the same way vbuild commits a building's cost. So
+    -- an order on this panel is already paid for and waits only on materials
+    -- -- which is what the rows above are reporting.
     if (sg.daler_each or 0) > 0 then
       add(pagelib.trunc("    " .. C.dim .. string.format(
-        "%d daler each, taken when it starts (not reserved)", sg.daler_each) .. pagelib.RESET,
+        "%s daler each, paid when ordered", pagelib.fmt_num(sg.daler_each)) .. pagelib.RESET,
         width))
     end
   end

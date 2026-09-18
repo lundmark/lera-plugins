@@ -89,6 +89,17 @@ local SHIP_STATE_ANSI = {
   repairing = C.red, voyaging = C.magenta, ["on voyage"] = C.magenta,
 }
 
+-- Ship identity: the name, plus the earned saga title when it has one. Kept
+-- as one field so a titled ship reads "Applet the Saga-Born" once, rather than
+-- printing the bare name and then repeating it on a line of its own.
+local function ship_ident(sh)
+  local out = C.bright_white .. (sh.name or "?") .. pagelib.RESET
+  if sh.saga_title and sh.saga_title ~= "" then
+    out = out .. " " .. C.magenta .. sh.saga_title .. pagelib.RESET
+  end
+  return out
+end
+
 local function longship_lines(add, width)
   add(pagelib.header(width, "Longships"))
   local ships = merged_ships()
@@ -125,14 +136,23 @@ local function longship_lines(add, width)
     -- "%-12s" would have the padding count the escape bytes and the columns
     -- would drift apart by row.
     add(pagelib.trunc(
-      C.bright_white .. string.format("%-12s", sh.name or "?") .. pagelib.RESET
+      -- Name and earned title are ONE identity field, not a name here and the
+      -- same name repeated three lines down. trunc() pads to an exact visible
+      -- width and is ANSI-aware, so the colours can sit inside the field --
+      -- which string.format("%-26s") could not do, per the note above.
+      -- 22 fits the longest real identity ("Nyckeln the Deathless", 21) and
+      -- keeps the whole row inside 80 columns with the raid count on the end.
+      pagelib.trunc(ship_ident(sh), 22)
       .. " " .. C.dim .. string.format("%-10s", tier_name) .. pagelib.RESET
       .. " " .. state_color .. string.format("%-10s", sh.state or "docked") .. pagelib.RESET
       .. "  " .. C.dim .. "Crew:" .. pagelib.RESET
       .. crew_color .. crew .. "/" .. crew_max .. pagelib.RESET
       .. (has_target and (C.dim .. " -> " .. pagelib.RESET .. C.yellow
           .. (sh.target or "") .. pagelib.RESET
-          .. ((sh.convoy == 1) and (C.dim .. " (convoy)" .. pagelib.RESET) or "")) or ""),
+          .. ((sh.convoy == 1) and (C.dim .. " (convoy)" .. pagelib.RESET) or "")) or "")
+      .. (((sh.saga_raids or 0) > 0)
+          and ("  " .. C.dim .. string.format("(%d raids)", sh.saga_raids) .. pagelib.RESET)
+          or ""),
       width))
     if sh.return_in and sh.return_in > 0 then
       add(pagelib.trunc("  " .. C.cyan .. cc.fmt_time(sh.return_in) .. pagelib.RESET, width))
@@ -143,14 +163,6 @@ local function longship_lines(add, width)
           break
         end
       end
-    end
-    if sh.saga_title and sh.saga_title ~= "" then
-      -- The earned title is the flourish on this line, so it carries the
-      -- colour; the raid count behind it is a footnote and stays dim.
-      add(pagelib.trunc("  " .. C.bright_white .. (sh.name or "?") .. pagelib.RESET
-        .. " " .. C.magenta .. sh.saga_title .. pagelib.RESET
-        .. "  " .. C.dim .. string.format("(%d raids)", sh.saga_raids or 0) .. pagelib.RESET,
-        width))
     end
     local dur = sh.durability or 100
     if dur < 100 then
@@ -273,9 +285,16 @@ local function wstock_row(width, ws, show_name)
     pct = 100
   end
   local name = show_name and cc.good_label(ws.good) or ""
-  return pagelib.trunc(string.format("%s%-14s%s %s%-16s%s %s %d  %d%%",
+  -- Amount and percentage are RIGHT-aligned to fixed widths. They were bare
+  -- %d, so every row's figures sat at a different column: "100  100%" and
+  -- "2929  100%" put the percentage four cells apart, and a column of stock
+  -- levels could not be read down. Amount is comma-grouped to match the
+  -- "[9,374 / 9,056]" in the section header.
+  return pagelib.trunc(string.format("%s%-14s%s %s%-16s%s %s %s  %s",
     cc.good_color(ws.good), name, pagelib.RESET, lcolor, label, pagelib.RESET,
-    pagelib.bar(12, pct, 100, lcolor), ws.amount or 0, pct), width)
+    pagelib.bar(12, pct, 100, lcolor),
+    pagelib.rjust(pagelib.fmt_num(ws.amount or 0), 7),
+    pagelib.rjust(pct .. "%", 4)), width)
 end
 
 local function warehouse_lines(add, width)

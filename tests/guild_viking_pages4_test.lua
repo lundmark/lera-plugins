@@ -387,6 +387,24 @@ check("army: unit 2 status is 'training' (no leader -> '-')",
 
 -- ---- Gate off -----------------------------------------------------------------
 page_opts.set("show_army_levy", false)
+-- ---- Siege park: the Army page owns it (it moved off the War page) --------
+S.siege = { engines = 2, cap = 4, ordered = 1, forging = 0,
+            reserved = { timber = 3 }, next_needs = { timber = 1 } }
+local siege_lines_out = army_page.lines(WIDTH)
+local siege_all = joined(siege_lines_out)
+check("army: siege park header shows engines held over capacity",
+      siege_all:find("2 / 4 held", 1, true) ~= nil, siege_all)
+check("army: on-order engines name the shortfall for the next engine",
+      siege_all:find("On order:", 1, true) ~= nil
+      and siege_all:find("Next engine still needs:", 1, true) ~= nil
+      and siege_all:find("Timber", 1, true) ~= nil, siege_all)
+check("army: siege park absent when the park is empty and nothing is on order",
+      (function()
+        S.siege = nil
+        return find_line(army_page.lines(WIDTH), "Siege Engines") == nil
+      end)(), "siege section rendered with no park data")
+S.siege = nil
+
 local no_levy = army_page.lines(WIDTH)
 check("army: Levy section absent when show_army_levy is off",
       find_line(no_levy, "Levy") == nil, joined(no_levy))
@@ -502,9 +520,12 @@ check("war: roster row shows id/name/size/ransom",
 check("war: roster carries a column header",
       prison_flat:find("# Captive Size Rank Ransom", 1, true) ~= nil, prison_flat)
 check("war: kin-held-by-foe line", prison_all:find("Our kin held by the foe: 1", 1, true) ~= nil, prison_all)
-check("war: siege engines line", prison_all:find("Siege engines: 2/4", 1, true) ~= nil, prison_all)
-check("war: siege engines line is not clipped",
-      prison_all:find("breach a garrison's walls", 1, true) ~= nil, prison_all)
+-- The siege park is the Army page's, not this one's: it used to render on
+-- both, the same three things twice. These two assertions moved to the Army
+-- section below; this one guards the removal.
+check("war: siege park does NOT render on the War page",
+      prison_all:find("Siege engines:", 1, true) == nil
+      and prison_all:find("breach a garrison's walls", 1, true) == nil, prison_all)
 
 -- A name that exactly fills the 22-wide name column used to run straight into
 -- the size field ("the village of Haugnesx6").
