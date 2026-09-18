@@ -42,6 +42,9 @@ const MAX_MSG: u32 = 64 * 1024;
 /// A push of a large tree is slow, but not endless.
 const TIMEOUT: Duration = Duration::from_secs(120);
 const DEFAULT_NAME: &str = "ferry-bridge";
+/// Exit code for "a live bridge already holds this socket" -- not a failure of
+/// this process so much as a statement that it is not needed.
+const EXIT_ALREADY_RUNNING: i32 = 3;
 
 /// The whole of what this process will run. A verb not in here is refused, and
 /// nothing is ever handed to a shell -- every call below is an argv list, so
@@ -338,7 +341,11 @@ fn main() {
                     "[ferry-bridge] a bridge is already listening on {}",
                     path.display()
                 );
-                std::process::exit(1);
+                // Its own exit code, so a supervisor can tell "someone else is
+                // already doing this job" apart from "this failed". The
+                // systemd unit maps it to RestartPreventExitStatus: retrying
+                // cannot help, and a flapping unit hides the reason.
+                std::process::exit(EXIT_ALREADY_RUNNING);
             }
             Err(_) => {
                 let _ = fs::remove_file(&path);
