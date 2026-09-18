@@ -24,6 +24,9 @@ local SELF = "lera-wizard"
 -- ipc.send() and ipc.disconnect() take the peer INDEX that ipc.connect()
 -- returned, not its name (lera/src/lua/api_ipc.c: luaL_checkinteger), so the
 -- index is what gets kept.
+-- Lines already shown as progress, so the closing summary does not repeat
+-- them. Cleared when a command finishes.
+local seen_lines = {}
 local peer_idx = nil
 local started = false
 local next_id = 1
@@ -32,6 +35,13 @@ local waiting = {}      -- id -> callback
 local function note(text)
   print("[ferry] " .. text)
 end
+
+-- Declared before start(), which registers it. A `local` is not in scope
+-- above its own declaration, so with the definition further down start() was
+-- registering the GLOBAL `on_message` -- nil. ipc accepted it, no callback was
+-- ever installed, and every reply from the bridge was dropped: commands ran,
+-- and the client never said they had finished.
+local on_message
 
 -- Our own IPC endpoint. ipc.list() raises unless IPC has been initialised
 -- ("IPC not initialized"), so this has to happen before anything can even ask
@@ -60,19 +70,50 @@ end
 
 -- Replies arrive as ordinary IPC messages; each carries back the id it was
 -- asked with, so two commands in flight cannot be confused for one another.
-local on_message
+-- "12/57 (21%) pushed players/x/foo.c", or "12 pushed ..." when the total is
+-- not known. One line per file: on a directory that IS the progress, and a
+-- count with no end in sight is not much better than silence.
+local function progress_line(message)
+  local done = tonumber(message.done) or 0
+  local total = tonumber(message.total)
+  local where = tostring(message.line or "")
+  if total and total > 0 then
+    local pct = math.floor((done / total) * 100 + 0.5)
+    return string.format("%d/%d (%d%%) %s", done, total, pct, where)
+  end
+  return string.format("%d %s", done, where)
+end
+
 on_message = function(peer, message)
   if peer ~= BRIDGE or type(message) ~= "table" then return end
+
+  -- A file went by while the command is still running.
+  if message.progress then
+    if message.line then seen_lines[message.line] = true end
+    note(progress_line(message))
+    return
+  end
+
   local id = message.id
   local cb = id and waiting[id]
   if id then waiting[id] = nil end
 
   local line = (message.op or "ferry") .. " " .. (message.path or "")
   if message.ok then
-    note(line .. ": " .. ((message.output ~= "" and message.output) or "done"))
+    note(line .. " done")
   else
-    note(line .. " FAILED: " .. tostring(message.output or "no reason given"))
+    note(line .. " FAILED")
   end
+  -- Anything ferry said that was NOT a per-file line -- an error, a summary,
+  -- a refusal. The per-file lines already went by as progress, so repeating
+  -- them here would print the whole transfer twice.
+  local output = message.output
+  if type(output) == "string" and output ~= "" then
+    for row in (output .. "\n"):gmatch("([^\n]*)\n") do
+      if row ~= "" and not seen_lines[row] then note("  " .. row) end
+    end
+  end
+  seen_lines = {}
   if cb then pcall(cb, message) end
 end
 

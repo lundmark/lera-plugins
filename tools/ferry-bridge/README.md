@@ -92,6 +92,10 @@ This process holds a shell and the pane does not get to use it.
 * **Socket** at `~/.lera/ipc/<name>.sock`, mode 0600. A stale socket left by a
   crash is probed before being replaced, so a live bridge is never yanked out
   from under a running session.
+* **Directories are ferry's own recursion** for pull and push. `ferry cc`
+  takes files only, so a directory cc is expanded here into the `.c` files
+  beneath it (capped at 200, symlinks not followed) -- the documented
+  `find <area> -name '*.c' | xargs ferry cc` pattern, done for you.
 * **ferry is given 120 seconds** per command, waited for on its own thread, so a
   hung FTP connection cannot hold a bridge thread forever.
 
@@ -103,8 +107,16 @@ length followed by JSON, and a connecting peer introduces itself with
 
 ```
 -> {"id": 7, "op": "pull", "path": "/players/shaman/cmd/shgather.c"}
-<- {"id": 7, "ok": true, "op": "pull", "output": "pulled ...", "status": 0}
+<- {"id": 7, "progress": true, "op": "pull", "done": 1, "total": 4, "line": "pulled ..."}
+<- {"id": 7, "progress": true, "op": "pull", "done": 2, "total": 4, "line": "pulled ..."}
+<- {"id": 7, "ok": true, "op": "pull", "output": "...", "status": 0}
 ```
+
+Progress frames are sent as ferry produces them, one per file, so a directory
+transfer reports itself while it runs instead of going quiet and then dumping
+everything. `total` comes from ferry's own `--dry-run` for a directory pull or
+push, and from the file list for a directory `cc`; it is absent when the count
+is not known, and the client then shows a plain count.
 
 `id` is echoed back so two commands in flight cannot be confused for one
 another. Anything the bridge refuses comes back as `{"ok": false, "output":

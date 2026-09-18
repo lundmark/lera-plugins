@@ -545,14 +545,18 @@ function M.confirm_command(label, command, anchor)
 end
 
 -- The same box as confirm_command, for a ferry verb rather than a MUD one.
-function M.confirm_ferry(op, path, anchor)
+-- `extra` spells out the scope when it is wider than the thing clicked --
+-- "and everything under it" for a directory -- so the box says what will
+-- actually happen rather than naming one folder.
+function M.confirm_ferry(op, path, anchor, extra)
+  local name = path:match("([^/]+)$") or path
   overlay.open({
     title = "Are you sure?",
     anchor = anchor,
     items = {
       { label = "no",  value = "no",  desc = "leave it alone", kind = "cancel" },
       { label = "yes", value = "yes", kind = "danger",
-        desc = "ferry " .. op .. " " .. (path:match("([^/]+)$") or path) },
+        desc = "ferry " .. op .. " " .. name .. (extra and (" " .. extra) or "") },
     },
     on_select = function(value)
       if value == "yes" then ferry.run(op, path) end

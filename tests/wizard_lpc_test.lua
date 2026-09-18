@@ -318,9 +318,10 @@ overlay.close()
 
 -- ipc present, but nothing listening.
 local listed = {}
+message_cb = nil
 ipc = {
   init = function() return true end,
-  on_message = function() end,
+  on_message = function(f) message_cb = f end,
   list = function() return listed end,
   connect = function() return 0 end,
   send = function() return true end,
@@ -395,4 +396,40 @@ do
   check("ferry: and says when the client has no ipc at all",
         ferry.status_line():find("unavailable", 1, true) ~= nil, ferry.status_line())
   ipc = saved
+end
+
+-- ---- progress --------------------------------------------------------------
+--
+-- A directory transfer is the case that needed this: ferry reports one line
+-- per file, and collecting them until the process ends means silence for the
+-- length of the transfer and then everything at once. The bridge streams them,
+-- and these are the two things the client must get right -- show each one with
+-- a percentage, and not print the whole transfer a second time at the end.
+
+do
+  local ferry = require("ferry")
+  listed = { "ferry-bridge" }
+
+  local said = {}
+  local real_print = print
+  print = function(line) said[#said + 1] = tostring(line) end
+
+  ferry.available()
+  ferry.run("push", "/players/x")
+  local function feed(msg) message_cb("ferry-bridge", msg) end
+  feed({ progress = true, op = "push", done = 1, total = 4, line = "pushed a.c" })
+  feed({ progress = true, op = "push", done = 3, total = 4, line = "pushed c.c" })
+  feed({ id = 1, ok = true, op = "push", path = "/players/x",
+         output = "pushed a.c\nerror: b.c was skipped" })
+  print = real_print
+
+  local joined = table.concat(said, "\n")
+  check("progress: each file is reported with a percentage",
+        joined:find("1/4 (25%)", 1, true) ~= nil
+        and joined:find("3/4 (75%)", 1, true) ~= nil, joined)
+  check("progress: the finish is announced", joined:find("done", 1, true) ~= nil, joined)
+  check("progress: a line already shown is not repeated in the summary",
+        select(2, joined:gsub("pushed a%.c", "")) == 1, joined)
+  check("progress: but anything NOT already shown is",
+        joined:find("b.c was skipped", 1, true) ~= nil, joined)
 end

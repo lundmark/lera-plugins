@@ -28,12 +28,12 @@
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -138,17 +138,69 @@ fn local_path(root: &Path, mud_path: &str) -> Result<String, String> {
 
 // ---- running ferry ----------------------------------------------------------
 
-fn run_ferry(root: &Path, verb: &str, relative: &str) -> (bool, String, i32) {
-    let child = Command::new("ferry")
+/// `ferry cc` compile-checks FILES; handed a directory it looks for
+/// "<dir>.c" and fails. pull and push walk a directory themselves, so this is
+/// only cc's problem -- and the documented way round it is the one the mirror's
+/// own notes give: `find <area> -name '*.c' | xargs ferry cc`. Do that here, so
+/// "cc this folder" means what it says.
+///
+/// Capped, because a cc of /players is not a thing anyone meant to ask for.
+const CC_FILE_MAX: usize = 200;
+
+fn collect_c_files(dir: &Path, root: &Path, out: &mut Vec<String>) {
+    if out.len() >= CC_FILE_MAX {
+        return;
+    }
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+    paths.sort();
+    for path in paths {
+        if out.len() >= CC_FILE_MAX {
+            return;
+        }
+        // Do not follow a symlink out of the mirror, here or anywhere else.
+        let meta = match fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            collect_c_files(&path, root, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("c") {
+            if let Ok(rel) = path.strip_prefix(root) {
+                out.push(rel.to_string_lossy().into_owned());
+            }
+        }
+    }
+}
+
+/// Run ferry, handing every line of its stdout to `on_line` as it arrives.
+///
+/// Streaming rather than collecting, because ferry reports one line per file
+/// and on a directory those lines ARE the progress: waiting for the process to
+/// end means silence for as long as the transfer takes, then everything at
+/// once.
+fn run_ferry_many(
+    root: &Path,
+    verb: &str,
+    relatives: &[String],
+    on_line: &mut dyn FnMut(&str),
+) -> (bool, String, i32) {
+    let spawned = Command::new("ferry")
         .arg(verb)
-        .arg(relative)
+        .args(relatives)
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn();
 
-    let child = match child {
+    let mut child = match spawned {
         Ok(c) => c,
         Err(e) if e.kind() == ErrorKind::NotFound => {
             return (false, "ferry is not on PATH".into(), -1)
@@ -156,33 +208,150 @@ fn run_ferry(root: &Path, verb: &str, relative: &str) -> (bool, String, i32) {
         Err(e) => return (false, format!("could not run ferry: {e}"), -1),
     };
 
-    // std has no wait-with-timeout, so the wait happens on its own thread and
-    // this one gives up after TIMEOUT and kills the child. Without it a hung
-    // FTP connection would hold the whole bridge thread forever.
-    let (tx, rx) = mpsc::channel();
-    let handle = thread::spawn(move || {
-        let out = child.wait_with_output();
-        let _ = tx.send(out);
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let child = Arc::new(Mutex::new(child));
+
+    // std has no wait-with-timeout, so a watchdog kills the child instead.
+    // Without it a hung FTP connection would hold this thread forever.
+    let timed_out = Arc::new(Mutex::new(false));
+    {
+        let child = Arc::clone(&child);
+        let timed_out = Arc::clone(&timed_out);
+        thread::spawn(move || {
+            let deadline = std::time::Instant::now() + TIMEOUT;
+            loop {
+                thread::sleep(Duration::from_millis(200));
+                let mut guard = match child.lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
+                match guard.try_wait() {
+                    Ok(Some(_)) => return,
+                    Ok(None) => {}
+                    Err(_) => return,
+                }
+                if std::time::Instant::now() >= deadline {
+                    *timed_out.lock().unwrap() = true;
+                    let _ = guard.kill();
+                    return;
+                }
+            }
+        });
+    }
+
+    // stderr on its own thread: ferry writes diagnostics there, and a full
+    // pipe with nobody reading it would block the child.
+    let stderr_thread = thread::spawn(move || {
+        let mut text = String::new();
+        if let Some(mut handle) = stderr {
+            let _ = handle.read_to_string(&mut text);
+        }
+        text
     });
 
-    match rx.recv_timeout(TIMEOUT) {
-        Ok(Ok(out)) => {
-            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-            text.push_str(&String::from_utf8_lossy(&out.stderr));
-            let status = out.status.code().unwrap_or(-1);
-            let _ = handle.join();
-            (out.status.success(), text.trim().to_string(), status)
+    let mut collected = String::new();
+    if let Some(handle) = stdout {
+        for line in BufReader::new(handle).lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            on_line(&line);
+            collected.push_str(&line);
+            collected.push('\n');
         }
-        Ok(Err(e)) => (false, format!("ferry failed: {e}"), -1),
-        Err(_) => (
+    }
+
+    let status = match child.lock().unwrap().wait() {
+        Ok(s) => s,
+        Err(e) => return (false, format!("ferry failed: {e}"), -1),
+    };
+    let errors = stderr_thread.join().unwrap_or_default();
+    collected.push_str(&errors);
+
+    if *timed_out.lock().unwrap() {
+        return (
             false,
             format!("ferry {verb} timed out after {}s", TIMEOUT.as_secs()),
             -1,
-        ),
+        );
+    }
+    (
+        status.success(),
+        collected.trim().to_string(),
+        status.code().unwrap_or(-1),
+    )
+}
+
+/// How many files a pull or push is about to touch.
+///
+/// ferry's own --dry-run answers it: one line per file it would move. Only
+/// worth asking for a DIRECTORY -- a single file is one of one -- and only so
+/// the client can show a percentage rather than a rising count with no end in
+/// sight.
+fn count_work(root: &Path, verb: &str, relative: &str) -> Option<usize> {
+    let args = vec!["--dry-run".to_string(), relative.to_string()];
+    let mut lines = 0usize;
+    let (_ok, _out, _status) = run_ferry_many(root, verb, &args, &mut |line| {
+        if line.starts_with("would ") {
+            lines += 1;
+        }
+    });
+    if lines > 0 {
+        Some(lines)
+    } else {
+        None
     }
 }
 
-fn handle(root: &Path, request: &Value) -> Value {
+fn run_ferry(
+    root: &Path,
+    verb: &str,
+    relative: &str,
+    on_progress: &mut dyn FnMut(usize, Option<usize>, &str),
+) -> (bool, String, i32) {
+    let full = root.join(relative);
+
+    if verb == "cc" && full.is_dir() {
+        let mut files = Vec::new();
+        collect_c_files(&full, root, &mut files);
+        if files.is_empty() {
+            return (false, format!("no .c files under {relative}"), -1);
+        }
+        let capped = files.len() >= CC_FILE_MAX;
+        // The total is known exactly here: it is the list just built.
+        let total = Some(files.len());
+        let mut done = 0usize;
+        let (ok, mut output, status) = run_ferry_many(root, verb, &files, &mut |line| {
+            done += 1;
+            on_progress(done, total, line);
+        });
+        if capped {
+            output.push_str(&format!(
+                "\n(stopped at {CC_FILE_MAX} files -- cc a narrower directory for the rest)"
+            ));
+        }
+        return (ok, output, status);
+    }
+
+    // A directory transfer gets a count first, so progress can be a
+    // percentage. A single file does not need one.
+    let total = if full.is_dir() {
+        count_work(root, verb, relative)
+    } else {
+        Some(1)
+    };
+
+    let mut done = 0usize;
+    let args = [relative.to_string()];
+    run_ferry_many(root, verb, &args, &mut |line| {
+        done += 1;
+        on_progress(done, total, line);
+    })
+}
+
+fn handle(root: &Path, request: &Value, on_progress: &mut dyn FnMut(usize, Option<usize>, &str)) -> Value {
     let op = request.get("op").and_then(Value::as_str).unwrap_or("");
     if !VERBS.contains(&op) {
         return json!({ "ok": false, "output": format!("unknown op '{op}'") });
@@ -194,7 +363,7 @@ fn handle(root: &Path, request: &Value) -> Value {
         Err(why) => return json!({ "ok": false, "op": op, "output": why }),
     };
 
-    let (ok, output, status) = run_ferry(root, op, &relative);
+    let (ok, output, status) = run_ferry(root, op, &relative, on_progress);
     log(&format!(
         "{op} {relative} -> {}",
         if ok { "ok" } else { "FAILED" }
@@ -249,11 +418,45 @@ fn serve_peer(root: PathBuf, mut stream: UnixStream) {
             continue;
         }
 
-        let mut reply = handle(&root, &request);
-        if let Some(id) = request.get("id") {
-            reply["id"] = id.clone();
+        let id = request.get("id").cloned();
+        let op = request
+            .get("op")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+
+        // Progress goes out on the same socket, one frame per file, while the
+        // command is still running. `done`/`total` let the client show a
+        // percentage; `line` is ferry's own word for what it just did.
+        let mut progress_failed = false;
+        let mut reply = {
+            let stream = &mut stream;
+            let id = id.clone();
+            let op = op.clone();
+            let progress_failed = &mut progress_failed;
+            handle(&root, &request, &mut |done, total, line| {
+                if *progress_failed {
+                    return;
+                }
+                let mut frame = json!({
+                    "progress": true, "op": op, "done": done, "line": line,
+                });
+                if let Some(total) = total {
+                    frame["total"] = json!(total);
+                }
+                if let Some(id) = &id {
+                    frame["id"] = id.clone();
+                }
+                if !send(stream, &frame) {
+                    *progress_failed = true;
+                }
+            })
+        };
+
+        if let Some(id) = id {
+            reply["id"] = id;
         }
-        if !send(&mut stream, &reply) {
+        if progress_failed || !send(&mut stream, &reply) {
             break;
         }
     }
