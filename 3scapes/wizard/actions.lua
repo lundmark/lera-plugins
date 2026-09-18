@@ -248,22 +248,26 @@ end
 --   send    the command word; the absolute path is appended
 --   run     for entries that are not a plain send (view arms the highlighter)
 --   confirm destructive enough to ask first
+-- label is the command word, desc is what it does. They are separate so the
+-- menu can align them into two columns and colour them apart: you aim at the
+-- command, you read the explanation once.
 M.FILE_ACTIONS = {
   -- The left-click default too, so the menu shows what a plain click does.
-  { key = "view",   label = "view (paged, highlighted)",
+  { key = "view",   label = "view",   desc = "page it here, highlighted",
     run = function(p) M.view(p) end },
   -- Unpaged and unpainted: the highlighter keys off the pager's EOF marker to
   -- know when a file ends, and a bare cat gives it no such end.
-  { key = "cat",    label = "cat (raw dump)",        send = "cat" },
-  { key = "head",   label = "head (first lines)",    send = "head" },
-  { key = "cc",     label = "cc (compile check)",    send = "cc" },
-  { key = "ed",     label = "ed (line editor)",      send = "ed" },
-  { key = "ul",     label = "ul (update + load)",    send = "ul" },
-  { key = "update", label = "update (destruct)",     send = "update" },
-  { key = "load",   label = "load",                  send = "load" },
+  { key = "cat",    label = "cat",    desc = "dump it raw, no pager",  send = "cat" },
+  { key = "head",   label = "head",   desc = "just the first lines",   send = "head" },
+  { key = "cc",     label = "cc",     desc = "compile-check it",       send = "cc" },
+  { key = "ed",     label = "ed",     desc = "open the line editor",   send = "ed" },
+  { key = "ul",     label = "ul",     desc = "update and load",        send = "ul" },
+  { key = "update", label = "update", desc = "destruct the loaded object", send = "update" },
+  { key = "load",   label = "load",   desc = "load it",                send = "load" },
   -- rm asks nothing of its own (cmds/secure/rm.c just removes and reports),
   -- and a file is not something a misclick should delete.
-  { key = "rm",     label = "rm (DELETE the file)",  send = "rm", confirm = true },
+  { key = "rm",     label = "rm",     desc = "delete the file for good",
+    send = "rm", confirm = true, kind = "danger" },
 }
 
 -- ---- viewing ---------------------------------------------------------------
@@ -385,12 +389,14 @@ function M.file_menu(path, anchor)
 
   local items = {}
   for i = 1, #M.FILE_ACTIONS do
-    items[i] = { label = M.FILE_ACTIONS[i].label, value = M.FILE_ACTIONS[i].key }
+    local spec = M.FILE_ACTIONS[i]
+    items[i] = { label = spec.label, desc = spec.desc, value = spec.key, kind = spec.kind }
   end
   -- Always a way out that does not depend on hitting the strip of pane
   -- outside the box -- which a full-width menu barely leaves -- and there is
   -- no Escape to fall back on: bind is not in the plugin sandbox.
-  items[#items + 1] = { label = "(cancel)", value = "" }
+  items[#items + 1] = { label = "cancel", desc = "close this menu",
+                        value = "", kind = "cancel" }
 
   overlay.open({
     -- The basename: the pane is already titled with the directory, and a full
@@ -432,9 +438,10 @@ function M.command_menu(cmd, path, anchor)
     title = cmd .. " " .. (path:match("([^/]+)$") or path),
     anchor = anchor,
     items = {
-      { label = "this folder", value = cmd },
-      { label = "and subfolders", value = cmd .. " -r" },
-      { label = "(cancel)", value = "" },
+      { label = cmd,          value = cmd,          desc = "this folder only" },
+      { label = cmd .. " -r", value = cmd .. " -r", desc = "...and every folder under it" },
+      { label = "cancel",     value = "",           desc = "close this menu",
+        kind = "cancel" },
     },
     on_select = function(value)
       if value == "" then return end
@@ -450,12 +457,16 @@ function M.dir_menu(path, anchor)
   local items = {}
   for i = 1, #M.COMMANDS do
     local cmd = M.COMMANDS[i].cmd
-    items[#items + 1] = { label = cmd, value = cmd }
+    items[#items + 1] = { label = cmd, value = cmd,
+                          desc = (cmd == "uall") and "recompile this folder"
+                                                  or "load this folder" }
     -- "and everything in it": the same command against this folder and every
     -- folder beneath it, walked client-side.
-    items[#items + 1] = { label = cmd .. " -r (with subfolders)", value = cmd .. " -r" }
+    items[#items + 1] = { label = cmd .. " -r", value = cmd .. " -r",
+                          desc = "...and every folder under it" }
   end
-  items[#items + 1] = { label = "(cancel)", value = "" }
+  items[#items + 1] = { label = "cancel", desc = "close this menu",
+                        value = "", kind = "cancel" }
 
   overlay.open({
     title = path:match("([^/]+)$") or path,
@@ -484,8 +495,8 @@ function M.confirm_command(label, command, anchor)
     title = "Are you sure?",
     anchor = anchor,
     items = {
-      { label = "No", value = "no" },
-      { label = "Yes, " .. (label or command), value = "yes" },
+      { label = "no",  value = "no",  desc = "leave it alone", kind = "cancel" },
+      { label = "yes", value = "yes", desc = label or command, kind = "danger" },
     },
     on_select = function(value)
       if value == "yes" then mud.send(command) end
@@ -508,9 +519,10 @@ function M.confirm(cmd, path, anchor)
     title = recursive and (base .. " -r?") or (base .. "?"),
     anchor = anchor,
     items = {
-      { label = "No", value = "no" },
-      { label = recursive and ("Yes, " .. name .. " + subfolders")
-                          or ("Yes, " .. base .. " " .. name), value = "yes" },
+      { label = "no",  value = "no", desc = "leave it alone", kind = "cancel" },
+      { label = "yes", value = "yes",
+        desc = recursive and (base .. " " .. name .. " + subfolders")
+                          or (base .. " " .. name) },
     },
     on_select = function(value)
       if value ~= "yes" then return end

@@ -22,6 +22,8 @@ local state = nil   -- { title, items, on_select, anchor = {x, y} }
 -- Box furniture: a border on each side, and a space either side of a label.
 local BORDER = 2
 local PAD = 2
+-- Between the command column and its explanation.
+local COL_GAP = 2
 
 function M.open(opts)
   if type(opts) ~= "table" then return false end
@@ -57,6 +59,11 @@ local function label_of(item)
   return tostring(item)
 end
 
+local function desc_of(item)
+  if type(item) == "table" and type(item.desc) == "string" then return item.desc end
+  return nil
+end
+
 local function value_of(item)
   if type(item) == "table" then
     if item.value ~= nil then return item.value end
@@ -74,11 +81,19 @@ end
 function M.layout(w, h)
   if not state or w <= 0 or h <= 0 then return nil end
 
-  local widest = state.title and #state.title or 0
+  -- Two columns: every command starts at the same x, and so does every
+  -- explanation. A ragged second column is the thing that makes a menu like
+  -- this look thrown together.
+  local label_w, desc_w = 0, 0
   for i = 1, #state.items do
     local n = #label_of(state.items[i])
-    if n > widest then widest = n end
+    if n > label_w then label_w = n end
+    local d = desc_of(state.items[i])
+    if d and #d > desc_w then desc_w = #d end
   end
+
+  local widest = label_w + (desc_w > 0 and (COL_GAP + desc_w) or 0)
+  if state.title and #state.title > widest then widest = #state.title end
 
   local bw = widest + BORDER + PAD
   if bw > w then bw = w end
@@ -105,6 +120,7 @@ function M.layout(w, h)
   -- rows: the item rows. With a border the first and last rows are the frame;
   -- without one every row is an item.
   return { x = x, y = y, w = bw, h = bh, bordered = bordered,
+           label_w = label_w, desc_x = label_w + COL_GAP,
            rows = bordered and (bh - BORDER) or bh }
 end
 
@@ -133,13 +149,25 @@ function M.render(w, h, box, text)
   local avail = rect.w - (rect.bordered and BORDER or 0)
   local shown, marker = visible_rows(rect.rows)
   for i = 1, shown do
-    local label = label_of(state.items[i])
+    local item = state.items[i]
+    local label = label_of(item)
+    local desc = desc_of(item)
+    local row = rect.y + inset + i - 1
     if #label > avail then label = label:sub(1, avail) end
-    text(rect.x + inset, rect.y + inset + i - 1, label, i)
+    -- The caller draws; this decides WHERE. label and desc are handed over
+    -- separately so they can be coloured separately.
+    text(rect.x + inset, row, label, {
+      kind = (type(item) == "table" and item.kind) or "command",
+    })
+    if desc and rect.desc_x < avail then
+      local room = avail - rect.desc_x
+      if #desc > room then desc = desc:sub(1, room) end
+      text(rect.x + inset + rect.desc_x, row, desc, { kind = "desc" })
+    end
   end
   if marker then
     if #marker > avail then marker = marker:sub(1, avail) end
-    text(rect.x + inset, rect.y + inset + rect.rows - 1, marker, 0)
+    text(rect.x + inset, rect.y + inset + rect.rows - 1, marker, { kind = "desc" })
   end
   return rect
 end

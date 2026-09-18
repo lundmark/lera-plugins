@@ -304,19 +304,19 @@ check("buttons: the toolbar offers flat or recursive, plus a way out",
       overlay.items()[2].value == "uall -r" and overlay.items()[3].value == "",
       overlay.items()[2].value)
 
-pick_overlay("this folder", 30, 10)
+pick_overlay("uall", 30, 10)
 check("buttons: choosing still asks before sending", #sent == 0 and overlay.active())
-check("buttons: No is the row nearest the pointer",
-      overlay.items()[1].label == "No", tostring(overlay.items()[1].label))
+check("buttons: no is the row nearest the pointer",
+      overlay.items()[1].label == "no", tostring(overlay.items()[1].label))
 
-pick_overlay("No", 30, 10)
+pick_overlay("no", 30, 10)
 check("buttons: answering No sends nothing and closes the box",
       #sent == 0 and not overlay.active(), tostring(sent[1]))
 
 pane.on_pointer({ kind = "down", button = "left", x = 12, y = 1,
                   inside = true, width = 30, height = 10 })
-pick_overlay("this folder", 30, 10)
-pick_overlay("Yes", 30, 10)
+pick_overlay("uall", 30, 10)
+pick_overlay("yes", 30, 10)
 check("buttons: answering Yes runs it against the cwd",
       #sent == 1 and sent[1] == "uall /players/simon", tostring(sent[1]))
 
@@ -324,8 +324,8 @@ check("buttons: answering Yes runs it against the cwd",
 sent = {}
 pane.on_pointer({ kind = "down", button = "left", x = 12, y = 1,
                   inside = true, width = 30, height = 10 })
-pick_overlay("and subfolders", 30, 10)
-pick_overlay("Yes", 30, 10)
+pick_overlay("uall -r", 30, 10)
+pick_overlay("yes", 30, 10)
 check("buttons: the recursive choice walks from the cwd",
       #sent >= 1 and sent[1] == "uall /players/simon", tostring(sent[1]))
 -- The cwd holds four folders, so a recursive run is the cwd plus those four.
@@ -406,6 +406,37 @@ do
         #overlay.items() .. " items, missing: " .. table.concat(missing, ","))
 end
 
+-- The two columns are the point of the layout: every command starts at the
+-- same x and so does every explanation, or the menu reads as a wall.
+do
+  local rect = overlay.layout(28, MENU_H - 2)
+  local label_w = 0
+  for _, it in ipairs(overlay.items()) do
+    if #it.label > label_w then label_w = #it.label end
+  end
+  check("file: the explanation column clears the longest command",
+        rect.desc_x >= label_w + 1, rect.desc_x .. " vs " .. label_w)
+  check("file: every entry carries an explanation", (function()
+    for _, it in ipairs(overlay.items()) do
+      if type(it.desc) ~= "string" or it.desc == "" then return false end
+    end
+    return true
+  end)())
+end
+
+-- rm is the row that deletes something, and it is coloured as such rather
+-- than sitting in the same white as `load`.
+do
+  local rm_kind, cancel_kind
+  for _, it in ipairs(overlay.items()) do
+    if it.value == "rm" then rm_kind = it.kind end
+    if it.value == "" then cancel_kind = it.kind end
+  end
+  check("file: rm is marked dangerous", rm_kind == "danger", tostring(rm_kind))
+  check("file: cancel is marked as the way out", cancel_kind == "cancel",
+        tostring(cancel_kind))
+end
+
 -- A menu longer than the pane must SAY so rather than hiding its tail, which
 -- is where rm sits.
 do
@@ -433,7 +464,7 @@ check("file: choosing closes the box", not overlay.active())
 sent = {}
 pane.on_pointer({ kind = "down", button = "right", x = 12, y = 3,
                   inside = true, width = 30, height = MENU_H })
-pick_overlay("ul (update", 30, MENU_H)
+pick_overlay("ul", 30, MENU_H)
 check("file: ul updates and loads that one file",
       #sent == 1 and sent[1] == "ul /players/simon/arena.c", tostring(sent[1]))
 
@@ -442,16 +473,16 @@ check("file: ul updates and loads that one file",
 sent = {}
 pane.on_pointer({ kind = "down", button = "right", x = 12, y = 3,
                   inside = true, width = 30, height = MENU_H })
-pick_overlay("rm (DELETE", 30, MENU_H)
+pick_overlay("rm", 30, MENU_H)
 check("file: rm asks before deleting anything",
       #sent == 0 and overlay.active(), tostring(sent[1]))
-pick_overlay("No", 30, MENU_H)
+pick_overlay("no", 30, MENU_H)
 check("file: answering No deletes nothing", #sent == 0, tostring(sent[1]))
 
 pane.on_pointer({ kind = "down", button = "right", x = 12, y = 3,
                   inside = true, width = 30, height = MENU_H })
-pick_overlay("rm (DELETE", 30, MENU_H)
-pick_overlay("Yes", 30, MENU_H)
+pick_overlay("rm", 30, MENU_H)
+pick_overlay("yes", 30, MENU_H)
 check("file: confirming rm sends it, absolute",
       #sent == 1 and sent[1] == "rm /players/simon/arena.c", tostring(sent[1]))
 
@@ -503,7 +534,7 @@ check("dir: each command is offered with and without subfolders",
 pick_overlay("lall -r", 30, 10)
 check("dir: choosing one still asks before sending", #sent == 0, tostring(sent[1]))
 check("dir: and the question replaces it in the same place", overlay.active())
-pick_overlay("Yes", 30, 10)
+pick_overlay("yes", 30, 10)
 check("dir: confirming a recursive run walks from that folder",
       #sent >= 1 and sent[1] == "lall /players/simon/archive", tostring(sent[1]))
 
@@ -511,7 +542,7 @@ sent = {}
 pane.on_pointer({ kind = "down", button = "right", x = 1, y = 2,
                   inside = true, width = 30, height = 10 })
 pick_overlay("lall", 30, 10)
-pick_overlay("Yes", 30, 10)
+pick_overlay("yes", 30, 10)
 check("dir: the flat variant sends exactly one command",
       #sent == 1 and sent[1] == "lall /players/simon/archive", tostring(sent[1]))
 

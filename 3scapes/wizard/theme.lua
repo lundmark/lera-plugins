@@ -45,6 +45,15 @@ M.PLAIN   = ""          -- terminal default
 M.BUTTON  = "\27[93m"   -- bright yellow
 M.NOTICE  = "\27[90m"   -- dim
 
+-- Menu rows are two columns: the command, then what it does. The command is
+-- what you aim at, so it keeps the strong colour; the explanation is there to
+-- be read once and then ignored, so it recedes. All-yellow rows made the two
+-- compete and the menu read as a wall.
+M.MENU_CMD    = "\27[97m"   -- bright white: the word that gets sent
+M.MENU_DESC   = "\27[90m"   -- dim: what it does
+M.MENU_DANGER = "\27[91m"   -- bright red: it deletes something
+M.MENU_CANCEL = "\27[90m"   -- dim: the way out
+
 local BY_EXT = {
   c = M.SOURCE,
   h = M.HEADER,

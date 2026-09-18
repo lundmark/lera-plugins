@@ -305,9 +305,13 @@ function M.render(rect, opts)
     function(bx, by, bw, bh, title)
       ui.box(ui.rect(x + bx, y + by, bw, bh), "single", title)
     end,
-    function(tx, ty, text)
-      ui.text_ansi(ui.rect(x + tx, y + ty, #text, 1),
-                   theme.paint(text, theme.BUTTON))
+    function(tx, ty, text, opts)
+      local kind = opts and opts.kind or "command"
+      local color = theme.MENU_CMD
+      if kind == "desc" then color = theme.MENU_DESC
+      elseif kind == "danger" then color = theme.MENU_DANGER
+      elseif kind == "cancel" then color = theme.MENU_CANCEL end
+      ui.text_ansi(ui.rect(x + tx, y + ty, #text, 1), theme.paint(text, color))
     end)
 end
 
