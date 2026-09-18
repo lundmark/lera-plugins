@@ -240,10 +240,30 @@ end
 -- No extra confirmation: unlike a button that recompiles a whole directory,
 -- picking an item out of this menu IS the deliberate choice, and neither of
 -- these reaches further than the one file that was clicked.
+-- Everything the MUD offers on a single file, as one menu. Each entry is a
+-- real wizard command (cmds/secure/*.c) with the path appended -- nothing here
+-- is invented, and nothing needs a second argument, which is what keeps cp and
+-- mv out: a click has nowhere to type a destination.
+--
+--   send    the command word; the absolute path is appended
+--   run     for entries that are not a plain send (view arms the highlighter)
+--   confirm destructive enough to ask first
 M.FILE_ACTIONS = {
-  { key = "view", label = "view", run = function(p) M.view(p) end },
-  { key = "ul",   label = "ul (update + load)",
-    run = function(p) mud.send("ul " .. p) end },
+  -- The left-click default too, so the menu shows what a plain click does.
+  { key = "view",   label = "view (paged, highlighted)",
+    run = function(p) M.view(p) end },
+  -- Unpaged and unpainted: the highlighter keys off the pager's EOF marker to
+  -- know when a file ends, and a bare cat gives it no such end.
+  { key = "cat",    label = "cat (raw dump)",        send = "cat" },
+  { key = "head",   label = "head (first lines)",    send = "head" },
+  { key = "cc",     label = "cc (compile check)",    send = "cc" },
+  { key = "ed",     label = "ed (line editor)",      send = "ed" },
+  { key = "ul",     label = "ul (update + load)",    send = "ul" },
+  { key = "update", label = "update (destruct)",     send = "update" },
+  { key = "load",   label = "load",                  send = "load" },
+  -- rm asks nothing of its own (cmds/secure/rm.c just removes and reports),
+  -- and a file is not something a misclick should delete.
+  { key = "rm",     label = "rm (DELETE the file)",  send = "rm", confirm = true },
 }
 
 -- ---- viewing ---------------------------------------------------------------
@@ -367,6 +387,10 @@ function M.file_menu(path, anchor)
   for i = 1, #M.FILE_ACTIONS do
     items[i] = { label = M.FILE_ACTIONS[i].label, value = M.FILE_ACTIONS[i].key }
   end
+  -- Always a way out that does not depend on hitting the strip of pane
+  -- outside the box -- which a full-width menu barely leaves -- and there is
+  -- no Escape to fall back on: bind is not in the plugin sandbox.
+  items[#items + 1] = { label = "(cancel)", value = "" }
 
   overlay.open({
     -- The basename: the pane is already titled with the directory, and a full
@@ -375,9 +399,17 @@ function M.file_menu(path, anchor)
     anchor = anchor,
     items = items,
     on_select = function(value)
+      if value == "" then return end
       for i = 1, #M.FILE_ACTIONS do
-        if M.FILE_ACTIONS[i].key == value then
-          M.FILE_ACTIONS[i].run(path)
+        local spec = M.FILE_ACTIONS[i]
+        if spec.key == value then
+          if spec.run then spec.run(path)
+          elseif spec.confirm then
+            M.confirm_command(spec.send .. " " .. (path:match("([^/]+)$") or path),
+                              spec.send .. " " .. path, anchor)
+          else
+            mud.send(spec.send .. " " .. path)
+          end
           return
         end
       end
@@ -402,8 +434,12 @@ function M.command_menu(cmd, path, anchor)
     items = {
       { label = "this folder", value = cmd },
       { label = "and subfolders", value = cmd .. " -r" },
+      { label = "(cancel)", value = "" },
     },
-    on_select = function(value) M.confirm(value, path, anchor) end,
+    on_select = function(value)
+      if value == "" then return end
+      M.confirm(value, path, anchor)
+    end,
   })
   return true
 end
@@ -419,6 +455,7 @@ function M.dir_menu(path, anchor)
     -- folder beneath it, walked client-side.
     items[#items + 1] = { label = cmd .. " -r (with subfolders)", value = cmd .. " -r" }
   end
+  items[#items + 1] = { label = "(cancel)", value = "" }
 
   overlay.open({
     title = path:match("([^/]+)$") or path,
@@ -426,7 +463,10 @@ function M.dir_menu(path, anchor)
     items = items,
     -- The confirmation replaces this menu in the same place, so the answer
     -- appears where the question was asked.
-    on_select = function(value) M.confirm(value, path, anchor) end,
+    on_select = function(value)
+      if value == "" then return end
+      M.confirm(value, path, anchor)
+    end,
   })
   return true
 end
@@ -436,6 +476,24 @@ end
 -- "No" is first: it is the row nearest the pointer, so the cheap, wrong
 -- reflex -- clicking again without reading -- is the harmless answer. A click
 -- anywhere outside the box also cancels.
+-- Ask before one arbitrary command. `label` is what the box offers as the
+-- Yes row; `command` is sent verbatim on yes.
+function M.confirm_command(label, command, anchor)
+  if type(command) ~= "string" or command == "" then return false end
+  overlay.open({
+    title = "Are you sure?",
+    anchor = anchor,
+    items = {
+      { label = "No", value = "no" },
+      { label = "Yes, " .. (label or command), value = "yes" },
+    },
+    on_select = function(value)
+      if value == "yes" then mud.send(command) end
+    end,
+  })
+  return true
+end
+
 function M.confirm(cmd, path, anchor)
   -- "uall -r" arrives as one string from the menu; split it back apart.
   local base, recursive = cmd:match("^(%S+)%s*(%-?r?)$")

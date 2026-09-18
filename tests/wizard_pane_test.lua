@@ -299,9 +299,10 @@ check("buttons: the box names the command and the directory",
 
 -- "this directory and everything in it" has to be reachable for the directory
 -- you are STANDING IN, not only for a folder listed below.
-check("buttons: the toolbar offers flat or recursive",
-      #overlay.items() == 2 and overlay.items()[1].value == "uall" and
-      overlay.items()[2].value == "uall -r", overlay.items()[2].value)
+check("buttons: the toolbar offers flat or recursive, plus a way out",
+      #overlay.items() == 3 and overlay.items()[1].value == "uall" and
+      overlay.items()[2].value == "uall -r" and overlay.items()[3].value == "",
+      overlay.items()[2].value)
 
 pick_overlay("this folder", 30, 10)
 check("buttons: choosing still asks before sending", #sent == 0 and overlay.active())
@@ -373,43 +374,96 @@ check("pointer: the third row of column 0 is the third entry",
 
 -- ---- clicking a file -------------------------------------------------------
 
+-- Left-click opens it, the way left-click on a folder enters it.
 sent = {}
 consumed = pane.on_pointer({ kind = "down", button = "left", x = 12, y = 3,
                              inside = true, width = 30, height = 10 })
-check("file: a click offers a menu rather than firing a command",
+check("file: a left-click views it outright",
+      consumed == true and sent[1] == "more /players/simon/arena.c" and not overlay.active(),
+      tostring(sent[1]))
+
+-- Right-click is where the rest lives, including the one that destructs a
+-- live object.
+-- Height 16: the menu is nine rows plus a border, and a pane that cannot show
+-- it all is its own case below.
+local MENU_H = 16
+sent = {}
+consumed = pane.on_pointer({ kind = "down", button = "right", x = 12, y = 3,
+                             inside = true, width = 30, height = MENU_H })
+check("file: a right-click offers the menu instead",
       consumed == true and #sent == 0 and overlay.active(), tostring(sent[1]))
 check("file: the menu is titled with the file, not the whole path",
       overlay.title() == "arena.c", tostring(overlay.title()))
-check("file: it offers view and ul", #overlay.items() == 2, #overlay.items())
+-- Everything the MUD offers on one file, each a real wizard command.
+do
+  local want = { view = true, cat = true, head = true, cc = true, ed = true,
+                 ul = true, update = true, load = true, rm = true }
+  local got, missing = {}, {}
+  for _, it in ipairs(overlay.items()) do got[it.value] = true end
+  for k in pairs(want) do if not got[k] then missing[#missing + 1] = k end end
+  check("file: the menu offers the whole file command set",
+        #missing == 0 and #overlay.items() == 10,   -- nine commands + (cancel)
+        #overlay.items() .. " items, missing: " .. table.concat(missing, ","))
+end
+
+-- A menu longer than the pane must SAY so rather than hiding its tail, which
+-- is where rm sits.
+do
+  local shown = 0
+  drawn = {}
+  pane.render({ x = 0, y = 0, w = 30, h = 8 }, {})
+  for _, d in ipairs(drawn) do if (d.text or ""):find("more (taller pane)", 1, true) then shown = shown + 1 end end
+  check("file: an overlong menu shows a +N more marker", shown == 1, shown)
+end
 
 -- The box opens AT the click, which is the whole point of drawing it here
 -- rather than above the input bar.
 do
-  local rect = overlay.layout(28, 8)
+  local rect = overlay.layout(28, MENU_H - 2)
   check("file: the box opens at the click, not at a fixed corner",
         rect.x <= 11 and rect.x + rect.w >= 11,
         "clicked column 11; box spans " .. rect.x .. ".." .. (rect.x + rect.w))
 end
 
-pick_overlay("view", 30, 10)
+pick_overlay("view", 30, MENU_H)
 check("file: view pages the file, absolute",
       #sent == 1 and sent[1] == "more /players/simon/arena.c", tostring(sent[1]))
 check("file: choosing closes the box", not overlay.active())
 
 sent = {}
-pane.on_pointer({ kind = "down", button = "left", x = 12, y = 3,
-                  inside = true, width = 30, height = 10 })
-pick_overlay("ul", 30, 10)
+pane.on_pointer({ kind = "down", button = "right", x = 12, y = 3,
+                  inside = true, width = 30, height = MENU_H })
+pick_overlay("ul (update", 30, MENU_H)
 check("file: ul updates and loads that one file",
       #sent == 1 and sent[1] == "ul /players/simon/arena.c", tostring(sent[1]))
+
+-- rm deletes with no confirmation of its own (cmds/secure/rm.c), so the menu
+-- must not be the last word on it.
+sent = {}
+pane.on_pointer({ kind = "down", button = "right", x = 12, y = 3,
+                  inside = true, width = 30, height = MENU_H })
+pick_overlay("rm (DELETE", 30, MENU_H)
+check("file: rm asks before deleting anything",
+      #sent == 0 and overlay.active(), tostring(sent[1]))
+pick_overlay("No", 30, MENU_H)
+check("file: answering No deletes nothing", #sent == 0, tostring(sent[1]))
+
+pane.on_pointer({ kind = "down", button = "right", x = 12, y = 3,
+                  inside = true, width = 30, height = MENU_H })
+pick_overlay("rm (DELETE", 30, MENU_H)
+pick_overlay("Yes", 30, MENU_H)
+check("file: confirming rm sends it, absolute",
+      #sent == 1 and sent[1] == "rm /players/simon/arena.c", tostring(sent[1]))
 
 -- A click outside the box dismisses it and does NOT fall through to whatever
 -- entry is underneath.
 sent = {}
-pane.on_pointer({ kind = "down", button = "left", x = 12, y = 3,
-                  inside = true, width = 30, height = 10 })
-local dismissed = pane.on_pointer({ kind = "down", button = "left", x = 1, y = 8,
-                                    inside = true, width = 30, height = 10 })
+pane.on_pointer({ kind = "down", button = "right", x = 12, y = 3,
+                  inside = true, width = 30, height = MENU_H })
+-- The menu is as wide as the pane and opens under the clicked row, so the
+-- pane outside it is the rows ABOVE. y=1 is the first content row.
+local dismissed = pane.on_pointer({ kind = "down", button = "left", x = 1, y = 1,
+                                    inside = true, width = 30, height = MENU_H })
 check("file: clicking away closes the menu and navigates nowhere",
       dismissed == true and not overlay.active() and #sent == 0, tostring(sent[1]))
 
@@ -423,8 +477,8 @@ do
     error("a pointer callback must not require('" .. tostring(name) .. "') -- "
           .. "capture the module at load instead")
   end
-  local ok, err = pcall(pane.on_pointer, { kind = "down", button = "left", x = 12, y = 3,
-                                           inside = true, width = 30, height = 10 })
+  local ok, err = pcall(pane.on_pointer, { kind = "down", button = "right", x = 12, y = 3,
+                                           inside = true, width = 30, height = MENU_H })
   require = real_require
   check("click: a file click requires no module at callback time", ok, tostring(err))
   check("click: and still opened its menu", overlay.active(), "no menu opened")
@@ -437,7 +491,8 @@ sent = {}
 pane.on_pointer({ kind = "down", button = "right", x = 1, y = 2,
                   inside = true, width = 30, height = 10 })
 check("dir: right-click offers the directory actions, flat and recursive",
-      overlay.active() and #overlay.items() == 4 and #sent == 0, tostring(sent[1]))
+      overlay.active() and #overlay.items() == 5 and #sent == 0,   -- four + (cancel)
+      tostring(sent[1]))
 check("dir: the box names the clicked folder",
       overlay.title() == "archive", tostring(overlay.title()))
 check("dir: each command is offered with and without subfolders",

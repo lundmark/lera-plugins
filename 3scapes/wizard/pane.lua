@@ -402,12 +402,18 @@ function M.on_pointer(event)
     return true
   end
 
-  -- A file: offer what can be done to it. Either button opens the same menu --
-  -- there is no default action on a file worth firing off a bare click, since
-  -- ul destructs a live object and view floods the output pane.
+  -- A file: left opens it, right offers the rest. Viewing is the thing you
+  -- want nine times out of ten and it is harmless -- it pages the file into
+  -- the output pane and nothing else -- so it gets the plain click, the same
+  -- way a directory gets cd. ul destructs a live object, so it stays behind
+  -- the menu.
   local path = entry_path(e)
   if not path then return false end
-  actions.file_menu(path, { x = lx, y = ly + brows })
+  if button == "right" then
+    actions.file_menu(path, { x = lx, y = ly + brows })
+  else
+    actions.view(path)
+  end
   return true
 end
 
