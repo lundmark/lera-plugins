@@ -230,14 +230,21 @@ end
 -- require("menu")'s own "opening a menu cancels the open one" contract
 -- reproduces LEGACY's explicit viking_close_page_menu() + show call.
 local function dispatch_action(action)
+  -- The four *_config rows open automation menus that ship only in the
+  -- private plugin repo. open_auto() is a no-op in the public base, where the
+  -- rows are not offered in the first place (see automation_available below).
+  local function open_auto(name)
+    local mod = require("util").optional_require(name)
+    if mod then mod.open_menu() end
+  end
   if action == "atrade_config" then
-    require("autotrader.tick").open_menu()
+    open_auto("autotrader.tick")
   elseif action == "araid_config" then
-    require("autoraid").open_menu()
+    open_auto("autoraid")
   elseif action == "avoyage_config" then
-    require("autovoyage").open_menu()
+    open_auto("autovoyage")
   elseif action == "aherd_config" then
-    require("autoherd").open_menu()
+    open_auto("autoherd")
   elseif action == "travel" then
     require("popups.map").open_poi_menu()
   end
