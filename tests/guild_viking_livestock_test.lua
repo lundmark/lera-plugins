@@ -166,7 +166,7 @@ check("management cap overrides mirrored tier", compact:find("9/20", 1, true) ~=
 check("fractional herd stats and generation visible", compact:find("H:50.01", 1, true)
   and compact:find("Gen:8.25", 1, true))
 check("fractional age visible", compact:find("Age:40.50", 1, true) ~= nil)
-check("concise pen safety metadata visible", compact:find("Penfree:9  pending:2  protected:9  auto-cull:off", 1, true) ~= nil)
+check("concise pen safety metadata visible", compact:find("Penfree:9  Pending:2  Protected:9  Auto-cull:off", 1, true) ~= nil)
 for _, line in ipairs(page.lines(40)) do
   check("compact page stays within narrow width", #(line:gsub("\027%[[%d;]*m", "")) <= 40)
 end
@@ -226,7 +226,7 @@ do
 end
 
 -- ---- Management row colours ------------------------------------------------
--- Penfree/pending/protected/auto-cull is a row of numbers you act on, and it
+-- Penfree/Pending/Protected/Auto-cull is a row of numbers you act on, and it
 -- rendered as one undifferentiated grey run. A pen with NO free space is the
 -- state that silently stops a herd growing, so it is the one called out.
 do
@@ -245,7 +245,10 @@ do
     check("counts above zero are coloured, not dim",
           line:find("\027%[36m3") ~= nil, line)
     check("a zero count stays dim", line:find("\027%[90m0") ~= nil, line)
-    check("the labels themselves stay dim", line:find("\027%[90mpending:") ~= nil, line)
+    check("the labels themselves stay dim", line:find("\027%[90mPending:") ~= nil, line)
+    check("and the labels are in proper case",
+          line:find("Pending:", 1, true) and line:find("Protected:", 1, true)
+          and line:find("Auto-cull:", 1, true) and line:find("pending:", 1, true) == nil, line)
   end
 end
 
