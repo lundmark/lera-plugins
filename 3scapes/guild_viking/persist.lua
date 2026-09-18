@@ -18,7 +18,9 @@
 local market = require("market")
 local page_opts = require("page_opts")
 local window = require("window")
-local at_core = require("autotrader.core")
+-- Private-repo module; nil in the public base. See util.optional_require.
+local optional_require = require("util").optional_require
+local at_core = optional_require("autotrader.core")
 
 local M = {}
 
@@ -38,25 +40,41 @@ local M = {}
 -- way for the same reason (see that module's own header) -- nothing
 -- requires it from a page yet, so it is not part of any live cycle today,
 -- but deferring costs nothing and keeps this file's require list uniform.
-local function ar_module() return require("autoraid") end
-local function av_module() return require("autovoyage") end
-local function ah_module() return require("autoherd") end
-local function aw_module() return require("autowar") end
+-- Each returns nil in the public base, where the module is not installed.
+local function ar_module() return optional_require("autoraid") end
+local function av_module() return optional_require("autovoyage") end
+local function ah_module() return optional_require("autoherd") end
+local function aw_module() return optional_require("autowar") end
+
+-- Snapshot one automation module's slice, or nil when it is not installed.
+local function auto_snapshot(mod_fn, key)
+  local mod = mod_fn()
+  if not mod then return nil end
+  return mod.snapshot()[key]
+end
 
 function M.save()
   local opts = {}
   for _, o in ipairs(page_opts.all()) do opts[o.key] = o.value end
+
+  -- What is already persisted, so an absent module's slice survives a save
+  -- made by the public base (see the fallbacks below).
+  local prev = store.get() or {}
 
   -- Native store APIs return false on failure; legacy stubs return nil on success.
   if store.set({
     price_history = market.snapshot().price_history,
     page_opts = opts,
     page = window.current_page(),
-    autotrade = at_core.snapshot().autotrade,
-    autoraid = ar_module().snapshot().autoraid,
-    autovoyage = av_module().snapshot().autovoyage,
-    autoherd = ah_module().snapshot().autoherd,
-    autowar = aw_module().snapshot().autowar,
+    -- Fall back to whatever is already stored when a module is absent. The
+    -- public base must not blank a private automation slice just because it
+    -- cannot see the module that owns it: a user who loaded the public copy
+    -- once would otherwise lose every auto* setting on the next save.
+    autotrade = (at_core and at_core.snapshot().autotrade) or prev.autotrade,
+    autoraid = auto_snapshot(ar_module, "autoraid") or prev.autoraid,
+    autovoyage = auto_snapshot(av_module, "autovoyage") or prev.autovoyage,
+    autoherd = auto_snapshot(ah_module, "autoherd") or prev.autoherd,
+    autowar = auto_snapshot(aw_module, "autowar") or prev.autowar,
   }) == false then
     error("store.set failed: persistence snapshot was not accepted")
   end
@@ -81,7 +99,7 @@ function M.load()
     window.set_page(data.page)
   end
   if data.autotrade then
-    at_core.restore({ autotrade = data.autotrade })
+    if at_core then at_core.restore({ autotrade = data.autotrade }) end
   end
   -- All three keys are ABSENT in a store file saved before their own fix --
   -- data.autoraid/data.autovoyage/data.autoherd are simply nil then, so
@@ -89,16 +107,16 @@ function M.load()
   -- creates fresh defaults on first use, exactly as if this file had never
   -- been touched.
   if data.autoraid then
-    ar_module().restore({ autoraid = data.autoraid })
+    if ar_module() then ar_module().restore({ autoraid = data.autoraid }) end
   end
   if data.autovoyage then
-    av_module().restore({ autovoyage = data.autovoyage })
+    if av_module() then av_module().restore({ autovoyage = data.autovoyage }) end
   end
   if data.autoherd then
-    ah_module().restore({ autoherd = data.autoherd })
+    if ah_module() then ah_module().restore({ autoherd = data.autoherd }) end
   end
   if data.autowar then
-    aw_module().restore({ autowar = data.autowar })
+    if aw_module() then aw_module().restore({ autowar = data.autowar }) end
   end
 end
 

@@ -26,7 +26,16 @@ local lpc = require("lpc")
 -- the dispatcher calls -- and raises "plugin capability is inactive" anywhere
 -- else, which a wm pointer callback is. Any module a click path needs must
 -- therefore be captured at load, as these two are.)
-local ferry = require("ferry")
+local ferry_actions = require("ferry_actions")
+
+-- Ferry is a NATIVE api in the client now (lera's `ferry` global, wrapped by
+-- ferry_actions). available() answers with a reason as its second return, so
+-- this keeps only the boolean for the menus, which just need to know whether
+-- to offer the rows at all.
+local function ferry_available()
+  local ok = ferry_actions.available()
+  return ok and true or false
+end
 local overlay = require("overlay")
 local protocol = require("protocol")
 
@@ -118,7 +127,6 @@ end
 function M.reset()
   disarm()
   stop_viewing()
-  ferry.reset()
   -- A walk whose replies never arrived (a dropped connection mid-walk) would
   -- otherwise refuse every later one as "already running".
   walk = nil
@@ -272,7 +280,7 @@ M.FILE_ACTIONS = {
     send = "rm", confirm = true, kind = "danger" },
 }
 
--- ferry, for anyone running the bridge (github.com/skuggo/ferry-bridge).
+-- ferry, through the client's native API (ferry_actions -> lera's `ferry`).
 -- These are NOT
 -- MUD commands: they move the file between the MUD and a local mirror
 -- checkout, through a process outside Lera, because the plugin sandbox has no
@@ -292,11 +300,6 @@ M.FERRY_ACTIONS = {
 -- The same three against a DIRECTORY. pull and push recurse in ferry itself,
 -- so "everything under it" is ferry's own behaviour rather than a walk this
 -- plugin drives -- unlike uall/lall, where the MUD has no recursion at all.
---
--- The bridge narrows two of them: a directory PUSH skips its ignore list --
--- data/ above all, where the live save files are, plus __pycache__, backups
--- and build noise -- and a directory CC is expanded to the .c files underneath
--- because ferry cc takes files only. A single file is never filtered.
 M.FERRY_DIR_ACTIONS = {
   { key = "ferry-pull", label = "pull", desc = "ferry: this folder and below, MUD -> here",
     op = "pull", confirm = true },
@@ -426,8 +429,11 @@ function M.on_input(text)
   if not key or not PAGER_KEYS[key:lower()] then stop_viewing() end
 end
 
-function M.file_menu(path, anchor)
+function M.file_menu(path, anchor, entry)
   if type(path) ~= "string" or path == "" then return false end
+  -- Resolve what was clicked NOW, so the rows act on this file even after the
+  -- pane has moved on (see ferry_actions.start).
+  local selection = ferry_available() and ferry_actions.selection(entry) or nil
 
   local items = {}
   for i = 1, #M.FILE_ACTIONS do
@@ -436,7 +442,7 @@ function M.file_menu(path, anchor)
   end
   -- Only when a bridge answers. An entry that cannot work should not be on
   -- the menu at all: a greyed-out row still invites the click.
-  if ferry.available() then
+  if ferry_available() then
     for i = 1, #M.FERRY_ACTIONS do
       local spec = M.FERRY_ACTIONS[i]
       items[#items + 1] = { label = spec.label, desc = spec.desc,
@@ -463,9 +469,9 @@ function M.file_menu(path, anchor)
           -- push overwrites what is on the MUD with what is on disk, which is
           -- not a click's worth of consequence on its own.
           if spec.confirm then
-            M.confirm_ferry(spec.op, path, anchor)
+            M.confirm_ferry(spec.op, path, anchor, nil, selection or entry)
           else
-            ferry.run(spec.op, path)
+            ferry_actions.start(spec.op, selection or entry)
           end
           return
         end
@@ -515,8 +521,9 @@ function M.command_menu(cmd, path, anchor)
   return true
 end
 
-function M.dir_menu(path, anchor)
+function M.dir_menu(path, anchor, entry)
   if type(path) ~= "string" or path == "" then return false end
+  local selection = ferry_available() and ferry_actions.selection(entry) or nil
 
   local items = {}
   for i = 1, #M.COMMANDS do
@@ -529,7 +536,7 @@ function M.dir_menu(path, anchor)
     items[#items + 1] = { label = cmd .. " -r", value = cmd .. " -r",
                           desc = "...and every folder under it" }
   end
-  if ferry.available() then
+  if ferry_available() then
     for i = 1, #M.FERRY_DIR_ACTIONS do
       local spec = M.FERRY_DIR_ACTIONS[i]
       items[#items + 1] = { label = spec.label, desc = spec.desc,
@@ -551,9 +558,9 @@ function M.dir_menu(path, anchor)
         local spec = M.FERRY_DIR_ACTIONS[i]
         if spec.key == value then
           if spec.confirm then
-            M.confirm_ferry(spec.op, path, anchor, M.FERRY_DIR_SCOPE[spec.op])
+            M.confirm_ferry(spec.op, path, anchor, M.FERRY_DIR_SCOPE[spec.op], selection or entry)
           else
-            ferry.run(spec.op, path)
+            ferry_actions.start(spec.op, selection or entry)
           end
           return
         end
@@ -587,11 +594,31 @@ function M.confirm_command(label, command, anchor)
   return true
 end
 
+-- The running job, and the one thing worth doing to it. Reached by
+-- right-clicking anywhere in the pane while it runs -- the thing you want to
+-- stop is not a row you can point at.
+function M.cancel_menu(anchor)
+  local what = ferry_actions.describe()
+  if not what then return false end
+  overlay.open({
+    title = what,
+    anchor = anchor,
+    items = {
+      { label = "keep going", desc = "leave it running", value = "", kind = "cancel" },
+      { label = "abort", desc = "stop this job", value = "abort", kind = "danger" },
+    },
+    on_select = function(value)
+      if value == "abort" then ferry_actions.cancel() end
+    end,
+  })
+  return true
+end
+
 -- The same box as confirm_command, for a ferry verb rather than a MUD one.
 -- `extra` spells out the scope when it is wider than the thing clicked --
 -- "and everything under it" for a directory -- so the box says what will
 -- actually happen rather than naming one folder.
-function M.confirm_ferry(op, path, anchor, extra)
+function M.confirm_ferry(op, path, anchor, extra, entry)
   local name = path:match("([^/]+)$") or path
   overlay.open({
     title = "Are you sure?",
@@ -602,7 +629,7 @@ function M.confirm_ferry(op, path, anchor, extra)
         desc = "ferry " .. op .. " " .. name .. (extra and (" " .. extra) or "") },
     },
     on_select = function(value)
-      if value == "yes" then ferry.run(op, path) end
+      if value == "yes" then ferry_actions.start(op, entry) end
     end,
   })
   return true

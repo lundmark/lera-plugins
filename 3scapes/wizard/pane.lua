@@ -14,7 +14,7 @@
 local wm = require("wm")
 local protocol = require("protocol")
 local actions = require("actions")
-local ferry = require("ferry")
+local ferry_actions = require("ferry_actions")
 local theme = require("theme")
 local overlay = require("overlay")
 
@@ -54,8 +54,7 @@ local function listing()
 end
 
 -- Sorted so a grid scans predictably. Directories stay grouped ahead of files
--- -- the grouping is the useful part, and mixing them would scatter the only
--- rows that are clickable.
+-- -- the grouping keeps left-click navigation predictable.
 function M.entries()
   local entry = listing()
   if not entry then return {} end
@@ -310,7 +309,7 @@ function M.render(rect, opts)
   -- log. Two reasons: a transfer can be silent for a long time and the pane is
   -- where you are looking, and the right-click-to-abort gesture depends on
   -- this state -- so if the row is not here, abort will not fire either.
-  local busy = ferry.running()
+  local busy = ferry_actions.running() and ferry_actions.describe()
   if busy and line < gh then
     local text = "* " .. busy .. " -- right-click to abort"
     if #text > w then text = text:sub(1, w) end
@@ -346,6 +345,21 @@ function M.on_pointer(event)
   if event.kind ~= "down" then return false end
   local button = event.button
   if button ~= "left" and button ~= "right" then return false end
+  -- wm still routes a click to the focused pane when the pointer is outside
+  -- it. Nothing here should act on one: the row under a coordinate that is
+  -- not in the pane is a coincidence.
+  if event.inside == false then return false end
+
+  -- A running Ferry job can be cancelled from anywhere inside the pane,
+  -- including blank space, notices and the border: the thing you want to stop
+  -- is not a row you can point at.
+  if button == "right" and ferry_actions.running() and not overlay.active() then
+    local x, y = event.x or 0, event.y or 0
+    if event.inside ~= false and x >= 0 and y >= 0
+        and x < (event.width or 0) and y < (event.height or 0) then
+      return actions.cancel_menu({ x = 0, y = 0 })
+    end
+  end
 
   -- event.x/event.y are pane-local and include the border; run them through the
   -- same inset render() used so a click lands on the cell it visually points
@@ -355,16 +369,6 @@ function M.on_pointer(event)
   local lx = (event.x or 0) - ox
   local ly = (event.y or 0) - oy
   if lx < 0 or lx >= ow or ly < 0 or ly >= oh then return false end
-
-  -- While a ferry command is running, a right-click ANYWHERE in the pane
-  -- aborts it. An abort needs to be reachable without hunting for a target --
-  -- the thing you want to stop is not a row you can point at -- and a
-  -- right-click during a transfer is not plausibly a request for a menu.
-  if button == "right" and ferry.running() and not overlay.active() then
-    ferry.cancel()
-    if ui and ui.dirty then ui.dirty() end
-    return true
-  end
 
   -- An open menu owns every click in the pane: one on an item chooses it, one
   -- anywhere else dismisses. Nothing falls through to the listing underneath,
@@ -421,13 +425,14 @@ function M.on_pointer(event)
   -- Only the text itself is clickable, not the gutter padding after it.
   if (lx - col * cell) >= #e.text then return false end
 
+  -- This pane's own menus own right-click on an entry; Ferry is offered
+  -- inside them (actions.FERRY_ACTIONS) rather than as a second menu system,
+  -- so one click gives you everything that can be done to what you clicked.
   if e.is_dir then
-    -- Right-click narrows the directory ACTIONS to this folder; left-click
-    -- still just walks into it.
     if button == "right" then
       local path = entry_path(e)
       if not path then return false end
-      actions.dir_menu(path, { x = lx, y = ly + brows })
+      actions.dir_menu(path, { x = lx, y = ly + brows }, e)
       return true
     end
     -- A real cd, so the confirmation line updates the cwd exactly as a typed
@@ -444,7 +449,7 @@ function M.on_pointer(event)
   local path = entry_path(e)
   if not path then return false end
   if button == "right" then
-    actions.file_menu(path, { x = lx, y = ly + brows })
+    actions.file_menu(path, { x = lx, y = ly + brows }, e)
   else
     actions.view(path)
   end

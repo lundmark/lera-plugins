@@ -175,8 +175,11 @@ local ROLE_EFF_NEG = { smidir = true, hasetar = true }
 local function role_row(width, label, pct, tgt, eff_text, eff_color, muted)
   local p = math.max(0, math.min(100, tonumber(pct) or 0))
   local bar_color = muted and C.dim or pagelib.pct_color(p, 100)
-  local out = string.format("%s%-11s%s %s %d%%",
-    muted and C.dim or C.white, label, pagelib.RESET, pagelib.bar(14, p, 100, bar_color), p)
+  -- Percentage RIGHT-aligned: it was a bare %d%%, so "5%" and "10%" pushed the
+  -- effect column one cell apart and the effects could not be read down.
+  local out = string.format("%s%-11s%s %s %s",
+    muted and C.dim or C.white, label, pagelib.RESET, pagelib.bar(14, p, 100, bar_color),
+    pagelib.rjust(p .. "%", 4))
   if tgt and tgt ~= p then
     local rising = tgt > p
     out = out .. string.format(" %s%s%d%%%s",
@@ -267,10 +270,47 @@ local function projects_lines(add, width)
   end
 end
 
+-- One "Label: value" cell: dim label, coloured value, same convention as
+-- pagelib.kv() -- which is this shape with exactly one cell on the row.
+-- The Settlers block was drawn entirely plain, so a full city, a starving
+-- job market and a healthy water store all read as the same grey text.
+local function cell(label, value, color)
+  return C.dim .. label .. pagelib.RESET .. " " ..
+         (color or C.white) .. tostring(value) .. pagelib.RESET
+end
+
+-- Headroom, not fill: a city housed to its cap cannot grow, so the warning
+-- colour belongs at HIGH occupancy -- the opposite sense to pct_color, which
+-- is why this is spelled out rather than reusing it.
+local function headroom_color(free, cap)
+  if cap <= 0 then return C.dim end
+  if free <= 0 then return C.bright_red end       -- full: no room to settle
+  if free * 10 <= cap then return C.yellow end    -- under 10% spare
+  return C.bright_green
+end
+
 local function settlers_lines(add, width)
   add(pagelib.header(width, "Settlers"))
-  add(pagelib.trunc(string.format("Population: %s   Tax: %s   Water: %s",
-    pagelib.fmt_num(S.settlers), tax_label(S.settler_tax), pagelib.fmt_num(S.city_water)), width))
+
+  -- Population against its own housing cap, on one row. The two numbers used
+  -- to sit three rows apart ("Population: 550" here, "Housing: 550 cap"
+  -- below), so the single most important fact about a city -- that it is
+  -- full -- was something you had to go and check.
+  do
+    local pop  = S.settlers or 0
+    local cap  = S.settler_housing_cap or 0
+    local free = cap - pop
+    if free < 0 then free = 0 end
+    local tax  = tax_label(S.settler_tax)
+    add(pagelib.trunc(table.concat({
+      cell("Population:", pagelib.fmt_num(pop) .. C.dim .. " / " .. pagelib.RESET ..
+           C.white .. pagelib.fmt_num(cap) .. C.dim .. " housed",
+           headroom_color(free, cap)),
+      -- No Tax is the neutral default; any rate set is a lever pulled.
+      cell("Tax:", tax, tax == "No Tax" and C.dim or C.yellow),
+      cell("Water:", pagelib.fmt_num(S.city_water), C.bright_cyan),
+    }, "   "), width))
+  end
 
   do
     local edict_val, edict_color = "Ready", C.dim
@@ -284,9 +324,17 @@ local function settlers_lines(add, width)
     add(pagelib.kv(width, "Edict:", edict_val, edict_color))
   end
 
-  add(pagelib.trunc(string.format("Housing: %s cap   Plots: %s   Avg Tier: %s",
-    pagelib.fmt_num(S.settler_housing_cap), pagelib.fmt_num(S.settler_housing_plots),
-    string.format("%.2f", (S.settler_housing_avg or 0) / 100)), width))
+  do
+    -- Housing cap moved up to the Population row, where it means something.
+    -- What is left here is the estate itself: how many plots, and how good.
+    local avg = (S.settler_housing_avg or 0) / 100
+    add(pagelib.trunc(table.concat({
+      cell("Plots:", pagelib.fmt_num(S.settler_housing_plots), C.white),
+      cell("Avg Tier:", string.format("%.2f", avg),
+           cc.tier_color(math.floor(avg + 0.5))),
+      cell("Housing:", pagelib.fmt_num(S.settler_housing_cap) .. C.dim .. " cap", C.white),
+    }, "   "), width))
+  end
 
   do
     local hpt = S.settler_housing_plot_tiers or {}
@@ -297,22 +345,44 @@ local function settlers_lines(add, width)
     local total = (hpt.t1 or 0) + (hpt.t2 or 0) + (hpt.t3 or 0) + (hpt.t4 or 0)
                   + (hpt.t5 or 0)
     if total > 0 then
+      -- Each tier in its own rung of the shared 1-5 ladder (cc.tier_color),
+      -- so the shape of the estate is legible at a glance instead of being
+      -- five numbers in one grey run.
       local parts = {}
-      if (hpt.t1 or 0) > 0 then parts[#parts + 1] = "T1:" .. hpt.t1 end
-      if (hpt.t2 or 0) > 0 then parts[#parts + 1] = "T2:" .. hpt.t2 end
-      if (hpt.t3 or 0) > 0 then parts[#parts + 1] = "T3:" .. hpt.t3 end
-      if (hpt.t4 or 0) > 0 then parts[#parts + 1] = "T4:" .. hpt.t4 end
-      if (hpt.t5 or 0) > 0 then parts[#parts + 1] = "T5:" .. hpt.t5 end
+      for tier = 1, 5 do
+        local n = hpt["t" .. tier] or 0
+        if n > 0 then
+          parts[#parts + 1] = cc.tier_color(tier) .. "T" .. tier .. ":" .. n .. pagelib.RESET
+        end
+      end
       add(pagelib.kv(width, "Plot Tiers:", table.concat(parts, "  ")))
     end
   end
 
-  add(pagelib.trunc(string.format("Housing Upkeep: %s/tick   Community Upkeep: %s/tick",
-    pagelib.fmt_num(S.settler_housing_upkeep), pagelib.fmt_num(S.settler_community_upkeep)), width))
+  -- Upkeep is money leaving every tick: the same yellow this client uses for
+  -- a cost everywhere else (a build's "Cost: N daler", the siege bill).
+  add(pagelib.trunc(table.concat({
+    cell("Housing Upkeep:", pagelib.fmt_num(S.settler_housing_upkeep) ..
+         C.dim .. "/tick", C.yellow),
+    cell("Community Upkeep:", pagelib.fmt_num(S.settler_community_upkeep) ..
+         C.dim .. "/tick", C.yellow),
+  }, "   "), width))
 
-  add(pagelib.trunc(string.format("Jobs: %s   Employed: %s   Market Staffed: %s",
-    pagelib.fmt_num(S.settler_jobs), pagelib.fmt_num(S.settler_employed),
-    pagelib.fmt_num(S.settler_market_staffed)), width))
+  do
+    -- Employment is a ratio, so it gets the standard ratio colour; an idle
+    -- workforce is the thing worth spotting here. Market staffing is a plain
+    -- presence check -- someone minding the stalls, or nobody.
+    local jobs     = S.settler_jobs or 0
+    local employed = S.settler_employed or 0
+    local staffed  = S.settler_market_staffed or 0
+    add(pagelib.trunc(table.concat({
+      cell("Jobs:", pagelib.fmt_num(jobs), C.white),
+      cell("Employed:", pagelib.fmt_num(employed),
+           jobs > 0 and pagelib.pct_color(employed, jobs) or C.dim),
+      cell("Market Staffed:", pagelib.fmt_num(staffed),
+           staffed > 0 and C.bright_green or C.red),
+    }, "   "), width))
+  end
 
   add(metric_bar_line(width, "Mood", S.settler_mood))
   add(metric_bar_line(width, "  Housing", S.settler_housing_quality))
@@ -352,17 +422,28 @@ local function settlers_lines(add, width)
       local tier = cb[cid] or 0
       if tier > 0 then parts[#parts + 1] = bldg_display(cid) .. " T" .. tier end
     end
-    if #parts > 0 then
-      add(pagelib.kv(width, "Civic Buildings:", table.concat(parts, ", ")))
+    for _, line in ipairs(pagelib.wrap_parts(width, "Civic Buildings:", parts)) do
+      add(line)
     end
   end
 
-  add(pagelib.trunc(string.format(
-    "Grain: %s   Fish: %s   %sBread:%s %s   %sSalted Fish:%s %s   Mead: %s",
-    pagelib.fmt_num(stock_total("grain")), pagelib.fmt_num(stock_total("fish")),
-    C.yellow, pagelib.RESET, pagelib.fmt_num(stock_total("bread")),
-    C.bright_cyan, pagelib.RESET, pagelib.fmt_num(stock_total("salted_fish")),
-    pagelib.fmt_num(stock_total("mead"))), width))
+  -- Every good coloured from city_common's shared palette. This row used to
+  -- hand-pick a colour for two of the five and leave Grain, Fish and Mead
+  -- plain -- and its Salted Fish (bright_cyan) did not even match the
+  -- palette's entry (bright_blue), so the same good was two colours
+  -- depending on which row you read it from.
+  do
+    local parts = {}
+    for _, g in ipairs({ "grain", "fish", "bread", "salted_fish", "mead" }) do
+      -- Colon INSIDE the coloured span, as the hand-rolled row had it
+      -- ("%sBread:%s"): label and colon are one visual unit.
+      parts[#parts + 1] = cc.good_color(g) .. cc.good_label(g) .. ":" .. pagelib.RESET
+        .. " " .. pagelib.fmt_num(stock_total(g))
+    end
+    for _, line in ipairs(pagelib.wrap_parts(width, "Stock:", parts, "   ")) do
+      add(line)
+    end
+  end
 
   do
     local spoils = stock_total("spoils")
@@ -378,8 +459,8 @@ local function settlers_lines(add, width)
         parts[#parts + 1] = cc.good_color(good) .. cc.good_label(good) .. pagelib.RESET .. ":-" .. amt
       end
     end
-    if #parts > 0 then
-      add(pagelib.trunc(C.dim .. "Consumption/tick: " .. pagelib.RESET .. table.concat(parts, ", "), width))
+    for _, line in ipairs(pagelib.wrap_parts(width, "Consumption/tick:", parts)) do
+      add(line)
     end
   end
 
@@ -404,9 +485,15 @@ local function settlers_lines(add, width)
   if #(S.settler_actions or {}) > 0 then
     local parts = {}
     for _, act in ipairs(S.settler_actions) do
-      parts[#parts + 1] = act.name .. " " .. cc.fmt_time(act.secs)
+      -- kv()'s value_color used to paint the whole joined value yellow;
+      -- wrap_parts takes pre-coloured parts, so each carries its own.
+      parts[#parts + 1] = C.yellow .. act.name .. " " .. cc.fmt_time(act.secs) .. pagelib.RESET
     end
-    add(pagelib.kv(width, "Actions:", table.concat(parts, ", "), C.yellow))
+    -- Server-supplied and unbounded, so kv()'s truncation lost the tail the
+    -- same way Civic Buildings did.
+    for _, line in ipairs(pagelib.wrap_parts(width, "Actions:", parts)) do
+      add(line)
+    end
   end
 
   if #(S.settler_projects or {}) > 0 then
@@ -438,36 +525,62 @@ end
 -- ---------------------------------------------------------------------------
 
 local LOY_LABELS = { [1] = "Wavering", [2] = "Uneasy", [3] = "Steady", [4] = "Loyal", [5] = "Devoted" }
+-- The MUD renders loyalty flat white (vroster.c:307, 371) -- a deliberate
+-- divergence. Five levels map onto pct_color()'s five bands exactly, so the
+-- column reads on the same red->bright_green ladder as every other graded
+-- figure on these pages rather than inventing a second scale.
+local LOY_COLORS = {
+  [1] = C.bright_red, [2] = C.red, [3] = C.yellow, [4] = C.green, [5] = C.bright_green,
+}
+-- "unit_leader" had no entry, so the RAW key fell through the
+-- `LABELS[status] or status` fallback below -- 11 cells into an 8-wide
+-- column, shoving every later column right on exactly those rows. It is a
+-- missing label, not a column that needs widening.
 local HIRD_STATUS_LABELS = {
   personal_guard = "Guard", garrison = "Garrison", city_pool = "Pool", wounded = "Wounded",
+  unit_leader = "Leader",
 }
 local HIRD_STATUS_COLORS = {
   personal_guard = C.bright_green, garrison = C.yellow, city_pool = C.dim, wounded = C.red,
+  unit_leader = C.cyan,
 }
 local HIRD_MODE_LABELS = { neutral = "Neutral", offensive = "Offensive", defensive = "Defensive" }
 local HIRD_MODE_COLORS = { neutral = C.white, offensive = C.red, defensive = C.cyan }
 
 -- Ported from LEGACY's pip_bar (guild_viking.lua:10217-10225): val is 1-10,
 -- mapped to 1-5 pips.
+--
+-- Graded to match the MUD's own roster. vroster.c's skill_color() keys off
+-- the PIP COUNT, not the raw stat -- its skill_bar() fills `i < sk` over five
+-- cells, so its `sk` is already 1-5 where ours is 1-10. Colouring by `pips`
+-- (post-halving) rather than `val` is what keeps the two in agreement;
+-- thresholds are skill_color()'s, with C.dim standing in for @viking_muted@.
+local PIP_COLORS = { [5] = C.white, [4] = C.bright_green, [3] = C.yellow }
+
 local function pip_bar(val, max_pips)
   local pips = math.floor(((val or 0) + 1) / 2)
   if pips < 1 then pips = 1 end
   if pips > max_pips then pips = max_pips end
   local s = "["
   for i = 1, max_pips do s = s .. (i <= pips and "*" or "-") end
-  return s .. "]"
+  return (PIP_COLORS[pips] or C.dim) .. s .. "]" .. pagelib.RESET
 end
 
 -- Fixed-width fields (name 14, loyalty/status 8, age 7, mode 9 -- the
 -- widest label in each set) so every row lines up and none of the fixed
 -- vocabulary (e.g. "Offensive", "Garrison") is ever truncated at width 80;
--- total visible width is 14+7+1+7+1+8+1+7+1+4+8+1+8+1+9 = 78, with room to
+-- total visible width is 16+1+7+1+7+1+8+1+7+4+2+8+1+9 = 73, with room to
 -- spare for the optional gear tag.
 local function hird_row(width, hm)
   local is_champ = (hm.champ or 0) ~= 0
   local name_color = is_champ and C.bright_cyan or C.bright_green
-  local display_name = (hm.name or "?") .. (is_champ and " [C]" or "")
+  -- Champion marker LEADS the name: it used to trail it, and a name that
+  -- filled the column took the marker with it when the cell truncated
+  -- ("Haldor Brandsson" is exactly 16). A trimmed name still reads; a
+  -- silently dropped champion flag does not.
+  local display_name = (is_champ and "[C] " or "") .. (hm.name or "?")
   local loy = LOY_LABELS[hm.loyalty] or "Steady"
+  local loy_color = LOY_COLORS[hm.loyalty] or C.yellow
   local age_label = (hm.age_phase == "veteran") and "Veteran"
     or (hm.age_phase == "elder") and "Elder" or "Young"
   local age_color = (hm.age_phase == "veteran") and C.white
@@ -477,12 +590,20 @@ local function hird_row(width, hm)
   local mode_key = (hm.mode == "offensive" or hm.mode == "defensive") and hm.mode or "neutral"
   local gear = ((hm.wpn or 0) > 0 or (hm.arm or 0) > 0)
     and string.format(" %sW%d/A%d%s", C.magenta, hm.wpn or 0, hm.arm or 0, pagelib.RESET) or ""
-  return pagelib.trunc(string.format(
-    "%s%-14s%s %s %s %-8s %s%-7s%s Lv%-2d%s  %s%-8s%s %s%-9s%s",
-    name_color, display_name, pagelib.RESET, pip_bar(hm.atk, 5), pip_bar(hm.def, 5), loy,
-    age_color, age_label, pagelib.RESET, hm.level or 0, gear,
-    status_color, status_label, pagelib.RESET,
-    HIRD_MODE_COLORS[mode_key], HIRD_MODE_LABELS[mode_key], pagelib.RESET), width)
+  -- Name and status go through trunc(), which pads AND truncates; the %-14s
+  -- and %-8s they replace only padded. Real names run to 18 cells
+  -- ("Steinulf Brandsson"), a champion's " [C]" adds four more, and
+  -- "unit_leader" is 11 -- so both fields overflowed and shoved every column
+  -- after them right, by a different amount on each row.
+  return pagelib.trunc(
+    pagelib.trunc(name_color .. display_name .. pagelib.RESET, 16)
+    .. " " .. pip_bar(hm.atk, 5) .. " " .. pip_bar(hm.def, 5)
+    .. " " .. loy_color .. string.format("%-8s", loy) .. pagelib.RESET
+    .. " " .. age_color .. string.format("%-7s", age_label) .. pagelib.RESET
+    .. string.format(" Lv%-2d", hm.level or 0) .. gear
+    .. "  " .. pagelib.trunc(status_color .. status_label .. pagelib.RESET, 8)
+    .. " " .. HIRD_MODE_COLORS[mode_key] .. HIRD_MODE_LABELS[mode_key]
+    .. pagelib.RESET, width)
 end
 
 local function varangian_lines(add, width)

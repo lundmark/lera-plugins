@@ -11,9 +11,9 @@ M.version = "1.0"
 M.priority = 50
 
 local actions = require("actions")
-local ferry = require("ferry")
 local complete = require("complete")
 local protocol = require("protocol")
+local ferry_actions = require("ferry_actions")
 -- Captured at load for the same reason actions.lua does it: offer() below runs
 -- from M.complete(), which the profile drives from a `bind` -- trusted code,
 -- outside this plugin's capability, where a call-time require() raises "plugin
@@ -184,7 +184,9 @@ local function wiz_command(args)
     print("[wizard] home: " .. (protocol.home() or "(unknown)"))
     print("[wizard] Files.List: " ..
           (protocol.available() and "available" or "unavailable (not a wizard?)"))
-    print("[wizard] " .. ferry.status_line())
+    local available, reason = ferry_actions.available()
+    print("[wizard] Ferry: " .. (available and "available" or
+          "unavailable (" .. tostring(reason) .. ")"))
     return
   end
 
@@ -233,18 +235,22 @@ function M.on_load()
   -- plugin has one load/unload story.
   actions.install()
 
-  -- Say once, on load, whether the ferry bridge is there. Everything else
-  -- about this plugin announces itself by existing -- the pane, the menus --
-  -- but a missing bridge shows up only as three rows that are not on a menu,
-  -- which looks exactly like something being broken.
-  print("[wizard] " .. ferry.status_line())
+  -- Say once, on load, whether Ferry is there. Everything else about this
+  -- plugin announces itself by existing -- the pane, the menus -- but a
+  -- missing Ferry shows up only as rows that are not on a menu, which looks
+  -- exactly like something being broken.
+  do
+    local available, reason = ferry_actions.available()
+    print("[wizard] Ferry: " .. (available and "available -- pull/push/cc are on the file menu"
+          or ("unavailable (" .. tostring(reason) .. ")")))
+  end
 
   if command and not command.get("/wiz") then
     local id, err = command.register({
       name = "/wiz",
       usage = "/wiz [refresh | cd <path> | ls [path]]",
       summary = "Wizard file browser",
-      description = "Show the tracked working directory and Files.List "
+      description = "Show the tracked working directory and Files.List/Ferry "
         .. "availability, refresh the file pane, change directory, or print a "
         .. "listing to the output buffer.",
       accepts_args = true,
@@ -269,6 +275,7 @@ function M.on_disconnect()
 end
 
 function M.on_unload()
+  ferry_actions.cleanup()
   for i = 1, #gmcp_ids do gmcp.remove(gmcp_ids[i]) end
   for i = 1, #trigger_ids do trigger.remove(trigger_ids[i]) end
   actions.remove()

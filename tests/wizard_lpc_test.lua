@@ -292,11 +292,13 @@ check("recursive: refuses to start a walk on top of nothing is fine",
 
 -- ---- ferry entries ---------------------------------------------------------
 --
--- The plugin sandbox has no disk and no shell, so ferry runs in a bridge
--- process (github.com/skuggo/ferry-bridge) reached over ipc. The rule that
--- matters here is that a wizard with no bridge running sees no ferry entries
--- at all: an entry
--- that cannot work should not invite the click.
+-- Ferry is NATIVE in the client now: Lera exposes a `ferry` global and
+-- ferry_actions wraps it. (It used to be a bridge process of ours reached over
+-- ipc; that is gone.) The rule that matters here is unchanged -- a wizard
+-- whose client cannot ferry sees no ferry rows at all: a row that cannot work
+-- should not invite the click. The job side of the API -- launching,
+-- progress, completion, cancellation -- is Simon's, and is covered by
+-- tests/wizard_ferry_test.lua.
 
 local overlay = require("overlay")
 
@@ -308,38 +310,46 @@ local function ferry_rows()
   return n
 end
 
--- No ipc at all: the sandbox of a client built without it, or a session that
--- never initialised one.
-ipc = nil
+local function reload_actions()
+  package.loaded["ferry_actions"] = nil
+  package.loaded["actions"] = nil
+  actions = require("actions")
+end
+
+-- An older Lera with no ferry at all.
+ferry = nil
+reload_actions()
 actions.file_menu("/players/x/foo.c", { x = 0, y = 0 })
-check("ferry: no ipc means no ferry entries", ferry_rows() == 0, ferry_rows())
+check("ferry: a client without ferry shows no ferry rows", ferry_rows() == 0, ferry_rows())
 check("ferry: and the MUD commands are still all there",
       #overlay.items() == 10, #overlay.items())
 overlay.close()
 
--- ipc present, but nothing listening.
-local listed = {}
-message_cb = nil
-ipc = {
-  init = function() return true end,
-  on_message = function(f) message_cb = f end,
-  list = function() return listed end,
-  connect = function() return 0 end,
-  send = function() return true end,
-  disconnect = function() end,
-}
-package.loaded["ferry"] = nil
-package.loaded["actions"] = nil
-actions = require("actions")
-
+-- Present, but not configured: available() answers with its reason.
+ferry = { available = function() return false, "no mirror configured" end,
+          running = function() return nil end }
+reload_actions()
 actions.file_menu("/players/x/foo.c", { x = 0, y = 0 })
-check("ferry: no bridge listening means no ferry entries", ferry_rows() == 0, ferry_rows())
+check("ferry: an unconfigured mirror shows no ferry rows", ferry_rows() == 0, ferry_rows())
 overlay.close()
 
--- A bridge appears.
-listed = { "some-other-session", "ferry-bridge" }
+-- Configured.
+local launched, cancelled = {}, {}
+ferry = {
+  available = function() return true end,
+  running = function() return nil end,
+  cancel = function(id) cancelled[#cancelled + 1] = id; return true end,
+}
+for _, verb in ipairs({ "pull", "push", "cc" }) do
+  ferry[verb] = function(path, opts)
+    launched[#launched + 1] = { op = verb, path = path, opts = opts }
+    return #launched
+  end
+end
+reload_actions()
+
 actions.file_menu("/players/x/foo.c", { x = 0, y = 0 })
-check("ferry: a listening bridge adds pull/push/cc", ferry_rows() == 3, ferry_rows())
+check("ferry: a working ferry adds pull/push/cc", ferry_rows() == 3, ferry_rows())
 do
   local labels = {}
   for _, it in ipairs(overlay.items()) do labels[it.value] = it end
@@ -348,105 +358,37 @@ do
   check("ferry: push IS marked dangerous -- it overwrites the MUD",
         labels["ferry-push"] ~= nil and labels["ferry-push"].kind == "danger")
 end
+overlay.close()
 
--- Choosing pull sends one framed request; choosing push asks first.
+-- Both transfers ask first: a pull overwrites what is on disk, a push
+-- overwrites what is on the MUD. cc changes nothing, so it does not ask.
 do
-  local sent_msgs = {}
-  ipc.send = function(peer, msg) sent_msgs[#sent_msgs + 1] = msg; return true end
-
-  local items = overlay.items()
-  local function pick(value)
-    for i, it in ipairs(items) do
-      if it.value == value then
-        local rect = overlay.layout(60, 20)
-        overlay.on_click(rect.x + 1, rect.y + (rect.bordered and 1 or 0) + i - 1, 60, 20)
-        return
-      end
+  local function confirms(list, key)
+    for _, spec in ipairs(list) do
+      if spec.key == key then return spec.confirm == true end
     end
+    return nil
   end
-
-  -- Both transfers ask first: a pull overwrites what is on disk, a push
-  -- overwrites what is on the MUD.
-  pick("ferry-pull")
   check("ferry: pull asks before overwriting local files",
-        #sent_msgs == 0 and overlay.active(), #sent_msgs)
+        confirms(actions.FERRY_ACTIONS, "ferry-pull") == true)
+  check("ferry: push asks too", confirms(actions.FERRY_ACTIONS, "ferry-push") == true)
+  check("ferry: cc does not -- it changes nothing",
+        confirms(actions.FERRY_ACTIONS, "ferry-cc") == false)
 
-  items = overlay.items()
-  pick("yes")
-  check("ferry: and goes out as one request once confirmed",
-        #sent_msgs == 1 and sent_msgs[1].op == "pull"
-        and sent_msgs[1].path == "/players/x/foo.c",
-        sent_msgs[1] and sent_msgs[1].op)
-
-  actions.file_menu("/players/x/foo.c", { x = 0, y = 0 })
-  items = overlay.items()
-  pick("ferry-push")
-  check("ferry: push asks before overwriting the MUD",
-        #sent_msgs == 1 and overlay.active(), #sent_msgs)
+  -- A directory push says that its scope is narrowed, and by what.
+  check("ferry: the directory push confirmation names the exclusions",
+        (actions.FERRY_DIR_SCOPE.push or ""):find("data/", 1, true) ~= nil,
+        actions.FERRY_DIR_SCOPE.push)
 end
 
--- The bridge is a process the wizard starts by hand, so "not running" is a
--- normal state. It has to be visible: three rows quietly missing from a menu
--- looks exactly like something being broken.
-do
-  local ferry = require("ferry")
-
-  listed = {}
-  check("ferry: says so when no bridge is running",
-        ferry.status_line():find("no bridge", 1, true) ~= nil, ferry.status_line())
-
-  listed = { "ferry-bridge" }
-  check("ferry: says so when one is",
-        ferry.status_line():find("ready", 1, true) ~= nil, ferry.status_line())
-
-  local saved = ipc
-  ipc = nil
-  check("ferry: and says when the client has no ipc at all",
-        ferry.status_line():find("unavailable", 1, true) ~= nil, ferry.status_line())
-  ipc = saved
-end
-
--- ---- progress --------------------------------------------------------------
+-- ---- abort -----------------------------------------------------------------
 --
--- A directory transfer is the case that needed this: ferry reports one line
--- per file, and collecting them until the process ends means silence for the
--- length of the transfer and then everything at once. The bridge streams them,
--- and these are the two things the client must get right -- show each one with
--- a percentage, and not print the whole transfer a second time at the end.
+-- While a job runs, a right-click anywhere in the pane is about THAT job: the
+-- thing you want to stop is not a row you can point at. It opens a two-row
+-- box rather than aborting on the spot, because a stray right-click should
+-- not kill a transfer.
 
 do
-  local ferry = require("ferry")
-  listed = { "ferry-bridge" }
-
-  local said = {}
-  local real_print = print
-  print = function(line) said[#said + 1] = tostring(line) end
-
-  ferry.available()
-  ferry.run("push", "/players/x")
-  local function feed(msg) message_cb("ferry-bridge", msg) end
-  feed({ progress = true, op = "push", done = 1, total = 4, line = "pushed a.c" })
-  feed({ progress = true, op = "push", done = 3, total = 4, line = "pushed c.c" })
-  feed({ id = 1, ok = true, op = "push", path = "/players/x",
-         output = "pushed a.c\nerror: b.c was skipped" })
-  print = real_print
-
-  local joined = table.concat(said, "\n")
-  check("progress: each file is reported with a percentage",
-        joined:find("1/4 (25%)", 1, true) ~= nil
-        and joined:find("3/4 (75%)", 1, true) ~= nil, joined)
-  check("progress: the finish is announced", joined:find("done", 1, true) ~= nil, joined)
-  check("progress: a line already shown is not repeated in the summary",
-        select(2, joined:gsub("pushed a%.c", "")) == 1, joined)
-  check("progress: but anything NOT already shown is",
-        joined:find("b.c was skipped", 1, true) ~= nil, joined)
-end
-
--- ---- abort, and asking first ----------------------------------------------
-
-do
-  -- pane pulls in wm for its scroller; this suite has no screen, so stub it
-  -- the way the pane suite does.
   package.loaded["wm"] = package.loaded["wm"] or {
     make_scroller = function(opts)
       return {
@@ -462,100 +404,44 @@ do
   ui.text_ansi = ui.text_ansi or function() end
   ui.box = ui.box or function() end
 
-  local ferry = require("ferry")
+  package.loaded["pane"] = nil
   local pane = require("pane")
-  local overlay = require("overlay")
-  listed = { "ferry-bridge" }
+  local ferry_actions = require("ferry_actions")
 
-  local sent_msgs = {}
-  ipc.send = function(_, msg) sent_msgs[#sent_msgs + 1] = msg; return true end
-
-  -- Nothing running: a right-click is a menu, not an abort.
-  check("abort: nothing to abort when nothing runs", ferry.running() == nil)
-
-  ferry.run("pull", "/players/x")
-  check("abort: a running command is visible to the pane",
-        (ferry.running() or ""):find("pull", 1, true) ~= nil, tostring(ferry.running()))
+  -- Launch through ferry_actions, the way a menu row does, so the pane sees
+  -- the job it will describe.
+  protocol.set_cwd("/players")
+  protocol.store("/players", { dirs = { "x" }, files = {}, complete = true })
+  local started = ferry_actions.start("pull", { name = "x", is_dir = true })
+  check("abort: the menu row launches through the native API",
+        started == true and launched[#launched].op == "pull"
+        and launched[#launched].path == "/players/x", tostring(started))
+  local job_id = #launched
+  ferry.running = function() return job_id end
 
   overlay.close()
   local consumed = pane.on_pointer({ kind = "down", button = "right", x = 1, y = 2,
                                      inside = true, width = 30, height = 16 })
-  check("abort: a right-click anywhere sends cancel, and opens no menu",
-        consumed == true and not overlay.active()
-        and sent_msgs[#sent_msgs].op == "cancel",
-        tostring(sent_msgs[#sent_msgs] and sent_msgs[#sent_msgs].op))
-  check("abort: and the pane stops offering it", ferry.running() == nil)
+  check("abort: a right-click anywhere offers to stop the job",
+        consumed == true and overlay.active(), tostring(consumed))
+  local rows = {}
+  for _, it in ipairs(overlay.items() or {}) do rows[it.value] = it end
+  check("abort: the box defaults to leaving it alone",
+        overlay.items()[1].value == "" and rows["abort"] ~= nil)
+  overlay.close()
 
-  -- Both transfers ask first now: a pull overwrites what is on disk just as a
-  -- push overwrites what is on the MUD.
-  local function confirms(list, key)
-    for _, spec in ipairs(list) do
-      if spec.key == key then return spec.confirm == true end
-    end
-    return nil
-  end
-  check("abort: pull asks before overwriting local files",
-        confirms(actions.FERRY_ACTIONS, "ferry-pull") == true)
-  check("abort: push asks too", confirms(actions.FERRY_ACTIONS, "ferry-push") == true)
-  check("abort: cc does not -- it changes nothing",
-        confirms(actions.FERRY_ACTIONS, "ferry-cc") == false)
-
-  -- A directory push says that its scope is narrowed, and by what.
-  check("abort: the directory push confirmation names the exclusions",
-        (actions.FERRY_DIR_SCOPE.push or ""):find("data/", 1, true) ~= nil,
-        actions.FERRY_DIR_SCOPE.push)
-end
-
--- ---- silence ---------------------------------------------------------------
---
--- A directory that turns out to need no transfer makes ferry print NOTHING,
--- for as long as the scan takes -- measured at 47 seconds on a real tree. The
--- client used to show that as a long nothing followed by "done", which reads
--- as "did that work?". Two frames fix it: a heartbeat while it runs, and an
--- explicit answer at the end.
-
-do
-  local ferry = require("ferry")
-  listed = { "ferry-bridge" }
-
-  local said = {}
-  local real_print = print
-  print = function(line) said[#said + 1] = tostring(line) end
-
-  ferry.available()
-  ferry.run("pull", "/players/x")
-  message_cb("ferry-bridge", { progress = true, op = "pull", waiting = true })
-  check("silence: a heartbeat says it is still working",
-        (said[#said] or ""):find("still working", 1, true) ~= nil, said[#said])
-  check("silence: and repeats how to stop it",
-        (said[#said] or ""):find("abort", 1, true) ~= nil, said[#said])
-
-  message_cb("ferry-bridge", { id = 1, ok = true, op = "pull", path = "/players/x",
-                               output = "", nothing_to_do = true })
-  print = real_print
-  check("silence: an in-sync tree says so, rather than a bare done",
-        (said[#said] or ""):find("already in sync", 1, true) ~= nil, said[#said])
-  check("silence: and the job is over", ferry.running() == nil)
-end
-
--- The pane names a running command, so the state the abort gesture depends on
--- is visible rather than implied. If this row is missing, right-click will not
--- fire either -- which is exactly the confusion it exists to prevent.
-do
-  local ferry = require("ferry")
-  local pane = require("pane")
+  -- The pane names what is running, so the state the abort gesture depends on
+  -- is visible rather than implied.
   local drawn = {}
   local real = ui.text_ansi
   ui.text_ansi = function(rect, text) drawn[#drawn + 1] = text end
-
-  ferry.run("push", "/players/x")
   pane.render({ x = 0, y = 0, w = 60, h = 12 }, {})
   ui.text_ansi = real
-
   local joined = table.concat(drawn, "\n"):gsub("\27%[[%d;]*m", "")
-  check("silence: the pane shows what is running",
-        joined:find("push /players/x", 1, true) ~= nil, joined:sub(1, 120))
-  check("silence: and that right-click aborts it",
+  check("abort: the pane shows what is running",
+        joined:find("pull /players/x", 1, true) ~= nil, joined:sub(1, 120))
+  check("abort: and that right-click aborts it",
         joined:find("right%-click to abort") ~= nil, joined:sub(1, 120))
-  ferry.reset()
+
+  ferry.running = function() return nil end
 end

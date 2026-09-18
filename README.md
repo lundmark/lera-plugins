@@ -422,7 +422,7 @@ This is the reusable plugin API only. Packaging or converting the existing
 | Plugin | Commands | Description |
 |--------|----------|-------------|
 | `autologin` | `/autologin` | Automatic login on connect |
-| `deadmans` | `/deadmans` | Idle detection with warnings and auto-disconnect |
+| `deadmans` | `/deadmans` | Fixed 15-minute idle limit for automated sends; warns at 10 minutes. Read-only status, no settings or anti-idle. |
 | `gmcp_state` | `/gmcp` | Subscribes to GMCP packages, tracks state, formats vitals bars |
 | `help` | *(none)* | Help content library; commands come from `require('commands')` |
 | `input_echo` | *(none)* | Display sent commands in output |
