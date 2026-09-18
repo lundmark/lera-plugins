@@ -505,3 +505,57 @@ do
         (actions.FERRY_DIR_SCOPE.push or ""):find("data/", 1, true) ~= nil,
         actions.FERRY_DIR_SCOPE.push)
 end
+
+-- ---- silence ---------------------------------------------------------------
+--
+-- A directory that turns out to need no transfer makes ferry print NOTHING,
+-- for as long as the scan takes -- measured at 47 seconds on a real tree. The
+-- client used to show that as a long nothing followed by "done", which reads
+-- as "did that work?". Two frames fix it: a heartbeat while it runs, and an
+-- explicit answer at the end.
+
+do
+  local ferry = require("ferry")
+  listed = { "ferry-bridge" }
+
+  local said = {}
+  local real_print = print
+  print = function(line) said[#said + 1] = tostring(line) end
+
+  ferry.available()
+  ferry.run("pull", "/players/x")
+  message_cb("ferry-bridge", { progress = true, op = "pull", waiting = true })
+  check("silence: a heartbeat says it is still working",
+        (said[#said] or ""):find("still working", 1, true) ~= nil, said[#said])
+  check("silence: and repeats how to stop it",
+        (said[#said] or ""):find("abort", 1, true) ~= nil, said[#said])
+
+  message_cb("ferry-bridge", { id = 1, ok = true, op = "pull", path = "/players/x",
+                               output = "", nothing_to_do = true })
+  print = real_print
+  check("silence: an in-sync tree says so, rather than a bare done",
+        (said[#said] or ""):find("already in sync", 1, true) ~= nil, said[#said])
+  check("silence: and the job is over", ferry.running() == nil)
+end
+
+-- The pane names a running command, so the state the abort gesture depends on
+-- is visible rather than implied. If this row is missing, right-click will not
+-- fire either -- which is exactly the confusion it exists to prevent.
+do
+  local ferry = require("ferry")
+  local pane = require("pane")
+  local drawn = {}
+  local real = ui.text_ansi
+  ui.text_ansi = function(rect, text) drawn[#drawn + 1] = text end
+
+  ferry.run("push", "/players/x")
+  pane.render({ x = 0, y = 0, w = 60, h = 12 }, {})
+  ui.text_ansi = real
+
+  local joined = table.concat(drawn, "\n"):gsub("\27%[[%d;]*m", "")
+  check("silence: the pane shows what is running",
+        joined:find("push /players/x", 1, true) ~= nil, joined:sub(1, 120))
+  check("silence: and that right-click aborts it",
+        joined:find("right%-click to abort") ~= nil, joined:sub(1, 120))
+  ferry.reset()
+end

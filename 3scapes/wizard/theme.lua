@@ -50,8 +50,12 @@ M.PLAIN   = ""          -- terminal default
 -- permanent row shout over the listing it sits above.
 M.BRACKET = "\27[90m"   -- dim: the [ ] around a button
 M.BUTTON  = "\27[37m"   -- white: an action button's word
-M.NAV     = "\27[34m"   -- blue: a navigation button's word
+-- Bright blue, not plain: SGR 34 on a dark terminal is near-invisible, which
+-- is a poor showing for the two buttons that move you around. The toning-down
+-- is carried by the dim brackets either side, not by dimming the word itself.
+M.NAV     = "\27[94m"   -- bright blue: a navigation button's word
 M.NOTICE  = "\27[90m"   -- dim
+M.BUSY    = "\27[93m"   -- bright yellow: a ferry command is running
 
 -- Menu rows are two columns: the command, then what it does. The command is
 -- what you aim at, so it keeps the strong colour; the explanation is there to

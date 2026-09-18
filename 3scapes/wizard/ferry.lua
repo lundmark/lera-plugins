@@ -102,6 +102,17 @@ on_message = function(peer, message)
 
   -- A file went by while the command is still running.
   if message.progress then
+    -- A heartbeat: ferry has said nothing for a few seconds. On a directory
+    -- that turns out to need no transfer it says nothing at ALL, for as long
+    -- as the scan takes, and silence is indistinguishable from a hang.
+    if message.waiting then
+      if running then
+        running.beats = (running.beats or 0) + 1
+        note("still working on " .. running.op .. " " .. running.path ..
+             " (right-click the pane to abort)")
+      end
+      return
+    end
     if message.line then seen_lines[message.line] = true end
     note(progress_line(message))
     return
@@ -113,7 +124,11 @@ on_message = function(peer, message)
 
   running = nil
   local line = (message.op or "ferry") .. " " .. (message.path or "")
-  if message.ok then
+  if message.ok and message.nothing_to_do then
+    -- ferry printed nothing and succeeded: everything was already in sync.
+    -- Saying "done" alone after a long wait reads as "did that work?".
+    note(line .. ": nothing to transfer, already in sync")
+  elseif message.ok then
     note(line .. " done")
   else
     note(line .. " FAILED")
@@ -176,7 +191,7 @@ function M.run(op, path, cb)
     note("could not reach the bridge")
     return false
   end
-  running = { op = op, path = path }
+  running = { op = op, path = path, started = os.time() }
   note(op .. " " .. path .. " ... (right-click the pane to abort)")
   return true
 end

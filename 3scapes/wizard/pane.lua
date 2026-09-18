@@ -303,6 +303,19 @@ function M.render(rect, opts)
   if notice and line < gh then
     ui.text_ansi(ui.rect(x, y + brows + line, w, 1),
                  theme.paint(notice, theme.NOTICE))
+    line = line + 1
+  end
+
+  -- A running ferry command, named in the pane rather than only in the output
+  -- log. Two reasons: a transfer can be silent for a long time and the pane is
+  -- where you are looking, and the right-click-to-abort gesture depends on
+  -- this state -- so if the row is not here, abort will not fire either.
+  local busy = ferry.running()
+  if busy and line < gh then
+    local text = "* " .. busy .. " -- right-click to abort"
+    if #text > w then text = text:sub(1, w) end
+    ui.text_ansi(ui.rect(x, y + brows + line, #text, 1),
+                 theme.paint(text, theme.BUSY))
   end
 
   -- Last, so it sits over the listing rather than under it. Coordinates are
