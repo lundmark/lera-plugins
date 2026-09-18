@@ -272,7 +272,8 @@ M.FILE_ACTIONS = {
     send = "rm", confirm = true, kind = "danger" },
 }
 
--- ferry, for anyone running the bridge (tools/ferry-bridge). These are NOT
+-- ferry, for anyone running the bridge (github.com/skuggo/ferry-bridge).
+-- These are NOT
 -- MUD commands: they move the file between the MUD and a local mirror
 -- checkout, through a process outside Lera, because the plugin sandbox has no
 -- disk of its own.
@@ -292,14 +293,14 @@ M.FERRY_ACTIONS = {
 -- so "everything under it" is ferry's own behaviour rather than a walk this
 -- plugin drives -- unlike uall/lall, where the MUD has no recursion at all.
 --
--- The bridge narrows two of them: a directory PUSH carries only .c/.h (the
--- mirror also holds .o save files and generated data, which a click must not
--- be able to put over the live MUD), and a directory CC is expanded to the .c
--- files underneath because ferry cc takes files only.
+-- The bridge narrows two of them: a directory PUSH skips its ignore list --
+-- data/ above all, where the live save files are, plus __pycache__, backups
+-- and build noise -- and a directory CC is expanded to the .c files underneath
+-- because ferry cc takes files only. A single file is never filtered.
 M.FERRY_DIR_ACTIONS = {
   { key = "ferry-pull", label = "pull", desc = "ferry: this folder and below, MUD -> here",
     op = "pull", confirm = true },
-  { key = "ferry-push", label = "push", desc = "ferry: .c/.h below this folder -> MUD",
+  { key = "ferry-push", label = "push", desc = "ferry: this folder and below, here -> MUD",
     op = "push", kind = "danger", confirm = true },
   { key = "ferry-cc",   label = "cc!",  desc = "ferry: compile-check every .c below",
     op = "cc" },
@@ -308,7 +309,7 @@ M.FERRY_DIR_ACTIONS = {
 -- What the confirmation says the scope is, when a directory was clicked.
 M.FERRY_DIR_SCOPE = {
   pull = "and everything under it",
-  push = "-- .c/.h under it, nothing else",
+  push = "and everything under it (minus data/ and junk)",
 }
 
 -- ---- viewing ---------------------------------------------------------------

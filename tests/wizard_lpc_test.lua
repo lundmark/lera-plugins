@@ -293,8 +293,9 @@ check("recursive: refuses to start a walk on top of nothing is fine",
 -- ---- ferry entries ---------------------------------------------------------
 --
 -- The plugin sandbox has no disk and no shell, so ferry runs in a bridge
--- process (tools/ferry-bridge) reached over ipc. The rule that matters here is
--- that a wizard with no bridge running sees no ferry entries at all: an entry
+-- process (github.com/skuggo/ferry-bridge) reached over ipc. The rule that
+-- matters here is that a wizard with no bridge running sees no ferry entries
+-- at all: an entry
 -- that cannot work should not invite the click.
 
 local overlay = require("overlay")
@@ -499,8 +500,8 @@ do
   check("abort: cc does not -- it changes nothing",
         confirms(actions.FERRY_ACTIONS, "ferry-cc") == false)
 
-  -- A directory push says what it will actually carry.
-  check("abort: the directory push confirmation names the .c/.h limit",
-        (actions.FERRY_DIR_SCOPE.push or ""):find("%.c/%.h") ~= nil,
+  -- A directory push says that its scope is narrowed, and by what.
+  check("abort: the directory push confirmation names the exclusions",
+        (actions.FERRY_DIR_SCOPE.push or ""):find("data/", 1, true) ~= nil,
         actions.FERRY_DIR_SCOPE.push)
 end

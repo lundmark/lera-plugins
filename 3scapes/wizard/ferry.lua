@@ -3,10 +3,15 @@
 -- The sandbox has no disk and no shell -- four os functions and nothing else
 -- (lera/src/script/plugin.c), and plugins are Lua only: the loader resolves
 -- <name>.lua and there is no native ABI, so this cannot be pushed down into a
--- compiled plugin either. It can open a Unix socket, though, and
--- tools/ferry-bridge in this repo is the process on the other end: a small
--- Rust binary that runs ferry in the mirror checkout and sends back what
--- happened.
+-- compiled plugin either. It can open a Unix socket, though, and the process
+-- on the other end is ferry-bridge -- a small Rust binary that runs ferry in
+-- a mirror checkout and sends back what happened:
+--
+--     https://github.com/skuggo/ferry-bridge
+--
+-- It lives in its own repository rather than here: it is a daemon that runs
+-- shell commands, which is a different kind of thing from a client plugin,
+-- and nobody should have to take it to get the rest of this.
 --
 -- Everything here is best-effort and optional. A wizard with no bridge running
 -- sees no ferry entries at all (see available()), which is what lets this ship
@@ -148,7 +153,7 @@ function M.status_line()
   if M.available() then
     return "ferry: bridge ready -- pull/push/cc are on the file menu"
   end
-  return "ferry: no bridge (start tools/ferry-bridge to get pull/push/cc)"
+  return "ferry: no bridge (github.com/skuggo/ferry-bridge) -- no pull/push/cc"
 end
 
 -- Send one verb for one path. Returns false when there is no bridge to send
@@ -156,8 +161,7 @@ end
 function M.run(op, path, cb)
   if type(op) ~= "string" or type(path) ~= "string" or path == "" then return false end
   if not ensure_connected() then
-    note("no bridge is running. Start tools/ferry-bridge (cargo build --release) "
-         .. "in your mirror checkout.")
+    note("no bridge is running -- see github.com/skuggo/ferry-bridge")
     return false
   end
 
