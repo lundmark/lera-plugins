@@ -118,7 +118,24 @@ local C = pagelib.C
 
 local M = {}
 
-local GRID_PLACEHOLDER = "Battle map: /vik war"
+-- Drawing the board inline rather than pointing at a popup. The two views
+-- share popups/war_*.lua's make_grid(), so they cannot drift apart.
+--
+-- Declines and falls back to the old pointer when the board is wider than
+-- the pane: maplib renders at the board's natural width and a page line
+-- wider than its pane would spill, and a war map is not something to read
+-- half of.
+local function grid_or_hint(add, width, mod_name, hint)
+  local ok, mod = pcall(require, mod_name)
+  if ok and mod and mod.grid_lines then
+    local lines, gw = mod.grid_lines()
+    if lines and #lines > 0 and gw <= width then
+      for _, l in ipairs(lines) do add(l) end
+      return
+    end
+  end
+  add(pagelib.trunc(C.dim .. hint .. pagelib.RESET, width))
+end
 
 -- ---------------------------------------------------------------------------
 -- Campaign Map (guild_viking.lua:13620-14016, UNGATED -- war_map.active)
@@ -150,7 +167,8 @@ local function campaign_map_lines(add, width, wm)
     return
   end
 
-  add(pagelib.trunc(GRID_PLACEHOLDER, width))
+  grid_or_hint(add, width, "popups.war_campaign",
+               "Campaign map too wide for this pane -- '/vik war'")
 
   local hint
   if wm.pending and wm.pending ~= 0 then
@@ -327,7 +345,8 @@ local function battle_lines(add, width)
     add(pagelib.header(width, string.format("Battle vs %s  --  turn %d", b.target or "?", b.turn or 0)))
   end
 
-  add(pagelib.trunc(GRID_PLACEHOLDER, width))
+  grid_or_hint(add, width, "popups.war_battle",
+               "Battle map too wide for this pane -- '/vik war'")
 
   add(pagelib.trunc(string.format("%sCommand %d/%d%s   %sFraegd %d%s",
     C.yellow, b.spent or 0, b.budget or 0, pagelib.RESET,
