@@ -185,6 +185,7 @@ local room_key = nil        -- identity of the room the view below describes
 local room_monsters = {}    -- monster names still believed to be standing
 local room_players = {}     -- player names seen on arrival
 local current_target = nil  -- monster do_attack() is working on
+local current_target_keyword = nil  -- target actually sent to the MUD
 
 -- Char.Combat is the sole combat-end signal. Starting/resuming cannot switch
 -- to guessing while the next combat snapshot is in flight.
@@ -342,6 +343,7 @@ local function sync_room_view()
   room_monsters = copy_names(ri and ri.monsters and ri.monsters())
   room_players = copy_names(ri and ri.players and ri.players())
   current_target = nil
+  current_target_keyword = nil
   trace("view reseeded " .. tostring(was) .. " -> " .. tostring(key)
         .. " (" .. #room_monsters .. " monsters, " .. #room_players
         .. " players from roominfo)")
@@ -375,13 +377,11 @@ end
 -- with nothing watching for that answer the run would wait forever for a
 -- combat-end signal that can never arrive.
 --
--- The state gate is the actual guard, not the pattern: give.c and other
--- mudlib commands emit the identical sentence for items, so a player giving
--- something away would otherwise prune a monster that is genuinely still
--- standing. Only state == "fighting" with no refresh outstanding identifies
--- the line as an answer to OUR attack -- outside "fighting" the line belongs
--- to someone else, and while awaiting_refresh a fight has already ended and
--- the question this line could be answering was never asked.
+-- The pattern also matches missing items and "There is no reason to '...'
+-- here." command errors, including while fighting. Require the exact keyword
+-- sent by do_attack(), as well as the fighting state with no refresh pending.
+-- While awaiting_refresh the fight has ended; a missing-target line cannot
+-- answer the outstanding room contents request.
 --
 -- Legacy had this trigger, but its handler only counted failures in its
 -- multi-target "dimhall" mode and did nothing for a single failed attack --
@@ -397,9 +397,11 @@ end
 -- fail identically forever.
 local function on_attack_no_target(_, name)
   if state ~= "fighting" or awaiting_refresh then return end
+  if not current_target_keyword or name ~= current_target_keyword then return end
   cancel_refresh_wait()  -- defensive; the gate above means there should be none
   forget_monster(current_target)
   current_target = nil
+  current_target_keyword = nil
   state = "idle"
   failed_attacks = failed_attacks + 1
   log("Attack did not resolve: \"" .. tostring(name) .. "\"", COLOR_WARN)
@@ -416,6 +418,7 @@ local function reseed_and_decide()
   room_monsters = copy_names(ri and ri.monsters and ri.monsters())
   room_players = copy_names(ri and ri.players and ri.players())
   current_target = nil
+  current_target_keyword = nil
   state = "idle"
   process_room()
 end
@@ -717,6 +720,7 @@ local function do_attack(monster)
     end
   end
 
+  current_target_keyword = send_target
   local cmd = config.attack_cmd .. " " .. send_target
   log("Attacking: " .. monster, COLOR_FIGHT)
   notify(on_attack_callbacks, monster, cmd)
@@ -1474,6 +1478,7 @@ function M.start(targets_only, from_entry)
   -- Forget any stale view so the room we are standing in is seeded afresh.
   room_key = nil
   current_target = nil
+  current_target_keyword = nil
   cancel_refresh_wait()
 
   -- Setup commands can pass through other rooms before entering the new sea.
@@ -1502,6 +1507,7 @@ function M.stop()
   run_mode = nil
   route_commands = {}
   current_target = nil
+  current_target_keyword = nil
   if step_dispatch and step_dispatch.explore_batch then
     -- Already transmitted commands may still move the player after this stop.
     log("Interrupted frontier speedwalk; discarding the map. Wait for queued moves before restarting.", COLOR_WARN)
