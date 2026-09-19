@@ -247,6 +247,20 @@ local function pre_grid_lines(width)
   return out, true
 end
 
+-- The board alone, with none of this popup's framing. pages/war.lua renders
+-- it inline rather than telling the reader to open a popup to see their own
+-- battle; sharing make_grid() keeps the two views from drifting, which is the
+-- whole reason this is exported instead of copied.
+--
+-- Returns the lines and their rendered width, so a caller can decline to draw
+-- a board wider than its pane instead of overflowing it.
+function M.grid_lines()
+  local wm = S.war_map
+  if not wm or #(wm.rows or {}) < 1 then return nil, 0 end
+  local grid = make_grid(wm)
+  return maplib.render(grid, {}), maplib.geometry(grid, {}).width
+end
+
 function M.lines(width)
   local out, has_grid = pre_grid_lines(width)
   if not has_grid then return out end

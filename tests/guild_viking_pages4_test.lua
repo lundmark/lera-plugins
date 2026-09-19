@@ -460,8 +460,13 @@ local camp_all = joined(camp_lines)
 check("war: campaign map header names the town and turn",
       camp_all:find("War Campaign: Jorvik", 1, true) ~= nil and
       camp_all:find("turn 3", 1, true) ~= nil, camp_all)
-check("war: campaign map grid collapses to the placeholder line",
-      find_line(camp_lines, "Battle map: /vik war") ~= nil, camp_all)
+-- The board is drawn on the page now, not replaced by a line telling the
+-- reader to open a popup to see their own campaign. Same make_grid() as
+-- popups/war_campaign.lua, so the two cannot drift.
+check("war: campaign map draws the board inline",
+      find_line(camp_lines, "Battle map: /vik war") == nil, camp_all)
+check("war: campaign board reaches the page as grid rows",
+      #camp_lines > 6, #camp_lines)
 check("war: campaign map march-ETA hint (125s -> '2m')",
       camp_all:find("On the march -- next tile in 2m", 1, true) ~= nil, camp_all)
 check("war: campaign map upkeep/tile line",
@@ -484,8 +489,11 @@ S.war_map.march_eta = 125
 S.war_map.dim = 0
 S.war_map.rows = {}
 local camp_waiting = joined(war_page.lines(WIDTH))
-check("war: campaign map shows '(waiting for map data...)' with no rows yet",
-      camp_waiting:find("waiting for map data", 1, true) ~= nil, camp_waiting)
+-- No rows is now told apart from no size: the two look identical to a reader
+-- but mean different things -- a campaign that has only just opened, versus
+-- terrain that never arrived.
+check("war: campaign map says the terrain is missing when there are no rows",
+      camp_waiting:find("no terrain yet", 1, true) ~= nil, camp_waiting)
 S.war_map.dim = 5
 S.war_map.rows = { ".....", ".....", ".....", ".....", "....." }
 
@@ -572,8 +580,8 @@ local deploy_all = joined(deploy_lines_out)
 local deploy_stripped = strip_ansi(deploy_all)
 check("war: battle header (deploying)",
       deploy_all:find("Deploying vs Jorvik  (field)", 1, true) ~= nil, deploy_all)
-check("war: battle grid collapses to the placeholder line",
-      find_line(deploy_lines_out, "Battle map: /vik war") ~= nil, deploy_all)
+check("war: battle board draws inline rather than pointing at the popup",
+      find_line(deploy_lines_out, "Battle map: /vik war") == nil, deploy_all)
 check("war: command budget + Fraegd line",
       deploy_all:find("Command 40/100", 1, true) ~= nil and
       deploy_all:find("Fraegd 15", 1, true) ~= nil, deploy_all)

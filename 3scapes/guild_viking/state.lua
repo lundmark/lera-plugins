@@ -189,7 +189,10 @@ local state = {
                    use_stock = false, auto_stock = 0, last_msg = "", show_n = 6, log = {},
                    stock_priority = true, pack = false, status = "", last_jobs = nil },
   route_upkeep = 0,  -- total road+fort maintenance cost, daler/tick (from RUPKEEP)
-  next_tick_in = 0, -- seconds until next trade/stock production tick
+  -- nil until Guild.City's "nexttick" arrives; then -1 ("no tick has ever
+  -- run"), 0 ("due now") or a real countdown. Starting at 0 made "nothing
+  -- has arrived" indistinguishable from "due this second".
+  next_tick_in = nil, -- seconds until next trade/stock production tick
   demand_cycle = "",
   demand_cycle_in = 0, -- seconds until next demand cycle shift
   -- Weather / season
