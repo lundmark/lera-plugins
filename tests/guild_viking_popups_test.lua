@@ -315,7 +315,12 @@ for _, l in ipairs(war_lines) do
     check("war.lua placeholder no longer says (stage 3)", false, l)
   end
 end
-check("war.lua renders an inline board instead of a popup placeholder", not war_placeholder_found)
+-- There is no placeholder any more: the war page draws the campaign and
+-- battle boards itself, sharing popups/war_*.lua's make_grid(). The pointer
+-- survives only as a fallback for a board wider than the pane, which this
+-- fixture is not.
+check("war.lua no longer points at a popup to see the board",
+      not war_placeholder_found)
 
 -- =============================================================================
 -- /vik dispatch: routing to popups.toggle/open_page, "page"/"pop"

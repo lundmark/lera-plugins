@@ -460,8 +460,13 @@ local camp_all = joined(camp_lines)
 check("war: campaign map header names the town and turn",
       camp_all:find("War Campaign: Jorvik", 1, true) ~= nil and
       camp_all:find("turn 3", 1, true) ~= nil, camp_all)
-check("war: campaign grid replaces the placeholder line",
+-- The board is drawn on the page now, not replaced by a line telling the
+-- reader to open a popup to see their own campaign. Same make_grid() as
+-- popups/war_campaign.lua, so the two cannot drift.
+check("war: campaign map draws the board inline",
       find_line(camp_lines, "Battle map: /vik war") == nil, camp_all)
+check("war: campaign board reaches the page as grid rows",
+      #camp_lines > 6, #camp_lines)
 check("war: campaign map march-ETA hint (125s -> '2m')",
       camp_all:find("On the march -- next tile in 2m", 1, true) ~= nil, camp_all)
 check("war: campaign map upkeep/tile line",
@@ -572,7 +577,7 @@ local deploy_all = joined(deploy_lines_out)
 local deploy_stripped = strip_ansi(deploy_all)
 check("war: battle header (deploying)",
       deploy_all:find("Deploying vs Jorvik  (field)", 1, true) ~= nil, deploy_all)
-check("war: battle grid replaces the placeholder line",
+check("war: battle board draws inline rather than pointing at the popup",
       find_line(deploy_lines_out, "Battle map: /vik war") == nil, deploy_all)
 check("war: command budget + Fraegd line",
       deploy_all:find("Command 40/100", 1, true) ~= nil and

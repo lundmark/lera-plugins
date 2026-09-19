@@ -360,6 +360,15 @@ local function build_lines(width)
   return out, #out
 end
 
+-- The board alone, without this popup's legend and action lines -- see the
+-- matching M.grid_lines() in popups/war_campaign.lua for why it exists.
+function M.grid_lines()
+  local b = S.battle
+  if not b then return nil, 0 end
+  local grid = make_grid(b)
+  return maplib.render(grid, {}), maplib.geometry(grid, {}).width
+end
+
 function M.lines(width)
   local out = build_lines(width)
   return out

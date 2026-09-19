@@ -118,6 +118,25 @@ local C = pagelib.C
 
 local M = {}
 
+-- Drawing the board inline rather than pointing at a popup. The two views
+-- share popups/war_*.lua's make_grid(), so they cannot drift apart.
+--
+-- Declines and falls back to the old pointer when the board is wider than
+-- the pane: maplib renders at the board's natural width and a page line
+-- wider than its pane would spill, and a war map is not something to read
+-- half of.
+local function grid_or_hint(add, width, mod_name, hint)
+  local ok, mod = pcall(require, mod_name)
+  if ok and mod and mod.grid_lines then
+    local lines, gw = mod.grid_lines()
+    if lines and #lines > 0 and gw <= width then
+      for _, l in ipairs(lines) do add(l) end
+      return
+    end
+  end
+  add(pagelib.trunc(C.dim .. hint .. pagelib.RESET, width))
+end
+
 -- ---------------------------------------------------------------------------
 -- Campaign Map (guild_viking.lua:13620-14016, UNGATED -- war_map.active)
 -- ---------------------------------------------------------------------------
@@ -148,7 +167,8 @@ local function campaign_map_lines(add, width, wm)
     return
   end
 
-  add(nil, "popups.war_campaign")
+  grid_or_hint(add, width, "popups.war_campaign",
+               "Campaign map too wide for this pane -- '/vik war'")
 
   local hint
   if wm.pending and wm.pending ~= 0 then
@@ -325,7 +345,8 @@ local function battle_lines(add, width)
     add(pagelib.header(width, string.format("Battle vs %s  --  turn %d", b.target or "?", b.turn or 0)))
   end
 
-  add(nil, "popups.war_battle")
+  grid_or_hint(add, width, "popups.war_battle",
+               "Battle map too wide for this pane -- '/vik war'")
 
   add(pagelib.trunc(string.format("%sCommand %d/%d%s   %sFraegd %d%s",
     C.yellow, b.spent or 0, b.budget or 0, pagelib.RESET,
@@ -422,21 +443,7 @@ end
 function M.lines(width)
   width = width or 80
   local lines = {}
-  local boards = {}
-  local function add(s, board_name)
-    if board_name then
-      local mod = require(board_name)
-      local rows, geom = mod.tile_grid(width)
-      if geom and geom.width <= width then
-        boards[#boards + 1] = { geometry=geom, offset=#lines, mod=mod }
-        for _, row in ipairs(rows) do lines[#lines + 1] = row end
-      else
-        lines[#lines + 1] = pagelib.trunc("Map too wide -- /vik war", width)
-      end
-    else
-      lines[#lines + 1] = s
-    end
-  end
+  local function add(s) lines[#lines + 1] = s end
 
   local wm = S.war_map
   if wm and wm.active then
@@ -462,7 +469,7 @@ function M.lines(width)
     houses_lines(add, width)
   end
 
-  return lines, nil, boards
+  return lines
 end
 
 return M
