@@ -163,7 +163,15 @@ local function campaign_map_lines(add, width, wm)
 
   local dim = wm.dim or #(wm.rows or {})
   if dim < 1 or #(wm.rows or {}) < 1 then
-    add(pagelib.trunc(C.dim .. "(waiting for map data...)" .. pagelib.RESET, width))
+    -- Say WHICH half is missing. "waiting for map data" was the same line for
+    -- a campaign that had only just opened and for one whose terrain never
+    -- arrived, and the two want different reactions from the reader.
+    if #(wm.rows or {}) < 1 then
+      add(pagelib.trunc(C.dim .. "(no terrain yet -- the map has not been drawn)"
+          .. pagelib.RESET, width))
+    else
+      add(pagelib.trunc(C.dim .. "(waiting for map data...)" .. pagelib.RESET, width))
+    end
     return
   end
 

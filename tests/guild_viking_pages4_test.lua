@@ -489,8 +489,11 @@ S.war_map.march_eta = 125
 S.war_map.dim = 0
 S.war_map.rows = {}
 local camp_waiting = joined(war_page.lines(WIDTH))
-check("war: campaign map shows '(waiting for map data...)' with no rows yet",
-      camp_waiting:find("waiting for map data", 1, true) ~= nil, camp_waiting)
+-- No rows is now told apart from no size: the two look identical to a reader
+-- but mean different things -- a campaign that has only just opened, versus
+-- terrain that never arrived.
+check("war: campaign map says the terrain is missing when there are no rows",
+      camp_waiting:find("no terrain yet", 1, true) ~= nil, camp_waiting)
 S.war_map.dim = 5
 S.war_map.rows = { ".....", ".....", ".....", ".....", "....." }
 
