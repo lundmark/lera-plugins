@@ -181,6 +181,13 @@ local PAGE_MENUS = {
     { key = "show_war_council",   label = "Show War Council" },
     { key = "show_war_campaigns", label = "Show Campaigns" },
     { key = "show_war_houses",    label = "Show Great Houses" },
+    -- Auto-War belongs on this page for the same reason Auto-Herd sits on
+    -- livestock: the automation follows its content. It was the one
+    -- automation of the five with no menu presence at all, so the engine in
+    -- autowar.lua could not be switched on from the client -- LEGACY's own
+    -- awar menu was a MUSHclient miniwindow and never got ported.
+    { key = "auto_battle",        label = "Auto-War (campaign + battle)" },
+    { action = "awar_config",     label = "Auto-War settings..." },
   },
   -- LEGACY [14]
   trade = {
@@ -243,6 +250,8 @@ local function dispatch_action(action)
     open_auto("autovoyage")
   elseif action == "aherd_config" then
     open_auto("autoherd")
+  elseif action == "awar_config" then
+    open_auto("autowar")
   elseif action == "travel" then
     require("popups.map").open_poi_menu()
   end
