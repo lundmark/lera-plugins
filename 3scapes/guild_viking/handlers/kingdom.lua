@@ -640,6 +640,13 @@ local function write_campaign(parts)
   for i, row in ipairs(parts.campaign_terrain or {}) do
     wm.rows[i] = tostring(row)
   end
+  -- Trust the rows over the declared size. `dim` and `campaign_terrain` are
+  -- separate keys, so one can arrive without the other -- a delta frame
+  -- carrying only the terrain, or a size the server could not determine --
+  -- and pages/war.lua tests BOTH before drawing. Deriving the missing half
+  -- from the half that did arrive is what keeps the board from sitting on
+  -- "(waiting for map data...)" with a perfectly good grid in hand.
+  if (wm.dim or 0) < 1 then wm.dim = #wm.rows end
 
   for _, u in ipairs(parts.campaign_units or {}) do
     if type(u) == "table" then
