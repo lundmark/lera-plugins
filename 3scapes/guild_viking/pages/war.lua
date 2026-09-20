@@ -118,8 +118,6 @@ local C = pagelib.C
 
 local M = {}
 
-local GRID_PLACEHOLDER = "Battle map: /vik war"
-
 -- ---------------------------------------------------------------------------
 -- Campaign Map (guild_viking.lua:13620-14016, UNGATED -- war_map.active)
 -- ---------------------------------------------------------------------------
@@ -150,7 +148,7 @@ local function campaign_map_lines(add, width, wm)
     return
   end
 
-  add(pagelib.trunc(GRID_PLACEHOLDER, width))
+  add(nil, "popups.war_campaign")
 
   local hint
   if wm.pending and wm.pending ~= 0 then
@@ -327,7 +325,7 @@ local function battle_lines(add, width)
     add(pagelib.header(width, string.format("Battle vs %s  --  turn %d", b.target or "?", b.turn or 0)))
   end
 
-  add(pagelib.trunc(GRID_PLACEHOLDER, width))
+  add(nil, "popups.war_battle")
 
   add(pagelib.trunc(string.format("%sCommand %d/%d%s   %sFraegd %d%s",
     C.yellow, b.spent or 0, b.budget or 0, pagelib.RESET,
@@ -424,7 +422,21 @@ end
 function M.lines(width)
   width = width or 80
   local lines = {}
-  local function add(s) lines[#lines + 1] = s end
+  local boards = {}
+  local function add(s, board_name)
+    if board_name then
+      local mod = require(board_name)
+      local rows, geom = mod.tile_grid()
+      if geom and geom.width <= width then
+        boards[#boards + 1] = { geometry=geom, offset=#lines, mod=mod }
+        for _, row in ipairs(rows) do lines[#lines + 1] = row end
+      else
+        lines[#lines + 1] = pagelib.trunc("Map too wide -- /vik war", width)
+      end
+    else
+      lines[#lines + 1] = s
+    end
+  end
 
   local wm = S.war_map
   if wm and wm.active then
@@ -450,7 +462,7 @@ function M.lines(width)
     houses_lines(add, width)
   end
 
-  return lines
+  return lines, nil, boards
 end
 
 return M

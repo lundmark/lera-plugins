@@ -353,6 +353,11 @@ local function set_opt(rest)
     return
   end
   local current = page_opts.get(opt)
+  if (opt == "show_map_icons" or opt == "show_sea_chart_icons" or opt == "show_war_ascii")
+      and not require("tiles").available() then
+    buffer.color_print(nil, "DAA520", "Viking: image/ASCII switching requires GUI mode.")
+    return
+  end
   if current == nil then
     buffer.color_print(nil, "DAA520", "Viking: unknown page option '" .. opt .. "'")
     return

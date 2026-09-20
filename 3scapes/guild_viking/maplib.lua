@@ -133,8 +133,12 @@ local function layout(grid, opts)
   -- Compact drops the east slot and the edge rows together: both are
   -- between-cells space, and a 1-char pitch has none to give them.
   local compact = opts.compact and true or false
+  if grid.image then compact = true end
   local glyph_width = compact and 1 or 2
   local pitch = compact and 1 or 3
+  -- Two character columns per PNG cell, with no inter-tile gutter. Text
+  -- remains underneath for terminals and failed/missing image assets.
+  if grid.image then glyph_width, pitch = 2, 2 end
 
   local edge_rows = (not compact) and opts.south_edge ~= nil
   local body_lines_per_row = edge_rows and 2 or 1
@@ -302,7 +306,28 @@ end
 function maplib.geometry(grid, opts)
   opts = opts or {}
   local L = layout(grid, opts)
+  local images = {}
+  if grid.image then
+    for r = 0, L.h - 1 do
+      for c = 0, L.w - 1 do
+        local cell = grid.cell(c, r)
+        -- Keep selected cells' reverse-video marker visible: image surfaces
+        -- suppress underlying text, so drawing one here would hide it.
+        local path, badge
+        if not (cell and cell.sel) then path, badge = grid.image(c, r) end
+        -- Lera images cover underlying glyphs. Reserve the first character
+        -- for tactical IDs/sailed markers instead of silently hiding them.
+        local inset = badge and math.max(1, #(cell and cell.glyph or "")) or 0
+        if path and inset < L.pitch then images[#images + 1] = {
+          x = L.prefix_width + c * L.pitch + inset,
+          y = L.col_header_lines + r * L.body_lines_per_row,
+          w = L.pitch - inset, path = path,
+        } end
+      end
+    end
+  end
   return {
+    images = images,
     width = L.total_width,
     height = L.total_height,
     cell_at = function(x, y) return cell_at(L, x, y) end,

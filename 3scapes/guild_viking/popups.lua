@@ -105,7 +105,7 @@ local function wrap(lines_fn, on_pointer_fn, geometry_fn, grid_line_offset_fn)
   function wrapper.render(rect, opts)
     local w, h = rect:w(), rect:h()
     if w <= 0 or h <= 0 then return end
-    local lines = lines_fn(w)
+    local lines, _, boards = lines_fn(w)
     if lera.render_pass() ~= "remote" then
       last_count = #lines
       last_width = w
@@ -118,6 +118,8 @@ local function wrap(lines_fn, on_pointer_fn, geometry_fn, grid_line_offset_fn)
       ui.text_ansi(ui.rect(rect:x(), rect:y() + (i - first), w, 1),
         pagelib.trunc(lines[i], w))
     end
+    require("tiles").render({ geometry=geometry_fn, grid_line_offset=grid_line_offset_fn },
+      rect, offset, boards)
   end
 
   wrapper.scroll = sc.scroll

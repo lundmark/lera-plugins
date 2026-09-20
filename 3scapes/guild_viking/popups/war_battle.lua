@@ -153,11 +153,34 @@ end
 -- 14110, 14201).
 local function make_grid(b)
   local w, h = b.width or 8, b.height or 8
+  local tiles = require("tiles")
+  local rows = {}
+  for r = 1, h do rows[r] = (b.terrain_rows or {})[h-r+1] or string.rep(".", w) end
+  local tile = tiles.enabled("battle") and tiles.board("battle", rows, w, h)
   local dz = b.dz or 2
   local deploying = (b.phase == "deploy")
 
   return {
     w = w, h = h,
+    image = tile and function(c, r)
+      local game_row = h-r
+      local works = ((b.works_rows or {})[game_row] or ""):sub(c+1,c+1)
+      local unit = unit_at(b, coord_at(c,r,h))
+      if unit then
+        local known = {skirmishers=true, bogmenn=true, shieldwall=true, huscarls=true,
+          berserkir=true, moose=true, ally_levy=true, siege=true,
+          foe_raiders=true, foe_levy=true, foe_hird=true}
+        if not known[unit.utype] then return nil end
+        local side = unit.side == "you" and "you" or "foe"
+        local name = "unit_" .. unit.utype .. "_" .. side
+        local ord = tonumber(unit.ord) or 0
+        if ord >= 1 and ord <= 9 then name = name .. "_" .. math.floor(ord) end
+        return tiles.city(name), true
+      end
+      if works == "v" or works == "u"
+          or (deploying and game_row <= dz) then return nil end
+      return tile(c, r)
+    end,
     cell = function(gc, gr)
       local r_game = h - gr
       local coord = coord_at(gc, gr, h)
@@ -353,6 +376,12 @@ local ACTIONS_PROBE_WIDTH = 76
 function M.actions_line_index(width)
   local _, idx = build_lines(width or ACTIONS_PROBE_WIDTH)
   return idx
+end
+
+function M.tile_grid()
+  if not S.battle then return {}, nil end
+  local grid = make_grid(S.battle)
+  return maplib.render(grid, GRID_OPTS), maplib.geometry(grid, GRID_OPTS)
 end
 
 function M.geometry(width)

@@ -235,8 +235,13 @@ end
 
 local function make_chart_grid()
   local w, h = S.voyage_chart_width or 0, S.voyage_chart_height or 0
+  local tiles = require("tiles")
+  local tile = tiles.enabled("sea") and tiles.board("sea", S.voyage_chart_rows, w, h)
   return {
     w = w, h = h,
+    image = tile and function(c, r)
+      return tile(c, r), chart_sym(c, r) ~= "S" and is_sailed(c, r)
+    end,
     cell = function(c, r)
       local sym = chart_sym(c, r)
       if sym == "" then return nil end

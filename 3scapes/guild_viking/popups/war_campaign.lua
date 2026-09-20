@@ -142,6 +142,8 @@ end
 local function make_grid(wm)
   local dim = wm.dim or #(wm.rows or {})
   local rows = wm.rows or {}
+  local tiles = require("tiles")
+  local tile = tiles.enabled("campaign") and tiles.board("campaign", rows, dim, dim)
   local ov, wks = {}, {}
   local you_c, you_r = -1, -1
   local sel_c, sel_r = -1, -1
@@ -158,6 +160,18 @@ local function make_grid(wm)
 
   return {
     w = dim, h = dim,
+    image = tile and function(c, r)
+      local key = c .. "," .. r
+      local u = ov[key]
+      if u then
+        if u.id == "A" then return tiles.city("camp_host_you"), true end
+        if u.id == "F" or u.kind == "ally" then return tiles.city("camp_ally_you"), true end
+        if tonumber(u.id) then return tiles.city("camp_foe_foe"), true end
+        return nil
+      end
+      if wks[key] then return nil end
+      return tile(c, r)
+    end,
     cell = function(c, r)
       local key = c .. "," .. r
       local cell
@@ -245,6 +259,13 @@ local function pre_grid_lines(width)
     return out, false
   end
   return out, true
+end
+
+function M.tile_grid()
+  local wm = S.war_map
+  if not wm or not wm.active then return {}, nil end
+  local grid = make_grid(wm)
+  return maplib.render(grid, {}), maplib.geometry(grid, {})
 end
 
 function M.lines(width)

@@ -403,8 +403,21 @@ end
 
 local function make_grid(poi_at)
   local w, h = S.vmap_w or 0, S.vmap_h or 0
+  local tiles = require("tiles")
+  local tile = tiles.enabled("map") and tiles.board("map", S.vmap_rows, w, h)
+  local icons = { M="castle", L="mead_hall", P="longhouse", S="herbyrgi",
+    T="woods", R="rock", F="farm", ["*"]="skald_hall" }
   return {
     w = w, h = h,
+    image = tile and function(c, r)
+      if is_player_cell(c, r) then return tiles.city("camp_host_you") end
+      local poi = poi_at[r * w + c]
+      if poi then
+        local name = icons[POI_TYPE_SYM[poi.type]]
+        return name and tiles.city(name) or nil
+      end
+      return tile(c, r)
+    end,
     cell = function(c, r)
       if is_player_cell(c, r) then
         return { glyph = "X", color = VMAP_COLOR.X }
