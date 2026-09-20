@@ -273,6 +273,7 @@ local function chart_hover_text(c, r)
   local node = CHART_NODES[sym]
   local parts = { chart_coord(c, r) .. "  " .. ((node and node.name) or "Uncharted") }
   if node and node.hint then parts[#parts + 1] = node.hint end
+  if is_sailed(c, r) then parts[#parts + 1] = "Sailed" end
   local status = (sym == "#") and "Unrevealed" or "Revealed"
   local danger = (S.voyage_status and S.voyage_status.danger) or 0
   if danger > 0 then

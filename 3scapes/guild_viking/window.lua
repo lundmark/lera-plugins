@@ -178,6 +178,7 @@ local page_targets = {}
 local recorded_tab_rows = 0
 local recorded_offset = 0
 local recorded_width = 0
+local recorded_image_limit = 2
 
 local SEPARATOR = " "
 
@@ -260,7 +261,7 @@ function window.render(rect, opts)
   if body_h <= 0 then return end
 
   local page = pages_by_key[current_key]
-  local lines, targets, boards = page.mod.lines(w)
+  local lines, targets, boards, image_limit = require("tiles").layout(page.mod, w, body_h)
 
   local sc = scrollers[current_key]
   -- Only the LOCAL render pass may adjust the scroller's height-based clamp,
@@ -297,11 +298,8 @@ function window.render(rect, opts)
     page_targets = targets or {}
     recorded_offset = offset
     recorded_width = w
+    recorded_image_limit = image_limit
     recorded_boards = boards or {}
-    if page.mod.geometry and page.mod.grid_line_offset then
-      recorded_boards = { { mod=page.mod, geometry=page.mod.geometry(w),
-        offset=page.mod.grid_line_offset(w), full_page=true } }
-    end
   end
 
   local body_y = rect:y() + tab_rows
@@ -463,6 +461,13 @@ function window.on_pointer(event)
     return true
   end
   return false
+end
+
+local pointer = window.on_pointer
+function window.on_pointer(event)
+  return require("maplib").with_limit(recorded_image_limit, function()
+    return pointer(event)
+  end)
 end
 
 return window

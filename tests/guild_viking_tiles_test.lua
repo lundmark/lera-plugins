@@ -17,7 +17,7 @@ ui = {
   end,
   image=function(r,img,options)
     draws[#draws+1] = {rect=r,path=img}
-    assert(options.fit == "contain")
+    assert(options.fit == "stretch")
   end,
 }
 lera = {display=function() return mode end,render_pass=function() return "local" end}
@@ -78,31 +78,54 @@ for _,image in ipairs(g.images) do
   assert(c==c2 and r==r2)
 end
 draws={}
-tiles.render_geometry(g,rect(10,20,g.width,3),0,1)
+tiles.render_geometry(g,rect(10,20,g.width,2),0,1)
 assert(#draws==2)
 for _,d in ipairs(draws) do assert(d.rect:y()==20 and d.rect:x()>=10) end
 draws={}
 tiles.render_geometry(g,rect(10,20,3,1),0,1)
 assert(#draws==0) -- partial tiles cannot bleed into adjacent panes
 -- Resize uses the same geometry for painting and clicks, including markers.
-for _,case in ipairs({{4,2,1},{8,4,2},{12,6,3}}) do
+for _,case in ipairs({{4,2,1},{8,4,2},{12,4,2}}) do
   local resized=maplib.geometry(grid,{},case[1])
-  assert(resized.width==case[1])
+  assert(resized.width==case[2]*grid.w)
   assert(resized.images[1].w==case[2] and resized.images[1].h==case[3])
   assert(#maplib.render(grid,{},case[1])==resized.height)
 end
-assert(#maplib.geometry(grid,{},3).images==0)
-local marked={w=2,h=2,cell=function() return {glyph="12",sel=true} end,
+assert(#maplib.geometry(grid,{},3).images==4) -- narrow panes never disable PNGs
+local marked={w=2,h=2,cell=function() return {glyph="12"} end,
   image=function() return tiles.city("plain"),true end}
 local mg=maplib.geometry(marked,{},12)
-assert(mg.images[1].w==6 and mg.images[1].h==3 and mg.height==8)
-local mc,mr=mg.cell_at(5,3)
-assert(mc==0 and mr==0) -- marker footer belongs to its tile
-assert(maplib.render(marked,{},12)[4]:find("12",1,true))
+assert(mg.images[1].w==4 and mg.images[1].h==2 and mg.height==4)
+local mc,mr=mg.cell_at(3,2)
+assert(mc==0 and mr==1) -- next row starts immediately, no marker gutter
+assert(mg.images[3].y==mg.images[1].y+mg.images[1].h)
+marked.cell=function(c,r) return {glyph="12",sel=c==0 and r==0} end
+local selected=maplib.geometry(marked,{},12)
+assert(#selected.images==3 and selected.height==mg.height)
+assert(maplib.render(marked,{},12)[1]:find("\27[7m",1,true))
 gui={size=function() return 1000,2000 end}
 ui.size=function() return 100,100 end
 assert(tiles.cell_aspect()==2)
 gui=nil; ui.size=nil
+-- Fit against the actual viewport height after reserving non-map content.
+local panel={
+  lines=function(width)
+    local result=maplib.render(grid,{},width)
+    for i=1,5 do result[#result+1]="status" end
+    return result
+  end,
+  geometry=function(width) return maplib.geometry(grid,{},width) end,
+  grid_line_offset=function() return 0 end,
+}
+local small,_,small_boards=tiles.layout(panel,80,8)
+local large,_,large_boards=tiles.layout(panel,80,9)
+assert(#small==7 and small_boards[1].geometry.images[1].h==1)
+assert(#large==9 and large_boards[1].geometry.images[1].h==2)
+assert(small_boards[1].geometry.cell_at(0,1)==0)
+-- A later render cannot mutate the geometry saved for the previous pane.
+local _,small_row=small_boards[1].geometry.cell_at(0,1)
+local _,large_row=large_boards[1].geometry.cell_at(0,1)
+assert(small_row==1 and large_row==0)
 local path=tiles.city("plain")
 tiles.draw(rect(0,0,2,1),path); tiles.draw(rect(0,0,2,1),path)
 assert(loads[path]==1)

@@ -135,7 +135,9 @@ function M.draw(rect, path)
     img = ui.image_load(path)
     cache[path] = img or false -- a missing asset must not cause I/O every frame
   end
-  if img then ui.image(rect, img, { fit="contain", filter="nearest" }) end
+  -- Layout already approximates square pixels. Fill the whole cell: contain
+  -- introduces letterbox seams with fonts whose aspect ratio is not integral.
+  if img then ui.image(rect, img, { fit="stretch", filter="nearest" }) end
 end
 
 -- Uses the SAME layout as text rendering and hit testing. Whole-cell clipping
@@ -149,6 +151,17 @@ function M.render_geometry(geom, rect, line_offset, scroll)
       M.draw(ui.rect(rect:x()+x, rect:y()+y, tile.w, height), tile.path)
     end
   end
+end
+
+function M.layout(mod, width, height)
+  return require("maplib").fit(height, function()
+    local lines, targets, boards = mod.lines(width)
+    if mod.geometry and mod.grid_line_offset then
+      boards = {{mod=mod, geometry=mod.geometry(width),
+        offset=mod.grid_line_offset(width), full_page=true}}
+    end
+    return lines, targets, boards
+  end)
 end
 
 function M.render(mod, rect, scroll, boards)

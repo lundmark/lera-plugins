@@ -113,6 +113,9 @@ local pagelib = require("pagelib")
 local RESET = pagelib.RESET
 local REV_ON = "\27[7m"
 local REV_OFF = "\27[27m"
+local image_row_limit = 2
+local measured_rows = 0
+
 
 -- Every position/size fact both render() and geometry() need, computed once.
 local function layout(grid, opts, available_width)
@@ -137,34 +140,27 @@ local function layout(grid, opts, available_width)
   local pitch = compact and 1 or 3
 
   local prefix_width = row_headers and (row_header_width + 1) or 0
-  local image_mode, image_height, marker_row = false, 1, false
+  local image_mode, image_height = false, 1
   if grid.image and w > 0 then
-    local budget = math.floor(((available_width or (prefix_width + w * 6)) - prefix_width) / w)
+    local budget = math.floor(((available_width or (prefix_width + w * 4)) - prefix_width) / w)
     local cell_aspect = require("tiles").cell_aspect()
-    -- Choose a square in character-cell units, capped at three text rows.
-    -- Too narrow for even one square: retain the ordinary ASCII layout.
-    local max_cols = math.min(budget, grid.image_max_cols or 6)
-    for rows = 1, 3 do
+    -- Choose a compact square in character-cell units, at most two rows.
+    -- A wide board must not silently disable the user's PNG preference.
+    -- Keep the minimum tile size and clip at the viewport instead.
+    image_mode, pitch, glyph_width = true, 2, 2
+    local max_cols = math.max(2, math.min(budget, grid.image_max_cols or 4))
+    for rows = 1, image_row_limit do
       local cols = math.max(2, math.floor(rows * cell_aspect + 0.5))
       if cols <= max_cols then
         image_mode, pitch, glyph_width, image_height = true, cols, cols, rows
       end
     end
-    if image_mode then
-      compact = true
-      for r = 0, h - 1 do
-        for c = 0, w - 1 do
-          local _, badge = grid.image(c, r)
-          local cell = grid.cell(c, r)
-          if badge or (cell and cell.sel) then marker_row = true end
-        end
-      end
-    end
+    compact = true
   end
 
   local edge_rows = (not compact) and opts.south_edge ~= nil
   local body_lines_per_row = edge_rows and 2 or 1
-  if image_mode then body_lines_per_row = image_height + (marker_row and 1 or 0) end
+  if image_mode then body_lines_per_row = image_height end
   local col_header_lines = col_headers and 1 or 0
 
   local body_width = w * pitch
@@ -183,7 +179,6 @@ local function layout(grid, opts, available_width)
     pitch = pitch,
     image_mode = image_mode,
     image_height = image_height,
-    marker_row = marker_row,
     edge_rows = edge_rows,
     body_lines_per_row = body_lines_per_row,
     col_header_lines = col_header_lines,
@@ -259,10 +254,6 @@ local function build_cell_line(L, r, subrow)
   local grid = L.grid
   for c = 0, L.w - 1 do
     local cell = grid.cell(c, r)
-    if L.image_mode and subrow == L.image_height then
-      local _, badge = grid.image(c, r)
-      if not badge and not (cell and cell.sel) then cell = nil end
-    end
     parts[#parts + 1] = glyph_field(cell, L.glyph_width)
     if not L.compact then
       local has_edge = L.east_edge and L.east_edge(c, r)
@@ -319,9 +310,31 @@ end
 
 local maplib = {}
 
+-- Scope sizing to one render/pointer pass; other panes and remote viewers
+-- must not change the geometry of an already painted local map.
+function maplib.with_limit(limit, build)
+  local previous = image_row_limit
+  image_row_limit = limit
+  local ok, a, b, c = pcall(build)
+  image_row_limit = previous
+  if not ok then error(a, 0) end
+  return a, b, c
+end
+
+function maplib.fit(height, build)
+  measured_rows = 0
+  local a, b, c = maplib.with_limit(1, build)
+  local rows = measured_rows
+  local limit = rows > 0 and math.max(1, math.min(2,
+    math.floor(1 + (height - #a) / rows))) or 1
+  if limit > 1 then a, b, c = maplib.with_limit(limit, build) end
+  return a, b, c, limit
+end
+
 function maplib.render(grid, opts, available_width)
   opts = opts or {}
   local L = layout(grid, opts, available_width)
+  if L.image_mode then measured_rows = measured_rows + L.h end
   local lines = {}
 
   if L.col_headers then
@@ -350,6 +363,10 @@ function maplib.geometry(grid, opts, available_width)
     for r = 0, L.h - 1 do
       for c = 0, L.w - 1 do
         local path = grid.image(c, r)
+        -- Until the host supports text over PNGs, selection uses its
+        -- reverse-video glyph in place, never an extra row between tiles.
+        local cell = grid.cell(c, r)
+        if cell and cell.sel then path = nil end
         if path then images[#images + 1] = {
           x = L.prefix_width + c * L.pitch,
           y = L.col_header_lines + r * L.body_lines_per_row,
