@@ -38,6 +38,21 @@ function M.enabled(kind)
   return not opts.get("show_war_ascii")
 end
 
+-- Pixel metrics are optional in older hosts/tests. Monospace cells normally
+-- have a 1:2 width:height ratio; native GUI dimensions refine that estimate.
+function M.cell_aspect()
+  if gui and gui.size and ui and ui.size
+      and (not lera.render_pass or lera.render_pass() ~= "remote") then
+    local pw, ph = gui.size()
+    local cols, rows = ui.size()
+    if pw and ph and cols and rows and cols > 0 and rows > 0 then
+      local cw, ch = math.floor(pw / cols), math.floor(ph / rows)
+      if cw > 0 and ch > 0 then return ch / cw end
+    end
+  end
+  return 2
+end
+
 local function bin4(n)
   local s = ""
   for i = 3, 0, -1 do s = s .. tostring(math.floor(n / 2^i) % 2) end
@@ -120,7 +135,7 @@ function M.draw(rect, path)
     img = ui.image_load(path)
     cache[path] = img or false -- a missing asset must not cause I/O every frame
   end
-  if img then ui.image(rect, img, { fit="stretch", filter="nearest" }) end
+  if img then ui.image(rect, img, { fit="contain", filter="nearest" }) end
 end
 
 -- Uses the SAME layout as text rendering and hit testing. Whole-cell clipping
@@ -129,8 +144,9 @@ function M.render_geometry(geom, rect, line_offset, scroll)
   if not geom or not geom.images then return end
   for _, tile in ipairs(geom.images) do
     local x, y = tile.x, tile.y + line_offset - scroll
-    if x >= 0 and y >= 0 and x + tile.w <= rect:w() and y + 1 <= rect:h() then
-      M.draw(ui.rect(rect:x()+x, rect:y()+y, tile.w, 1), tile.path)
+    local height = tile.h or 1
+    if x >= 0 and y >= 0 and x + tile.w <= rect:w() and y + height <= rect:h() then
+      M.draw(ui.rect(rect:x()+x, rect:y()+y, tile.w, height), tile.path)
     end
   end
 end

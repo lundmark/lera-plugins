@@ -409,6 +409,7 @@ local function make_grid(poi_at)
     T="woods", R="rock", F="farm", ["*"]="skald_hall" }
   return {
     w = w, h = h,
+    image_max_cols = 4,
     image = tile and function(c, r)
       if is_player_cell(c, r) then return tiles.city("camp_host_you") end
       local poi = poi_at[r * w + c]
@@ -567,7 +568,7 @@ function M.lines(width)
 
   local poi_at = poi_lookup()
   local grid = make_grid(poi_at)
-  for _, l in ipairs(maplib.render(grid, GRID_OPTS)) do
+  for _, l in ipairs(maplib.render(grid, GRID_OPTS, width)) do
     out[#out + 1] = l
   end
 
@@ -585,7 +586,7 @@ end
 function M.geometry(width)
   if (S.vmap_w or 0) == 0 then return nil end
   local grid = make_grid(poi_lookup())
-  return maplib.geometry(grid, GRID_OPTS)
+  return maplib.geometry(grid, GRID_OPTS, width)
 end
 
 function M.grid_line_offset(width)

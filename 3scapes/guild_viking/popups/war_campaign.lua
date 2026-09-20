@@ -261,11 +261,11 @@ local function pre_grid_lines(width)
   return out, true
 end
 
-function M.tile_grid()
+function M.tile_grid(width)
   local wm = S.war_map
   if not wm or not wm.active then return {}, nil end
   local grid = make_grid(wm)
-  return maplib.render(grid, {}), maplib.geometry(grid, {})
+  return maplib.render(grid, {}, width), maplib.geometry(grid, {}, width)
 end
 
 function M.lines(width)
@@ -273,7 +273,7 @@ function M.lines(width)
   if not has_grid then return out end
 
   local wm = S.war_map
-  for _, l in ipairs(maplib.render(make_grid(wm), {})) do out[#out + 1] = l end
+  for _, l in ipairs(maplib.render(make_grid(wm), {}, width)) do out[#out + 1] = l end
   out[#out + 1] = hover ~= "" and pagelib.trunc(hover, width) or ""
   out[#out + 1] = pagelib.trunc(C.yellow .. hint_text(wm) .. RESET, width)
 
@@ -303,7 +303,7 @@ end
 function M.geometry(width)
   local _, has_grid = pre_grid_lines(width)
   if not has_grid then return nil end
-  return maplib.geometry(make_grid(S.war_map), {})
+  return maplib.geometry(make_grid(S.war_map), {}, width)
 end
 
 function M.grid_line_offset(width)

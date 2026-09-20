@@ -17,7 +17,7 @@ ui = {
   end,
   image=function(r,img,options)
     draws[#draws+1] = {rect=r,path=img}
-    assert(options.fit == "stretch")
+    assert(options.fit == "contain")
   end,
 }
 lera = {display=function() return mode end,render_pass=function() return "local" end}
@@ -69,20 +69,40 @@ local grid = { w=2,h=2,cell=function() return {glyph="f"} end,
   image=tiles.board("campaign",{"ff","ff"},2,2) }
 local g = maplib.geometry(grid,{col_headers=true,row_headers=true})
 local lines = maplib.render(grid,{col_headers=true,row_headers=true})
+assert(g.height==#lines)
 for _,l in ipairs(lines) do assert(require("pagelib").visible_width(l)==g.width) end
 for _,image in ipairs(g.images) do
   local c,r = g.cell_at(image.x,image.y)
   assert(c~=nil and r~=nil)
-  local c2,r2 = g.cell_at(image.x+image.w-1,image.y)
+  local c2,r2 = g.cell_at(image.x+image.w-1,image.y+image.h-1)
   assert(c==c2 and r==r2)
 end
 draws={}
-tiles.render_geometry(g,rect(10,20,g.width,1),0,1)
+tiles.render_geometry(g,rect(10,20,g.width,3),0,1)
 assert(#draws==2)
 for _,d in ipairs(draws) do assert(d.rect:y()==20 and d.rect:x()>=10) end
 draws={}
 tiles.render_geometry(g,rect(10,20,3,1),0,1)
 assert(#draws==0) -- partial tiles cannot bleed into adjacent panes
+-- Resize uses the same geometry for painting and clicks, including markers.
+for _,case in ipairs({{4,2,1},{8,4,2},{12,6,3}}) do
+  local resized=maplib.geometry(grid,{},case[1])
+  assert(resized.width==case[1])
+  assert(resized.images[1].w==case[2] and resized.images[1].h==case[3])
+  assert(#maplib.render(grid,{},case[1])==resized.height)
+end
+assert(#maplib.geometry(grid,{},3).images==0)
+local marked={w=2,h=2,cell=function() return {glyph="12",sel=true} end,
+  image=function() return tiles.city("plain"),true end}
+local mg=maplib.geometry(marked,{},12)
+assert(mg.images[1].w==6 and mg.images[1].h==3 and mg.height==8)
+local mc,mr=mg.cell_at(5,3)
+assert(mc==0 and mr==0) -- marker footer belongs to its tile
+assert(maplib.render(marked,{},12)[4]:find("12",1,true))
+gui={size=function() return 1000,2000 end}
+ui.size=function() return 100,100 end
+assert(tiles.cell_aspect()==2)
+gui=nil; ui.size=nil
 local path=tiles.city("plain")
 tiles.draw(rect(0,0,2,1),path); tiles.draw(rect(0,0,2,1),path)
 assert(loads[path]==1)

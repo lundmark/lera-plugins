@@ -291,7 +291,7 @@ local function chart_lines(width)
     out[#out + 1] = pagelib.trunc(C.dim .. "No active chart" .. RESET, width)
     return out
   end
-  for _, l in ipairs(maplib.render(make_chart_grid(), chart_grid_opts())) do
+  for _, l in ipairs(maplib.render(make_chart_grid(), chart_grid_opts(), width)) do
     out[#out + 1] = l
   end
   out[#out + 1] = hover ~= "" and pagelib.trunc(hover, width) or ""
@@ -530,7 +530,7 @@ function M.geometry(width)
   if not voyage_active() or not page_opts.get("show_sea_chart") or not chart_available() then
     return nil
   end
-  return maplib.geometry(make_chart_grid(), chart_grid_opts())
+  return maplib.geometry(make_chart_grid(), chart_grid_opts(), width)
 end
 
 -- Absolute 1-based line index of the "[Actions]" line (pre_chart_lines'

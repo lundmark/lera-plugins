@@ -343,7 +343,7 @@ local function build_lines(width)
   if not has_grid then return out, nil end
 
   local b = S.battle
-  for _, l in ipairs(maplib.render(make_grid(b), GRID_OPTS)) do out[#out + 1] = l end
+  for _, l in ipairs(maplib.render(make_grid(b), GRID_OPTS, width)) do out[#out + 1] = l end
   out[#out + 1] = hover ~= "" and pagelib.trunc(hover, width) or ""
   for _, l in ipairs(legend_lines(width, b)) do out[#out + 1] = l end
   out[#out + 1] = pagelib.trunc(string.format(
@@ -378,16 +378,16 @@ function M.actions_line_index(width)
   return idx
 end
 
-function M.tile_grid()
+function M.tile_grid(width)
   if not S.battle then return {}, nil end
   local grid = make_grid(S.battle)
-  return maplib.render(grid, GRID_OPTS), maplib.geometry(grid, GRID_OPTS)
+  return maplib.render(grid, GRID_OPTS, width), maplib.geometry(grid, GRID_OPTS, width)
 end
 
 function M.geometry(width)
   local _, has_grid = pre_grid_lines(width)
   if not has_grid then return nil end
-  return maplib.geometry(make_grid(S.battle), GRID_OPTS)
+  return maplib.geometry(make_grid(S.battle), GRID_OPTS, width)
 end
 
 function M.grid_line_offset(width)

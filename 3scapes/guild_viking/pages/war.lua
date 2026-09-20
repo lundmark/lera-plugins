@@ -426,7 +426,7 @@ function M.lines(width)
   local function add(s, board_name)
     if board_name then
       local mod = require(board_name)
-      local rows, geom = mod.tile_grid()
+      local rows, geom = mod.tile_grid(width)
       if geom and geom.width <= width then
         boards[#boards + 1] = { geometry=geom, offset=#lines, mod=mod }
         for _, row in ipairs(rows) do lines[#lines + 1] = row end

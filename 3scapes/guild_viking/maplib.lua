@@ -115,7 +115,7 @@ local REV_ON = "\27[7m"
 local REV_OFF = "\27[27m"
 
 -- Every position/size fact both render() and geometry() need, computed once.
-local function layout(grid, opts)
+local function layout(grid, opts, available_width)
   local w, h = grid.w or 0, grid.h or 0
   local row_headers = opts.row_headers and true or false
   local col_headers = opts.col_headers and true or false
@@ -133,18 +133,40 @@ local function layout(grid, opts)
   -- Compact drops the east slot and the edge rows together: both are
   -- between-cells space, and a 1-char pitch has none to give them.
   local compact = opts.compact and true or false
-  if grid.image then compact = true end
   local glyph_width = compact and 1 or 2
   local pitch = compact and 1 or 3
-  -- Two character columns per PNG cell, with no inter-tile gutter. Text
-  -- remains underneath for terminals and failed/missing image assets.
-  if grid.image then glyph_width, pitch = 2, 2 end
+
+  local prefix_width = row_headers and (row_header_width + 1) or 0
+  local image_mode, image_height, marker_row = false, 1, false
+  if grid.image and w > 0 then
+    local budget = math.floor(((available_width or (prefix_width + w * 6)) - prefix_width) / w)
+    local cell_aspect = require("tiles").cell_aspect()
+    -- Choose a square in character-cell units, capped at three text rows.
+    -- Too narrow for even one square: retain the ordinary ASCII layout.
+    local max_cols = math.min(budget, grid.image_max_cols or 6)
+    for rows = 1, 3 do
+      local cols = math.max(2, math.floor(rows * cell_aspect + 0.5))
+      if cols <= max_cols then
+        image_mode, pitch, glyph_width, image_height = true, cols, cols, rows
+      end
+    end
+    if image_mode then
+      compact = true
+      for r = 0, h - 1 do
+        for c = 0, w - 1 do
+          local _, badge = grid.image(c, r)
+          local cell = grid.cell(c, r)
+          if badge or (cell and cell.sel) then marker_row = true end
+        end
+      end
+    end
+  end
 
   local edge_rows = (not compact) and opts.south_edge ~= nil
   local body_lines_per_row = edge_rows and 2 or 1
+  if image_mode then body_lines_per_row = image_height + (marker_row and 1 or 0) end
   local col_header_lines = col_headers and 1 or 0
 
-  local prefix_width = row_headers and (row_header_width + 1) or 0
   local body_width = w * pitch
   local total_width = prefix_width + body_width
   local total_height = col_header_lines + h * body_lines_per_row
@@ -159,6 +181,9 @@ local function layout(grid, opts)
     compact = compact,
     glyph_width = glyph_width,
     pitch = pitch,
+    image_mode = image_mode,
+    image_height = image_height,
+    marker_row = marker_row,
     edge_rows = edge_rows,
     body_lines_per_row = body_lines_per_row,
     col_header_lines = col_header_lines,
@@ -215,21 +240,30 @@ local function build_header_line(L)
     parts[#parts + 1] = " "
   end
   for c = 0, L.w - 1 do
-    parts[#parts + 1] = pagelib.trunc(L.col_label(c), L.glyph_width)
+    local label = tostring(L.col_label(c))
+    -- At minimum zoom show alternate coordinates instead of "01020304".
+    local stride = L.image_mode and math.ceil((#label + 1) / L.pitch) or 1
+    parts[#parts + 1] = pagelib.trunc(c % stride == 0 and label or "", L.glyph_width)
     if not L.compact then parts[#parts + 1] = " " end
   end
   return table.concat(parts)
 end
 
-local function build_cell_line(L, r)
+local function build_cell_line(L, r, subrow)
+  subrow = subrow or 0
   local parts = {}
   if L.row_headers then
-    parts[#parts + 1] = pagelib.trunc(L.row_label(r), L.row_header_width)
+    parts[#parts + 1] = pagelib.trunc(subrow == 0 and L.row_label(r) or "", L.row_header_width)
     parts[#parts + 1] = " "
   end
   local grid = L.grid
   for c = 0, L.w - 1 do
-    parts[#parts + 1] = glyph_field(grid.cell(c, r), L.glyph_width)
+    local cell = grid.cell(c, r)
+    if L.image_mode and subrow == L.image_height then
+      local _, badge = grid.image(c, r)
+      if not badge and not (cell and cell.sel) then cell = nil end
+    end
+    parts[#parts + 1] = glyph_field(cell, L.glyph_width)
     if not L.compact then
       local has_edge = L.east_edge and L.east_edge(c, r)
       parts[#parts + 1] = has_edge and "|" or " "
@@ -262,7 +296,7 @@ local function cell_at(L, x, y)
   local group = math.floor(gy / L.body_lines_per_row)
   if group < 0 or group >= L.h then return nil end
   local line_in_group = gy % L.body_lines_per_row
-  if line_in_group ~= 0 then return nil end -- an edge row: no cells
+  if line_in_group ~= 0 and not L.image_mode then return nil end
   local r = group
 
   local bx
@@ -285,9 +319,9 @@ end
 
 local maplib = {}
 
-function maplib.render(grid, opts)
+function maplib.render(grid, opts, available_width)
   opts = opts or {}
-  local L = layout(grid, opts)
+  local L = layout(grid, opts, available_width)
   local lines = {}
 
   if L.col_headers then
@@ -295,6 +329,11 @@ function maplib.render(grid, opts)
   end
   for r = 0, L.h - 1 do
     lines[#lines + 1] = build_cell_line(L, r)
+    if L.image_mode then
+      for subrow = 1, L.body_lines_per_row - 1 do
+        lines[#lines + 1] = build_cell_line(L, r, subrow)
+      end
+    end
     if L.edge_rows then
       lines[#lines + 1] = build_edge_line(L, r)
     end
@@ -303,25 +342,18 @@ function maplib.render(grid, opts)
   return lines
 end
 
-function maplib.geometry(grid, opts)
+function maplib.geometry(grid, opts, available_width)
   opts = opts or {}
-  local L = layout(grid, opts)
+  local L = layout(grid, opts, available_width)
   local images = {}
-  if grid.image then
+  if L.image_mode then
     for r = 0, L.h - 1 do
       for c = 0, L.w - 1 do
-        local cell = grid.cell(c, r)
-        -- Keep selected cells' reverse-video marker visible: image surfaces
-        -- suppress underlying text, so drawing one here would hide it.
-        local path, badge
-        if not (cell and cell.sel) then path, badge = grid.image(c, r) end
-        -- Lera images cover underlying glyphs. Reserve the first character
-        -- for tactical IDs/sailed markers instead of silently hiding them.
-        local inset = badge and math.max(1, #(cell and cell.glyph or "")) or 0
-        if path and inset < L.pitch then images[#images + 1] = {
-          x = L.prefix_width + c * L.pitch + inset,
+        local path = grid.image(c, r)
+        if path then images[#images + 1] = {
+          x = L.prefix_width + c * L.pitch,
           y = L.col_header_lines + r * L.body_lines_per_row,
-          w = L.pitch - inset, path = path,
+          w = L.pitch, h = L.image_height, path = path,
         } end
       end
     end

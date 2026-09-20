@@ -31,10 +31,12 @@ Text remains underneath as the fallback if an image cannot be loaded.
 
 Lera's current image API uses character-cell rectangles and covers underlying
 text; it does not support MUSHclient's pixel-level text/rectangle overlays.
-Terrain cells therefore use two character columns. Unit identifiers and
-sailed markers retain a text column beside the original icon. Selected
-cells retain their reverse-video ASCII marker; works and deployment cells
-retain their glyphs. This preserves tactical information without claiming
+Tiles grow with the pane width, up to three text rows high (two for the
+dense territory map), using the GUI cell proportions to preserve square art.
+Unit identifiers, sailed markers and reverse-video selection markers have
+a dedicated row below the images instead of squeezing them sideways.
+Very narrow panes fall back to ASCII. Works and deployment cells retain
+their glyphs. This preserves tactical information without claiming
 pixel-identical MUSHclient overlays. A narrow pane can use `/vik war` or
 `/vik map` for more space.
 
