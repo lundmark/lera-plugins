@@ -412,10 +412,13 @@ local function make_grid(poi_at)
     image = tile and function(c, r)
       if is_player_cell(c, r) then return tiles.city("camp_host_you") end
       local poi = poi_at[r * w + c]
-      if poi then
-        local name = icons[POI_TYPE_SYM[poi.type]]
-        return name and tiles.city(name) or nil
-      end
+      -- Glyph-mode Guild.Map can bake settlement/POI symbols into terrain
+      -- rows, just like MUSHclient's map. Landmark metadata is optional.
+      local sym = (poi and POI_TYPE_SYM[poi.type]) or terrain_glyph(r, c)
+      if sym == "X" then return tiles.city("camp_host_you") end
+      local name = icons[sym]
+      if name then return tiles.city(name) end
+      if poi then return nil end -- unknown landmark: preserve its text marker
       return tile(c, r)
     end,
     cell = function(c, r)

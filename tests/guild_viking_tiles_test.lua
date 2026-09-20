@@ -115,4 +115,26 @@ draws={}; window.render(rect(0,0,100,30),{})
 assert(#draws==4)
 mode="tty"; draws={}; window.render(rect(0,0,100,30),{})
 assert(#draws==0)
+
+-- Real glyph-mode GMCP rows already contain POIs, even when the separate
+-- landmark list is absent. Every legacy symbol must resolve to its artwork.
+mode="gui"
+S.vmap_w=9; S.vmap_h=1; S.vmap_rows={"MLPSTRF*X"}; S.vmap_pois={}
+local map=require("popups.map")
+local poi_images=map.geometry(100).images
+local expected={"castle","mead_hall","longhouse","herbyrgi","woods","rock",
+  "farm","skald_hall","camp_host_you"}
+assert(#poi_images==#expected)
+for i,name in ipairs(expected) do
+  ends(poi_images[i].path,"/"..name..".png")
+  tiles.draw(rect(i*2,0,2,1),poi_images[i].path)
+  assert(loads[poi_images[i].path], name)
+end
+-- Metadata overlays still win over baked symbols, then the current player.
+S.vmap_pois={{type="capital",x=2,y=0}}
+ends(map.geometry(100).images[3].path,"/castle.png")
+S.vmap_px=2; S.vmap_py=0
+ends(map.geometry(100).images[3].path,"/camp_host_you.png")
+S.vmap_px=-1; S.vmap_pois={{type="future_type",x=2,y=0}}
+ends(map.geometry(100).images[3].path,"/longhouse.png")
 print("Viking tiles: masks, assets, GUI gating, clipping, cache, battle orientation, tabs PASS")
