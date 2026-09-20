@@ -784,9 +784,16 @@ local function write_battle(rec, full)
   if rec.units ~= nil then b.units = {} end
   for _, u in ipairs(rec.units or {}) do
     if type(u) == "table" then
-      -- `side` is "Y" for yours and anything else for the foe, as it was on
-      -- the wire.
-      local side = (tostring(u.side) == "Y") and "you" or "foe"
+      -- The wire value is the server's own word: battle.h builds every
+      -- company with "side":"you" and compares on that string. This tested
+      -- for "Y" -- MIP's spelling, and MIP is gone -- so EVERY company of
+      -- yours was classified as the foe's.
+      --
+      -- Not a cosmetic miss. The War tab's "Deployed" block filters on
+      -- side == "you" and listed nothing; the board drew your own host in the
+      -- foe's red; and autowar.lua's split_units() saw no units of yours and
+      -- the whole board as hostile, which is what it plans orders from.
+      local side = (tostring(u.side) == "you") and "you" or "foe"
       local utype = tostring(u.type or "")
       -- Allied house levies ride under the hird type because the server reuses
       -- foe_hird for allied aid; the client renames them so they load the

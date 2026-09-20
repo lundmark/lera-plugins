@@ -399,7 +399,7 @@ do
     budget = 100, spent = 40, war_points = 22,
     terrain_rows = { "..", ".." },
     units = {
-      { side = "Y", label = "Shieldwall", size = 10, coord = "A1", morale = 70,
+      { side = "you", label = "Shieldwall", size = 10, coord = "A1", morale = 70,
         utype = "shieldwall", bid = 201 },
       { side = "N", label = "Levy Rabble", size = 12, coord = "B2", morale = 40,
         utype = "foe_levy" },
@@ -518,7 +518,7 @@ do
     budget = 100, spent = 40, war_points = 22,
     terrain_rows = { "..", ".." },
     units = {
-      { side = "Y", label = "Shieldwall", size = 10, coord = "A1", morale = 70,
+      { side = "you", label = "Shieldwall", size = 10, coord = "A1", morale = 70,
         utype = "shieldwall", bid = 201 },
       { side = "N", label = "Levy Rabble", size = 12, coord = "B2", morale = 40,
         utype = "foe_levy" },
@@ -575,7 +575,7 @@ do
     budget = 100, spent = 40, war_points = 22,
     terrain_rows = { "..", ".." },
     units = {
-      { side = "Y", label = "Shieldwall", size = 10, coord = "A1", morale = 70,
+      { side = "you", label = "Shieldwall", size = 10, coord = "A1", morale = 70,
         utype = "shieldwall", bid = 201 },
       { side = "N", label = "Levy Rabble", size = 12, coord = "B2", morale = 40,
         utype = "foe_levy" },

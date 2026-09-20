@@ -97,16 +97,16 @@ check("war_points is set from the frame", S.war_points == 12)
 
 war({ active = 1, phase = "melee", w = 2, h = 1, terrain = { ".." },
       units = {
-        { side = "Y", label = "Hird", size = 20, coord = "A1", morale = 80,
+        { side = "you", label = "Hird", size = 20, coord = "A1", morale = 80,
           type = "hird", leader = "Bjorn", bid = 3, ord = 1, g = "a" },
-        { side = "Y", label = "Aid", size = 10, coord = "B1", morale = 60,
+        { side = "you", label = "Aid", size = 10, coord = "B1", morale = 60,
           type = "foe_hird", leader = "", bid = 0, ord = 2 },
         { side = "F", label = "Raiders", size = 30, coord = "A2", morale = 50,
           type = "foe_levy", bid = 0, ord = 0 },
       },
       reserve = { { label = "Levy", size = 15, uid = 7, cost = 40,
                     leader = "Gunnar" } } })
-check("unit side Y is yours and anything else is the foe",
+check("the server's own \"you\" is yours; anything else is the foe",
       S.battle.units[1].side == "you" and S.battle.units[3].side == "foe")
 check("unit fields", S.battle.units[1].label == "Hird"
       and S.battle.units[1].size == 20 and S.battle.units[1].coord == "A1"

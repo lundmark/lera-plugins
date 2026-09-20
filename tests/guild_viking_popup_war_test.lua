@@ -592,7 +592,7 @@ seed_battle({
   terrain_rows = { "..#", "^*w" }, -- row1 (bottom) then row2 (top)
   works_rows = { "v.u", "..." },
   units = {
-    { side = "Y", label = "Huscarl Guard", size = 8, coord = "A2", morale = 80,
+    { side = "you", label = "Huscarl Guard", size = 8, coord = "A2", morale = 80,
       utype = "huscarls", bid = 101 },
     { side = "N", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
       utype = "foe_raiders", ord = 2 },
@@ -753,7 +753,7 @@ seed_battle({
   terrain_rows = { "..#", "^*w" },
   works_rows = { "v.u", "..." },
   units = {
-    { side = "Y", label = "Huscarl Guard", size = 8, coord = "A2", morale = 80,
+    { side = "you", label = "Huscarl Guard", size = 8, coord = "A2", morale = 80,
       utype = "huscarls", bid = 101 },
     { side = "N", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
       utype = "foe_raiders", ord = 2 },
@@ -782,7 +782,7 @@ seed_battle({
   budget = 100, spent = 40, war_points = 22,
   terrain_rows = { "..", ".." },
   units = {
-    { side = "Y", label = "Shieldwall", size = 10, coord = "A1", morale = 70,
+    { side = "you", label = "Shieldwall", size = 10, coord = "A1", morale = 70,
       utype = "shieldwall", bid = 201 },
     { side = "N", label = "Levy Rabble", size = 12, coord = "B2", morale = 40,
       utype = "foe_levy" },
@@ -904,7 +904,7 @@ seed_battle({
   terrain_rows = { repeat_row(".", 10), repeat_row("^", 10), repeat_row("*", 10), repeat_row("=", 10) },
   works_rows = { repeat_row(".", 10), repeat_row(".", 10), repeat_row(".", 10), repeat_row(".", 10) },
   units = {
-    { side = "Y", label = "A Very Long Unit Label Indeed", size = 99, coord = "A1", morale = 100,
+    { side = "you", label = "A Very Long Unit Label Indeed", size = 99, coord = "A1", morale = 100,
       utype = "moose", bid = 1 },
   },
 })
@@ -1046,9 +1046,9 @@ seed_battle({
     -- Two units of ONE type on ONE side: the case that used to draw a pair of
     -- indistinguishable "S" tiles, then a pair of ordinals that collided with
     -- every other type's ordinals.
-    { side = "Y", label = "First Wall", size = 8, coord = "A2", morale = 80,
+    { side = "you", label = "First Wall", size = 8, coord = "A2", morale = 80,
       utype = "shieldwall", bid = 101, g = "a" },
-    { side = "Y", label = "Second Wall", size = 8, coord = "B2", morale = 80,
+    { side = "you", label = "Second Wall", size = 8, coord = "B2", morale = 80,
       utype = "shieldwall", bid = 102, g = "b" },
     { side = "N", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
       utype = "foe_raiders", bid = 103, g = "A" },
@@ -1081,7 +1081,7 @@ seed_battle({
   terrain_rows = { "...", "..." },
   works_rows = { "...", "..." },
   units = {
-    { side = "Y", label = "Huscarl Guard", size = 8, coord = "A2", morale = 80,
+    { side = "you", label = "Huscarl Guard", size = 8, coord = "A2", morale = 80,
       utype = "huscarls", bid = 101 },
     { side = "N", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
       utype = "foe_raiders", bid = 103, ord = 2 },
