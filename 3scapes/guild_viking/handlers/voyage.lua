@@ -71,11 +71,7 @@ local function apply_plane(parts, gmcp_key, state_key, glyphs)
   end
 end
 
-local function apply_landmarks(parts)
-  local landmarks = parts.landmarks
-  if type(landmarks) ~= "table" then return end
-  -- Rebuilt whole, not merged: `landmarks` is one array key, so a frame
-  -- carrying it carries the entire list.
+local function landmarks_to_pois(landmarks)
   local pois, keys = {}, {}
   for _, lm in ipairs(landmarks) do
     if type(lm) == "table" then
@@ -96,6 +92,45 @@ local function apply_landmarks(parts)
       end
     end
   end
+  return pois, keys
+end
+
+local function apply_landmarks(parts)
+  local landmarks = parts.landmarks
+  if type(landmarks) ~= "table" then return end
+
+  local rev = tonumber(parts.landmark_rev)
+  if rev then
+    local chunk = tonumber(parts.landmark_chunk) or 0
+    local chunks = tonumber(parts.landmark_chunks) or 0
+    if chunk < 1 or chunks < 1 or chunk > chunks then return end
+
+    -- Keep the old, complete POI list visible until every chunk from the new
+    -- server snapshot has arrived. protocol.lua has already merged any GMCP
+    -- transport pages, so this joins only the landmark snapshot chunks.
+    if S.vmap_landmark_rev ~= rev or S.vmap_landmark_chunks ~= chunks then
+      S.vmap_landmark_rev = rev
+      S.vmap_landmark_chunks = chunks
+      S.vmap_landmark_parts = {}
+      S.vmap_landmark_received = 0
+    end
+    if not S.vmap_landmark_parts[chunk] then
+      S.vmap_landmark_received = (S.vmap_landmark_received or 0) + 1
+    end
+    S.vmap_landmark_parts[chunk] = landmarks
+
+    if S.vmap_landmark_received < chunks then return end
+    landmarks = {}
+    for i = 1, chunks do
+      local part = S.vmap_landmark_parts[i]
+      if type(part) ~= "table" then return end
+      for _, lm in ipairs(part) do landmarks[#landmarks + 1] = lm end
+    end
+  end
+
+  -- Older servers send one complete `landmarks` array without chunk metadata;
+  -- accept that shape during rolling upgrades as well.
+  local pois, keys = landmarks_to_pois(landmarks)
   S.vmap_pois = pois
   S.vmap_pois_keys = keys
 end

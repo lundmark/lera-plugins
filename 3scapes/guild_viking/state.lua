@@ -235,6 +235,10 @@ local state = {
   vmap_south_edges = {}, -- [wire row + 1] = south edge passability string
   vmap_pois = {},   -- { type, name, x, y, owner }
   vmap_pois_keys = {},          -- { "x,y" = true } dedup lookup
+  vmap_landmark_rev = nil,
+  vmap_landmark_chunks = 0,
+  vmap_landmark_parts = {},
+  vmap_landmark_received = 0,
   -- 1 while the player is standing on the biome grid, 0 while vmap_px/py are
   -- the last position we saw them at. Starts at 1 because Guild.Map's first
   -- frame after connect is a full one and always carries it -- the value only
@@ -281,6 +285,10 @@ function M.reset_connection()
   state.vmap_legend = nil
   state.vmap_legend_edge = nil
   state.vmap_terrain_glyphs = nil
+  state.vmap_landmark_rev = nil
+  state.vmap_landmark_chunks = 0
+  state.vmap_landmark_parts = {}
+  state.vmap_landmark_received = 0
 end
 
 return M

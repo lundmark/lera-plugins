@@ -680,7 +680,7 @@ end
 -- a player who is past `deadmans`' block_time when they click a POI has
 -- every command in the path silently swallowed by its on_send governance,
 -- not just the first (see plugins/README.md's automation section).
-local function travel_to(poi)
+local function travel_to_cell(x, y, name)
   -- viking_poi_menu_travel's four ColourNotes (12347-12357), verbatim. Two
   -- LEGACY quirks are reproduced rather than tidied: the name is the RAW
   -- wire name (`vmap_poi_selected.name`, so lowercase -- the display-cased
@@ -688,13 +688,17 @@ local function travel_to(poi)
   -- vmap_display_name), and "Already at" is the one line with no "[vmap] "
   -- prefix. Also verbatim: "(1 steps)" -- the count is interpolated with no
   -- plural handling.
-  local name = poi.name
+  name = name or string.format("(%d,%d)", x, y)
   if (S.vmap_px or -1) < 0 then
     status("[vmap] Player position unknown")
     status("[vmap]   %s", position_unknown_reason())
     return
   end
-  local path = pathfinding.bfs(S.vmap_px, S.vmap_py, poi.x, poi.y)
+  if S.vmap_active == 0 then
+    status("[vmap] Travel requires standing on the territory map.")
+    return
+  end
+  local path = pathfinding.bfs(S.vmap_px, S.vmap_py, x, y)
   if not path then
     status("[vmap] No passable route to %s", name)
     return
@@ -707,6 +711,10 @@ local function travel_to(poi)
   for _, dir in ipairs(path) do
     require("util").send(dir, "vmap travel")
   end
+end
+
+local function travel_to(poi)
+  return travel_to_cell(poi.x, poi.y, poi.name)
 end
 
 -- Exported (Task 6): pages/people.lua's errand-return button reuses this
@@ -733,6 +741,10 @@ local function open_poi_menu()
   if (S.vmap_px or -1) < 0 then
     status("[vmap] Travel unavailable: you are not on the map.")
     status("[vmap]   %s", position_unknown_reason())
+    return
+  end
+  if S.vmap_active == 0 then
+    status("[vmap] Travel requires standing on the territory map.")
     return
   end
   local pois = poi_menu_items()
@@ -787,7 +799,7 @@ function M.on_pointer(ev, ctx)
     return nil
   end
 
-  -- RIGHT-click anywhere on the grid: this page's context menu (page_menu.lua
+-- RIGHT-click anywhere on the grid: this page's context menu (page_menu.lua
   -- -- LEGACY's PAGE_MENUS[7], whose right-click hotspot covered the whole
   -- page body). Same record-on-down / match-on-up discipline as the POI path
   -- below, and deliberately NOT gated on landing on a POI: LEGACY's page-body
@@ -813,16 +825,15 @@ function M.on_pointer(ev, ctx)
     hover = cell_tip(poi_at, c, r)
     ui.dirty()
     if ev.button ~= "left" then return nil end
-    if not poi_at_cell(poi_at, c, r) then return nil end
     track.record({ kind = "cell", c = c, r = r })
     return true
   end
 
   -- ev.kind == "up"
-  local matched = poi_at_cell(poi_at, c, r) ~= nil and track.matches({ kind = "cell", c = c, r = r })
+  local matched = track.matches({ kind = "cell", c = c, r = r })
   track.clear()
   if matched then
-    open_poi_menu()
+    travel_to_cell(c, r)
     return true
   end
   return nil
