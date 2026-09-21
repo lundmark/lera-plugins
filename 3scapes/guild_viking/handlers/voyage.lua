@@ -99,11 +99,16 @@ local function apply_landmarks(parts)
   local landmarks = parts.landmarks
   if type(landmarks) ~= "table" then return end
 
-  local rev = tonumber(parts.landmark_rev)
-  if rev then
-    local chunk = tonumber(parts.landmark_chunk) or 0
-    local chunks = tonumber(parts.landmark_chunks) or 0
-    if chunk < 1 or chunks < 1 or chunk > chunks then return end
+  local chunk = tonumber(parts.landmark_chunk)
+  if chunk then
+    -- Guild.Map is delta-cached by the server. After chunk 1, unchanged
+    -- landmark_rev/landmark_chunks are omitted from chunks 2..N, while the
+    -- chunk index and array continue changing. Carry the active snapshot
+    -- metadata forward; otherwise each later chunk is mistaken for a legacy
+    -- complete list and replaces the POIs with only that slice.
+    local rev = tonumber(parts.landmark_rev) or S.vmap_landmark_rev
+    local chunks = tonumber(parts.landmark_chunks) or S.vmap_landmark_chunks
+    if not rev or not chunks or chunks < 1 or chunk < 1 or chunk > chunks then return end
 
     -- Keep the old, complete POI list visible until every chunk from the new
     -- server snapshot has arrived. protocol.lua has already merged any GMCP
