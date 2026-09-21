@@ -822,9 +822,7 @@ function M.on_pointer(ev, ctx)
   end
 
   if ev.kind == "down" then
-    hover = cell_tip(poi_at, c, r)
-    ui.dirty()
-    if ev.button ~= "left" then return nil end
+    if ev.button ~= "left" or not poi_at_cell(poi_at, c, r) then return nil end
     track.record({ kind = "cell", c = c, r = r })
     return true
   end
@@ -832,8 +830,8 @@ function M.on_pointer(ev, ctx)
   -- ev.kind == "up"
   local matched = track.matches({ kind = "cell", c = c, r = r })
   track.clear()
-  if matched then
-    travel_to_cell(c, r)
+  if matched and poi_at_cell(poi_at, c, r) then
+    open_poi_menu()
     return true
   end
   return nil
