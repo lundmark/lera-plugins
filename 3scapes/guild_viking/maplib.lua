@@ -362,16 +362,29 @@ function maplib.geometry(grid, opts, available_width)
   if L.image_mode then
     for r = 0, L.h - 1 do
       for c = 0, L.w - 1 do
-        local path = grid.image(c, r)
+        local path, overlay = grid.image(c, r)
         -- Until the host supports text over PNGs, selection uses its
         -- reverse-video glyph in place, never an extra row between tiles.
         local cell = grid.cell(c, r)
         if cell and cell.sel then path = nil end
-        if path then images[#images + 1] = {
-          x = L.prefix_width + c * L.pitch,
-          y = L.col_header_lines + r * L.body_lines_per_row,
-          w = L.pitch, h = L.image_height, path = path,
-        } end
+        if path then
+          local x = L.prefix_width + c * L.pitch
+          local y = L.col_header_lines + r * L.body_lines_per_row
+          -- A unit marker is a marker, not a tile: it says WHO is standing
+          -- there, and the ground it stands on is the terrain underneath.
+          -- Markers are drawn with transparent backdrops, so the board emits
+          -- the terrain first and lets the marker composite over it -- which
+          -- is why grids flag their overlays and expose `under`.
+          if overlay and grid.under then
+            local base = grid.under(c, r)
+            if base then images[#images + 1] = {
+              x = x, y = y, w = L.pitch, h = L.image_height, path = base,
+            } end
+          end
+          images[#images + 1] = {
+            x = x, y = y, w = L.pitch, h = L.image_height, path = path,
+          }
+        end
       end
     end
   end

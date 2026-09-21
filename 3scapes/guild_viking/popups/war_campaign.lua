@@ -161,6 +161,9 @@ local function make_grid(wm)
 
   return {
     w = dim, h = dim,
+    -- The terrain under an overlay marker, so maplib can draw the ground
+    -- first and let a marker with a transparent backdrop sit on it.
+    under = tile and function(c, r) return tile(c, r) end or nil,
     image = tile and function(c, r)
       local key = c .. "," .. r
       local u = ov[key]

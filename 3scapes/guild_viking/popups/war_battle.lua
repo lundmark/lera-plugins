@@ -163,6 +163,9 @@ local function make_grid(b)
 
   return {
     w = w, h = h,
+    -- The terrain under an overlay marker, so maplib can draw the ground
+    -- first and let a marker with a transparent backdrop sit on it.
+    under = tile and function(c, r) return tile(c, r) end or nil,
     image = tile and function(c, r)
       local game_row = h-r
       local works = ((b.works_rows or {})[game_row] or ""):sub(c+1,c+1)
