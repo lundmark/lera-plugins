@@ -56,6 +56,7 @@ wm_module=$lera_root/scripts/default/wm.lua
 [ -r "$wm_module" ] || { printf 'missing %s - cannot load wm\n' "$wm_module" >&2; exit 1; }
 
 LERA_ROOT=$lera_root "$luajit" tests/chat_monitor_test.lua
+LERA_ROOT=$lera_root "$luajit" tests/chat_recording_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/push_notify_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/combat_notify_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/deadmans_test.lua
