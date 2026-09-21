@@ -338,7 +338,13 @@ end
 -- sends is absolute: the MUD resolves a bare name against ITS cwd, and the
 -- pane's idea of the directory is the thing being clicked in.
 local function entry_path(e)
-  return protocol.resolve(e.name, protocol.cwd(), protocol.home())
+  local cwd = protocol.cwd()
+  if not cwd then return nil end
+  -- A Files.List entry is a literal file name, so its parent goes on before
+  -- the resolver sees it: a leading "~" belongs to the name and must not
+  -- expand to the wizard's home. ferry_actions.selection builds its path the
+  -- same way, for the same reason.
+  return protocol.resolve(cwd .. "/" .. e.name, cwd, protocol.home())
 end
 
 function M.on_pointer(event)

@@ -706,5 +706,26 @@ check("render: an unavailable pane draws only its notice",
       #drawn == 1 and (drawn[1].text or ""):find("wizard", 1, true) ~= nil,
       tostring(drawn[1] and drawn[1].text))
 
+-- ---- entry names are literal, and home may be unknown ----------------------
+--
+-- Home arrives with the seed response, so every click before it lands has
+-- home = nil. A name beginning with "~" must still resolve: it is a file
+-- name, not the wizard's home directory.
+
+protocol.reset()
+protocol.set_available(true)
+protocol.set_cwd("/players/simon")
+protocol.store("/players/simon", {
+  dirs = {}, files = { "~literal.c" }, complete = true,
+})
+sent = {}
+pane.render({ x = 0, y = 0, w = 30, h = 10 })
+pane.on_pointer({ kind = "down", button = "left", x = 1, y = 2,
+                  inside = true, width = 30, height = 10 })
+pick_overlay("view", 30, 10)
+check("entry: a leading ~ is part of the name, not home",
+      #sent == 1 and sent[1] == "more /players/simon/~literal.c",
+      tostring(sent[1]))
+
 print(failures == 0 and "ALL PASS" or (failures .. " FAILURE(S)"))
 os.exit(failures == 0 and 0 or 1)

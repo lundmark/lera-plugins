@@ -65,13 +65,20 @@ check("available: set true", protocol.available() == true)
 
 protocol.set_cwd("/players/simon")
 check("cwd: set from a cd confirmation", protocol.cwd() == "/players/simon")
-check("home: the first cwd of a connection is home",
-      protocol.home() == "/players/simon",
-      "current_path is players/<name> at logon")
+-- Home is the server's answer to "where am I", not whatever reached set_cwd
+-- first: a cd confirmation is a line off the screen, and a prompt can put a
+-- path-shaped line there.
+check("home: a cd confirmation does not establish home", protocol.home() == nil)
+
+protocol.set_cwd("/players/simon", true)
+check("home: the seed establishes it", protocol.home() == "/players/simon")
 
 protocol.set_cwd("/open")
 check("cwd: a later cd moves the cwd", protocol.cwd() == "/open")
 check("home: a later cd does not move home", protocol.home() == "/players/simon")
+
+protocol.set_cwd("/later", true)
+check("home: a second seed does not move home", protocol.home() == "/players/simon")
 
 -- ---- cache ---------------------------------------------------------------
 

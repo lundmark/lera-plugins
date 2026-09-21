@@ -82,11 +82,27 @@ function M.on_line(line)
   return actions.on_line(line)
 end
 
+-- A cd confirmation is a real path, and the trigger's "slash then non-space"
+-- is looser than that. A prompt is free to draw a rule line --
+-- "/-----------\" -- which is a slash followed by non-space characters and
+-- matches the trigger exactly. Two things separate the two: a path has at
+-- least one alphanumeric character somewhere, and it never contains a
+-- backslash.
+local function looks_like_path(text)
+  if type(text) ~= "string" then return false end
+  if text:find("\\", 1, true) then return false end
+  return text:find("%w") ~= nil
+end
+
 -- The confirmation: cd writes exactly "/<resolved path>" and nothing else on
 -- success (secure/pinc/wiz.h:46). Guarded by cd_pending because this pattern
 -- alone matches any output line that happens to be a bare path.
 local function on_cd_confirmed(_, path)
   if not cd_pending then return end
+  -- Decoration between the cd and its confirmation leaves the arm standing:
+  -- disarming here would spend the cd on the decoration and leave the pane on
+  -- the old directory for good.
+  if not looks_like_path(path) then return end
   cd_pending = false
   protocol.set_cwd(path)
   protocol.invalidate(protocol.cwd())

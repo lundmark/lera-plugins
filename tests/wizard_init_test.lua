@@ -177,6 +177,31 @@ wizard.on_input("cd")
 cd_line("/players/simon")
 check("cwd: a bare cd arms the flag", protocol.cwd() == "/players/simon")
 
+-- A prompt is free to draw a rule line, and "/--------\\" is a slash followed
+-- by non-space characters: the trigger matches it exactly like a path. It must
+-- neither become the cwd nor spend the pending cd, or every cd issued under
+-- such a prompt lands on the decoration and the pane stops following.
+protocol.reset()
+protocol.set_cwd("/open")
+wizard.on_input("cd /players/adventurer")
+cd_line("/-----------------------------------------------------------------------------\\")
+check("cwd: a prompt rule line is not a path",
+      protocol.cwd() == "/open",
+      "got " .. tostring(protocol.cwd()))
+cd_line("/players/adventurer")
+check("cwd: the real confirmation still lands after the decoration",
+      protocol.cwd() == "/players/adventurer",
+      "got " .. tostring(protocol.cwd()))
+
+-- Punctuation-only is the give-away, not the backslash alone.
+protocol.reset()
+protocol.set_cwd("/open")
+wizard.on_input("cd /x")
+cd_line("/===========")
+check("cwd: a punctuation-only line is not a path",
+      protocol.cwd() == "/open",
+      "got " .. tostring(protocol.cwd()))
+
 -- A scripted cd (the pane's click-to-navigate goes through mud.send, which
 -- dispatches on_send, not on_input) must track the cwd exactly as a typed one.
 protocol.reset()

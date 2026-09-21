@@ -68,13 +68,17 @@ function M.reset()
   seed_pending = false
 end
 
-function M.set_cwd(path)
+-- learn_home is passed only by the seed response, which is the server telling
+-- us where the wizard is (current_path is "players/<name>" at logon,
+-- secure/pinc/logon.h:1637). It used to be "the first directory seen in a
+-- connection", which meant any line that reached set_cwd could define home --
+-- and a prompt drawing a rule line ("/-----\") reaches it, because that is a
+-- slash followed by non-space characters like any other path.
+function M.set_cwd(path, learn_home)
   local resolved = M.normalize(path)
   if not resolved then return end
   current = resolved
-  -- current_path is "players/<name>" at logon (secure/pinc/logon.h:1637), so
-  -- the first directory seen in a connection is the wizard's home.
-  if not home_dir then home_dir = resolved end
+  if learn_home and not home_dir then home_dir = resolved end
 end
 
 function M.cwd() return current end
@@ -181,7 +185,7 @@ function M.on_message(_, data)
   -- directory must never move the cwd, so only a pending seed consumes this.
   if seed_pending then
     seed_pending = false
-    M.set_cwd(path)
+    M.set_cwd(path, true)
   end
 
   local page = tonumber(data.page) or 1
