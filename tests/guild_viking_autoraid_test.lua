@@ -775,6 +775,11 @@ if last_menu_open then
         labels[1] == "Lineage Cities:" and labels[2] == "  Uppsala Furs Iron"
           and labels[3] == "Other Targets:" and labels[4] == "  Birka",
         table.concat(labels, "|"))
+  local colored = last_menu_open.items[2].label_ansi
+  check("menu/target: target name and each good have ANSI colors",
+        type(colored) == "string" and colored:find("\27[96mUppsala\27[39m", 1, true)
+          and colored:find("\27[31mFurs\27[39m", 1, true)
+          and colored:find("\27[36mIron\27[39m", 1, true), colored)
 end
 printed = {}
 last_menu_open.on_select("lin_1")

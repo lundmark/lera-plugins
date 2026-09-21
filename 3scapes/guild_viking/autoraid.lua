@@ -77,10 +77,8 @@
 --     viking_araid_menu_pick: LEGACY's bespoke WindowCreate/AddHotspot
 --     popup (11410-11434) becomes a require("menu") menu (5 items, LEGACY's
 --     own id/label/val order from araid_menu_build, 11397-11408); per-item
---     colours have no equivalent in menu.lua's plain-label rows and are
---     dropped (content fidelity, not pixel fidelity -- the same ruling
---     autotrader/tick.lua's and autovoyage.lua's own menu ports already
---     apply). Selecting "on"/"convoy"/"log"/"ships" performs the exact same
+--     colours are supplied through menu.lua's optional label_ansi field.
+--     Selecting "on"/"convoy"/"log"/"ships" performs the exact same
 --     toggle/cycle LEGACY's pick handler did, saves, then reopens the menu
 --     in place (LEGACY did the same at 11572); `viking_window.update()`
 --     (11573/11665) is dropped, same disposition as every other
@@ -112,10 +110,9 @@
 --     and the display helper (pages/city_common.lua's good_label) were both
 --     already available, and LEGACY's own picker title ("Pick raid target
 --     (shows the 2 goods each yields)", MAIN 11604) makes the goods the
---     whole point of the window. Only the per-good COLOURS have no
---     equivalent in menu.lua's plain-label rows and stay dropped -- that
---     narrower disclosure is the one genuinely forced by the target
---     surface. This flat-list reshaping avoids growing a new hotspot/scroll
+--     whole point of the window. The plain searchable label and its ANSI
+--     presentation label are both kept, matching the target/goods colors
+--     from the legacy picker. This flat-list reshaping avoids growing a new hotspot/scroll
 --     surface for a picker that is a read-only city-data browse, not a new
 --     automated-send interaction (the plan's Interaction Fidelity bar
 --     governs NEW send-capable pointer surfaces; this one is not that -- it
@@ -404,18 +401,36 @@ local function cycle_ships(ar)
 end
 
 -- LEGACY:11610-11622 (the cell() closure inside viking_show_araid_target_menu).
--- "name good1 good2", skipping a nil good -- same field order LEGACY's own
--- cell() draws (name first, then up to two good labels, space-separated).
--- Fix round 1, I-3: this text was dropped entirely in the first pass; only
--- the per-good COLOURS are genuinely forced by menu.lua's plain-label rows
--- (see the module header) -- the text itself was always preservable, and
--- LEGACY's own picker title ("Pick raid target (shows the 2 goods each
--- yields)", MAIN 11604) makes the goods the whole point of this window.
+-- Plain "name good1 good2" plus a separately colored ANSI rendering.
+-- The menu's plain label remains the searchable/measured text. label_ansi is
+-- its visual counterpart: target names are bright cyan, while each good uses
+-- the same color as the city and warehouse pages.
 local function target_label(e)
   local parts = { e.name or "?" }
+  local colored = { "\27[96m", e.name or "?", "\27[39m" }
   if e.g1 then parts[#parts + 1] = cc.good_label(e.g1) end
   if e.g2 then parts[#parts + 1] = cc.good_label(e.g2) end
-  return table.concat(parts, " ")
+  for _, good in ipairs({ e.g1, e.g2 }) do
+    if good then
+      colored[#colored + 1] = " "
+      colored[#colored + 1] = cc.good_color(good)
+      colored[#colored + 1] = cc.good_label(good)
+      -- Reset just the foreground so the menu's selected-row reverse-video
+      -- attribute remains active while colors change between fields.
+      colored[#colored + 1] = "\27[39m"
+    end
+  end
+  return table.concat(parts, " "), table.concat(colored)
+end
+
+local function target_menu_item(e, value)
+  local label, label_ansi = target_label(e)
+  return {
+    label = "  " .. label,
+    label_ansi = "  " .. label_ansi,
+    value = value,
+    search = e.name,
+  }
 end
 
 -- LEGACY:11579-11667. Flat require("menu") replacement for the two-column
@@ -427,13 +442,13 @@ local function target_menu_items()
   if #lin > 0 then
     items[#items + 1] = { label = "Lineage Cities:", value = "_hdr" }
     for i, e in ipairs(lin) do
-      items[#items + 1] = { label = "  " .. target_label(e), value = "lin_" .. i, search = e.name }
+      items[#items + 1] = target_menu_item(e, "lin_" .. i)
     end
   end
   if #hist > 0 then
     items[#items + 1] = { label = "Other Targets:", value = "_hdr" }
     for i, e in ipairs(hist) do
-      items[#items + 1] = { label = "  " .. target_label(e), value = "hist_" .. i, search = e.name }
+      items[#items + 1] = target_menu_item(e, "hist_" .. i)
     end
   end
   return items
