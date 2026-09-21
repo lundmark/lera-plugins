@@ -193,6 +193,28 @@ check("cwd: the real confirmation still lands after the decoration",
       protocol.cwd() == "/players/adventurer",
       "got " .. tostring(protocol.cwd()))
 
+-- A prompt sent without a trailing newline is assembled onto the front of the
+-- next line, so the confirmation arrives as "> /players/shaman" and the
+-- anchored trigger never matches. The pane must not be stuck there: the first
+-- line back from a cd asks the server where it is instead.
+protocol.reset()
+protocol.set_available(true)
+protocol.set_cwd("/players/skuggis")
+local before = #sent
+wizard.on_input("cd /players/shaman")
+wizard.on_line("> /players/shaman")
+check("cwd: a prompt-glued confirmation triggers a where-am-I request",
+      #sent == before + 1 and sent[#sent].pkg == "Files.List"
+      and sent[#sent].data and sent[#sent].data.path == nil,
+      tostring(#sent - before))
+wizard.on_line("some other line")
+check("cwd: the request is sent once per cd, not once per line",
+      #sent == before + 1, tostring(#sent - before))
+protocol.on_message("Files.List", { path = "/players/shaman", dirs = {}, files = {},
+                                    page = 1, pages = 1 })
+check("cwd: the server's answer moves the pane",
+      protocol.cwd() == "/players/shaman", tostring(protocol.cwd()))
+
 -- Punctuation-only is the give-away, not the backslash alone.
 protocol.reset()
 protocol.set_cwd("/open")

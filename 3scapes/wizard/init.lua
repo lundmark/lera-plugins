@@ -36,6 +36,7 @@ local command_id = nil
 local gmcp_ids = {}
 local trigger_ids = {}
 local cd_pending = false
+local cd_asked = false   -- 1 seed request per cd, see on_line()
 
 -- ---- cwd tracking ---------------------------------------------------------
 
@@ -56,7 +57,7 @@ local function arm_if_cd(text)
   if type(text) == "string" then
     -- The first word must be exactly "cd": `cdtest foo` is a different command.
     local first = text:match("^%s*(%S+)")
-    if first == "cd" then cd_pending = true end
+    if first == "cd" then cd_pending = true; cd_asked = false end
   end
   return text
 end
@@ -74,6 +75,17 @@ function M.on_line(line)
     -- cd's three failure lines report and leave current_path alone.
     if CD_FAILURES[line] or line:match("^Illegal directory: ") then
       cd_pending = false
+    elseif not cd_asked then
+      -- ASK, rather than read the screen. The confirmation trigger below is
+      -- the fast path, but it only matches a line that is exactly the path:
+      -- a prompt sent without a trailing newline is assembled onto the front
+      -- of the next line ("> /players/shaman") and the anchored pattern stops
+      -- matching, which left the pane sitting on the old directory forever.
+      -- A bodyless Files.List request is the server answering "where am I",
+      -- and it cannot be spelled wrong by a prompt. Sent once per cd, on the
+      -- first line back, so the MUD has already processed the cd.
+      cd_asked = true
+      protocol.request(nil)
     end
   end
   -- Syntax highlighting for a file being paged through `more`, and a no-op at
@@ -99,6 +111,7 @@ end
 -- alone matches any output line that happens to be a bare path.
 local function on_cd_confirmed(_, path)
   if not cd_pending then return end
+  cd_asked = false
   -- Decoration between the cd and its confirmation leaves the arm standing:
   -- disarming here would spend the cd on the decoration and leave the pane on
   -- the old directory for good.
