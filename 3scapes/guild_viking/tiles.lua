@@ -133,6 +133,20 @@ function M.draw(rect, path)
   local img = cache[path]
   if img == nil then
     img = ui.image_load(path)
+    -- Numbered battle-unit sprites distinguish duplicate formations. Siege
+    -- has only a shared sprite (unit_siege_you.png), so a numbered siege
+    -- path from the wire must fall back instead of leaving that cell blank.
+    if not img then
+      local fallback = path:match("^(images/viking_cityplan/unit_.+)_([1-9])%.png$")
+      if fallback then
+        fallback = fallback .. ".png"
+        img = cache[fallback]
+        if img == nil then
+          img = ui.image_load(fallback)
+          cache[fallback] = img or false
+        end
+      end
+    end
     cache[path] = img or false -- a missing asset must not cause I/O every frame
   end
   -- Layout already approximates square pixels. Fill the whole cell: contain
