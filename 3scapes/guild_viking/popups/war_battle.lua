@@ -46,6 +46,7 @@
 -- and this module's send commands both key on.
 local pagelib = require("pagelib")
 local maplib = require("maplib")
+local details = require("popups.hover_details")
 local state = require("state")
 local track = require("popups.pointer_track").tracker()
 
@@ -338,13 +339,15 @@ end
 -- Builds the full line array plus the 1-based index of the "[Actions]"
 -- line (nil if unreachable), in lockstep by construction -- same
 -- discipline popups/sea.lua's pre_chart_lines/actions_line_index follow.
+local hover_text
 local function build_lines(width)
   local out, has_grid = pre_grid_lines(width)
   if not has_grid then return out, nil end
 
   local b = S.battle
   for _, l in ipairs(maplib.render(make_grid(b), GRID_OPTS, width)) do out[#out + 1] = l end
-  out[#out + 1] = hover ~= "" and pagelib.trunc(hover, width) or ""
+  details.append_grid(out, hover, width, b.width or 8, b.height or 8,
+    function(c, r) return hover_text(b, c, r) end)
   for _, l in ipairs(legend_lines(width, b)) do out[#out + 1] = l end
   out[#out + 1] = pagelib.trunc(string.format(
     "%sCommand %d/%d%s   %sFraegd %d%s",
@@ -397,7 +400,7 @@ end
 
 -- viking_battle_click's tooltip (guild_viking.lua:14337-14359), flattened
 -- to one line, "\r\n" collapsed to "  " like every other module's hover.
-local function hover_text(b, gc, gr)
+hover_text = function(b, gc, gr)
   local w, h = b.width or 8, b.height or 8
   local r_game = h - gr
   local coord = coord_at(gc, gr, h)
@@ -413,7 +416,11 @@ local function hover_text(b, gc, gr)
 
   local tip
   if u then
-    tip = coord .. "  " .. (u.label or "unit") .. (u.side == "you" and " (yours)" or " (enemy)")
+    local label = u.label and u.label ~= "" and u.label or ULABEL[u.utype or ""] or "unit"
+    tip = coord .. "  " .. label .. (u.side == "you" and " (yours)" or " (enemy)")
+    if u.utype and u.utype ~= "" then tip = tip .. "  Type: " .. u.utype:gsub("_", " ") end
+    if u.leader and u.leader ~= "" then tip = tip .. "  Leader: " .. u.leader end
+    if u.owner and u.owner ~= "" then tip = tip .. "  Owner: " .. u.owner end
     if u.size ~= nil then tip = tip .. string.format("  %d men", u.size) end
     if u.morale ~= nil then tip = tip .. string.format("  morale %d", u.morale) end
     tip = tip .. "  on " .. (BTERR_NAME[ch] or "plains")

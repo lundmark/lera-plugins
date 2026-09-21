@@ -159,7 +159,7 @@ local function seed_wmap(t)
     local kind = UNIT_KIND[u.id] or "foe"
     units[#units + 1] = { kind = kind, id = (kind == "foe") and u.id or "",
                           c = u.c or 0, r = u.r or 0, size = u.size or 0,
-                          flag = u.f or "" }
+                          flag = u.f or "", name = u.name, owner = u.owner }
   end
   -- `t.queues` is `{ [id] = { "A1", "B2", ... } }`; the payload is a flat list
   -- of {id, label} rows, and an id with no squares contributes none -- which
@@ -1093,6 +1093,29 @@ check("without letters the board falls back to type glyph + ordinal",
   olines[ooffset + 1]:find("H", 1, true) ~= nil and
   olines[ooffset + 1]:find("2", 1, true) ~= nil, olines[ooffset + 1])
 check("without letters the static type key is used", find_plain(olines, "huscarl"))
+
+reset_all()
+seed_wmap({dim = 1, rows = {"."}, units = {
+  {id = "A", c = 0, r = 0, size = 123, name = "Jorvik Host", owner = "Sigetest"} }})
+local before = war_campaign.lines(28)
+war_campaign.on_pointer({kind = "move", inside = true}, fixed_ctx(0, 0))
+local after = war_campaign.lines(28)
+local info = table.concat(after, " ")
+check("campaign hover includes host name", info:find("Jorvik Host", 1, true))
+check("campaign hover includes size", info:find("123 men", 1, true))
+check("campaign hover includes supplied owner", info:find("Owner: Sigetest", 1, true))
+check("campaign hover reservation is stable", #before == #after)
+reset_all()
+seed_battle({width = 1, height = 1, terrain_rows = {"."}, units = {
+  {side = "Y", coord = "A1", utype = "huscarls", label = "", leader = "Sigetest", size = 25, morale = 90} }})
+before = war_battle.lines(28)
+war_battle.on_pointer({kind = "move", inside = true}, bfixed_ctx(0, 0))
+after = war_battle.lines(28)
+info = table.concat(after, " ")
+check("battle hover includes type despite empty label", info:find("Type: huscarls", 1, true))
+check("battle hover includes leader", info:find("Leader: Sigetest", 1, true))
+check("battle hover includes allegiance", info:find("(yours)", 1, true))
+check("battle hover reservation is stable", #before == #after)
 
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING POPUP WAR TESTS PASSED")

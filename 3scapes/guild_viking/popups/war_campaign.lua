@@ -60,6 +60,7 @@
 -- the grid already gives the exact "A1"-style cell name.
 local pagelib = require("pagelib")
 local maplib = require("maplib")
+local details = require("popups.hover_details")
 local state = require("state")
 local track = require("popups.pointer_track").tracker()
 
@@ -268,13 +269,15 @@ function M.tile_grid(width)
   return maplib.render(grid, {}, width), maplib.geometry(grid, {}, width)
 end
 
+local hover_text
 function M.lines(width)
   local out, has_grid = pre_grid_lines(width)
   if not has_grid then return out end
 
   local wm = S.war_map
   for _, l in ipairs(maplib.render(make_grid(wm), {}, width)) do out[#out + 1] = l end
-  out[#out + 1] = hover ~= "" and pagelib.trunc(hover, width) or ""
+  details.append_grid(out, hover, width, wm.dim or #(wm.rows or {}), wm.dim or #(wm.rows or {}),
+    function(c, r) return hover_text(wm, c, r) end)
   out[#out + 1] = pagelib.trunc(C.yellow .. hint_text(wm) .. RESET, width)
 
   local up = wm.upkeep
@@ -314,7 +317,7 @@ end
 -- viking_chart_tooltip-style flattened hover text, mirroring LEGACY's own
 -- bcamp_* tooltip construction (13901-13935) one-for-one, "\r\n" collapsed
 -- to "  " like every other module's hover line.
-local function hover_text(wm, c, r)
+hover_text = function(wm, c, r)
   local row = (wm.rows or {})[r + 1] or ""
   local terr_ch = row:sub(c + 1, c + 1)
   if terr_ch == "" then terr_ch = "." end
@@ -331,11 +334,16 @@ local function hover_text(wm, c, r)
   if dugout then tip = tip .. "  dugout" end
 
   if u then
+    if u.name and u.name ~= "" then tip = tip .. "  Name: " .. u.name end
+    if u.size ~= nil then tip = tip .. "  " .. tostring(u.size) .. " men" end
+    if u.owner and u.owner ~= "" then tip = tip .. "  Owner: " .. u.owner end
     if u.f and u.f ~= "" then tip = tip .. "  facing " .. u.f end
     if u.id == "A" then
       tip = tip .. "  host (you)"
-    elseif u.id == "F" then
+    elseif u.id == "F" or u.kind == "ally" then
       tip = tip .. "  ally"
+    elseif u.kind == "detach" then
+      tip = tip .. "  detachment (yours)"
     elseif u.id == "*" then
       tip = tip .. "  objective"
     elseif type(u.id) == "string" and u.id:sub(1, 1) == "P" then

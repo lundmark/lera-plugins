@@ -650,6 +650,7 @@ local function write_campaign(parts)
         wm.units[#wm.units + 1] = {
           id = id, c = tonumber(u.c) or 0, r = tonumber(u.r) or 0,
           size = tonumber(u.size) or 0, f = tostring(u.flag or ""),
+          kind = kind, name = tostring(u.name or ""), owner = tostring(u.owner or ""),
         }
       end
     end
