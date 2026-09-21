@@ -298,6 +298,29 @@ local function print_sources()
   buffer.color_print(nil, "DAA520", string.format(
     "  frames %d, foreign %d, malformed %d",
     gs.frames, gs.foreign, gs.malformed))
+
+  -- `/vik source` is also the quickest way to diagnose map hover metadata:
+  -- terrain glyphs can still render even when their landmark records (the
+  -- names and owners used by hover) are absent or out of alignment.
+  local w, h = tonumber(S.vmap_w) or 0, tonumber(S.vmap_h) or 0
+  local rows, pois = S.vmap_rows or {}, S.vmap_pois or {}
+  local settlements, outside = 0, 0
+  for _, poi in ipairs(pois) do
+    if poi.type == "player" or poi.type == "capital" or poi.type == "lineage" then
+      settlements = settlements + 1
+      local x, y = tonumber(poi.x), tonumber(poi.y)
+      local inside = x and y and x >= 0 and y >= 0 and x < w and y < h
+      if not inside then outside = outside + 1 end
+      local glyph = inside and ((rows[y + 1] or ""):sub(x + 1, x + 1)) or "?"
+      buffer.color_print(nil, "DAA520", string.format(
+        "  map %s %q owner=%q at (%s,%s) glyph=%q%s",
+        tostring(poi.type), tostring(poi.name or ""), tostring(poi.owner or ""),
+        tostring(poi.x), tostring(poi.y), glyph, inside and "" or " OUTSIDE"))
+    end
+  end
+  buffer.color_print(nil, "DAA520", string.format(
+    "  map %dx%d rows=%d landmarks=%d settlements=%d outside=%d",
+    w, h, #rows, #pois, settlements, outside))
 end
 
 local function print_status()
