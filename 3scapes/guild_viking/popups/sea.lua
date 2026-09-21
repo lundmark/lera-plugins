@@ -81,6 +81,7 @@
 --     hint) so it stays legible without opening the menu.
 local pagelib = require("pagelib")
 local maplib = require("maplib")
+local details = require("popups.hover_details")
 local state = require("state")
 local page_opts = require("page_opts")
 local common = require("popups.sea_common")
@@ -235,8 +236,13 @@ end
 
 local function make_chart_grid()
   local w, h = S.voyage_chart_width or 0, S.voyage_chart_height or 0
+  local tiles = require("tiles")
+  local tile = tiles.enabled("sea") and tiles.board("sea", S.voyage_chart_rows, w, h)
   return {
     w = w, h = h,
+    image = tile and function(c, r)
+      return tile(c, r), chart_sym(c, r) ~= "S" and is_sailed(c, r)
+    end,
     cell = function(c, r)
       local sym = chart_sym(c, r)
       if sym == "" then return nil end
@@ -268,6 +274,7 @@ local function chart_hover_text(c, r)
   local node = CHART_NODES[sym]
   local parts = { chart_coord(c, r) .. "  " .. ((node and node.name) or "Uncharted") }
   if node and node.hint then parts[#parts + 1] = node.hint end
+  if is_sailed(c, r) then parts[#parts + 1] = "Sailed" end
   local status = (sym == "#") and "Unrevealed" or "Revealed"
   local danger = (S.voyage_status and S.voyage_status.danger) or 0
   if danger > 0 then
@@ -286,10 +293,11 @@ local function chart_lines(width)
     out[#out + 1] = pagelib.trunc(C.dim .. "No active chart" .. RESET, width)
     return out
   end
-  for _, l in ipairs(maplib.render(make_chart_grid(), chart_grid_opts())) do
+  for _, l in ipairs(maplib.render(make_chart_grid(), chart_grid_opts(), width)) do
     out[#out + 1] = l
   end
-  out[#out + 1] = hover ~= "" and pagelib.trunc(hover, width) or ""
+  details.append_grid(out, hover, width, S.voyage_chart_width or 0, S.voyage_chart_height or 0,
+    chart_hover_text)
   if page_opts.get("show_sea_chart_legend") then
     for _, l in ipairs(maplib.legend(width, legend_entries())) do out[#out + 1] = l end
   end
@@ -525,7 +533,7 @@ function M.geometry(width)
   if not voyage_active() or not page_opts.get("show_sea_chart") or not chart_available() then
     return nil
   end
-  return maplib.geometry(make_chart_grid(), chart_grid_opts())
+  return maplib.geometry(make_chart_grid(), chart_grid_opts(), width)
 end
 
 -- Absolute 1-based line index of the "[Actions]" line (pre_chart_lines'

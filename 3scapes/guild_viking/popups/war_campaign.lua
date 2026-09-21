@@ -60,6 +60,7 @@
 -- the grid already gives the exact "A1"-style cell name.
 local pagelib = require("pagelib")
 local maplib = require("maplib")
+local details = require("popups.hover_details")
 local state = require("state")
 local track = require("popups.pointer_track").tracker()
 
@@ -142,6 +143,8 @@ end
 local function make_grid(wm)
   local dim = wm.dim or #(wm.rows or {})
   local rows = wm.rows or {}
+  local tiles = require("tiles")
+  local tile = tiles.enabled("campaign") and tiles.board("campaign", rows, dim, dim)
   local ov, wks = {}, {}
   local you_c, you_r = -1, -1
   local sel_c, sel_r = -1, -1
@@ -158,6 +161,30 @@ local function make_grid(wm)
 
   return {
     w = dim, h = dim,
+    -- The terrain under an overlay marker, so maplib can draw the ground
+    -- first and let a marker with a transparent backdrop sit on it.
+    under = tile and function(c, r) return tile(c, r) end or nil,
+    image = tile and function(c, r)
+      local key = c .. "," .. r
+      local u = ov[key]
+      if u then
+        if u.id == "A" then return tiles.city("camp_host_you"), true end
+        if u.id == "F" or u.kind == "ally" then return tiles.city("camp_ally_you"), true end
+        if tonumber(u.id) then return tiles.city("camp_foe_foe"), true end
+        -- The objective marker and the waystone landmarks used to fall through
+        -- to nil, which draws no image at all -- so on a tiled board they were
+        -- the two cells still showing their raw glyph ("*" and "w", the latter
+        -- reading as water because w is also the terrain glyph for it).
+        if u.id == "*" then return tiles.city("camp_objective"), true end
+        if type(u.id) == "string" and u.id:sub(1, 1) == "P" then
+          return tiles.city(u.id == "P1" and "camp_landmark_taken"
+                                          or "camp_landmark"), true
+        end
+        return nil
+      end
+      if wks[key] then return tiles.city("camp_dugout"), true end
+      return tile(c, r)
+    end,
     cell = function(c, r)
       local key = c .. "," .. r
       local cell
@@ -247,13 +274,22 @@ local function pre_grid_lines(width)
   return out, true
 end
 
+function M.tile_grid(width)
+  local wm = S.war_map
+  if not wm or not wm.active then return {}, nil end
+  local grid = make_grid(wm)
+  return maplib.render(grid, {}, width), maplib.geometry(grid, {}, width)
+end
+
+local hover_text
 function M.lines(width)
   local out, has_grid = pre_grid_lines(width)
   if not has_grid then return out end
 
   local wm = S.war_map
-  for _, l in ipairs(maplib.render(make_grid(wm), {})) do out[#out + 1] = l end
-  out[#out + 1] = hover ~= "" and pagelib.trunc(hover, width) or ""
+  for _, l in ipairs(maplib.render(make_grid(wm), {}, width)) do out[#out + 1] = l end
+  details.append_grid(out, hover, width, wm.dim or #(wm.rows or {}), wm.dim or #(wm.rows or {}),
+    function(c, r) return hover_text(wm, c, r) end)
   out[#out + 1] = pagelib.trunc(C.yellow .. hint_text(wm) .. RESET, width)
 
   local up = wm.upkeep
@@ -282,7 +318,7 @@ end
 function M.geometry(width)
   local _, has_grid = pre_grid_lines(width)
   if not has_grid then return nil end
-  return maplib.geometry(make_grid(S.war_map), {})
+  return maplib.geometry(make_grid(S.war_map), {}, width)
 end
 
 function M.grid_line_offset(width)
@@ -293,7 +329,7 @@ end
 -- viking_chart_tooltip-style flattened hover text, mirroring LEGACY's own
 -- bcamp_* tooltip construction (13901-13935) one-for-one, "\r\n" collapsed
 -- to "  " like every other module's hover line.
-local function hover_text(wm, c, r)
+hover_text = function(wm, c, r)
   local row = (wm.rows or {})[r + 1] or ""
   local terr_ch = row:sub(c + 1, c + 1)
   if terr_ch == "" then terr_ch = "." end
@@ -310,11 +346,16 @@ local function hover_text(wm, c, r)
   if dugout then tip = tip .. "  dugout" end
 
   if u then
+    if u.name and u.name ~= "" then tip = tip .. "  Name: " .. u.name end
+    if u.size ~= nil then tip = tip .. "  " .. tostring(u.size) .. " men" end
+    if u.owner and u.owner ~= "" then tip = tip .. "  Owner: " .. u.owner end
     if u.f and u.f ~= "" then tip = tip .. "  facing " .. u.f end
     if u.id == "A" then
       tip = tip .. "  host (you)"
-    elseif u.id == "F" then
+    elseif u.id == "F" or u.kind == "ally" then
       tip = tip .. "  ally"
+    elseif u.kind == "detach" then
+      tip = tip .. "  detachment (yours)"
     elseif u.id == "*" then
       tip = tip .. "  objective"
     elseif type(u.id) == "string" and u.id:sub(1, 1) == "P" then

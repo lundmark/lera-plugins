@@ -842,5 +842,21 @@ check("an out-of-grid wrapper coordinate does not send to the MUD", #send_calls 
 
 if is_open_flag then package.loaded["wm"].popup.close() end
 
+seed_vmap({ w = 2, h = 1, px = 0, py = 0, rows = { "pp" },
+  pois = { { type = "player", name = "LongSettlementName", owner = "Sigetest", x = 0, y = 0 } } })
+local before_hover = map.lines(24)
+map.on_pointer({ kind = "move", x = 0, y = 0, inside = true }, fixed_ctx(0, 0))
+local full_hover = map.lines(24)
+local all_details = table.concat(full_hover, " ")
+check("own-position hover retains settlement name", all_details:find("LongSettlementName", 1, true))
+check("own-position hover retains owner", all_details:find("Owner: Sigetest", 1, true))
+check("own-position hover also identifies player", all_details:find("You are here", 1, true))
+check("hover does not change reserved map height", #before_hover == #full_hover)
+local details = require("popups.hover_details")
+local long_name = "ExtremelyLongUnbrokenSettlementOwner"
+local wrapped = details.wrap(long_name, 8)
+check("long unbroken names wrap without data loss", table.concat(wrapped) == long_name)
+for _, line in ipairs(wrapped) do check("wrapped detail fits width", #line <= 8) end
+
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING POPUP MAP TESTS PASSED")
