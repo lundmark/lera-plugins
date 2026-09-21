@@ -168,9 +168,18 @@ local function make_grid(wm)
         if u.id == "A" then return tiles.city("camp_host_you"), true end
         if u.id == "F" or u.kind == "ally" then return tiles.city("camp_ally_you"), true end
         if tonumber(u.id) then return tiles.city("camp_foe_foe"), true end
+        -- The objective marker and the waystone landmarks used to fall through
+        -- to nil, which draws no image at all -- so on a tiled board they were
+        -- the two cells still showing their raw glyph ("*" and "w", the latter
+        -- reading as water because w is also the terrain glyph for it).
+        if u.id == "*" then return tiles.city("camp_objective"), true end
+        if type(u.id) == "string" and u.id:sub(1, 1) == "P" then
+          return tiles.city(u.id == "P1" and "camp_landmark_taken"
+                                          or "camp_landmark"), true
+        end
         return nil
       end
-      if wks[key] then return nil end
+      if wks[key] then return tiles.city("camp_dugout"), true end
       return tile(c, r)
     end,
     cell = function(c, r)
