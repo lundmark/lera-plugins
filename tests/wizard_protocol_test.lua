@@ -313,6 +313,26 @@ check("seed: a bodyless response sets the cwd",
       protocol.cwd() == "/players/simon", tostring(protocol.cwd()))
 check("seed: it also establishes home", protocol.home() == "/players/simon")
 
+-- A seed whose listing is REFUSED still answers "where am I". The daemon
+-- gates listings on an ACL glob (daemon/gmcp_files_d.c), so a cd into a
+-- directory the wizard may enter but not list -- /players -- answers
+-- { path, error }. The pane must follow the cd and show the reason, and the
+-- seed must be consumed so a later response is not mistaken for it.
+protocol.reset()
+sent = {}
+protocol.set_cwd("/players/skuggis", true)
+protocol.request(nil)
+protocol.on_message("Files.List", { path = "/players", error = "denied" })
+check("seed: an errored seed still moves the cwd",
+      protocol.cwd() == "/players", tostring(protocol.cwd()))
+check("seed: the reason is kept for the pane to show",
+      (protocol.lookup("/players") or {}).error == "denied")
+protocol.on_message("Files.List", {
+  path = "/elsewhere", dirs = {}, files = {}, page = 1, pages = 1,
+})
+check("seed: a later response is not mistaken for the consumed seed",
+      protocol.cwd() == "/players", tostring(protocol.cwd()))
+
 -- A Tab-driven request for another directory must NOT move the cwd.
 protocol.reset()
 protocol.set_cwd("/players/simon")

@@ -175,6 +175,18 @@ function M.on_message(_, data)
     local entry = { dirs = {}, files = {}, complete = true,
                     truncated = false, error = data.error }
     M.store(path, entry)
+    -- A seed that errors still answers "where am I": the echoed path is the
+    -- wizard's own directory, and only the LISTING was refused (the daemon
+    -- gates on an ACL glob, so /players comes back "denied" while the cd
+    -- itself succeeded). Consume the seed anyway and let the pane show the
+    -- reason. Returning early here left the pane silently on the previous
+    -- directory AND left seed_pending armed, so the next response to arrive
+    -- -- a Tab completion for some other directory, say -- was mistaken for
+    -- the seed and moved the cwd somewhere the wizard never went.
+    if seed_pending then
+      seed_pending = false
+      M.set_cwd(path, true)
+    end
     fire(path, entry)
     if ui and ui.dirty then ui.dirty() end
     return
