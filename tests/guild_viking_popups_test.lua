@@ -315,7 +315,7 @@ for _, l in ipairs(war_lines) do
     check("war.lua placeholder no longer says (stage 3)", false, l)
   end
 end
-check("war.lua placeholder text updated", war_placeholder_found)
+check("war.lua renders an inline board instead of a popup placeholder", not war_placeholder_found)
 
 -- =============================================================================
 -- /vik dispatch: routing to popups.toggle/open_page, "page"/"pop"

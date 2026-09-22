@@ -25,15 +25,9 @@
 --     that plugin window's own font. lera's font is global and
 --     composition-level (gui.font_size / gui.set_font), so a plugin page menu
 --     has nothing to retune. Portal chrome, dropped like the rest of it.
---   * show_city_plan_icons (LEGACY [2]), show_map_icons ([7]) and
---     show_sea_chart_icons ([10]) -- these ARE real page_opts entries, so
---     `/vik opts` still lists them and `/vik set` still flips them, but
---     nothing in this conversion READS them: they gate LEGACY's graphical
---     Wang-tile branch, and only the text-view branch was ported (see
---     popups/map.lua, popups/cityplan.lua and popups/sea.lua headers). A menu
---     is a discoverability surface, and offering a control that provably does
---     nothing would be a defect from the user's side, so they are omitted
---     here while remaining reachable through the option list.
+--   * show_city_plan_icons remains omitted: city-plan graphics are not
+--     ported here. Map, Sea and War image controls are available in GUI mode
+--     through tiles.lua; TTY/headless sessions always render ASCII.
 --
 -- Per-item COLOUR is lost (LEGACY:11191-11196 coloured action rows 0xCCCCFF
 -- and dimmed OFF toggles to 0x888888): require("menu") rows are plain labels.
@@ -134,8 +128,9 @@ local PAGE_MENUS = {
     { key = "auto_trade",         label = "Auto-Trade (arbitrage)" },
     { action = "atrade_config",   label = "Auto-Trade settings..." },
   },
-  -- LEGACY [7] -- the Map POPUP here (show_map_icons omitted)
+  -- LEGACY [7] -- shared by the Map tab and popup
   map = {
+    { key = "show_map_icons", label = "Images (off = ASCII)", graphical = true },
     { key = "show_map_towns", label = "Show Locations List" },
     { action = "travel",      label = "Travel to..." },
   },
@@ -148,8 +143,9 @@ local PAGE_MENUS = {
     { key = "show_ranks_standings",   label = "Show Lineage Standings" },
     { key = "show_ranks_village_rep", label = "Show Village Reputation" },
   },
-  -- LEGACY [10] -- the Sea POPUP here (show_sea_chart_icons omitted)
+  -- LEGACY [10] -- shared by the Sea tab and popup
   sea = {
+    { key = "show_sea_chart_icons", label = "Images (off = ASCII)", graphical = true },
     { key = "show_sea_voyage",       label = "Show Voyage" },
     { key = "show_sea_chart",        label = "Show Chart" },
     { key = "show_sea_chart_legend", label = "Show Chart Legend" },
@@ -181,7 +177,7 @@ local PAGE_MENUS = {
   -- LEGACY [13]
   war = {
     { key = "show_war_battle",    label = "Show Battle" },
-    { key = "show_war_ascii",     label = "ASCII Map (in-game look)" },
+    { key = "show_war_ascii",     label = "ASCII Map (off = images)", graphical = true },
     { key = "show_war_council",   label = "Show War Council" },
     { key = "show_war_campaigns", label = "Show Campaigns" },
     { key = "show_war_houses",    label = "Show Great Houses" },
@@ -213,6 +209,7 @@ function M.items(page_key)
   if not spec then return nil end
   local items = {}
   for _, it in ipairs(spec) do
+    if not it.graphical or require("tiles").available() then
     local label, value
     if it.action then
       label = ">  " .. it.label
@@ -222,6 +219,7 @@ function M.items(page_key)
       value = "key:" .. it.key
     end
     items[#items + 1] = { label = label, value = value, search = it.label }
+    end
   end
   return items
 end
@@ -230,14 +228,21 @@ end
 -- require("menu")'s own "opening a menu cancels the open one" contract
 -- reproduces LEGACY's explicit viking_close_page_menu() + show call.
 local function dispatch_action(action)
+  -- The four *_config rows open automation menus that ship only in the
+  -- private plugin repo. open_auto() is a no-op in the public base, where the
+  -- rows are not offered in the first place (see automation_available below).
+  local function open_auto(name)
+    local mod = require("util").optional_require(name)
+    if mod then mod.open_menu() end
+  end
   if action == "atrade_config" then
-    require("autotrader.tick").open_menu()
+    open_auto("autotrader.tick")
   elseif action == "araid_config" then
-    require("autoraid").open_menu()
+    open_auto("autoraid")
   elseif action == "avoyage_config" then
-    require("autovoyage").open_menu()
+    open_auto("autovoyage")
   elseif action == "aherd_config" then
-    require("autoherd").open_menu()
+    open_auto("autoherd")
   elseif action == "travel" then
     require("popups.map").open_poi_menu()
   end
@@ -252,6 +257,8 @@ function M.pick(page_key, value)
   if type(value) ~= "string" then return end
   local kind, rest = value:match("^(%a+):(.+)$")
   if kind == "key" then
+    if (rest == "show_map_icons" or rest == "show_sea_chart_icons"
+        or rest == "show_war_ascii") and not require("tiles").available() then return end
     if page_opts.get(rest) == nil then return end
     page_opts.set(rest, not page_opts.get(rest))
     require("persist").save()

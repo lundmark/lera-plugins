@@ -68,13 +68,17 @@ function M.reset()
   seed_pending = false
 end
 
-function M.set_cwd(path)
+-- learn_home is passed only by the seed response, which is the server telling
+-- us where the wizard is (current_path is "players/<name>" at logon,
+-- secure/pinc/logon.h:1637). It used to be "the first directory seen in a
+-- connection", which meant any line that reached set_cwd could define home --
+-- and a prompt drawing a rule line ("/-----\") reaches it, because that is a
+-- slash followed by non-space characters like any other path.
+function M.set_cwd(path, learn_home)
   local resolved = M.normalize(path)
   if not resolved then return end
   current = resolved
-  -- current_path is "players/<name>" at logon (secure/pinc/logon.h:1637), so
-  -- the first directory seen in a connection is the wizard's home.
-  if not home_dir then home_dir = resolved end
+  if learn_home and not home_dir then home_dir = resolved end
 end
 
 function M.cwd() return current end
@@ -171,6 +175,18 @@ function M.on_message(_, data)
     local entry = { dirs = {}, files = {}, complete = true,
                     truncated = false, error = data.error }
     M.store(path, entry)
+    -- A seed that errors still answers "where am I": the echoed path is the
+    -- wizard's own directory, and only the LISTING was refused (the daemon
+    -- gates on an ACL glob, so /players comes back "denied" while the cd
+    -- itself succeeded). Consume the seed anyway and let the pane show the
+    -- reason. Returning early here left the pane silently on the previous
+    -- directory AND left seed_pending armed, so the next response to arrive
+    -- -- a Tab completion for some other directory, say -- was mistaken for
+    -- the seed and moved the cwd somewhere the wizard never went.
+    if seed_pending then
+      seed_pending = false
+      M.set_cwd(path, true)
+    end
     fire(path, entry)
     if ui and ui.dirty then ui.dirty() end
     return
@@ -181,7 +197,7 @@ function M.on_message(_, data)
   -- directory must never move the cwd, so only a pending seed consumes this.
   if seed_pending then
     seed_pending = false
-    M.set_cwd(path)
+    M.set_cwd(path, true)
   end
 
   local page = tonumber(data.page) or 1

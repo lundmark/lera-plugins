@@ -206,9 +206,11 @@ gm("Guild.Fleet", { ships = {
 S.autoraid = { convoy = false, ships = 5, target = "", last = 0 }
 local capped_lines = city_page.lines(WIDTH)
 local capped_all = joined(capped_lines)
-check("Raids: ship count is capped to the REAL ar_max_ships() (1), not the configured 5",
-      capped_all:find("1 Ships", 1, true) ~= nil and capped_all:find("5 Ships", 1, true) == nil,
-      capped_all)
+-- Without autoraid installed there is no Dock-derived cap to clamp to, so the
+-- public base shows the configured count as-is. The private repo, which has
+-- the module, asserts the clamped "1 Ships" in its own automation test.
+check("Raids: ship count shows the configured value when autoraid is absent",
+      capped_all:find("5 Ships", 1, true) ~= nil, capped_all)
 -- Restore the shared CITY-mode fixture for every later check in this file.
 gm("Guild.City", { buildings = { { id = "dock", tier = 2 },
                                  { id = "warehouse", tier = 3 } } })

@@ -16,7 +16,8 @@
 --     holding); per-tile upkeep; spoils-if-you-win.
 --   War Captives (UNGATED -- data-gated on state.prison/state.siege having
 --     anything to show, 14020-14058) -- held/cap header, a pending-judgement
---     line, the captive roster, kin held by the foe, and siege-engine count.
+--     line, the captive roster, and kin held by the foe. The siege park is
+--     the Army page's, not this one's.
 --     Persists even with no active campaign (LEGACY's own comment).
 --   Battle (show_war_battle, 14084-14603) -- deploy/turn header; the tactical
 --     grid (dropped); command budget + Fraegd (war points); either the
@@ -117,8 +118,6 @@ local C = pagelib.C
 
 local M = {}
 
-local GRID_PLACEHOLDER = "Battle map: /vik war"
-
 -- ---------------------------------------------------------------------------
 -- Campaign Map (guild_viking.lua:13620-14016, UNGATED -- war_map.active)
 -- ---------------------------------------------------------------------------
@@ -149,7 +148,7 @@ local function campaign_map_lines(add, width, wm)
     return
   end
 
-  add(pagelib.trunc(GRID_PLACEHOLDER, width))
+  add(nil, "popups.war_campaign")
 
   local hint
   if wm.pending and wm.pending ~= 0 then
@@ -182,22 +181,19 @@ end
 -- Captive roster column widths. The name column is the only one that can
 -- overflow, so its text is cut one short (ROSTER_NAME_W - 1) and a literal
 -- space appended -- see the comment in the loop.
--- Bill goods, in the order the server lists them.
-local SIEGE_GOODS = { "timber", "iron", "tools" }
-
 local ROSTER_ID_W, ROSTER_NAME_W = 5, 30
 local ROSTER_SIZE_W, ROSTER_RANK_W, ROSTER_RANSOM_W = 6, 6, 9
 
 local function prison_lines(add, width)
   local pr = S.prison
-  local sg = S.siege
+  -- Captives only. The siege park used to render here as well as on the Army
+  -- page, which draws it in full (engines held, the forge queue with per-engine
+  -- clocks, and the materials bill) -- the same three things this section was
+  -- repeating. Gating on the park too meant a player with engines but no
+  -- captives got an empty "War Captives  (0/0 held)" header, so that goes with
+  -- it.
   local have_prison = pr and ((pr.held or 0) > 0 or (pr.kin or 0) > 0 or pr.pending or (pr.cap or 0) > 0)
-  -- Gate on anything the park holds OR has committed: with cap alone, a
-  -- demolished/downgraded Siege Workshop hides engines still on order.
-  local have_siege = sg and ((sg.cap or 0) > 0 or (sg.engines or 0) > 0
-                             or (sg.forging or 0) > 0 or (sg.ordered or 0) > 0)
-  if not have_prison and not have_siege then return end
-  if not pr then pr = { held = 0, cap = 0, kin = 0 } end
+  if not have_prison then return end
 
   add(pagelib.header(width, string.format("War Captives  (%d/%d held)", pr.held or 0, pr.cap or 0)))
 
@@ -243,46 +239,6 @@ local function prison_lines(add, width)
       C.red, pr.kin, pagelib.RESET), width))
   end
 
-  if have_siege then
-    -- Held / forging / on order are distinct states (gmcp.h:322-329); this
-    -- line used to print engines/cap alone, so a park with engines on the
-    -- forge line or waiting on materials read as empty. The headline stays
-    -- short enough not to be clipped at 80 columns, and the other two states
-    -- get their own line only when they are non-zero.
-    add(pagelib.trunc(string.format(
-      "%sSiege engines: %d/%d held%s -- 'vsiege build' to breach a garrison's walls",
-      C.yellow, sg.engines or 0, sg.cap or 0, pagelib.RESET), width))
-    -- Engines on the forge line, each with its own clock (campaign_siege_queue).
-    for _, e in ipairs(sg.queue or {}) do
-      local eta = e.eta or 0
-      add(pagelib.trunc("  "
-        .. pagelib.trunc(C.dim .. "Engine " .. tostring(e.slot or "?")
-                         .. pagelib.RESET, 11)
-        .. (eta <= 0 and (C.bright_green .. "Finalizing...")
-                     or (C.white .. cc.fmt_time(eta))) .. pagelib.RESET, width))
-    end
-
-    -- Materials pulled toward the NEXT engine, as delivered/needed per good.
-    -- The server sends `reserved` (already pulled) and `next_needs` (the
-    -- shortfall); _reserve_for_one_engine() (set.h:9706) never reserves more
-    -- than one engine's bill, so needed = reserved + next_needs exactly, and
-    -- no separate recipe key is required.
-    if (sg.ordered or 0) > 0 then
-      add(pagelib.trunc(string.format("  %s%d on order%s -- materials pulled:",
-        C.yellow, sg.ordered, pagelib.RESET), width))
-      for _, g in ipairs(SIEGE_GOODS) do
-        local got  = (sg.reserved or {})[g] or 0
-        local need = got + ((sg.next_needs or {})[g] or 0)
-        if need > 0 then
-          add(pagelib.trunc("    "
-            .. pagelib.trunc(C.white .. g .. pagelib.RESET, 10)
-            .. pagelib.pct_color(got, need) .. got .. "/" .. need .. pagelib.RESET
-            .. (got >= need and (C.bright_green .. "  done" .. pagelib.RESET) or ""),
-            width))
-        end
-      end
-    end
-  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -369,7 +325,7 @@ local function battle_lines(add, width)
     add(pagelib.header(width, string.format("Battle vs %s  --  turn %d", b.target or "?", b.turn or 0)))
   end
 
-  add(pagelib.trunc(GRID_PLACEHOLDER, width))
+  add(nil, "popups.war_battle")
 
   add(pagelib.trunc(string.format("%sCommand %d/%d%s   %sFraegd %d%s",
     C.yellow, b.spent or 0, b.budget or 0, pagelib.RESET,
@@ -466,7 +422,21 @@ end
 function M.lines(width)
   width = width or 80
   local lines = {}
-  local function add(s) lines[#lines + 1] = s end
+  local boards = {}
+  local function add(s, board_name)
+    if board_name then
+      local mod = require(board_name)
+      local rows, geom = mod.tile_grid(width)
+      if geom and geom.width <= width then
+        boards[#boards + 1] = { geometry=geom, offset=#lines, mod=mod }
+        for _, row in ipairs(rows) do lines[#lines + 1] = row end
+      else
+        lines[#lines + 1] = pagelib.trunc("Map too wide -- /vik war", width)
+      end
+    else
+      lines[#lines + 1] = s
+    end
+  end
 
   local wm = S.war_map
   if wm and wm.active then
@@ -492,7 +462,7 @@ function M.lines(width)
     houses_lines(add, width)
   end
 
-  return lines
+  return lines, nil, boards
 end
 
 return M

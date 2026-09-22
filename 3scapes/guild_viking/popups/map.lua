@@ -182,6 +182,7 @@
 -- the exports are additive.
 local pagelib = require("pagelib")
 local maplib = require("maplib")
+local details = require("popups.hover_details")
 local state = require("state")
 local page_opts = require("page_opts")
 local pathfinding = require("pathfinding")
@@ -403,8 +404,25 @@ end
 
 local function make_grid(poi_at)
   local w, h = S.vmap_w or 0, S.vmap_h or 0
+  local tiles = require("tiles")
+  local tile = tiles.enabled("map") and tiles.board("map", S.vmap_rows, w, h)
+  local icons = { M="castle", L="mead_hall", P="longhouse", S="herbyrgi",
+    T="woods", R="rock", F="farm", ["*"]="skald_hall" }
   return {
     w = w, h = h,
+    image_max_cols = 4,
+    image = tile and function(c, r)
+      if is_player_cell(c, r) then return tiles.city("camp_host_you") end
+      local poi = poi_at[r * w + c]
+      -- Glyph-mode Guild.Map can bake settlement/POI symbols into terrain
+      -- rows, just like MUSHclient's map. Landmark metadata is optional.
+      local sym = (poi and POI_TYPE_SYM[poi.type]) or terrain_glyph(r, c)
+      if sym == "X" then return tiles.city("camp_host_you") end
+      local name = icons[sym]
+      if name then return tiles.city(name) end
+      if poi then return nil end -- unknown landmark: preserve its text marker
+      return tile(c, r)
+    end,
     cell = function(c, r)
       if is_player_cell(c, r) then
         return { glyph = "X", color = VMAP_COLOR.X }
@@ -521,6 +539,7 @@ end
 -- Public renderer contract (popups.lua)
 -- ---------------------------------------------------------------------------
 
+local cell_tip
 function M.lines(width)
   local out = pre_grid_lines(width)
 
@@ -551,11 +570,12 @@ function M.lines(width)
 
   local poi_at = poi_lookup()
   local grid = make_grid(poi_at)
-  for _, l in ipairs(maplib.render(grid, GRID_OPTS)) do
+  for _, l in ipairs(maplib.render(grid, GRID_OPTS, width)) do
     out[#out + 1] = l
   end
 
-  out[#out + 1] = hover ~= "" and pagelib.trunc(hover, width) or ""
+  details.append_grid(out, hover, width, S.vmap_w or 0, S.vmap_h or 0,
+    function(c, r) return cell_tip(poi_at, c, r) end)
 
   if page_opts.get("show_map_towns") then
     for _, l in ipairs(town_lines(width)) do out[#out + 1] = l end
@@ -569,7 +589,7 @@ end
 function M.geometry(width)
   if (S.vmap_w or 0) == 0 then return nil end
   local grid = make_grid(poi_lookup())
-  return maplib.geometry(grid, GRID_OPTS)
+  return maplib.geometry(grid, GRID_OPTS, width)
 end
 
 function M.grid_line_offset(width)
@@ -587,11 +607,9 @@ end
 -- or a non-left button) is unconsumed, exactly as before.
 -- ---------------------------------------------------------------------------
 
-local function cell_tip(poi_at, c, r)
+cell_tip = function(poi_at, c, r)
   local tip
-  if is_player_cell(c, r) then
-    tip = VMAP_TIP_SYM.X
-  else
+  do
     local poi = poi_at[r * (S.vmap_w or 0) + c]
     if poi then
       tip = (VMAP_TYPE_LABEL[poi.type] or "Location") .. ": " .. display_name(poi.name or "?")
@@ -603,6 +621,7 @@ local function cell_tip(poi_at, c, r)
       tip = VMAP_TIP_SYM[ch] or VMAP_TIP_TERR[ch] or "Terrain"
     end
   end
+  if is_player_cell(c, r) then tip = tip .. "  -- You are here" end
   return string.format("(%d,%d)  %s", c, r, tip)
 end
 
@@ -661,7 +680,7 @@ end
 -- a player who is past `deadmans`' block_time when they click a POI has
 -- every command in the path silently swallowed by its on_send governance,
 -- not just the first (see plugins/README.md's automation section).
-local function travel_to(poi)
+local function travel_to_cell(x, y, name)
   -- viking_poi_menu_travel's four ColourNotes (12347-12357), verbatim. Two
   -- LEGACY quirks are reproduced rather than tidied: the name is the RAW
   -- wire name (`vmap_poi_selected.name`, so lowercase -- the display-cased
@@ -669,13 +688,17 @@ local function travel_to(poi)
   -- vmap_display_name), and "Already at" is the one line with no "[vmap] "
   -- prefix. Also verbatim: "(1 steps)" -- the count is interpolated with no
   -- plural handling.
-  local name = poi.name
+  name = name or string.format("(%d,%d)", x, y)
   if (S.vmap_px or -1) < 0 then
     status("[vmap] Player position unknown")
     status("[vmap]   %s", position_unknown_reason())
     return
   end
-  local path = pathfinding.bfs(S.vmap_px, S.vmap_py, poi.x, poi.y)
+  if S.vmap_active == 0 then
+    status("[vmap] Travel requires standing on the territory map.")
+    return
+  end
+  local path = pathfinding.bfs(S.vmap_px, S.vmap_py, x, y)
   if not path then
     status("[vmap] No passable route to %s", name)
     return
@@ -688,6 +711,10 @@ local function travel_to(poi)
   for _, dir in ipairs(path) do
     require("util").send(dir, "vmap travel")
   end
+end
+
+local function travel_to(poi)
+  return travel_to_cell(poi.x, poi.y, poi.name)
 end
 
 -- Exported (Task 6): pages/people.lua's errand-return button reuses this
@@ -714,6 +741,10 @@ local function open_poi_menu()
   if (S.vmap_px or -1) < 0 then
     status("[vmap] Travel unavailable: you are not on the map.")
     status("[vmap]   %s", position_unknown_reason())
+    return
+  end
+  if S.vmap_active == 0 then
+    status("[vmap] Travel requires standing on the territory map.")
     return
   end
   local pois = poi_menu_items()
@@ -768,7 +799,7 @@ function M.on_pointer(ev, ctx)
     return nil
   end
 
-  -- RIGHT-click anywhere on the grid: this page's context menu (page_menu.lua
+-- RIGHT-click anywhere on the grid: this page's context menu (page_menu.lua
   -- -- LEGACY's PAGE_MENUS[7], whose right-click hotspot covered the whole
   -- page body). Same record-on-down / match-on-up discipline as the POI path
   -- below, and deliberately NOT gated on landing on a POI: LEGACY's page-body
@@ -791,18 +822,15 @@ function M.on_pointer(ev, ctx)
   end
 
   if ev.kind == "down" then
-    hover = cell_tip(poi_at, c, r)
-    ui.dirty()
-    if ev.button ~= "left" then return nil end
-    if not poi_at_cell(poi_at, c, r) then return nil end
+    if ev.button ~= "left" or not poi_at_cell(poi_at, c, r) then return nil end
     track.record({ kind = "cell", c = c, r = r })
     return true
   end
 
   -- ev.kind == "up"
-  local matched = poi_at_cell(poi_at, c, r) ~= nil and track.matches({ kind = "cell", c = c, r = r })
+  local matched = track.matches({ kind = "cell", c = c, r = r })
   track.clear()
-  if matched then
+  if matched and poi_at_cell(poi_at, c, r) then
     open_poi_menu()
     return true
   end

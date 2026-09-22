@@ -87,17 +87,21 @@ local persist = require("persist")
 -- Stage 4 Task 3: the auto-trade paced runner + its /vik trader control
 -- surface and settings menu. notify.lua calls autotrade_tick.tick() itself
 -- (see its own header); init.lua only needs it for the command surface.
-local autotrade_tick = require("autotrader.tick")
+-- The five automation modules ship only in the PRIVATE plugin repo (3s-lera),
+-- which carries this same base alongside them. Each is nil here in the public
+-- base and every use below branches on that -- see util.optional_require.
+local optional_require = require("util").optional_require
+local autotrade_tick = optional_require("autotrader.tick")
 
 -- Stage 4 Task 8: the auto-raider + its /vik raid control surface and
 -- settings menu. notify.lua calls autoraid.tick() itself (see its own
 -- header); init.lua only needs it for the command surface.
-local autoraid = require("autoraid")
+local autoraid = optional_require("autoraid")
 
 -- Stage 4 Task 7: the auto-voyage router + its /vik voyage auto control
 -- surface and settings menu. notify.lua calls autovoyage.tick() itself (see
 -- its own header); init.lua only needs it for the command surface.
-local autovoyage = require("autovoyage")
+local autovoyage = optional_require("autovoyage")
 
 -- Husbandry plan Task 4: Auto-Herd + its /vik herd control surface and
 -- settings menu. notify.lua calls autoherd.tick() itself (see its own
@@ -106,12 +110,12 @@ local autovoyage = require("autovoyage")
 -- (goal/reserve/keep/per-building/menu) would be unreachable -- only the
 -- master toggle would be, via `/vik set auto_herd on`. Auto-Herd is OFF by
 -- default and sends nothing until explicitly enabled.
-local autoherd = require("autoherd")
+local autoherd = optional_require("autoherd")
 
 -- Client-side Viking Auto-War planner. It is deliberately OFF by default;
 -- notify.lua owns its paced tick and this module only provides configuration
 -- and status here.
-local autowar = require("autowar")
+local autowar = optional_require("autowar")
 
 local S = state_mod.S
 
@@ -198,13 +202,18 @@ end
 -- M.AV_INTERVAL (the latter newly exported this task, mirroring autoraid's
 -- own M.AR_INTERVAL).
 local function print_automation_status()
+  -- Each block is gated on its own module: absent in the public base, the
+  -- line is simply not printed.
+  if autotrade_tick then
   local trade_phase, trade_pending, _, trade_last_error, trade_next_at = autotrade_tick.status()
   buffer.color_print(nil, "DAA520", string.format(
     "  Auto-Trade: %s | phase=%s pending=%d%s | next: %s",
     page_opts.get("auto_trade") and "ON" or "off", trade_phase, trade_pending,
     (trade_last_error ~= "" and (" last_error=" .. trade_last_error)) or "",
     fmt_next(trade_next_at)))
+  end
 
+  if autoraid then
   local ar = autoraid.settings()
   local raid_last = "none"
   if ar.last_dispatch then
@@ -216,13 +225,16 @@ local function print_automation_status()
     "  Auto-Raid: %s | last dispatch: %s | next: %s",
     page_opts.get("auto_raid") and "ON" or "off", raid_last,
     fmt_next((ar.last or 0) + autoraid.AR_INTERVAL)))
+  end
 
+  if autovoyage then
   local av = autovoyage.settings()
   local voyage_last = (av.log and #av.log > 0) and av.log[#av.log] or "none"
   buffer.color_print(nil, "DAA520", string.format(
     "  Auto-Voyage: %s | last: %s | next: %s",
     page_opts.get("auto_voyage") and "ON" or "off", voyage_last,
     fmt_next((av.last or 0) + autovoyage.AV_INTERVAL)))
+  end
 
   -- Auto-Herd, mirroring the three blocks above. Its log entries are
   -- { t = "HH:MM", desc = ... } records rather than Auto-Voyage's plain
@@ -230,6 +242,7 @@ local function print_automation_status()
   -- text's own promise ("each automation's on/off state and
   -- last-action/next-eligible summary") false by omission -- for the ONE
   -- automation that spends the player's daler.
+  if autoherd then
   local ah = autoherd.settings()
   local herd_last = "none"
   if ah.log and #ah.log > 0 then
@@ -240,13 +253,16 @@ local function print_automation_status()
     "  Auto-Herd: %s | last: %s | next: %s",
     page_opts.get("auto_herd") and "ON" or "off", herd_last,
     fmt_next((ah.last or 0) + autoherd.AH_INTERVAL)))
+  end
 
+  if autowar then
   local aw = autowar.settings()
   buffer.color_print(nil, "DAA520", string.format(
     "  Auto-War: %s | phase=%s | last: %s | next: %s",
     page_opts.get("auto_battle") and "ON" or "off", autowar.status().phase,
     aw.status ~= "" and aw.status or "none",
     fmt_next((aw.last or 0) + (autowar.AW_INTERVAL or 4))))
+  end
 end
 
 -- The keys GMCP has fed this connection, sorted. The single extraction both
@@ -282,6 +298,29 @@ local function print_sources()
   buffer.color_print(nil, "DAA520", string.format(
     "  frames %d, foreign %d, malformed %d",
     gs.frames, gs.foreign, gs.malformed))
+
+  -- `/vik source` is also the quickest way to diagnose map hover metadata:
+  -- terrain glyphs can still render even when their landmark records (the
+  -- names and owners used by hover) are absent or out of alignment.
+  local w, h = tonumber(S.vmap_w) or 0, tonumber(S.vmap_h) or 0
+  local rows, pois = S.vmap_rows or {}, S.vmap_pois or {}
+  local settlements, outside = 0, 0
+  for _, poi in ipairs(pois) do
+    if poi.type == "player" or poi.type == "capital" or poi.type == "lineage" then
+      settlements = settlements + 1
+      local x, y = tonumber(poi.x), tonumber(poi.y)
+      local inside = x and y and x >= 0 and y >= 0 and x < w and y < h
+      if not inside then outside = outside + 1 end
+      local glyph = inside and ((rows[y + 1] or ""):sub(x + 1, x + 1)) or "?"
+      buffer.color_print(nil, "DAA520", string.format(
+        "  map %s %q owner=%q at (%s,%s) glyph=%q%s",
+        tostring(poi.type), tostring(poi.name or ""), tostring(poi.owner or ""),
+        tostring(poi.x), tostring(poi.y), glyph, inside and "" or " OUTSIDE"))
+    end
+  end
+  buffer.color_print(nil, "DAA520", string.format(
+    "  map %dx%d rows=%d landmarks=%d settlements=%d outside=%d",
+    w, h, #rows, #pois, settlements, outside))
 end
 
 local function print_status()
@@ -337,6 +376,11 @@ local function set_opt(rest)
     return
   end
   local current = page_opts.get(opt)
+  if (opt == "show_map_icons" or opt == "show_sea_chart_icons" or opt == "show_war_ascii")
+      and not require("tiles").available() then
+    buffer.color_print(nil, "DAA520", "Viking: image/ASCII switching requires GUI mode.")
+    return
+  end
   if current == nil then
     buffer.color_print(nil, "DAA520", "Viking: unknown page option '" .. opt .. "'")
     return
@@ -401,15 +445,18 @@ function M.vik_command(args)
     print_opts()
   elseif sub == "set" then
     set_opt(rest)
-  elseif sub_lower == "trader" then
+  -- The automation subcommands exist only where their module does. In the
+  -- public base each guard is false, so "/vik raid" falls through to the
+  -- unknown-subcommand path rather than indexing a nil module.
+  elseif sub_lower == "trader" and autotrade_tick then
     autotrade_tick.trader_command(rest)
-  elseif sub_lower == "raid" then
+  elseif sub_lower == "raid" and autoraid then
     autoraid.raid_command(rest)
-  elseif sub_lower == "herd" then
+  elseif sub_lower == "herd" and autoherd then
     autoherd.herd_command(rest)
-  elseif sub_lower == "awar" or sub_lower == "autowar" then
+  elseif (sub_lower == "awar" or sub_lower == "autowar") and autowar then
     autowar.config(rest)
-  elseif sub_lower == "voyage" and rest:sub(1, 4):lower() == "auto"
+  elseif sub_lower == "voyage" and autovoyage and rest:sub(1, 4):lower() == "auto"
       and (#rest == 4 or rest:sub(5, 5):match("%s")) then
     -- "/vik voyage auto [<sub>]" -- strip the "auto" token (case-
     -- insensitively) and hand the remainder to autovoyage.lua, same shape
@@ -485,7 +532,7 @@ function M.on_load()
   -- same loop in on_unload. Not gated on page_opts.auto_herd -- the latch is a
   -- fact about the world worth recording even while the automation is off, and
   -- the planner is what consults it.
-  for _, t in ipairs(autoherd.triggers or {}) do
+  for _, t in ipairs((autoherd and autoherd.triggers) or {}) do
     notify_trigger_ids[#notify_trigger_ids + 1] = trigger.add(t.pattern, t.fn)
   end
   countdown_id = timer.every(1000, function() notify.countdown_tick() end)

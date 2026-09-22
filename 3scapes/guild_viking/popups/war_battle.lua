@@ -46,6 +46,7 @@
 -- and this module's send commands both key on.
 local pagelib = require("pagelib")
 local maplib = require("maplib")
+local details = require("popups.hover_details")
 local state = require("state")
 local track = require("popups.pointer_track").tracker()
 
@@ -153,11 +154,37 @@ end
 -- 14110, 14201).
 local function make_grid(b)
   local w, h = b.width or 8, b.height or 8
+  local tiles = require("tiles")
+  local rows = {}
+  for r = 1, h do rows[r] = (b.terrain_rows or {})[h-r+1] or string.rep(".", w) end
+  local tile = tiles.enabled("battle") and tiles.board("battle", rows, w, h)
   local dz = b.dz or 2
   local deploying = (b.phase == "deploy")
 
   return {
     w = w, h = h,
+    -- The terrain under an overlay marker, so maplib can draw the ground
+    -- first and let a marker with a transparent backdrop sit on it.
+    under = tile and function(c, r) return tile(c, r) end or nil,
+    image = tile and function(c, r)
+      local game_row = h-r
+      local works = ((b.works_rows or {})[game_row] or ""):sub(c+1,c+1)
+      local unit = unit_at(b, coord_at(c,r,h))
+      if unit then
+        local known = {skirmishers=true, bogmenn=true, shieldwall=true, huscarls=true,
+          berserkir=true, moose=true, ally_levy=true, siege=true,
+          foe_raiders=true, foe_levy=true, foe_hird=true}
+        if not known[unit.utype] then return nil end
+        local side = unit.side == "you" and "you" or "foe"
+        local name = "unit_" .. unit.utype .. "_" .. side
+        local ord = tonumber(unit.ord) or 0
+        if ord >= 1 and ord <= 9 then name = name .. "_" .. math.floor(ord) end
+        return tiles.city(name), true
+      end
+      if works == "v" or works == "u"
+          or (deploying and game_row <= dz) then return nil end
+      return tile(c, r)
+    end,
     cell = function(gc, gr)
       local r_game = h - gr
       local coord = coord_at(gc, gr, h)
@@ -315,13 +342,15 @@ end
 -- Builds the full line array plus the 1-based index of the "[Actions]"
 -- line (nil if unreachable), in lockstep by construction -- same
 -- discipline popups/sea.lua's pre_chart_lines/actions_line_index follow.
+local hover_text
 local function build_lines(width)
   local out, has_grid = pre_grid_lines(width)
   if not has_grid then return out, nil end
 
   local b = S.battle
-  for _, l in ipairs(maplib.render(make_grid(b), GRID_OPTS)) do out[#out + 1] = l end
-  out[#out + 1] = hover ~= "" and pagelib.trunc(hover, width) or ""
+  for _, l in ipairs(maplib.render(make_grid(b), GRID_OPTS, width)) do out[#out + 1] = l end
+  details.append_grid(out, hover, width, b.width or 8, b.height or 8,
+    function(c, r) return hover_text(b, c, r) end)
   for _, l in ipairs(legend_lines(width, b)) do out[#out + 1] = l end
   out[#out + 1] = pagelib.trunc(string.format(
     "%sCommand %d/%d%s   %sFraegd %d%s",
@@ -355,10 +384,16 @@ function M.actions_line_index(width)
   return idx
 end
 
+function M.tile_grid(width)
+  if not S.battle then return {}, nil end
+  local grid = make_grid(S.battle)
+  return maplib.render(grid, GRID_OPTS, width), maplib.geometry(grid, GRID_OPTS, width)
+end
+
 function M.geometry(width)
   local _, has_grid = pre_grid_lines(width)
   if not has_grid then return nil end
-  return maplib.geometry(make_grid(S.battle), GRID_OPTS)
+  return maplib.geometry(make_grid(S.battle), GRID_OPTS, width)
 end
 
 function M.grid_line_offset(width)
@@ -368,7 +403,7 @@ end
 
 -- viking_battle_click's tooltip (guild_viking.lua:14337-14359), flattened
 -- to one line, "\r\n" collapsed to "  " like every other module's hover.
-local function hover_text(b, gc, gr)
+hover_text = function(b, gc, gr)
   local w, h = b.width or 8, b.height or 8
   local r_game = h - gr
   local coord = coord_at(gc, gr, h)
@@ -384,7 +419,11 @@ local function hover_text(b, gc, gr)
 
   local tip
   if u then
-    tip = coord .. "  " .. (u.label or "unit") .. (u.side == "you" and " (yours)" or " (enemy)")
+    local label = u.label and u.label ~= "" and u.label or ULABEL[u.utype or ""] or "unit"
+    tip = coord .. "  " .. label .. (u.side == "you" and " (yours)" or " (enemy)")
+    if u.utype and u.utype ~= "" then tip = tip .. "  Type: " .. u.utype:gsub("_", " ") end
+    if u.leader and u.leader ~= "" then tip = tip .. "  Leader: " .. u.leader end
+    if u.owner and u.owner ~= "" then tip = tip .. "  Owner: " .. u.owner end
     if u.size ~= nil then tip = tip .. string.format("  %d men", u.size) end
     if u.morale ~= nil then tip = tip .. string.format("  morale %d", u.morale) end
     tip = tip .. "  on " .. (BTERR_NAME[ch] or "plains")

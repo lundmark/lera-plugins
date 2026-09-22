@@ -1742,6 +1742,21 @@ check("no-target setup: tracked view holds it", #tracked() == 1, tostring(#track
 
 local before_fail_status = capture(as.status)
 sent = {}
+-- Unknown commands and missing items share the trigger's sentence shape.
+-- Even while fighting, only the keyword sent by our attack can identify its
+-- failure; unrelated text must leave the target and combat state intact.
+for _, name in ipairs({ "reason to '/mobignore'", "sword", "a rock lizard" }) do
+  local unrelated_lines = capture(function() deliver_no_target(name) end)
+  check("unrelated no-target text preserves the fight: " .. name,
+    as.get_state() == "fighting" and #tracked() == 1
+      and tracked()[1] == "a rock lizard" and #sent == 0,
+    as.get_state() .. ": " .. table.concat(sent, "|"))
+  check("unrelated no-target text is not counted or logged: " .. name,
+    failed_attacks_count(capture(as.status)) == failed_attacks_count(before_fail_status)
+      and not has_line(unrelated_lines, "Attack did not resolve:"),
+    table.concat(unrelated_lines, "|"))
+end
+
 local fail_lines = capture(function() deliver_no_target("lizard") end)
 check("a failed attack prunes the monster from the tracked view",
   #tracked() == 0, table.concat(tracked(), ","))
