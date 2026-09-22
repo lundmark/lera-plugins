@@ -22,8 +22,9 @@
 --   Battle (show_war_battle, 14084-14603) -- deploy/turn header; the tactical
 --     grid (dropped); command budget + Fraegd (war points); either the
 --     deploy-phase reserve/deployed rosters or the turn-phase your-host/enemy
---     rosters; "No battle underway" plus the running Fraegd total when
---     state.battle is nil.
+--     rosters; "No battle underway" when state.battle is nil. The running
+--     Fraegd total is NOT here: it is the page's first line (below), since
+--     it outlives any one battle.
 --   War Council (show_war_council, 14606-14624) -- an incoming-threat line
 --     or "no power marches," then the held-claims list or "no claims held."
 --   Campaigns (show_war_campaigns AND state.war.campaigns non-empty,
@@ -314,14 +315,7 @@ end
 local function battle_lines(add, width)
   local b = S.battle
   if not b then
-    -- Fraegd is a running total, not a property of a battle in progress:
-    -- handlers/kingdom.lua writes S.war_points from every Guild.War frame,
-    -- active or not, so between battles it is the only place the client can
-    -- see what the war has earned. Same colour and label as the in-battle
-    -- row below.
-    add(pagelib.trunc(string.format("%sNo battle underway.%s   %sFraegd: %d%s",
-      C.dim, pagelib.RESET,
-      C.bright_cyan, S.war_points or 0, pagelib.RESET), width))
+    add(pagelib.trunc(C.dim .. "No battle underway." .. pagelib.RESET, width))
     return
   end
 
@@ -335,9 +329,8 @@ local function battle_lines(add, width)
 
   add(nil, "popups.war_battle")
 
-  add(pagelib.trunc(string.format("%sCommand %d/%d%s   %sFraegd: %d%s",
-    C.yellow, b.spent or 0, b.budget or 0, pagelib.RESET,
-    C.bright_cyan, b.war_points or S.war_points or 0, pagelib.RESET), width))
+  add(pagelib.trunc(string.format("%sCommand %d/%d%s",
+    C.yellow, b.spent or 0, b.budget or 0, pagelib.RESET), width))
 
   if deploying then
     deploy_lines(add, width, b)
@@ -445,6 +438,13 @@ function M.lines(width)
       lines[#lines + 1] = s
     end
   end
+
+  -- Fraegd first, before any section: it is a running total that
+  -- handlers/kingdom.lua writes from every Guild.War frame, active or not,
+  -- so it belongs in one fixed place rather than buried in whichever
+  -- section happens to be showing.
+  add(pagelib.trunc(string.format("%sFraegd: %d%s",
+    C.bright_cyan, S.war_points or 0, pagelib.RESET), width))
 
   local wm = S.war_map
   if wm and wm.active then

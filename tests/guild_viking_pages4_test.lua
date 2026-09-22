@@ -574,9 +574,12 @@ check("war: battle header (deploying)",
       deploy_all:find("Deploying vs Jorvik  (field)", 1, true) ~= nil, deploy_all)
 check("war: battle grid replaces the placeholder line",
       find_line(deploy_lines_out, "Battle map: /vik war") == nil, deploy_all)
-check("war: command budget + Fraegd line",
+check("war: command budget line (Fraegd is the page's own first line)",
       deploy_all:find("Command 40/100", 1, true) ~= nil and
-      deploy_all:find("Fraegd: 15", 1, true) ~= nil, deploy_all)
+      deploy_all:find("Command 40/100   Fraegd", 1, true) == nil, deploy_all)
+check("war: Fraegd is the first line of the page, battle or not",
+      strip_ansi(deploy_lines_out[1]):find("Fraegd: 15", 1, true) ~= nil,
+      deploy_lines_out[1])
 check("war: 'In reserve' roster row names id/size/label/cost/leader",
       deploy_all:find("In reserve", 1, true) ~= nil and
       deploy_all:find("[5] 10x Skirmishers", 1, true) ~= nil and
@@ -618,7 +621,7 @@ S.war_points = 42          -- the running total outlives the battle it came from
 local no_battle = joined(war_page.lines(WIDTH))
 check("war: 'No battle underway.' when state.battle is nil",
       no_battle:find("No battle underway.", 1, true) ~= nil, no_battle)
-check("war: running Fraegd total shown with no battle underway",
+check("war: running Fraegd total still shown with no battle underway",
       strip_ansi(no_battle):find("Fraegd: 42", 1, true) ~= nil, no_battle)
 
 S.battle = { phase = "turn", target = "Jorvik", turn = 1, budget = 10, spent = 0, units = {} }
