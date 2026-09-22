@@ -319,7 +319,7 @@ local function battle_lines(add, width)
     -- active or not, so between battles it is the only place the client can
     -- see what the war has earned. Same colour and label as the in-battle
     -- row below.
-    add(pagelib.trunc(string.format("%sNo battle underway.%s   %sFraegd %d%s",
+    add(pagelib.trunc(string.format("%sNo battle underway.%s   %sFraegd: %d%s",
       C.dim, pagelib.RESET,
       C.bright_cyan, S.war_points or 0, pagelib.RESET), width))
     return
@@ -335,7 +335,7 @@ local function battle_lines(add, width)
 
   add(nil, "popups.war_battle")
 
-  add(pagelib.trunc(string.format("%sCommand %d/%d%s   %sFraegd %d%s",
+  add(pagelib.trunc(string.format("%sCommand %d/%d%s   %sFraegd: %d%s",
     C.yellow, b.spent or 0, b.budget or 0, pagelib.RESET,
     C.bright_cyan, b.war_points or S.war_points or 0, pagelib.RESET), width))
 

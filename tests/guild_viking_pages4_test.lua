@@ -576,7 +576,7 @@ check("war: battle grid replaces the placeholder line",
       find_line(deploy_lines_out, "Battle map: /vik war") == nil, deploy_all)
 check("war: command budget + Fraegd line",
       deploy_all:find("Command 40/100", 1, true) ~= nil and
-      deploy_all:find("Fraegd 15", 1, true) ~= nil, deploy_all)
+      deploy_all:find("Fraegd: 15", 1, true) ~= nil, deploy_all)
 check("war: 'In reserve' roster row names id/size/label/cost/leader",
       deploy_all:find("In reserve", 1, true) ~= nil and
       deploy_all:find("[5] 10x Skirmishers", 1, true) ~= nil and
@@ -619,7 +619,7 @@ local no_battle = joined(war_page.lines(WIDTH))
 check("war: 'No battle underway.' when state.battle is nil",
       no_battle:find("No battle underway.", 1, true) ~= nil, no_battle)
 check("war: running Fraegd total shown with no battle underway",
-      strip_ansi(no_battle):find("Fraegd 42", 1, true) ~= nil, no_battle)
+      strip_ansi(no_battle):find("Fraegd: 42", 1, true) ~= nil, no_battle)
 
 S.battle = { phase = "turn", target = "Jorvik", turn = 1, budget = 10, spent = 0, units = {} }
 page_opts.set("show_war_battle", false)

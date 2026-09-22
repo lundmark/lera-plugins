@@ -353,7 +353,7 @@ local function build_lines(width)
     function(c, r) return hover_text(b, c, r) end)
   for _, l in ipairs(legend_lines(width, b)) do out[#out + 1] = l end
   out[#out + 1] = pagelib.trunc(string.format(
-    "%sCommand %d/%d%s   %sFraegd %d%s",
+    "%sCommand %d/%d%s   %sFraegd: %d%s",
     C.yellow, b.spent or 0, b.budget or 0, RESET,
     C.bright_cyan, b.war_points or S.war_points or 0, RESET), width)
   out[#out + 1] = pagelib.trunc(actions_line_text(b), width)
