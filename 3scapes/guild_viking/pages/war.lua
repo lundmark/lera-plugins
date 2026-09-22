@@ -22,7 +22,8 @@
 --   Battle (show_war_battle, 14084-14603) -- deploy/turn header; the tactical
 --     grid (dropped); command budget + Fraegd (war points); either the
 --     deploy-phase reserve/deployed rosters or the turn-phase your-host/enemy
---     rosters; "No battle underway" when state.battle is nil.
+--     rosters; "No battle underway" plus the running Fraegd total when
+--     state.battle is nil.
 --   War Council (show_war_council, 14606-14624) -- an incoming-threat line
 --     or "no power marches," then the held-claims list or "no claims held."
 --   Campaigns (show_war_campaigns AND state.war.campaigns non-empty,
@@ -313,7 +314,14 @@ end
 local function battle_lines(add, width)
   local b = S.battle
   if not b then
-    add(pagelib.trunc(C.dim .. "No battle underway." .. pagelib.RESET, width))
+    -- Fraegd is a running total, not a property of a battle in progress:
+    -- handlers/kingdom.lua writes S.war_points from every Guild.War frame,
+    -- active or not, so between battles it is the only place the client can
+    -- see what the war has earned. Same colour and label as the in-battle
+    -- row below.
+    add(pagelib.trunc(string.format("%sNo battle underway.%s   %sFraegd %d%s",
+      C.dim, pagelib.RESET,
+      C.bright_cyan, S.war_points or 0, pagelib.RESET), width))
     return
   end
 

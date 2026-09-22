@@ -614,9 +614,12 @@ check("war: 'Enemy' roster row with position and morale (no leader)",
       turn_stripped:find("Morale 20", 1, true) ~= nil, turn_all)
 
 S.battle = nil
+S.war_points = 42          -- the running total outlives the battle it came from
 local no_battle = joined(war_page.lines(WIDTH))
 check("war: 'No battle underway.' when state.battle is nil",
       no_battle:find("No battle underway.", 1, true) ~= nil, no_battle)
+check("war: running Fraegd total shown with no battle underway",
+      strip_ansi(no_battle):find("Fraegd 42", 1, true) ~= nil, no_battle)
 
 S.battle = { phase = "turn", target = "Jorvik", turn = 1, budget = 10, spent = 0, units = {} }
 page_opts.set("show_war_battle", false)
