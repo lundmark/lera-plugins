@@ -33,6 +33,9 @@ local valid_abilities = {
 
 local auto_use_last_time = 0
 local omit_trigger_ids = {}
+-- Armed for exactly one line after a status line that may have wrapped; see
+-- rebuild_omit_triggers below.
+local tail_trigger_id, tail_timer_id = nil, nil
 
 -- ---- helpers ---------------------------------------------------------------
 
@@ -199,19 +202,57 @@ function M.set_auto_use_cooldown(seconds)
 end
 
 function M.omit_status_lines() return config.omit_status_lines end
+
+-- A wrapped status line's tail is bar alphabet only: an optional field-name
+-- fragment, then digits and the punctuation the bar uses. Narrow on purpose --
+-- combat lines ("Bosse struck but did no damage to Big Brute.") and bracketed
+-- damage numbers ("[0]") do not match it.
+local TAIL_PATTERN = "^[A-Za-z]{0,10}:?[0-9][0-9,/()%+: ]*$"
+
+local function disarm_tail()
+  if tail_trigger_id then trigger.remove(tail_trigger_id); tail_trigger_id = nil end
+  if tail_timer_id then timer.cancel(tail_timer_id); tail_timer_id = nil end
+end
+
+-- Hide the continuation of a status line that wrapped, and nothing else: the
+-- trigger is one_shot, so it dies on the line it hides, and the timer disarms
+-- it when the line did not wrap after all and no continuation ever comes.
+local function arm_tail()
+  disarm_tail()
+  tail_trigger_id = trigger.add(TAIL_PATTERN, function()
+    tail_trigger_id = nil                      -- one_shot: already gone
+    if tail_timer_id then timer.cancel(tail_timer_id); tail_timer_id = nil end
+  end, { omit_from_output = true, one_shot = true })
+  tail_timer_id = timer.after(1, disarm_tail)
+end
+
 local function rebuild_omit_triggers()
   for _, id in ipairs(omit_trigger_ids) do trigger.remove(id) end
   omit_trigger_ids = {}
+  disarm_tail()
   if not config.omit_status_lines then return end
 
   -- These are the three legacy MercenaryStats output lines. The GMCP pane
-  -- already renders the same state, so hide only complete matching lines.
+  -- already renders the same state, so the raw lines are hidden.
+  --
+  -- The MUD emits them through fmt_lib (mercenary_base.c's write_hpbar), which
+  -- wraps to the reader's column count -- and these lines are long enough to
+  -- wrap, mid-token at that:
+  --
+  --   [Bosse] HP:33500/33500(100%) Stam:6946/12562(55%)+39 AP:2605/6270(41%)+
+  --   21
+  --
+  -- So the patterns below anchor at the START and stop demanding the rest of
+  -- the line: they match a bar whether it wrapped or not. The orphaned
+  -- continuation ("21") is caught by arm_tail(), which hides the NEXT line
+  -- only -- one line's worth of authority, not a standing rule that would eat
+  -- any short numeric line the MUD sends.
   for _, pattern in ipairs({
-    "^\\[.+?\\] HP:[0-9]+/[0-9]+\\([0-9]+%\\) Stam:[0-9]+/[0-9]+\\([0-9]+%\\)\\+[0-9]+ AP:[0-9]+/[0-9]+\\([0-9]+%\\)\\+[0-9]+.*$",
-    "^PL:[0-9]+\\([0-9]+/[0-9]+\\) IL:[0-9]+\\([0-9]+/[0-9]+\\) Cost:[0-9]+ Type:[^ ]+ Follow:[^ ]+.*$",
-    "^Fund:[0-9,]+ Spent:[0-9,]+ Target:.+$",
+    "^\\[.+?\\] HP:[0-9]+/[0-9]+\\([0-9]+%\\).*$",
+    "^PL:[0-9]+\\([0-9]+/[0-9]+\\) IL:[0-9]+\\([0-9]+/[0-9]+\\).*$",
+    "^Fund:[0-9,]+ Spent:[0-9,]+.*$",
   }) do
-    local id = trigger.add(pattern, function() end, { omit_from_output = true })
+    local id = trigger.add(pattern, arm_tail, { omit_from_output = true })
     if id then omit_trigger_ids[#omit_trigger_ids + 1] = id end
   end
 end
@@ -283,6 +324,7 @@ function M.on_disconnect()
 end
 
 function M.on_unload()
+  disarm_tail()
   for _, id in ipairs(omit_trigger_ids) do trigger.remove(id) end
   omit_trigger_ids = {}
   commands.uninstall()

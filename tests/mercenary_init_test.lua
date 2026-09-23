@@ -24,12 +24,22 @@ buffer = { color_print = function() end }
 local added_triggers = {}
 local removed_triggers = {}
 trigger = {
-  add = function(pattern, _, opts)
+  add = function(pattern, fn, opts)
     local id = #added_triggers + 1
-    added_triggers[#added_triggers + 1] = { id = id, pattern = pattern, opts = opts }
+    added_triggers[#added_triggers + 1] = { id = id, pattern = pattern, fn = fn, opts = opts }
     return id
   end,
   remove = function(id) removed_triggers[#removed_triggers + 1] = id; return true end,
+}
+
+-- The wrapped-line handling arms a one_shot trigger and a disarm timer.
+local timers, cancelled_timers = {}, {}
+timer = {
+  after = function(secs, fn)
+    timers[#timers + 1] = { secs = secs, fn = fn }
+    return #timers
+  end,
+  cancel = function(id) cancelled_timers[#cancelled_timers + 1] = id; return true end,
 }
 
 local saved
@@ -100,6 +110,36 @@ check("disabling omission unregisters every status trigger",
 M.set_omit_status_lines(true)
 check("enabling omission restores all three status triggers",
   #added_triggers == 6, "triggers=" .. #added_triggers)
+
+-- ---- wrapped status lines --------------------------------------------------
+-- The MUD wraps these lines to the reader's width (fmt_lib), which can split
+-- one mid-token: "... AP:2605/6270(41%)+" then "21" on its own line. The head
+-- patterns must not demand the tail, and the orphaned tail must be hidden too.
+local head = added_triggers[4]
+check("the HP head pattern does not demand the rest of the line",
+  head.pattern:find("HP:", 1, true) ~= nil
+    and head.pattern:find("AP:", 1, true) == nil, head.pattern)
+
+local before_add, before_cancel = #added_triggers, #cancelled_timers
+head.fn("[Bosse] HP:33500/33500(100%) Stam:6946/12562(55%)+39 AP:2605/6270(41%)+")
+local tail = added_triggers[#added_triggers]
+check("a matched status line arms one trigger for the continuation",
+  #added_triggers == before_add + 1, "added=" .. (#added_triggers - before_add))
+check("the continuation trigger hides its line and fires once only",
+  tail.opts.omit_from_output == true and tail.opts.one_shot == true)
+check("a disarm timer is scheduled in case the line did not wrap",
+  #timers == 1 and timers[1].secs == 1, #timers)
+
+tail.fn("21")
+check("the continuation firing cancels the disarm timer",
+  #cancelled_timers == before_cancel + 1, #cancelled_timers)
+
+-- Arming twice in a row must not leak the first trigger.
+head.fn("[Bosse] HP:1/1(100%) Stam:1/1(100%)+0 AP:1/1(100%)+")
+local leaked = #removed_triggers
+head.fn("[Bosse] HP:1/1(100%) Stam:1/1(100%)+0 AP:1/1(100%)+")
+check("re-arming removes the previous continuation trigger",
+  #removed_triggers == leaked + 1, #removed_triggers - leaked)
 
 -- ---- auto-use -------------------------------------------------------------
 -- Kills: dropping the auto_use_enabled guard. The ability is deliberately set
