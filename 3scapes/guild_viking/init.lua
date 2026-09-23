@@ -426,6 +426,8 @@ function M.vik_command(args)
     elseif rest == "off" then want = false end
     local now = protocol.trace(want)
     buffer.color_print(nil, "DAA520", "Viking protocol trace: " .. (now and "on" or "off"))
+  elseif sub_lower == "mapdebug" or sub_lower == "map-debug" then
+    popups.debug("map")
   elseif sub == "save" then
     persist.save()
     buffer.color_print(nil, "DAA520", "Viking guild data saved.")
@@ -472,6 +474,11 @@ function M.vik_command(args)
     else
       buffer.color_print(nil, "DAA520", "Usage: /vik page <page>")
     end
+  elseif sub_lower == "saga" or sub_lower == "warlog" then
+    -- The full war and battle sagas, scrolling. The right-click menu's
+    -- "Recent war/battle log" prints the last 15 to the output for a glance;
+    -- this is the whole of what saga.h keeps (40 beats per category).
+    popups.toggle("war_saga")
   elseif sub_lower == "pop" then
     local key = rest:lower()
     if key == "" then
@@ -484,7 +491,7 @@ function M.vik_command(args)
   else
     buffer.color_print(nil, "DAA520",
       "Usage: /vik [status | trace | save | source | resetxp | "
-      .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
+      .. "map | sea | voyage | cityplan | war | saga | page <page> | pop <page> | "
       .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | raid [<sub>] | "
       .. "voyage auto [<sub>] | herd [<sub>] | awar [<sub>]]")
   end

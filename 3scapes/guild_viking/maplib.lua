@@ -72,23 +72,14 @@
 -- consumer needs a wider reservation than the existing sizing already gives
 -- it.
 --
--- FOOTGUN, recorded here rather than only at each caller: the sizing is
--- `#tostring(h - 1)` (the 0-based max row index's OWN digit count) --
--- correct for a letter `row_label` (always 1 char) and for the DEFAULT
--- `tostring` 0-based numeric label (same value, so same digit count by
--- construction). A caller that instead supplies a 1-based NUMERIC
--- `row_label` (e.g. `function(r) return tostring(r + 1) end`, to match a
--- game's 1-based row-naming convention) gets a MISMATCH exactly at a
--- power-of-ten row count: at `h == 10`, `h - 1 == 9` sizes the field to 1
--- digit, but the actual displayed label for the last row is `"10"` (2
--- digits) and silently truncates. `popups/war_campaign.lua` and
--- `popups/war_battle.lua` hit this while porting guild_viking's 1-based
--- "vcampaign"/"vbattle" row numbering, and sidestepped it by omitting
--- `row_headers` entirely (hover text carries the cell name instead) rather
--- than fixing the sizing here -- a future caller that DOES want 1-based
--- numeric row headers on a grid that can reach a power-of-ten row count
--- will need to either widen this calculation (size from the label text,
--- not just the 0-based count) or accept the same truncation risk.
+-- `row_header_width` is measured from what `row_label` actually renders --
+-- every row is asked, widest wins -- so any labelling scheme fits. This used
+-- to be `#tostring(h - 1)`, the 0-based row count's own digit width, which is
+-- right for the default label by construction but truncates a 1-based numeric
+-- label exactly at a power-of-ten row count (at `h == 10` it sized the field
+-- to one digit and then rendered "10" into it). That is why
+-- `popups/war_campaign.lua` and `popups/war_battle.lua` originally omitted
+-- row headers; they no longer need to.
 --
 -- Selection: `cell.sel` wraps the glyph field in reverse video ("\27[7m"
 -- .. field .. "\27[27m"), matching window.lua/menu.lua's existing reverse-
@@ -125,11 +116,18 @@ local function layout(grid, opts, available_width)
 
   local row_header_width = 0
   if row_headers then
-    -- Sized from the 0-based row COUNT, not from whatever `opts.row_label`
-    -- actually renders -- see the header comment's FOOTGUN note: a 1-based
-    -- numeric row_label can outgrow this at a power-of-ten row count.
-    local max_row = h > 0 and (h - 1) or 0
-    row_header_width = #tostring(max_row)
+    -- Sized from what row_label ACTUALLY renders, widest row wins. It used to
+    -- be sized from the 0-based row count (`#tostring(h - 1)`), which matched
+    -- the default label by construction but silently truncated any other
+    -- scheme at a power-of-ten row count: a 1-based numeric label on a
+    -- 10-row grid sized the field to 1 char and then rendered "10" into it.
+    -- That is why war_campaign.lua and war_battle.lua omitted row headers
+    -- entirely rather than show a broken axis.
+    local label = opts.row_label or tostring
+    for r = 0, (h > 0 and (h - 1) or 0) do
+      local n = #tostring(label(r))
+      if n > row_header_width then row_header_width = n end
+    end
     if row_header_width < 1 then row_header_width = 1 end
   end
 
@@ -149,8 +147,10 @@ local function layout(grid, opts, available_width)
     -- Keep the minimum tile size and clip at the viewport instead.
     image_mode, pitch, glyph_width = true, 2, 2
     local max_cols = math.max(2, math.min(budget, grid.image_max_cols or 4))
+    local min_cols = math.min(max_cols, math.max(2, opts.image_min_cols or 2))
     for rows = 1, image_row_limit do
-      local cols = math.max(2, math.floor(rows * cell_aspect + 0.5))
+      local cols = opts.image_cols or math.max(min_cols,
+        math.floor(rows * cell_aspect + 0.5))
       if cols <= max_cols then
         image_mode, pitch, glyph_width, image_height = true, cols, cols, rows
       end
@@ -321,7 +321,12 @@ function maplib.with_limit(limit, build)
   return a, b, c
 end
 
-function maplib.fit(height, build)
+function maplib.fit(height, build, forced_limit)
+  if forced_limit then
+    local limit = math.max(1, math.min(image_row_limit, forced_limit))
+    local a, b, c = maplib.with_limit(limit, build)
+    return a, b, c, limit
+  end
   measured_rows = 0
   local a, b, c = maplib.with_limit(1, build)
   local rows = measured_rows
@@ -375,9 +380,17 @@ function maplib.geometry(grid, opts, available_width)
           -- Markers are drawn with transparent backdrops, so the board emits
           -- the terrain first and lets the marker composite over it -- which
           -- is why grids flag their overlays and expose `under`.
-          if overlay and grid.under then
+          -- Any image supplied by a terrain-backed grid is composited over
+          -- that terrain. Do not make correctness depend on each individual
+          -- marker remembering the overlay flag; transparent PNG pixels must
+          -- never expose the renderer's clear color.
+          if grid.under then
             local base = grid.under(c, r)
-            if base then images[#images + 1] = {
+            -- Only when it differs: a grid whose own image IS the terrain
+            -- (every cell with no marker on it) would otherwise emit that
+            -- tile twice at the same spot -- two draws per empty cell, and a
+            -- geometry twice the size it should be.
+            if base and base ~= path then images[#images + 1] = {
               x = x, y = y, w = L.pitch, h = L.image_height, path = base,
             } end
           end

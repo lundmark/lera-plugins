@@ -61,7 +61,25 @@ local track = require("popups.pointer_track").tracker()
 -- it is used. The legacy fallback is a duplicate unit's ordinal,
 -- `tostring(u.ord)`, which would truncate at ord >= 10 -- far past the
 -- handful of same-type units a board carries.
-local GRID_OPTS = { compact = true }
+-- Axis labels, matching the in-game board exactly: letters across the top
+-- (A, B, C...) and 1-based row numbers down the side, which is also how
+-- 'vbattle' names a square ("D2"). The grid was rendered without them, so the
+-- pane showed a field of glyphs with no way to read a coordinate off it.
+local function col_letter(c) return string.char(65 + c) end
+local function row_number(r) return tostring(r + 1) end
+
+-- The battle board counts rows from the BOTTOM: coord_at() names a square
+-- char(65+gc) .. (h - gr), so grid row 0 is game row h. A label of r+1 would
+-- therefore print the axis upside down -- someone reading "1" off the top
+-- row and typing D1 would order a unit to the far end of the field. The
+-- label needs the board's height, so the opts are built per render rather
+-- than shared as a constant.
+local function grid_opts(b)
+  local h = (b and b.height) or 8
+  return { compact = true, col_headers = true, row_headers = true,
+           col_label = col_letter,
+           row_label = function(r) return tostring(h - r) end }
+end
 
 local S = state.S
 local C = pagelib.C
@@ -348,16 +366,25 @@ local function build_lines(width)
   if not has_grid then return out, nil end
 
   local b = S.battle
-  for _, l in ipairs(maplib.render(make_grid(b), GRID_OPTS, width)) do out[#out + 1] = l end
+  for _, l in ipairs(maplib.render(make_grid(b), grid_opts(b), width)) do out[#out + 1] = l end
   details.append_grid(out, hover, width, b.width or 8, b.height or 8,
     function(c, r) return hover_text(b, c, r) end)
   for _, l in ipairs(legend_lines(width, b)) do out[#out + 1] = l end
   out[#out + 1] = pagelib.trunc(string.format(
-    "%sCommand %d/%d%s   %sFraegd %d%s",
+    "%sCommand %d/%d%s   %sFraegd: %d%s",
     C.yellow, b.spent or 0, b.budget or 0, RESET,
     C.bright_cyan, b.war_points or S.war_points or 0, RESET), width)
   out[#out + 1] = pagelib.trunc(actions_line_text(b), width)
   return out, #out
+end
+
+-- The board alone, without this popup's legend and action lines -- see the
+-- matching M.grid_lines() in popups/war_campaign.lua for why it exists.
+function M.grid_lines()
+  local b = S.battle
+  if not b then return nil, 0 end
+  local grid = make_grid(b)
+  return maplib.render(grid, grid_opts(S.battle)), maplib.geometry(grid, grid_opts(S.battle)).width
 end
 
 function M.lines(width)
@@ -387,13 +414,13 @@ end
 function M.tile_grid(width)
   if not S.battle then return {}, nil end
   local grid = make_grid(S.battle)
-  return maplib.render(grid, GRID_OPTS, width), maplib.geometry(grid, GRID_OPTS, width)
+  return maplib.render(grid, grid_opts(S.battle), width), maplib.geometry(grid, grid_opts(S.battle), width)
 end
 
 function M.geometry(width)
   local _, has_grid = pre_grid_lines(width)
   if not has_grid then return nil end
-  return maplib.geometry(make_grid(S.battle), GRID_OPTS, width)
+  return maplib.geometry(make_grid(S.battle), grid_opts(S.battle), width)
 end
 
 function M.grid_line_offset(width)

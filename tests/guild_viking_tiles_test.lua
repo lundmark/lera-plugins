@@ -167,17 +167,26 @@ local map=require("popups.map")
 local poi_images=map.geometry(100).images
 local expected={"castle","mead_hall","longhouse","herbyrgi","woods","rock",
   "farm","skald_hall","camp_host_you"}
-assert(#poi_images==#expected)
+-- Two images per cell, ground then marker: a POI marker is drawn with a
+-- transparent backdrop, so the board emits the terrain underneath it first
+-- (maplib's `under`) and lets the marker composite over it. Without the
+-- ground pass the renderer's clear colour showed through the transparency.
+assert(#poi_images==#expected*2)
 for i,name in ipairs(expected) do
-  ends(poi_images[i].path,"/"..name..".png")
-  tiles.draw(rect(i*2,0,2,1),poi_images[i].path)
-  assert(loads[poi_images[i].path], name)
+  local ground, marker = poi_images[i*2-1], poi_images[i*2]
+  ends(ground.path,"/plain.png")
+  ends(marker.path,"/"..name..".png")
+  assert(ground.x==marker.x and ground.y==marker.y, name)
+  tiles.draw(rect(i*2,0,2,1),marker.path)
+  assert(loads[marker.path], name)
 end
 -- Metadata overlays still win over baked symbols, then the current player.
+-- Ground and marker alternate, so column c's marker is image 2c+2.
+local function marker_at(c) return map.geometry(100).images[c*2+2] end
 S.vmap_pois={{type="capital",x=2,y=0}}
-ends(map.geometry(100).images[3].path,"/castle.png")
+ends(marker_at(2).path,"/castle.png")
 S.vmap_px=2; S.vmap_py=0
-ends(map.geometry(100).images[3].path,"/camp_host_you.png")
+ends(marker_at(2).path,"/camp_host_you.png")
 S.vmap_px=-1; S.vmap_pois={{type="future_type",x=2,y=0}}
-ends(map.geometry(100).images[3].path,"/longhouse.png")
+ends(marker_at(2).path,"/longhouse.png")
 print("Viking tiles: masks, assets, GUI gating, clipping, cache, battle orientation, tabs PASS")
