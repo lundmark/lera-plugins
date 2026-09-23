@@ -208,4 +208,39 @@ local beneath=cimgs[#cimgs-1]
 assert(beneath.x==marker.x and beneath.y==marker.y,
   "the marker cell has no ground tile beneath it")
 
+-- Two cells that used to draw NOTHING on a tiled board, both showing the
+-- renderer's black clear colour: the SELECTED cell (blanked so its
+-- reverse-video glyph can be read) and a cell whose overlay id the board does
+-- not recognise. Ground is emitted from grid.under regardless of whether there
+-- is a marker to put on it, so neither is a hole any more.
+opts.set("show_war_ascii", false)
+S.war_map={active=true,dim=2,rows={"ff","ff"},town="t",units={
+  {id="A",c=0,r=0,size=10},                     -- selected by default (your host)
+  {id="ZZZ",kind="mystery",c=1,r=1,size=3},     -- an id the board has no marker for
+}}
+local camp2=require("popups.war_campaign")
+local function camp_covered()
+  local at={}
+  for _,im in ipairs(camp2.geometry(80).images) do
+    assert(im.path and #im.path>0, "an image with no path")
+    at[im.x..","..im.y]=true
+  end
+  local n=0
+  for _ in pairs(at) do n=n+1 end
+  return n
+end
+-- Unknown overlay id: covered because the board falls through to the terrain
+-- rather than to nil.
+assert(camp_covered()==4, "unknown-overlay cell left a hole: "..camp_covered())
+
+-- Now SELECT your host by clicking it. The selected cell has its marker blanked
+-- so the reverse-video glyph can be read, so this is the case where image()
+-- legitimately yields nil and only `under` can keep the cell from going black.
+local function ctx_at(c,r)
+  return { cell_from_xy=function() return c,r end, close=function() end }
+end
+camp2.on_pointer({kind="down",x=0,y=0,inside=true,button="left"}, ctx_at(0,0))
+camp2.on_pointer({kind="up",x=0,y=0,inside=true,button="left"}, ctx_at(0,0))
+assert(camp_covered()==4, "the SELECTED cell left a hole: "..camp_covered())
+
 print("Viking tiles: masks, assets, GUI gating, clipping, cache, battle orientation, tabs PASS")

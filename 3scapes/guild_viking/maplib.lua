@@ -372,7 +372,18 @@ function maplib.geometry(grid, opts, available_width)
         -- reverse-video glyph in place, never an extra row between tiles.
         local cell = grid.cell(c, r)
         if cell and cell.sel then path = nil end
-        if path then
+        -- The GROUND is drawn whenever the grid can name it, even when there is
+        -- no marker to put on top -- `path` being nil is not a reason to leave
+        -- a hole. Two cases reach here with path == nil on a tiled board and
+        -- both showed the renderer's black clear colour before:
+        --   * the SELECTED cell, blanked two lines above so its reverse-video
+        --     glyph can be read -- which on a tiled board meant a black square
+        --     following your own host around the campaign map;
+        --   * a cell whose overlay id the board does not recognise. The
+        --     campaign grid returns nil for anything that is not host/ally/
+        --     foe/objective/landmark, and a detachment marker is exactly that.
+        local ground = grid.under and grid.under(c, r) or nil
+        if path or ground then
           local x = L.prefix_width + c * L.pitch
           local y = L.col_header_lines + r * L.body_lines_per_row
           -- A unit marker is a marker, not a tile: it says WHO is standing
@@ -384,19 +395,16 @@ function maplib.geometry(grid, opts, available_width)
           -- that terrain. Do not make correctness depend on each individual
           -- marker remembering the overlay flag; transparent PNG pixels must
           -- never expose the renderer's clear color.
-          if grid.under then
-            local base = grid.under(c, r)
-            -- Only when it differs: a grid whose own image IS the terrain
-            -- (every cell with no marker on it) would otherwise emit that
-            -- tile twice at the same spot -- two draws per empty cell, and a
-            -- geometry twice the size it should be.
-            if base and base ~= path then images[#images + 1] = {
-              x = x, y = y, w = L.pitch, h = L.image_height, path = base,
-            } end
-          end
-          images[#images + 1] = {
+          -- Only when it differs from the marker: a grid whose own image IS
+          -- the terrain (every cell with no marker on it) would otherwise emit
+          -- that tile twice at the same spot -- two draws per empty cell, and
+          -- a geometry twice the size it should be.
+          if ground and ground ~= path then images[#images + 1] = {
+            x = x, y = y, w = L.pitch, h = L.image_height, path = ground,
+          } end
+          if path then images[#images + 1] = {
             x = x, y = y, w = L.pitch, h = L.image_height, path = path,
-          }
+          } end
         end
       end
     end

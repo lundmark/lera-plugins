@@ -204,7 +204,15 @@ local function make_grid(wm)
           return tiles.city(u.id == "P1" and "camp_landmark_taken"
                                           or "camp_landmark"), true
         end
-        return nil
+        -- A detachment is one of yours, so it wears your colours; kingdom.lua
+        -- passes its own server id through, which is neither numeric nor one of
+        -- the fixed letters above.
+        if u.kind == "detach" then return tiles.city("camp_host_you"), true end
+        -- Anything else: fall through to the terrain rather than to nil. nil
+        -- used to mean "draw nothing at all", which left the cell showing the
+        -- renderer's black clear colour -- a new overlay kind on the server
+        -- should look like plain ground here, not like a hole.
+        return tile(c, r)
       end
       if wks[key] then return tiles.city("camp_dugout"), true end
       return tile(c, r)
