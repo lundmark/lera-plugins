@@ -76,7 +76,16 @@ function M.board(kind, rows, w, h)
   -- icon still needs a biome tile underneath it or transparent pixels reveal
   -- the renderer's black clear colour. Infer a marker cell's terrain from its
   -- mapped cardinal neighbours; fall back to plain at an isolated edge.
-  if kind == "map" then
+  --
+  -- Every board with a ground layer needs this, not just the map: a campaign
+  -- or battle row that is SHORTER than the grid yields "" for the cells past
+  -- its end, and any glyph the board's own table does not map yields nil the
+  -- same way. Those cells drew no tile at all, so a camp_* marker over one --
+  -- which is ~75% transparent by design -- showed the clear colour instead of
+  -- ground. That is the black background on the campaign map. "sea" is
+  -- excluded: it runs its own feature pass below and its unmapped cells mean
+  -- "unrevealed", which is a thing it draws rather than a hole.
+  if kind ~= "sea" then
     for r = 0, h - 1 do
       for c = 0, w - 1 do
         if not plane[r][c] then

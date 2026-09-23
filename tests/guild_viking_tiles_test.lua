@@ -189,4 +189,23 @@ S.vmap_px=2; S.vmap_py=0
 ends(marker_at(2).path,"/camp_host_you.png")
 S.vmap_px=-1; S.vmap_pois={{type="future_type",x=2,y=0}}
 ends(marker_at(2).path,"/longhouse.png")
+-- A campaign row SHORTER than the grid -- or any glyph the board's own table
+-- does not map -- used to leave those cells with no terrain tile at all,
+-- because the ground inference ran for kind == "map" only. A camp_* marker is
+-- ~75% transparent by design, so one standing on such a cell showed the
+-- renderer's black clear colour instead of ground. That was the black
+-- background on the campaign map.
+opts.set("show_war_ascii", false)
+S.war_map={active=true,dim=2,rows={"ff"},units={{id="A",c=1,r=1,size=10}},town="t"}
+local camp=require("popups.war_campaign")
+local cimgs=camp.geometry(80).images
+local ground=0
+for _,im in ipairs(cimgs) do if im.path:find("woods_wang",1,true) then ground=ground+1 end end
+assert(ground==4, "every cell needs ground, got "..ground)
+local marker=cimgs[#cimgs]
+ends(marker.path,"/camp_host_you.png")
+local beneath=cimgs[#cimgs-1]
+assert(beneath.x==marker.x and beneath.y==marker.y,
+  "the marker cell has no ground tile beneath it")
+
 print("Viking tiles: masks, assets, GUI gating, clipping, cache, battle orientation, tabs PASS")
