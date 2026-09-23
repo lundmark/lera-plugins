@@ -139,10 +139,14 @@ local function write_hird(parts)
 
   S.hird_by_slice = S.hird_by_slice or {}
   local carried = false
-  for i = 0, 3 do
-    local slice = parts["hird_" .. i]
-    if type(slice) == "table" then
-      S.hird_by_slice[i] = slice
+  -- Every hird_<n> key in the frame, found by pattern rather than by scanning a
+  -- fixed 0..3: a slice now carries 3 records so it fits inside one
+  -- PROTOCOL_FRAME_MAX page, so an 18-strong hird is 6 slices rather than 3.
+  -- The fixed range silently ignored every index past 3.
+  for k, v in pairs(parts) do
+    local idx = tostring(k):match("^hird_(%d+)$")
+    if idx and type(v) == "table" then
+      S.hird_by_slice[tonumber(idx)] = v
       carried = true
     end
   end

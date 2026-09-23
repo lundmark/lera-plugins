@@ -105,6 +105,27 @@ roster({ staff_total = 1, staff_slices = 1, staff_0 = { { name = "Only" } } })
 check("a shrunk roster drops the stale tail", #S.staff_list == 1
       and S.staff_list[1].name == "Only", #S.staff_list)
 
+-- A slice index ABOVE the old fixed scan range (0..7). Slices hold 4 records
+-- now so they fit one PROTOCOL_FRAME_MAX page, which makes a 55-strong roster
+-- 14 slices -- and the reader used to scan 0..7 only, so everything past index
+-- 7 was silently dropped on the floor. That is what produced "Hired Folk
+-- (2 of 55)" on screen: the tail of the list and nothing else.
+roster({ staff_total = 36, staff_slices = 9, staff_8 = {
+  { name = "Tail Ninth", assigned = "smithy", stat = "craft", best_stat = "craft",
+    stats = "1,2,3,4,5,6,7", trait = "taskmaster", loyalty = 3, age = "veteran",
+    arrive = 0, id = 99 },
+} })
+check("a slice past index 7 is accumulated, not ignored",
+  S.staff_by_slice and S.staff_by_slice[8] ~= nil
+  and #S.staff_by_slice[8] == 1, S.staff_by_slice and #(S.staff_by_slice[8] or {}))
+check("the accumulated high slice reaches staff_list",
+  (function()
+     for _, r in ipairs(S.staff_list or {}) do
+       if r.name == "Tail Ninth" then return true end
+     end
+     return false
+   end)(), #(S.staff_list or {}))
+
 -- ---- hird ------------------------------------------------------------------
 -- hird rotates the same way, and Bonds resolves its pair ids against
 -- S.hird_by_id -- a half-filled accumulator is what renders "#7 + #8".
