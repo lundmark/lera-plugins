@@ -139,6 +139,11 @@ check("the continuation firing cancels the disarm timer",
 -- continuation re-arms for one more line -- and only one more.
 check("the continuation pattern knows the abilities segment",
   tail.pattern:find("Abilities", 1, true) ~= nil, tail.pattern)
+-- The wrap can also fall between "Abilities" and its bracket, leaving
+-- "[Rend(7)]" alone on the next line -- the list form must be there too, and
+-- it must open with a letter so a bare damage number like "[0]" is left alone.
+check("the continuation pattern takes a bracketed list on its own line",
+  tail.pattern:find("|\\[[A-Za-z][", 1, true) ~= nil, tail.pattern)
 local second = added_triggers[#added_triggers]
 check("a hidden continuation arms one more for the line after it",
   second ~= tail and second.pattern == tail.pattern

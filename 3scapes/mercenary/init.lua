@@ -209,16 +209,20 @@ function M.omit_status_lines() return config.omit_status_lines end
 --
 --   22                          bar digits only
 --   22 Abilities [Rend(4)]      digits, then the abilities segment
+--   22 Abilities                ...with the wrap falling before the bracket
 --   Abilities [Rend(4)]         the abilities segment on a line of its own
+--   [Rend(7)]                   just the bracketed list, wrapped off its label
 --   Cover:ON]                   the end of an abilities list that wrapped too
 --
 -- Narrow on purpose -- combat lines ("Bosse struck but did no damage to Big
--- Brute.") and bracketed damage numbers ("[0]") match none of them.
+-- Brute.") and bracketed damage numbers ("[0]") match none of them: a list on
+-- its own line must open with a letter, which a damage number never does.
 local TAIL_BAR = "[A-Za-z]{0,10}:?[0-9][0-9,/()%+: ]*"
-local TAIL_ABILS = "Abilities \\[[A-Za-z0-9(),: ]*\\]?"
+local TAIL_ABILS = "Abilities(?: \\[[A-Za-z0-9(),: ]*\\]?)?"
+local TAIL_ABILS_LIST = "\\[[A-Za-z][A-Za-z0-9(),: ]*\\]?"
 local TAIL_ABILS_END = "[A-Za-z0-9(),: ]+\\]"
 local TAIL_PATTERN = "^(?:" .. TAIL_BAR .. "(?: " .. TAIL_ABILS .. ")?|"
-  .. TAIL_ABILS .. "|" .. TAIL_ABILS_END .. ")$"
+  .. TAIL_ABILS .. "|" .. TAIL_ABILS_LIST .. "|" .. TAIL_ABILS_END .. ")$"
 
 -- A bar wraps onto at most this many extra lines at any sane width: the
 -- digits, then the abilities segment.
