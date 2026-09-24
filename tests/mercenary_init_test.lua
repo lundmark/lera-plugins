@@ -134,6 +134,20 @@ tail.fn("21")
 check("the continuation firing cancels the disarm timer",
   #cancelled_timers == before_cancel + 1, #cancelled_timers)
 
+-- With an ability running the bar ends in " Abilities [Rend(4)]", so it can
+-- wrap onto a SECOND line ("22" then "Abilities [Rend(4)]"). A hidden
+-- continuation re-arms for one more line -- and only one more.
+check("the continuation pattern knows the abilities segment",
+  tail.pattern:find("Abilities", 1, true) ~= nil, tail.pattern)
+local second = added_triggers[#added_triggers]
+check("a hidden continuation arms one more for the line after it",
+  second ~= tail and second.pattern == tail.pattern
+    and second.opts.omit_from_output == true and second.opts.one_shot == true)
+local before_third = #added_triggers
+second.fn("Abilities [Rend(4)]")
+check("the second continuation does not arm a third",
+  #added_triggers == before_third, "added=" .. (#added_triggers - before_third))
+
 -- Arming twice in a row must not leak the first trigger.
 head.fn("[Bosse] HP:1/1(100%) Stam:1/1(100%)+0 AP:1/1(100%)+")
 local leaked = #removed_triggers

@@ -203,11 +203,26 @@ end
 
 function M.omit_status_lines() return config.omit_status_lines end
 
--- A wrapped status line's tail is bar alphabet only: an optional field-name
--- fragment, then digits and the punctuation the bar uses. Narrow on purpose --
--- combat lines ("Bosse struck but did no damage to Big Brute.") and bracketed
--- damage numbers ("[0]") do not match it.
-local TAIL_PATTERN = "^[A-Za-z]{0,10}:?[0-9][0-9,/()%+: ]*$"
+-- A wrapped status line's tail. The bar ends with the active-abilities
+-- segment when one is running (mercenary_base.c's $ABILS$, " Abilities
+-- [Rend(4)]"), so the continuation can be any of:
+--
+--   22                          bar digits only
+--   22 Abilities [Rend(4)]      digits, then the abilities segment
+--   Abilities [Rend(4)]         the abilities segment on a line of its own
+--   Cover:ON]                   the end of an abilities list that wrapped too
+--
+-- Narrow on purpose -- combat lines ("Bosse struck but did no damage to Big
+-- Brute.") and bracketed damage numbers ("[0]") match none of them.
+local TAIL_BAR = "[A-Za-z]{0,10}:?[0-9][0-9,/()%+: ]*"
+local TAIL_ABILS = "Abilities \\[[A-Za-z0-9(),: ]*\\]?"
+local TAIL_ABILS_END = "[A-Za-z0-9(),: ]+\\]"
+local TAIL_PATTERN = "^(?:" .. TAIL_BAR .. "(?: " .. TAIL_ABILS .. ")?|"
+  .. TAIL_ABILS .. "|" .. TAIL_ABILS_END .. ")$"
+
+-- A bar wraps onto at most this many extra lines at any sane width: the
+-- digits, then the abilities segment.
+local MAX_TAIL_LINES = 2
 
 local function disarm_tail()
   if tail_trigger_id then trigger.remove(tail_trigger_id); tail_trigger_id = nil end
@@ -216,15 +231,21 @@ end
 
 -- Hide the continuation of a status line that wrapped, and nothing else: the
 -- trigger is one_shot, so it dies on the line it hides, and the timer disarms
--- it when the line did not wrap after all and no continuation ever comes.
-local function arm_tail()
+-- it when the line did not wrap after all and no continuation ever comes. A
+-- hidden continuation re-arms for the line after it, up to MAX_TAIL_LINES in
+-- all -- the bar can wrap twice once an ability is active.
+local function arm_tail(left)
   disarm_tail()
+  if left <= 0 then return end
   tail_trigger_id = trigger.add(TAIL_PATTERN, function()
     tail_trigger_id = nil                      -- one_shot: already gone
     if tail_timer_id then timer.cancel(tail_timer_id); tail_timer_id = nil end
+    arm_tail(left - 1)
   end, { omit_from_output = true, one_shot = true })
   tail_timer_id = timer.after(1, disarm_tail)
 end
+
+local function arm_status_tail() arm_tail(MAX_TAIL_LINES) end
 
 local function rebuild_omit_triggers()
   for _, id in ipairs(omit_trigger_ids) do trigger.remove(id) end
@@ -252,7 +273,7 @@ local function rebuild_omit_triggers()
     "^PL:[0-9]+\\([0-9]+/[0-9]+\\) IL:[0-9]+\\([0-9]+/[0-9]+\\).*$",
     "^Fund:[0-9,]+ Spent:[0-9,]+.*$",
   }) do
-    local id = trigger.add(pattern, arm_tail, { omit_from_output = true })
+    local id = trigger.add(pattern, arm_status_tail, { omit_from_output = true })
     if id then omit_trigger_ids[#omit_trigger_ids + 1] = id end
   end
 end
