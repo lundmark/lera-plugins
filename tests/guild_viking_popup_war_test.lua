@@ -624,7 +624,7 @@ check("legend: side colours + deploy hint present",
   find_plain(blines, "green = you") and find_plain(blines, "red = foe") and find_plain(blines, "+ deploy"))
 check("legend: unit-type key letters present", find_plain(blines, "huscarl") and find_plain(blines, "raiders"))
 check("legend: terrain key present", find_plain(blines, "fjord") and find_plain(blines, "rampart"))
-check("command/fraegd line", find_plain(blines, "Command 20/100") and find_plain(blines, "Fraegd 15"))
+check("command/fraegd line", find_plain(blines, "Command 20/100") and find_plain(blines, "Fraegd: 15"))
 check("actions line (deploy phase)", find_plain(blines, "[Actions] Begin Battle | Abandon"))
 
 -- =============================================================================
