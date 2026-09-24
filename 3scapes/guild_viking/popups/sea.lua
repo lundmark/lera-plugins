@@ -93,6 +93,9 @@ local C = pagelib.C
 local RESET = pagelib.RESET
 
 local M = {}
+-- Preserve the chart's native two-row character aspect for PNG cells. The
+-- popup remains scrollable when the surrounding Sea sections do not fit.
+M.image_limit = 1
 M.title = "Sea Chart"
 
 -- Module-local hover/info line for the chart, same pattern as
@@ -237,9 +240,11 @@ end
 local function make_chart_grid()
   local w, h = S.voyage_chart_width or 0, S.voyage_chart_height or 0
   local tiles = require("tiles")
-  local tile = tiles.enabled("sea") and tiles.board("sea", S.voyage_chart_rows, w, h)
+  local tile, base = tiles.enabled("sea")
+    and tiles.board("sea", S.voyage_chart_rows, w, h)
   return {
     w = w, h = h,
+    under = base,
     image = tile and function(c, r)
       return tile(c, r), chart_sym(c, r) ~= "S" and is_sailed(c, r)
     end,
@@ -264,7 +269,11 @@ local function chart_coord(c, r) return chart_row_label(r) .. chart_col_label(c)
 
 local function chart_grid_opts()
   return { col_headers = true, row_headers = true,
-           col_label = chart_col_label, row_label = chart_row_label }
+           col_label = chart_col_label, row_label = chart_row_label,
+           -- The voyage chart is only 16 columns wide. Keep its PNG cells
+           -- large enough to match the readable in-game text chart even
+           -- when the page height permits only one image row per cell.
+           image_cols = 2, image_min_cols = 2, image_max_cols = 2 }
 end
 
 -- viking_chart_tooltip (guild_viking.lua:13051-13061), ported verbatim as

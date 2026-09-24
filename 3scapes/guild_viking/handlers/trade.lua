@@ -242,10 +242,14 @@ local function write_staff(parts)
 
   S.staff_by_slice = S.staff_by_slice or {}
   local carried = false
-  for i = 0, 7 do
-    local slice = parts["staff_" .. i]
-    if type(slice) == "table" then
-      S.staff_by_slice[i] = slice
+  -- Every staff_<n> key in the frame, found by pattern rather than by scanning a
+  -- fixed 0..7: a slice now carries 4 records so it fits inside one
+  -- PROTOCOL_FRAME_MAX page, which makes a 55-strong roster 14 slices rather
+  -- than 6. The fixed range silently ignored every index past 7.
+  for k, v in pairs(parts) do
+    local idx = tostring(k):match("^staff_(%d+)$")
+    if idx and type(v) == "table" then
+      S.staff_by_slice[tonumber(idx)] = v
       carried = true
     end
   end

@@ -20,6 +20,16 @@ local function find_plain(lines, needle)
   return false
 end
 
+-- Same search with the escapes taken out first: the resource and Fraegd rows
+-- colour each value separately, so a phrase that spans a value now has escapes
+-- inside it.
+local function find_stripped(lines, needle)
+  for _, l in ipairs(lines) do
+    if tostring(l):gsub("\27%[[0-9;]*m", ""):find(needle, 1, true) then return true end
+  end
+  return false
+end
+
 -- ---- lera API stubs (same shape as guild_viking_popup_cityplan_test.lua) --
 local function make_rect(x, y, w, h)
   return {
@@ -196,6 +206,9 @@ end
 -- S.battle.units[].side == "you"). `terrain_rows`/`works_rows` are 1-indexed
 -- arrays in wire row order and now travel as rows rather than being
 -- concatenated into one flat string.
+-- Wire sides are the server's own words, "you" and "foe" (battle.h builds every
+-- company with "side":"you"). "R" stays a fixture-only marker for a reserve
+-- entry, which the wire carries in its own list rather than as a side.
 local function seed_battle(t)
   local units, reserve = {}, {}
   for _, u in ipairs(t.units or {}) do
@@ -204,7 +217,7 @@ local function seed_battle(t)
                                 uid = u.uid or 0, cost = u.cost or 0,
                                 leader = u.leader or "" }
     else
-      units[#units + 1] = { side = u.side or "Y", label = u.label or "",
+      units[#units + 1] = { side = u.side or "you", label = u.label or "",
                             size = u.size or 0, coord = u.coord or "",
                             morale = u.morale or 0, type = u.utype or "",
                             leader = u.leader or "", bid = u.bid or 0,
@@ -291,7 +304,12 @@ local glines = war_campaign.lines(WIDTH)
 local geom = war_campaign.geometry(WIDTH)
 check("geometry non-nil once committed", geom ~= nil)
 
-local function grid_line(gr) return glines[offset + gr + 1] end
+-- The board carries a column-header line ("  A  B  C") above its first data
+-- row now, and a row label down the left, so a data row sits one line further
+-- down than the bare grid used to.
+local function grid_line(gr) return glines[offset + gr + 2] end
+-- Rows are labelled down the left edge, 1-based, the way vcampaign names them.
+local function row_label(gr) return tostring(gr + 1) .. " " end
 
 -- row0 = "f.w": col0 'f' is pure terrain (unoverlaid, green); col1 '.' is
 -- overridden by the P9 waystone landmark (white 'w'); col2 'w' is
@@ -299,13 +317,13 @@ local function grid_line(gr) return glines[offset + gr + 1] end
 -- "objective glyph wins" overlay order (13840-13851 draws the marker on
 -- top of whatever terrain/dugout occupies the cell).
 check("row0: 'f'(0,0)=green woods (unoverlaid), 'w'(1,0)=white waystone (P9), '*'(2,0)=yellow objective",
-  grid_line(0) == field(C.green, "f") .. " " .. field(C.white, "w") .. " " ..
+  grid_line(0) == row_label(0) .. field(C.green, "f") .. " " .. field(C.white, "w") .. " " ..
     field(C.yellow, "*") .. " ", grid_line(0))
 check("row1: 'w'(0,1)=dim landmark taken(P1), '.'(1,1)=dim plain (unoverlaid), '3'(2,1)=red enemy army",
-  grid_line(1) == field(C.dim, "w") .. " " .. field(C.dim, ".") .. " " ..
+  grid_line(1) == row_label(1) .. field(C.dim, "w") .. " " .. field(C.dim, ".") .. " " ..
     field(C.bright_red, "3") .. " ", grid_line(1))
 check("row2: 'A'(0,2)=bright_green host, 'F'(1,2)=bright_cyan ally, 'u'(2,2)=white dugout",
-  grid_line(2) == field(C.bright_green, "A") .. " " .. field(C.bright_cyan, "F") .. " " ..
+  grid_line(2) == row_label(2) .. field(C.bright_green, "A") .. " " .. field(C.bright_cyan, "F") .. " " ..
     field(C.white, "u") .. " ", grid_line(2))
 
 -- =============================================================================
@@ -332,9 +350,9 @@ seed_wmap({
   upkeep = { food = 10, mead = 5, tools = 2, iron = 1, daler = 50 },
   spoils = { daler = 200, renown = 15, deeds = 2 },
 })
-check("upkeep line", find_plain(war_campaign.lines(WIDTH),
+check("upkeep line", find_stripped(war_campaign.lines(WIDTH),
   "Upkeep/tile: 10 food  5 mead  2 tools  1 iron  50d"))
-check("spoils line", find_plain(war_campaign.lines(WIDTH),
+check("spoils line", find_stripped(war_campaign.lines(WIDTH),
   "Spoils if you win: 200 daler, 15 renown  (2 deeds)"))
 
 -- =============================================================================
@@ -592,9 +610,9 @@ seed_battle({
   terrain_rows = { "..#", "^*w" }, -- row1 (bottom) then row2 (top)
   works_rows = { "v.u", "..." },
   units = {
-    { side = "Y", label = "Huscarl Guard", size = 8, coord = "A2", morale = 80,
+    { side = "you", label = "Huscarl Guard", size = 8, coord = "A2", morale = 80,
       utype = "huscarls", bid = 101 },
-    { side = "N", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
+    { side = "foe", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
       utype = "foe_raiders", ord = 2 },
     { side = "R", label = "Reserve Skirm", size = 5, uid = 55, cost = 10, leader = "Bjorn" },
   },
@@ -606,25 +624,30 @@ local blines = war_battle.lines(WIDTH)
 local bgeom = war_battle.geometry(WIDTH)
 check("battle geometry non-nil", bgeom ~= nil)
 
-local function bgrid_line(gr) return blines[boffset + gr + 1] end
+-- Column header above the first data row, and a row label down the left: the
+-- battle board draws both now. Wire row 1 is the BOTTOM, so the label on the
+-- first DISPLAYED row is the highest game row.
+local function bgrid_line(gr) return blines[boffset + gr + 2] end
+local function brow_label(gr, h) return tostring((h or 2) - gr) .. " " end
 
 -- gr=0 (top, row_game=2): A2 = you-unit override (huscarls "H", bright_green);
 -- B2 = forest '*' green; C2 = enemy ordinal-2 override ("2", bright_red).
 check("top row: A2 unit override, B2 forest, C2 ordinal-2 enemy override",
-  bgrid_line(0) == bfield(C.bright_green, "H") .. bfield(C.green, "*") ..
+  bgrid_line(0) == brow_label(0, 2) .. bfield(C.bright_green, "H") .. bfield(C.green, "*") ..
     bfield(C.bright_red, "2"), bgrid_line(0))
 
 -- gr=1 (bottom, row_game=1, in deploy zone): A1 = stakes 'v' yellow;
 -- B1 = empty in-dz cell '+' bright_cyan; C1 = dugout 'u' white.
 check("bottom row: A1 stakes, B1 deploy-zone '+', C1 dugout",
-  bgrid_line(1) == bfield(C.yellow, "v") .. bfield(C.bright_cyan, "+") ..
+  bgrid_line(1) == brow_label(1, 2) .. bfield(C.yellow, "v") .. bfield(C.bright_cyan, "+") ..
     bfield(C.white, "u"), bgrid_line(1))
 
 check("legend: side colours + deploy hint present",
   find_plain(blines, "green = you") and find_plain(blines, "red = foe") and find_plain(blines, "+ deploy"))
 check("legend: unit-type key letters present", find_plain(blines, "huscarl") and find_plain(blines, "raiders"))
 check("legend: terrain key present", find_plain(blines, "fjord") and find_plain(blines, "rampart"))
-check("command/fraegd line", find_plain(blines, "Command 20/100") and find_plain(blines, "Fraegd 15"))
+check("command/fraegd line", find_stripped(blines, "Command 20/100")
+  and find_stripped(blines, "Fraegd: 15"))
 check("actions line (deploy phase)", find_plain(blines, "[Actions] Begin Battle | Abandon"))
 
 -- =============================================================================
@@ -729,7 +752,7 @@ seed_battle({
   phase = "deploy", target = "Fjordvik", width = 1, height = 1, dz = 1,
   terrain_rows = { "." }, works_rows = { "." },
   units = {
-    { side = "N", label = "Squatting Raider", size = 4, coord = "A1", morale = 50, utype = "foe_raiders" },
+    { side = "foe", label = "Squatting Raider", size = 4, coord = "A1", morale = 50, utype = "foe_raiders" },
     { side = "R", label = "Reserve Skirm", size = 5, uid = 55, cost = 10, leader = "Bjorn" },
   },
 })
@@ -753,9 +776,9 @@ seed_battle({
   terrain_rows = { "..#", "^*w" },
   works_rows = { "v.u", "..." },
   units = {
-    { side = "Y", label = "Huscarl Guard", size = 8, coord = "A2", morale = 80,
+    { side = "you", label = "Huscarl Guard", size = 8, coord = "A2", morale = 80,
       utype = "huscarls", bid = 101 },
-    { side = "N", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
+    { side = "foe", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
       utype = "foe_raiders", ord = 2 },
     { side = "R", label = "Reserve Skirm", size = 5, uid = 55, cost = 10, leader = "Bjorn" },
   },
@@ -782,9 +805,9 @@ seed_battle({
   budget = 100, spent = 40, war_points = 22,
   terrain_rows = { "..", ".." },
   units = {
-    { side = "Y", label = "Shieldwall", size = 10, coord = "A1", morale = 70,
+    { side = "you", label = "Shieldwall", size = 10, coord = "A1", morale = 70,
       utype = "shieldwall", bid = 201 },
-    { side = "N", label = "Levy Rabble", size = 12, coord = "B2", morale = 40,
+    { side = "foe", label = "Levy Rabble", size = 12, coord = "B2", morale = 40,
       utype = "foe_levy" },
   },
 })
@@ -904,7 +927,7 @@ seed_battle({
   terrain_rows = { repeat_row(".", 10), repeat_row("^", 10), repeat_row("*", 10), repeat_row("=", 10) },
   works_rows = { repeat_row(".", 10), repeat_row(".", 10), repeat_row(".", 10), repeat_row(".", 10) },
   units = {
-    { side = "Y", label = "A Very Long Unit Label Indeed", size = 99, coord = "A1", morale = 100,
+    { side = "you", label = "A Very Long Unit Label Indeed", size = 99, coord = "A1", morale = 100,
       utype = "moose", bid = 1 },
   },
 })
@@ -1014,11 +1037,14 @@ reset_drawn()
 renderer.render(make_rect(0, 0, WIDTH, rect_h), { title = "War" })
 
 local pre_offset = war_campaign.grid_line_offset(WIDTH)
-local wrapper_y_row0 = pre_offset
+-- +1 for the column-header line the board draws above its first data row.
+local wrapper_y_row0 = pre_offset + 1
 check("row 0 is within the visible rect at zero scroll", wrapper_y_row0 < rect_h, wrapper_y_row0)
 send_calls = {}
-renderer.on_pointer({ kind = "down", x = 0, y = wrapper_y_row0, inside = true, button = "left" })
-renderer.on_pointer({ kind = "up", x = 0, y = wrapper_y_row0, inside = true, button = "left" })
+-- x is past the row-label column, which the board draws down the left edge.
+local wrapper_x_col0 = 2
+renderer.on_pointer({ kind = "down", x = wrapper_x_col0, y = wrapper_y_row0, inside = true, button = "left" })
+renderer.on_pointer({ kind = "up", x = wrapper_x_col0, y = wrapper_y_row0, inside = true, button = "left" })
 check("wrapper's ctx.cell_from_xy maps wrapper-local (x,y) to grid cell (0,0), selecting the host",
   find_plain(war_campaign.lines(WIDTH), "Selected A"))
 
@@ -1046,22 +1072,22 @@ seed_battle({
     -- Two units of ONE type on ONE side: the case that used to draw a pair of
     -- indistinguishable "S" tiles, then a pair of ordinals that collided with
     -- every other type's ordinals.
-    { side = "Y", label = "First Wall", size = 8, coord = "A2", morale = 80,
+    { side = "you", label = "First Wall", size = 8, coord = "A2", morale = 80,
       utype = "shieldwall", bid = 101, g = "a" },
-    { side = "Y", label = "Second Wall", size = 8, coord = "B2", morale = 80,
+    { side = "you", label = "Second Wall", size = 8, coord = "B2", morale = 80,
       utype = "shieldwall", bid = 102, g = "b" },
-    { side = "N", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
+    { side = "foe", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
       utype = "foe_raiders", bid = 103, g = "A" },
   },
 })
 
 local glines = war_battle.lines(WIDTH)
 local goffset = war_battle.grid_line_offset(WIDTH)
-local function ggrid_line(gr) return glines[goffset + gr + 1] end
+local function ggrid_line(gr) return glines[goffset + gr + 2] end
 
 check("two units of one type draw as two DIFFERENT letters, not one shared glyph",
-  ggrid_line(0) == bfield(C.bright_green, "a") .. bfield(C.bright_green, "b") ..
-    bfield(C.bright_red, "A"), ggrid_line(0))
+  ggrid_line(0) == brow_label(0, 2) .. bfield(C.bright_green, "a")
+    .. bfield(C.bright_green, "b") .. bfield(C.bright_red, "A"), ggrid_line(0))
 
 check("the foe's letter is uppercase and red",
   ggrid_line(0):find("A", 1, true) ~= nil and ggrid_line(0):find(C.bright_red, 1, true) ~= nil)
@@ -1081,17 +1107,19 @@ seed_battle({
   terrain_rows = { "...", "..." },
   works_rows = { "...", "..." },
   units = {
-    { side = "Y", label = "Huscarl Guard", size = 8, coord = "A2", morale = 80,
+    { side = "you", label = "Huscarl Guard", size = 8, coord = "A2", morale = 80,
       utype = "huscarls", bid = 101 },
-    { side = "N", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
+    { side = "foe", label = "Raider Warband", size = 6, coord = "C2", morale = 60,
       utype = "foe_raiders", bid = 103, ord = 2 },
   },
 })
 local olines = war_battle.lines(WIDTH)
 local ooffset = war_battle.grid_line_offset(WIDTH)
+-- +2, not +1: the column-header line sits between the offset and the first
+-- data row now (see bgrid_line above).
 check("without letters the board falls back to type glyph + ordinal",
-  olines[ooffset + 1]:find("H", 1, true) ~= nil and
-  olines[ooffset + 1]:find("2", 1, true) ~= nil, olines[ooffset + 1])
+  olines[ooffset + 2]:find("H", 1, true) ~= nil and
+  olines[ooffset + 2]:find("2", 1, true) ~= nil, olines[ooffset + 2])
 check("without letters the static type key is used", find_plain(olines, "huscarl"))
 
 reset_all()
@@ -1107,7 +1135,7 @@ check("campaign hover includes supplied owner", info:find("Owner: Sigetest", 1, 
 check("campaign hover reservation is stable", #before == #after)
 reset_all()
 seed_battle({width = 1, height = 1, terrain_rows = {"."}, units = {
-  {side = "Y", coord = "A1", utype = "huscarls", label = "", leader = "Sigetest", size = 25, morale = 90} }})
+  {side = "you", coord = "A1", utype = "huscarls", label = "", leader = "Sigetest", size = 25, morale = 90} }})
 before = war_battle.lines(28)
 war_battle.on_pointer({kind = "move", inside = true}, bfixed_ctx(0, 0))
 after = war_battle.lines(28)

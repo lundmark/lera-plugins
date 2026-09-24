@@ -71,6 +71,38 @@ function M.board(kind, rows, w, h)
       symbols[r][c], plane[r][c] = ch, mapping[ch]
     end
   end
+  -- Guild.Map uses the same terrain rows for landmark markers (P/M/L/S/T,
+  -- etc.). Those marker glyphs intentionally have no terrain mapping, but an
+  -- icon still needs a biome tile underneath it or transparent pixels reveal
+  -- the renderer's black clear colour. Infer a marker cell's terrain from its
+  -- mapped cardinal neighbours; fall back to plain at an isolated edge.
+  --
+  -- Every board with a ground layer needs this, not just the map: a campaign
+  -- or battle row that is SHORTER than the grid yields "" for the cells past
+  -- its end, and any glyph the board's own table does not map yields nil the
+  -- same way. Those cells drew no tile at all, so a camp_* marker over one --
+  -- which is ~75% transparent by design -- showed the clear colour instead of
+  -- ground. That is the black background on the campaign map. "sea" is
+  -- excluded: it runs its own feature pass below and its unmapped cells mean
+  -- "unrevealed", which is a thing it draws rather than a hole.
+  if kind ~= "sea" then
+    for r = 0, h - 1 do
+      for c = 0, w - 1 do
+        if not plane[r][c] then
+          local counts = {}
+          for _, d in ipairs(directions) do
+            local t = plane[r + d[2]] and plane[r + d[2]][c + d[1]]
+            if t then counts[t] = (counts[t] or 0) + 1 end
+          end
+          local best, score = "plain", 0
+          for t, n in pairs(counts) do
+            if n > score then best, score = t, n end
+          end
+          plane[r][c] = best
+        end
+      end
+    end
+  end
   if kind == "sea" then
     for r = 0, h - 1 do
       for c = 0, w - 1 do
@@ -123,7 +155,24 @@ function M.board(kind, rows, w, h)
     else t = t .. "_wang" end
     return root .. t .. "_" .. bin4(mask) .. ".png"
   end
-  return path
+  local function base(c, r)
+    local t = plane[r] and plane[r][c]
+    if not t then return nil end
+    local root = kind == "sea" and voyage or city
+    return root .. t .. ".png"
+  end
+  -- What the cell STANDS on. Every Wang tile is opaque ground in its own
+  -- right, but rock.png is not: it is a crag-and-ruin sprite on a transparent
+  -- backdrop (over half the pixels), drawn as the cell's only image -- so
+  -- every rock square on the campaign map showed the renderer's black clear
+  -- colour around it. A rock sits on plain ground; the board emits that as
+  -- the cell's `under` and lets maplib composite the rock over it.
+  local function ground(c, r)
+    local t = plane[r] and plane[r][c]
+    if t == "rock" then return city .. "plain.png" end
+    return path(c, r)
+  end
+  return path, base, ground
 end
 
 function M.city(name) return city .. name .. ".png" end
@@ -175,7 +224,7 @@ function M.layout(mod, width, height)
         offset=mod.grid_line_offset(width), full_page=true}}
     end
     return lines, targets, boards
-  end)
+  end, mod.image_limit)
 end
 
 function M.render(mod, rect, scroll, boards)

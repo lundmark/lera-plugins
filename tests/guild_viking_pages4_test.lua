@@ -457,6 +457,9 @@ S.diplomacy = nil
 
 local camp_lines = war_page.lines(WIDTH)
 local camp_all = joined(camp_lines)
+-- The resource lines colour each value separately now, so the escapes fall
+-- between the label and the numbers: search the stripped text for them.
+local camp_stripped = strip_ansi(camp_all)
 check("war: campaign map header names the town and turn",
       camp_all:find("War Campaign: Jorvik", 1, true) ~= nil and
       camp_all:find("turn 3", 1, true) ~= nil, camp_all)
@@ -465,9 +468,9 @@ check("war: campaign grid replaces the placeholder line",
 check("war: campaign map march-ETA hint (125s -> '2m')",
       camp_all:find("On the march -- next tile in 2m", 1, true) ~= nil, camp_all)
 check("war: campaign map upkeep/tile line",
-      camp_all:find("Upkeep/tile: 10 food  5 mead  2 tools  1 iron  3d", 1, true) ~= nil, camp_all)
+      camp_stripped:find("Upkeep/tile: 10 food  5 mead  2 tools  1 iron  3d", 1, true) ~= nil, camp_stripped)
 check("war: campaign map spoils-if-win line",
-      camp_all:find("Spoils if you win: 500 daler, 20 renown  (2 deeds)", 1, true) ~= nil, camp_all)
+      camp_stripped:find("Spoils if you win: 500 daler, 20 renown  (2 deeds)", 1, true) ~= nil, camp_stripped)
 
 S.war_map.pending = 1
 local camp_pending = joined(war_page.lines(WIDTH))
@@ -484,8 +487,12 @@ S.war_map.march_eta = 125
 S.war_map.dim = 0
 S.war_map.rows = {}
 local camp_waiting = joined(war_page.lines(WIDTH))
-check("war: campaign map shows '(waiting for map data...)' with no rows yet",
-      camp_waiting:find("waiting for map data", 1, true) ~= nil, camp_waiting)
+-- The two empty states are told apart now: no rows at all means the map has
+-- not been drawn yet, which wants a different reaction from a dim that never
+-- arrived alongside rows that did.
+check("war: campaign map names WHICH half is missing when there are no rows",
+      camp_waiting:find("no terrain yet -- the map has not been drawn", 1, true) ~= nil,
+      camp_waiting)
 S.war_map.dim = 5
 S.war_map.rows = { ".....", ".....", ".....", ".....", "....." }
 
@@ -574,9 +581,12 @@ check("war: battle header (deploying)",
       deploy_all:find("Deploying vs Jorvik  (field)", 1, true) ~= nil, deploy_all)
 check("war: battle grid replaces the placeholder line",
       find_line(deploy_lines_out, "Battle map: /vik war") == nil, deploy_all)
-check("war: command budget + Fraegd line",
+check("war: command budget line (Fraegd is the page's own first line)",
       deploy_all:find("Command 40/100", 1, true) ~= nil and
-      deploy_all:find("Fraegd 15", 1, true) ~= nil, deploy_all)
+      deploy_all:find("Command 40/100   Fraegd", 1, true) == nil, deploy_all)
+check("war: Fraegd is the first line of the page, battle or not",
+      strip_ansi(deploy_lines_out[1]):find("Fraegd: 15", 1, true) ~= nil,
+      deploy_lines_out[1])
 check("war: 'In reserve' roster row names id/size/label/cost/leader",
       deploy_all:find("In reserve", 1, true) ~= nil and
       deploy_all:find("[5] 10x Skirmishers", 1, true) ~= nil and

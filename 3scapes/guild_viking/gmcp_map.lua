@@ -86,11 +86,21 @@ M.COMPOSITE = {
   -- so each push stays inside the page budget, and the client accumulates the
   -- slices. staff_slices says how many there are, so a page can tell whether
   -- it has seen a full set yet.
+  -- Slice indices run to 23, not to 7: a slice holds 4 staff (3 hird) so that
+  -- it fits one PROTOCOL_FRAME_MAX page, which makes a roster at the 95-staff
+  -- cap 24 slices. A key missing from this list is not routed to a composite
+  -- at all, so the short list silently discarded every slice past index 7 --
+  -- the third and last place that ceiling was written down.
   STAFF     = { "staff_total", "staff_slices",
-                "staff_0", "staff_1", "staff_2", "staff_3",
-                "staff_4", "staff_5", "staff_6", "staff_7" },
+                "staff_0", "staff_1", "staff_2", "staff_3", "staff_4", "staff_5",
+                "staff_6", "staff_7", "staff_8", "staff_9", "staff_10", "staff_11",
+                "staff_12", "staff_13", "staff_14", "staff_15", "staff_16", "staff_17",
+                "staff_18", "staff_19", "staff_20", "staff_21", "staff_22", "staff_23" },
   HIRD      = { "hird_total", "hird_slices",
-                "hird_0", "hird_1", "hird_2", "hird_3" },
+                "hird_0", "hird_1", "hird_2", "hird_3", "hird_4", "hird_5",
+                "hird_6", "hird_7", "hird_8", "hird_9", "hird_10", "hird_11",
+                "hird_12", "hird_13", "hird_14", "hird_15", "hird_16", "hird_17",
+                "hird_18", "hird_19", "hird_20", "hird_21", "hird_22", "hird_23" },
   VITALS    = { "hp", "sp", "points", "chain", "gxp", "tox", "fx",
                 "encounter", "target", "ledung", "bars" },
   -- Guild.Kingdom. army and dynasty each flatten a nested container out of
@@ -195,10 +205,17 @@ local MAP = {
   -- 64-staff roster does not fit a package's 8-page budget, so the server
   -- sends a bounded prefix that SAYS it is one.
   staff_total = "STAFF", staff_slices = "STAFF",
-  staff_0 = "STAFF", staff_1 = "STAFF", staff_2 = "STAFF", staff_3 = "STAFF",
-  staff_4 = "STAFF", staff_5 = "STAFF", staff_6 = "STAFF", staff_7 = "STAFF",
+  staff_0 = "STAFF", staff_1 = "STAFF", staff_2 = "STAFF", staff_3 = "STAFF", staff_4 = "STAFF",
+  staff_5 = "STAFF", staff_6 = "STAFF", staff_7 = "STAFF", staff_8 = "STAFF", staff_9 = "STAFF",
+  staff_10 = "STAFF", staff_11 = "STAFF", staff_12 = "STAFF", staff_13 = "STAFF", staff_14 = "STAFF",
+  staff_15 = "STAFF", staff_16 = "STAFF", staff_17 = "STAFF", staff_18 = "STAFF", staff_19 = "STAFF",
+  staff_20 = "STAFF", staff_21 = "STAFF", staff_22 = "STAFF", staff_23 = "STAFF",
   hird_total = "HIRD", hird_slices = "HIRD",
-  hird_0 = "HIRD", hird_1 = "HIRD", hird_2 = "HIRD", hird_3 = "HIRD",
+  hird_0 = "HIRD", hird_1 = "HIRD", hird_2 = "HIRD", hird_3 = "HIRD", hird_4 = "HIRD",
+  hird_5 = "HIRD", hird_6 = "HIRD", hird_7 = "HIRD", hird_8 = "HIRD", hird_9 = "HIRD",
+  hird_10 = "HIRD", hird_11 = "HIRD", hird_12 = "HIRD", hird_13 = "HIRD", hird_14 = "HIRD",
+  hird_15 = "HIRD", hird_16 = "HIRD", hird_17 = "HIRD", hird_18 = "HIRD", hird_19 = "HIRD",
+  hird_20 = "HIRD", hird_21 = "HIRD", hird_22 = "HIRD", hird_23 = "HIRD",
   bonds = "BONDS", train = "TRAIN",
   thralls = "THRALLS", thrall_follower = "THRALL_FOLLOWER",
   courier = "COURIER", courier_tier = "COURIER",
