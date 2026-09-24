@@ -225,6 +225,39 @@ check("captives and the siege park survive it",
 protocol.on_gmcp("Guild.War", { guild = "berserker", active = 1, phase = "foreign" })
 check("a foreign guild's battle frame is dropped", S.battle == nil)
 
+-- ---- campaign deltas, on Guild.Info ----------------------------------------
+-- The server moved the campaign_* keys from Guild.Kingdom to Guild.Info (the
+-- Kingdom package ran out of pages), and the client routes them by key name,
+-- so they must land from either package. Frames are DELTAS: when the armies
+-- move but the header does not change, the frame carries campaign_units with
+-- no `campaign` record. That used to be thrown away whole.
+local function info(payload)
+  payload.guild = "viking"
+  protocol.on_gmcp("Guild.Info", payload)
+end
+info({
+  campaign = { active = 1, dim = 3, turn = 7, mode = "march", pending = 0,
+               town = "Utrecht" },
+  campaign_terrain = { "...", "...", "..." },
+  campaign_units = { { kind = "host", id = "A", c = 0, r = 0, size = 60 } },
+})
+check("the campaign lands from Guild.Info",
+      S.war_map ~= nil and S.war_map.town == "Utrecht" and #S.war_map.units == 1)
+info({
+  campaign_units = {
+    { kind = "foe", id = "1", c = 2, r = 1, size = 25, name = "Utrecht Hird" },
+    { kind = "host", id = "A", c = 1, r = 0, size = 60 },
+  },
+})
+local moved = {}
+for _, u in ipairs(S.war_map and S.war_map.units or {}) do moved[u.id] = u end
+check("a units-only delta updates the board",
+      moved["1"] ~= nil and moved["1"].c == 2 and moved.A ~= nil and moved.A.c == 1,
+      S.war_map and #S.war_map.units)
+check("a units-only delta keeps the header and terrain",
+      S.war_map ~= nil and S.war_map.turn == 7 and S.war_map.town == "Utrecht"
+      and #S.war_map.rows == 3)
+
 if failures > 0 then
   print("FAILURES: " .. failures)
   os.exit(1)

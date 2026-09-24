@@ -533,10 +533,21 @@ local function square_to_cell(label)
   return col, row
 end
 
+-- The last `campaign` record the server sent. Frames are DELTAS: a key that
+-- has not changed is not resent, so when the enemy armies move but the turn,
+-- mode and spoils do not, the frame carries campaign_units and no `campaign`
+-- record at all. Returning on a missing record threw every such frame away --
+-- and prison and siege deltas with it, since they are read below this point --
+-- so the board kept its old units, or none, until something in the header
+-- happened to change as well. The record is reused instead.
+local last_campaign_rec = nil
+
 local function write_campaign(parts)
   if type(parts) ~= "table" then return end
   local rec = parts.campaign
+  if type(rec) ~= "table" then rec = last_campaign_rec end
   if type(rec) ~= "table" then return end
+  last_campaign_rec = rec
 
   -- Captives and the siege park first: they outlive a campaign.
   if type(parts.campaign_prison) == "table" then
