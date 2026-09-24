@@ -161,7 +161,18 @@ function M.board(kind, rows, w, h)
     local root = kind == "sea" and voyage or city
     return root .. t .. ".png"
   end
-  return path, base
+  -- What the cell STANDS on. Every Wang tile is opaque ground in its own
+  -- right, but rock.png is not: it is a crag-and-ruin sprite on a transparent
+  -- backdrop (over half the pixels), drawn as the cell's only image -- so
+  -- every rock square on the campaign map showed the renderer's black clear
+  -- colour around it. A rock sits on plain ground; the board emits that as
+  -- the cell's `under` and lets maplib composite the rock over it.
+  local function ground(c, r)
+    local t = plane[r] and plane[r][c]
+    if t == "rock" then return city .. "plain.png" end
+    return path(c, r)
+  end
+  return path, base, ground
 end
 
 function M.city(name) return city .. name .. ".png" end

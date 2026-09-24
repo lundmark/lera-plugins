@@ -168,7 +168,13 @@ local function make_grid(wm)
   local dim = wm.dim or #(wm.rows or {})
   local rows = wm.rows or {}
   local tiles = require("tiles")
-  local tile = tiles.enabled("campaign") and tiles.board("campaign", rows, dim, dim)
+  -- Not `enabled and board(...)`: `and` keeps only the first return value,
+  -- and the third (ground) is what keeps a rock cell from going black.
+  local tile, ground
+  if tiles.enabled("campaign") then
+    local _
+    tile, _, ground = tiles.board("campaign", rows, dim, dim)
+  end
   local ov, wks = {}, {}
   local you_c, you_r = -1, -1
   local sel_c, sel_r = -1, -1
@@ -187,7 +193,9 @@ local function make_grid(wm)
     w = dim, h = dim,
     -- The terrain under an overlay marker, so maplib can draw the ground
     -- first and let a marker with a transparent backdrop sit on it.
-    under = tile and function(c, r) return tile(c, r) end or nil,
+    -- `ground`, not `tile`: they differ exactly where a terrain tile is itself
+    -- a transparent sprite (rock), which needs real ground drawn beneath it.
+    under = ground and function(c, r) return ground(c, r) end or nil,
     image = tile and function(c, r)
       local key = c .. "," .. r
       local u = ov[key]

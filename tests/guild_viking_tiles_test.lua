@@ -243,4 +243,33 @@ camp2.on_pointer({kind="down",x=0,y=0,inside=true,button="left"}, ctx_at(0,0))
 camp2.on_pointer({kind="up",x=0,y=0,inside=true,button="left"}, ctx_at(0,0))
 assert(camp_covered()==4, "the SELECTED cell left a hole: "..camp_covered())
 
+-- rock.png is a crag-and-ruin SPRITE on a transparent backdrop, not a ground
+-- tile, and it was a rock cell's only image -- every rock square on the
+-- campaign map was black around its rocks. The board must put ground under it,
+-- both bare and with a marker standing on it.
+do
+  local rockimg=assert(io.open(root.."images/viking_cityplan/rock.png","rb"))
+  rockimg:close()
+  local _,_,rground=tiles.board("campaign",{"r"},1,1)
+  ends(rground(0,0),"/plain.png")
+  local _,_,fground=tiles.board("campaign",{"f"},1,1)
+  ends(fground(0,0),"woods_wang_0000.png")
+
+  S.war_map={active=true,dim=2,rows={"rr","rr"},town="t",units={
+    {id="3",c=1,r=1,size=4}}}
+  local at={}
+  for _,im in ipairs(require("popups.war_campaign").geometry(80).images) do
+    local k=im.x..","..im.y
+    at[k]=at[k] or {}
+    table.insert(at[k],im.path)
+  end
+  local cells=0
+  for k,list in pairs(at) do
+    cells=cells+1
+    ends(list[1],"/plain.png")
+    assert(#list==2, "rock cell "..k.." needs ground plus one image, got "..#list)
+  end
+  assert(cells==4, "expected 4 covered cells, got "..cells)
+end
+
 print("Viking tiles: masks, assets, GUI gating, clipping, cache, battle orientation, tabs PASS")
