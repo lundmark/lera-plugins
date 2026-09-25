@@ -129,6 +129,7 @@ function M.reset()
   stop_viewing()
   -- A walk whose replies never arrived (a dropped connection mid-walk) would
   -- otherwise refuse every later one as "already running".
+  if walk and walk.timer then timer.cancel(walk.timer) end
   walk = nil
 end
 
@@ -156,45 +157,105 @@ end
 -- a wizard typing uall in each folder would send -- no new privilege, no new
 -- server code.
 --
--- Bounded twice over, because "this directory and everything in it" pointed at
--- /players is a very large promise: a directory ceiling and a depth ceiling,
--- both reported when hit rather than silently truncating.
+-- Bounded, because "this directory and everything in it" pointed at /players
+-- is a very large promise -- and both bounds are reported when hit rather than
+-- silently truncating:
+--
+--   MAX_SCAN   folders LISTED. Cheap (a GMCP listing each), and generous so
+--              data-heavy trees are still searched all the way down: a guild
+--              like /players/elemental is 648 folders of which only 23 hold
+--              any code.
+--   MAX_DIRS   commands SENT. Only folders that contain .c files get one --
+--              lall loads *.c and uall recompiles loaded objects, so a folder
+--              of data files has nothing for either to do. Sending to every
+--              folder spent the whole budget on encyclopedia pages.
+--   MAX_DEPTH  how far down the walk goes at all.
+--
+-- The commands are PACED, one per SEND_GAP_MS, from a queue. They used to go
+-- out in a single burst: hundreds of commands in one instant, most of them
+-- dropped by the MUD's command queue, and the output a wall of spam.
 local MAX_DIRS = 200
+local MAX_SCAN = 2000
 local MAX_DEPTH = 8
+local SEND_GAP_MS = 500
 
--- { cmd, root, dirs, outstanding, stopped, reason }; forward-declared above.
+-- { cmd, root, scanned, queued, sent, queue, outstanding, timer, stopped,
+--   reason }; forward-declared above.
+
+local function has_code(entry)
+  local files = entry and entry.files
+  if type(files) ~= "table" then return false end
+  for i = 1, #files do
+    local f = files[i]
+    local name = type(f) == "table" and f.name or f
+    if type(name) == "string" and name:match("%.c$") then return true end
+  end
+  return false
+end
 
 local function walk_report()
-  if not walk or walk.outstanding > 0 then return end
+  if not walk or walk.outstanding > 0 or #walk.queue > 0 then return end
+  local verb = (walk.cmd == "uall") and "recompiled" or "loaded"
   local msg = "[wizard] " .. walk.cmd .. " -r " .. walk.root .. ": " ..
-              walk.dirs .. " director" .. (walk.dirs == 1 and "y" or "ies")
-  if walk.reason then msg = msg .. " (" .. walk.reason .. ")" end
+              walk.sent .. " folder" .. (walk.sent == 1 and "" or "s") ..
+              " with code " .. verb .. " (" .. walk.scanned .. " scanned)"
+  if walk.reason then msg = msg .. " -- " .. walk.reason end
   print(msg)
+  if walk.timer then timer.cancel(walk.timer) end
   walk = nil
 end
 
-local function walk_into(path, depth)
+-- One command per tick. Keeps ticking while listings are still arriving, so a
+-- folder found late still gets its turn; reports once both are exhausted.
+local function pump()
+  if not walk then return end
+  walk.timer = nil
+  local path = table.remove(walk.queue, 1)
+  if path then
+    walk.sent = walk.sent + 1
+    M.run(walk.cmd, path)
+  end
+  if #walk.queue > 0 or walk.outstanding > 0 then
+    walk.timer = timer.after(SEND_GAP_MS, pump)
+  else
+    walk_report()
+  end
+end
+
+local function enqueue(path)
+  if walk.queued >= MAX_DIRS then
+    walk.stopped = true
+    walk.reason = "stopped at the " .. MAX_DIRS .. "-folder limit"
+    return
+  end
+  walk.queued = walk.queued + 1
+  walk.queue[#walk.queue + 1] = path
+  if not walk.timer then walk.timer = timer.after(0, pump) end
+end
+
+local function visit(path, depth)
   if not walk or walk.stopped then return end
-  if walk.dirs >= MAX_DIRS then
-    walk.stopped, walk.reason = true, "stopped at the " .. MAX_DIRS .. "-directory limit"
+  if walk.scanned >= MAX_SCAN then
+    walk.stopped = true
+    walk.reason = "stopped after scanning " .. MAX_SCAN .. " folders"
     return
   end
-
-  walk.dirs = walk.dirs + 1
-  M.run(walk.cmd, path)
-
-  if depth >= MAX_DEPTH then
-    walk.reason = walk.reason or ("depth " .. MAX_DEPTH .. " reached; deeper folders skipped")
-    return
-  end
+  walk.scanned = walk.scanned + 1
 
   -- A directory we cannot read is not a failure of the whole walk: the wizard
   -- simply has no access there, and the rest still runs.
-  local function descend(entry)
-    if not entry or entry.error or not entry.dirs then return end
-    for i = 1, #entry.dirs do
+  local function on_listing(entry)
+    if not walk or not entry or entry.error then return end
+    if has_code(entry) then enqueue(path) end
+    if depth >= MAX_DEPTH then
+      if entry.dirs and #entry.dirs > 0 then
+        walk.reason = walk.reason or ("depth " .. MAX_DEPTH .. " reached; deeper folders skipped")
+      end
+      return
+    end
+    for i = 1, #(entry.dirs or {}) do
       local child = protocol.resolve(entry.dirs[i], path, protocol.home())
-      if child then walk_into(child, depth + 1) end
+      if child then visit(child, depth + 1) end
     end
   end
 
@@ -204,30 +265,33 @@ local function walk_into(path, depth)
   -- created seconds ago is an acceptable trade for a bulk recompile.
   local cached = protocol.lookup(path)
   if cached and cached.complete and not cached.error then
-    descend(cached)
+    on_listing(cached)
     return
   end
 
   walk.outstanding = walk.outstanding + 1
   protocol.request(path, function(entry)
+    if not walk then return end
     walk.outstanding = walk.outstanding - 1
-    descend(entry)
-    walk_report()
+    on_listing(entry)
+    -- The last listing can land after the queue already drained.
+    if not walk.timer then walk.timer = timer.after(0, pump) end
   end)
 end
 
--- Run `cmd` against `root` and every directory beneath it. Returns false when
--- one is already running -- two overlapping walks would interleave their
--- commands and make the reported count meaningless.
+-- Run `cmd` against `root` and every directory beneath it that holds code.
+-- Returns false when one is already running -- two overlapping walks would
+-- interleave their commands and make the reported count meaningless.
 function M.run_recursive(cmd, root)
   if not BY_CMD[cmd] or type(root) ~= "string" or root == "" then return false end
   if walk then
     print("[wizard] a recursive " .. walk.cmd .. " is already running")
     return false
   end
-  walk = { cmd = cmd, root = root, dirs = 0, outstanding = 0 }
-  walk_into(root, 1)
-  walk_report()
+  walk = { cmd = cmd, root = root, scanned = 0, queued = 0, sent = 0,
+           queue = {}, outstanding = 0 }
+  visit(root, 1)
+  if walk and not walk.timer then walk.timer = timer.after(0, pump) end
   return true
 end
 
