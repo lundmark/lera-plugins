@@ -86,10 +86,14 @@ M.COMPOSITE = {
   -- so each push stays inside the page budget, and the client accumulates the
   -- slices. staff_slices says how many there are, so a page can tell whether
   -- it has seen a full set yet.
-  STAFF     = { "staff_total", "staff_slices",
+  -- The server now sends one window per push under FIXED keys -- <name>_page,
+  -- starting at member <name>_from -- instead of the rotating slice keys, which
+  -- stay listed for older servers. Missing from these lists, the new keys were
+  -- never routed at all, and the hird and staff lists stayed empty.
+  STAFF     = { "staff_total", "staff_slices", "staff_page", "staff_from",
                 "staff_0", "staff_1", "staff_2", "staff_3",
                 "staff_4", "staff_5", "staff_6", "staff_7" },
-  HIRD      = { "hird_total", "hird_slices",
+  HIRD      = { "hird_total", "hird_slices", "hird_page", "hird_from",
                 "hird_0", "hird_1", "hird_2", "hird_3" },
   VITALS    = { "hp", "sp", "points", "chain", "gxp", "tox", "fx",
                 "encounter", "target", "ledung", "bars" },
@@ -194,10 +198,13 @@ local MAP = {
   -- total/shown scalars, the same shape Guild.Market's order book uses: a
   -- 64-staff roster does not fit a package's 8-page budget, so the server
   -- sends a bounded prefix that SAYS it is one.
-  staff_total = "STAFF", staff_slices = "STAFF",
+  -- The server now sends each list as ONE window per push under fixed keys --
+  -- <name>_page records starting at member <name>_from -- rather than the
+  -- rotating <name>_<n> keys below, which are kept for older servers.
+  staff_total = "STAFF", staff_slices = "STAFF", staff_page = "STAFF", staff_from = "STAFF",
   staff_0 = "STAFF", staff_1 = "STAFF", staff_2 = "STAFF", staff_3 = "STAFF",
   staff_4 = "STAFF", staff_5 = "STAFF", staff_6 = "STAFF", staff_7 = "STAFF",
-  hird_total = "HIRD", hird_slices = "HIRD",
+  hird_total = "HIRD", hird_slices = "HIRD", hird_page = "HIRD", hird_from = "HIRD",
   hird_0 = "HIRD", hird_1 = "HIRD", hird_2 = "HIRD", hird_3 = "HIRD",
   bonds = "BONDS", train = "TRAIN",
   thralls = "THRALLS", thrall_follower = "THRALL_FOLLOWER",

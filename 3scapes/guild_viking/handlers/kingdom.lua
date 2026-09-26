@@ -137,25 +137,9 @@ local function write_hird(parts)
   if parts.hird_total ~= nil then S.hird_total = tonumber(parts.hird_total) or 0 end
   if parts.hird_slices ~= nil then S.hird_slices = tonumber(parts.hird_slices) or 0 end
 
-  S.hird_by_slice = S.hird_by_slice or {}
-  local carried = false
-  for i = 0, 3 do
-    local slice = parts["hird_" .. i]
-    if type(slice) == "table" then
-      S.hird_by_slice[i] = slice
-      carried = true
-    end
-  end
-  if not carried then return end
-
-  for i in pairs(S.hird_by_slice) do
-    if i >= (S.hird_slices or 0) then S.hird_by_slice[i] = nil end
-  end
-
-  local records = {}
-  for i = 0, (S.hird_slices or 0) - 1 do
-    for _, r in ipairs(S.hird_by_slice[i] or {}) do records[#records + 1] = r end
-  end
+  S.hird_parts = S.hird_parts or {}
+  if not util.merge_roster(S.hird_parts, parts, "hird") then return end
+  local records = util.roster_records(S.hird_parts, S.hird_total or 0, S.hird_slices or 0)
 
   S.hird_list = {}
   S.hird_by_id = {}

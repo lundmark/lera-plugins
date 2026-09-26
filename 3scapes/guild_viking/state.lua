@@ -162,12 +162,12 @@ local state = {
   staff_list = {},  -- { name, assigned_to, stat_key, stats={combat=N,...}, trait, loyalty, age, arrive_at }
   staff_total = 0,     -- how many staff the guild has
   staff_slices = 0,    -- how many rotating slices that list is sent in
-  staff_by_slice = {}, -- [index] = slice, accumulated across pushes
+  staff_parts = {}, -- { members, slices } accumulated across pushes (util.merge_roster)
   hird_list  = {},  -- { name, status, level, mode }
   hird_by_id = {},    -- [id] = hird record; what Bonds resolves pair ids against
   hird_total = 0,     -- how many hirdmadrs the guild has
   hird_slices = 0,    -- how many rotating slices that list is sent in
-  hird_by_slice = {}, -- [index] = slice, accumulated across pushes
+  hird_parts = {}, -- { members, slices } accumulated across pushes (util.merge_roster)
   bonds_list  = {},  -- { id_a, id_b, ticks, tier }
   standings   = {},  -- { [lin_id] = { name, score, label, is_own } }
   village_rep = {},  -- { [lin_id] = { name, rep, rank, next_at } }
