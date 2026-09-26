@@ -179,8 +179,11 @@ local function hp_bar_1(line, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12,
   ui.dirty()
 end
 
--- Continuation of a wrapped Line 1: "<fury-tail>] C[chain/bsdepth]"
-local hp_bar_1_cont_pattern = "^[-*]*\\] C\\[(\\d+)/(\\d+)\\]\\s*$"
+-- Continuation of a wrapped Line 1: "<fury-tail>] C[chain/bsdepth]". When the
+-- MUD wraps exactly between F[...] and C[...], the continuation is a bare
+-- "C[2/0]" with no fury tail in front of it; requiring "] " let that line
+-- through the status-line gag.
+local hp_bar_1_cont_pattern = "^\\s*(?:[-*]*\\]\\s*)?C\\[(\\d+)/(\\d+)\\]\\s*$"
 
 local function hp_bar_1_cont(line, c1, c2)
   if gmcp_owns_vitals() then return end
