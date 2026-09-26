@@ -49,6 +49,11 @@ starts a fresh map in the current sea. After the cask/portal room is cleared, fa
 opens the cask, enters the portal, unsets the old sea, creates the configured sea,
 and enters it. Only this automatic restart sends the setup commands.
 
+Position in the sea is dead reckoned, so any room entry the stepper did not send
+for -- wimpy, a mob moving you, a direction typed by hand mid-run or while paused --
+drops the map. A running explore stops with "Moved outside the stepper"; the next
+`/step explore` maps afresh from where you stand.
+
 `/step chaossea farm off` disables repeats and cancels a pending restart without
 interrupting the current exploration or fight. `-!`, `/step stop` and `/step explore off`
 stop exploration and cancel pending restarts while keeping the farm configuration.

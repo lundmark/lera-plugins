@@ -469,6 +469,23 @@ end
 -- Room entry lists are marked by the server. Refresh/subscription snapshots
 -- are not arrivals, even when they land while a movement is outstanding.
 local function on_room_contents_frame(info)
+  -- An entry the stepper did not ask for -- wimpy, a mob moving the player,
+  -- a direction typed by hand mid-run or while paused -- moves the player
+  -- without a committed step, so the explore map's dead-reckoned position is
+  -- now wrong. Maze rooms mostly share their neighbours' exits, so the
+  -- contradiction check rarely catches it; instead the offset makes unvisited
+  -- rooms land on recorded coordinates, and the run ends "exhausted" with rooms
+  -- left. The position cannot be recovered in an area without room ids, so the
+  -- map is dropped here and the next start or resume maps afresh.
+  local unasked = info and info.entry and not (enabled and state == "stepping")
+  if unasked and explore and explore.profile and explore.profile() then
+    explore.reset("moved without a step; position unknown")
+    if enabled then
+      log("Moved outside the stepper; stopping", COLOR_WARN)
+      M.stop()
+      return
+    end
+  end
   if not enabled then return end
   if awaiting_refresh then
     if info and info.entry then
