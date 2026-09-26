@@ -179,6 +179,14 @@ local hp_bar_1_cont = trigger_handlers[2]
 S.chain, S.bsdepth = 0, 0
 hp_bar_1_cont.fn("----------] C[5/3]", "5", "3")
 check("hp_bar_1_cont", S.chain == 5 and S.bsdepth == 3)
+-- A wrap exactly between F[...] and C[...] leaves a bare "C[2/0]" line. The
+-- pattern must take it (with or without a fury tail), or the status-line gag
+-- lets it through to the output.
+check("hp_bar_1_cont takes a bare C[] line",
+      not hp_bar_1_cont.pattern:find("^[-*]*\\] C", 1, true)
+        and hp_bar_1_cont.pattern:find("(?:[-*]*\\]\\s*)?C", 1, true) ~= nil)
+hp_bar_1_cont.fn("C[2/0]", "2", "0")
+check("hp_bar_1_cont reads a bare C[] line", S.chain == 2 and S.bsdepth == 0)
 
 -- ---- hp_bar_2 (LEGACY 599) --------------------------------------------------
 -- XML: ^G\[(\d+)\((\d+)\)\|(\d+)\((\d+)\)\|(\d+)\((\d+)\)\|(\d+)\((\d+)\)\] L\[(\d*)\|(\d*)\((\d*)%\)\] E\[([^|]*)\|([^|]*)(?:\|(\d*))?\]?
