@@ -337,7 +337,17 @@ function M.stop_reason()
 end
 
 function M.next_step()
-  if not active or not map or #pending_dirs > 0 then return nil end
+  -- These nils are not exhaustion, and must not read as it: the caller reports
+  -- whatever stop_reason() says, and a stale "exhausted" here would announce
+  -- an empty map while rooms remain.
+  if not active or not map then
+    stop_reason_val = "inactive"
+    return nil
+  end
+  if #pending_dirs > 0 then
+    stop_reason_val = "in flight"
+    return nil
+  end
 
   -- A pending leave path takes precedence over frontier selection: once
   -- M.leave() has armed one, every next_step() call drains it one direction
