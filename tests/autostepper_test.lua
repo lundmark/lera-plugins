@@ -286,6 +286,7 @@ print = function(...)
 end
 
 local as = require("init")
+as.dump_path = os.tmpname()   -- exhaustion reports stay out of ~/.lera
 as.on_load()
 print = real_print
 

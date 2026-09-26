@@ -40,7 +40,19 @@ local COLOR_WARN  = "FFC107"   -- amber: a guess, a refusal, something to see
 local COLOR_ERROR = "FF4444"   -- red: the run cannot go on (autotrader's red)
 local COLOR_TRACE = "78909C"   -- slate: /step trace, off by default
 
+-- The last HISTORY_MAX log and trace lines, kept whether or not tracing is on,
+-- so an exhaustion dump can say what led up to it after the fact.
+local HISTORY_MAX = 120
+local history = {}
+
+local function remember(msg)
+  history[#history + 1] = string.format("%9.1f %s",
+    (lera and lera.time and lera.time()) or 0, tostring(msg))
+  if #history > HISTORY_MAX then table.remove(history, 1) end
+end
+
 local function log(msg, color)
+  remember(msg)
   buffer.color_print(nil, COLOR_TAG, "[autostepper] ",
                      nil, color or COLOR_INFO, tostring(msg))
 end
@@ -61,7 +73,7 @@ end
 local tracing = false
 
 local function trace(msg)
-  if not tracing then return end
+  if not tracing then remember("trace: " .. msg); return end
   log("trace: " .. msg, COLOR_TRACE)
 end
 
@@ -753,6 +765,43 @@ local function is_preparation(cmd)
   return PREPARATION_COMMANDS[tostring(cmd):lower():match("^%s*(%S+)")] == true
 end
 
+-- Exhaustion reports. Appended, never overwritten, so the file holds every run
+-- that ended "exhausted" until someone clears it. M.dump_path is the seam the
+-- tests use to point it elsewhere.
+M.dump_path = (os.getenv("HOME") or ".") .. "/.lera/autostepper_dumps.log"
+
+local function write_explore_dump(why)
+  local lines = {}
+  local function add(s) lines[#lines + 1] = s end
+  add(string.rep("=", 72))
+  add(os.date("%Y-%m-%d %H:%M:%S") .. "  " .. tostring(why))
+  local prof = explore and explore.profile and explore.profile()
+  add("area: " .. tostring(prof and prof.name) .. "  run_mode: "
+      .. tostring(run_mode) .. "  state: " .. tostring(state))
+  if ri then
+    add("roominfo room: " .. tostring(ri.room and ri.room()))
+    add("roominfo exits: " .. tostring(ri.exits_string and ri.exits_string()))
+    local mobs = ri.monsters and ri.monsters() or {}
+    add("roominfo monsters: " .. table.concat(copy_names(mobs), ", "))
+  end
+  add("-- map")
+  for _, l in ipairs(explore and explore.dump_lines and explore.dump_lines() or {}) do
+    add(l)
+  end
+  add("-- last " .. #history .. " log/trace lines (seconds since client start)")
+  for _, l in ipairs(history) do add(l) end
+  local f, err = io.open(M.dump_path, "a")
+  if not f then
+    log("Could not write the explore dump to " .. M.dump_path .. ": "
+        .. tostring(err), COLOR_WARN)
+    return false
+  end
+  f:write(table.concat(lines, "\n"), "\n")
+  f:close()
+  log("Map dump written to " .. M.dump_path, COLOR_WARN)
+  return true
+end
+
 local function do_step(monsters)
   local step
   local notify_step = true
@@ -802,6 +851,9 @@ local function do_step(monsters)
         log("Explore map unavailable; stopping (not exhausted)", COLOR_WARN)
       else
         log("Explored: no unvisited exits remain", COLOR_RUN)
+      end
+      if not at_completion and (reason == "exhausted" or reason == "in flight") then
+        write_explore_dump("explore stopped: " .. reason)
       end
       enabled = false
       state = "idle"
@@ -985,6 +1037,8 @@ local function show_help()
   log("  -!                     - Stop stepping")
   log("  /step status           - Show farm settings, restart/wait state and travel progress")
   log("  /step trace [on|off]   - Log room frames, refreshes and decisions")
+  log("  /step dump             - Append the explore map and recent history to ~/.lera/autostepper_dumps.log")
+  log("                           (written automatically when exploring ends 'exhausted')")
   log("  /step mobignore add|remove <name> | list | clear")
   log("                           Exact full name, case/whitespace normalized; saved per profile")
   log("  /step explore [area]   - Start explore mode in an area (default: chaossea)")
@@ -1169,6 +1223,8 @@ local function dispatch(args)
     else
       log("Usage: /step trace [on|off]", COLOR_WARN)
     end
+  elseif sub == "dump" then
+    write_explore_dump("requested with /step dump")
   elseif sub == "start" then
     M.start(false)
   elseif sub == "targets" then

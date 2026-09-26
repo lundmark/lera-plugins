@@ -1,6 +1,8 @@
 -- Autostepper GMCP integration regressions: real plugins, simulated I/O and time.
 package.path = "3scapes/autostepper/?.lua;3scapes/?.lua;generic/?.lua;" .. package.path
 
+local DUMP_PATH = os.tmpname()
+
 local function engine()
   for _, name in ipairs({"roominfo", "init", "explore.mode", "areas.chaossea"}) do
     package.loaded[name] = nil
@@ -94,6 +96,8 @@ local function engine()
   ri.on_load()
   print = output
   E.ri, E.mode, E.as = ri, require("explore.mode"), require("init")
+  -- Exhaustion writes a report; never into the real ~/.lera from a test.
+  E.as.dump_path = DUMP_PATH
   E.as.on_load()
   if E.as.on_setup then E.as.on_setup() end
   function E.info(exits)
@@ -1259,6 +1263,33 @@ do
   e.info({n = 0, s = 0}); e.contents({}, nil, true)   -- walked by hand while paused
   check("a move while paused drops the retained map",
     rooms == 2 and e.mode.stats().rooms == 0 and not e.as.is_running())
+end
+
+-- Exhaustion appends a report: the map with frontier marks, the room as the
+-- server last described it, and the history leading up to it -- trace lines
+-- included, though trace is off.
+do
+  os.remove(DUMP_PATH)
+  local e = engine()
+  e.begin({n = 0}, {})
+  e.info({s = 0}); e.contents({}, nil, true)
+  local f = io.open(DUMP_PATH, "r")
+  local text = f and f:read("*a") or ""
+  if f then f:close() end
+  check("exhaustion writes a dump",
+    not e.as.is_running() and text:find("explore stopped: exhausted", 1, true) ~= nil)
+  check("the dump lists every recorded room with its exits marked",
+    text:find("0,0,0: n.", 1, true) ~= nil and text:find("0,1,0: s.", 1, true) ~= nil
+      and text:find("rooms per layer: z0=2", 1, true) ~= nil)
+  check("the dump carries the history, trace lines included with trace off",
+    text:find("Explored: no unvisited exits remain", 1, true) ~= nil
+      and text:find("trace: ", 1, true) ~= nil)
+  local before = #text
+  e.command("dump")
+  f = io.open(DUMP_PATH, "r"); text = f and f:read("*a") or ""; if f then f:close() end
+  check("/step dump appends rather than overwrites",
+    #text > before and text:find("requested with /step dump", 1, true) ~= nil)
+  os.remove(DUMP_PATH)
 end
 
 print(string.format("%d checks, %d failures", checks, failures))
