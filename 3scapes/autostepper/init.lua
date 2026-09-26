@@ -765,15 +765,14 @@ local function is_preparation(cmd)
   return PREPARATION_COMMANDS[tostring(cmd):lower():match("^%s*(%S+)")] == true
 end
 
--- Exhaustion reports. Appended, never overwritten, so the file holds every run
--- that ended "exhausted" until someone clears it. M.dump_path is the seam the
--- tests use to point it elsewhere.
-M.dump_path = (os.getenv("HOME") or ".") .. "/.lera/autostepper_dumps.log"
+-- Exhaustion reports. A plugin has no io and no os.getenv in Lera's sandbox,
+-- so they go through the plugin store, alongside the mob-ignore list: the last
+-- DUMP_KEEP reports, newest last, in the profile's .storage/autostepper.json.
+local DUMP_KEEP = 5
 
 local function write_explore_dump(why)
   local lines = {}
   local function add(s) lines[#lines + 1] = s end
-  add(string.rep("=", 72))
   add(os.date("%Y-%m-%d %H:%M:%S") .. "  " .. tostring(why))
   local prof = explore and explore.profile and explore.profile()
   add("area: " .. tostring(prof and prof.name) .. "  run_mode: "
@@ -790,16 +789,28 @@ local function write_explore_dump(why)
   end
   add("-- last " .. #history .. " log/trace lines (seconds since client start)")
   for _, l in ipairs(history) do add(l) end
-  local f, err = io.open(M.dump_path, "a")
-  if not f then
-    log("Could not write the explore dump to " .. M.dump_path .. ": "
-        .. tostring(err), COLOR_WARN)
-    return false
+
+  -- A diagnostic must never be what breaks a run: any failure here is logged
+  -- and swallowed.
+  local ok, saved = pcall(function()
+    if not (store and store.get and store.set and store.save) then return false end
+    local data = store.get()
+    if type(data) ~= "table" then data = {} end
+    local dumps = type(data.explore_dumps) == "table" and data.explore_dumps or {}
+    dumps[#dumps + 1] = lines
+    while #dumps > DUMP_KEEP do table.remove(dumps, 1) end
+    data.explore_dumps = dumps
+    return store.set(data) and store.save()
+  end)
+  if ok and saved then
+    local dir = store.path and store.path()
+    log("Map dump saved to " .. (dir and (dir .. "/autostepper.json") or "the plugin store")
+        .. " (explore_dumps, newest last)", COLOR_WARN)
+    return true
   end
-  f:write(table.concat(lines, "\n"), "\n")
-  f:close()
-  log("Map dump written to " .. M.dump_path, COLOR_WARN)
-  return true
+  log("Could not save the explore dump" .. (ok and "" or (": " .. tostring(saved))),
+      COLOR_WARN)
+  return false
 end
 
 local function do_step(monsters)
@@ -1037,8 +1048,8 @@ local function show_help()
   log("  -!                     - Stop stepping")
   log("  /step status           - Show farm settings, restart/wait state and travel progress")
   log("  /step trace [on|off]   - Log room frames, refreshes and decisions")
-  log("  /step dump             - Append the explore map and recent history to ~/.lera/autostepper_dumps.log")
-  log("                           (written automatically when exploring ends 'exhausted')")
+  log("  /step dump             - Save the explore map and recent history (last 5 kept)")
+  log("                           to .storage/autostepper.json; automatic when exploring ends 'exhausted'")
   log("  /step mobignore add|remove <name> | list | clear")
   log("                           Exact full name, case/whitespace normalized; saved per profile")
   log("  /step explore [area]   - Start explore mode in an area (default: chaossea)")
