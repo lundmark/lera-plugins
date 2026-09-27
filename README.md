@@ -351,6 +351,14 @@ syntax; everything word-shaped lives under `/speedwalk` and `/step`.
 
 ## Chat history selection
 
+When session recording is enabled, `chat_monitor` also records a logical Chat
+source: direct and relayed messages use the same unwrapped ANSI text as companion
+pages. Restored history is included, formatting changes update retained rows,
+and clear starts a new archive epoch. Reload retires the old source and creates
+a new one; ordinary live retention does not delete archived messages. After
+recording stops or fails, the adapter stops its extra formatting work. Older
+Lera versions without the optional recording-source API continue normally.
+
 With a Lera core that supports `wm` history-selection providers, `chat_monitor`
 lets you hold the left mouse button and drag above or below the chat pane to
 scroll and select older or newer text. `Ctrl+C` includes offscreen selected rows,

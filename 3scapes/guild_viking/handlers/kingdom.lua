@@ -137,29 +137,9 @@ local function write_hird(parts)
   if parts.hird_total ~= nil then S.hird_total = tonumber(parts.hird_total) or 0 end
   if parts.hird_slices ~= nil then S.hird_slices = tonumber(parts.hird_slices) or 0 end
 
-  S.hird_by_slice = S.hird_by_slice or {}
-  local carried = false
-  -- Every hird_<n> key in the frame, found by pattern rather than by scanning a
-  -- fixed 0..3: a slice now carries 3 records so it fits inside one
-  -- PROTOCOL_FRAME_MAX page, so an 18-strong hird is 6 slices rather than 3.
-  -- The fixed range silently ignored every index past 3.
-  for k, v in pairs(parts) do
-    local idx = tostring(k):match("^hird_(%d+)$")
-    if idx and type(v) == "table" then
-      S.hird_by_slice[tonumber(idx)] = v
-      carried = true
-    end
-  end
-  if not carried then return end
-
-  for i in pairs(S.hird_by_slice) do
-    if i >= (S.hird_slices or 0) then S.hird_by_slice[i] = nil end
-  end
-
-  local records = {}
-  for i = 0, (S.hird_slices or 0) - 1 do
-    for _, r in ipairs(S.hird_by_slice[i] or {}) do records[#records + 1] = r end
-  end
+  S.hird_parts = S.hird_parts or {}
+  if not util.merge_roster(S.hird_parts, parts, "hird") then return end
+  local records = util.roster_records(S.hird_parts, S.hird_total or 0, S.hird_slices or 0)
 
   S.hird_list = {}
   S.hird_by_id = {}
