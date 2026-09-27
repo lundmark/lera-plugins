@@ -280,6 +280,36 @@ check("an unmapped key is counted under its own GMCP name, not applied",
       (after["gneeds"] or 0) > before and after["rneeds"] ~= nil
       and after["some_future_key"] ~= nil)
 
+-- ---- paged rosters: the server's fixed <name>_page + <name>_from keys ----
+-- The server replaced the rotating <name>_<n> keys with one window per push.
+-- The client neither routed nor parsed the new keys, so the hird and staff
+-- lists stayed empty.
+S.hird_parts, S.hird_total = {}, 0
+local function hm(id, name, status) return { id = id, name = name, status = status } end
+roster({ hird_total = 5, hird_slices = 2, hird_from = 0,
+         hird_page = { hm(11, "Ulf", "city_pool"), hm(12, "Bjorn", "personal_guard"),
+                       hm(13, "Sigrid", "garrison") } })
+check("hird_page: the first window fills the first three members",
+      #S.hird_list == 3 and S.hird_by_id[11] and S.hird_by_id[11].status == "city_pool",
+      #S.hird_list)
+roster({ hird_from = 3, hird_page = { hm(14, "Astrid", "city_pool"), hm(15, "Leif", "wounded") } })
+check("hird_page: the next window completes the hird in member order",
+      #S.hird_list == 5 and S.hird_list[4].name == "Astrid" and S.hird_by_id[15] ~= nil,
+      #S.hird_list)
+roster({ hird_from = 0, hird_page = { hm(11, "Ulf", "unit_leader"),
+         hm(12, "Bjorn", "personal_guard"), hm(13, "Sigrid", "garrison") } })
+check("hird_page: a re-sent window replaces rather than appends",
+      #S.hird_list == 5 and S.hird_by_id[11].status == "unit_leader", #S.hird_list)
+roster({ hird_total = 3, hird_from = 0, hird_page = { hm(11, "Ulf", "unit_leader"),
+         hm(12, "Bjorn", "personal_guard"), hm(13, "Sigrid", "garrison") } })
+check("hird_page: a shrunk hird leaves no stale tail",
+      #S.hird_list == 3 and S.hird_by_id[15] == nil, #S.hird_list)
+S.staff_parts, S.staff_total = {}, 0
+roster({ staff_total = 2, staff_slices = 1, staff_from = 0,
+         staff_page = { { name = "Grima" }, { name = "Oddny" } } })
+check("staff_page: staff arrive through the page keys too",
+      #S.staff_list == 2 and S.staff_list[2].name == "Oddny", #S.staff_list)
+
 if failures > 0 then
   print("FAILURES: " .. failures)
   os.exit(1)
