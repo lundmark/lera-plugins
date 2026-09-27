@@ -658,7 +658,11 @@ push enable, activity grace and rate limits apply. Separate channels keep the
 cask alert from suppressing the nearby restart alert. A cancelled pending restart
 sends no alert. See [autostepper push notifications](3scapes/autostepper/README.md#exploration-push-notifications).
 
-TODO: track or invalidate coordinates when moving manually during a paused run.
+A move the stepper did not send (a typed direction, wimpy, a mob moving you,
+including while paused) drops the explore map, and a running explore stops. A run
+ending with no unvisited exits saves a map dump; see
+[unnoticed moves and dumps](3scapes/autostepper/README.md).
+
 ### Upcoming directions in the map pane
 
 `/minimap next on` shows up to five upcoming parsed speedwalk commands as
