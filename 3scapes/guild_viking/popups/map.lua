@@ -411,15 +411,18 @@ local function make_grid(poi_at)
   return {
     w = w, h = h,
     image_max_cols = 4,
+    -- Landmark sprites contain transparent pixels. Draw the biome tile first
+    -- so those pixels reveal the terrain instead of the GUI clear color.
+    under = tile and function(c, r) return tile(c, r) end or nil,
     image = tile and function(c, r)
-      if is_player_cell(c, r) then return tiles.city("camp_host_you") end
+      if is_player_cell(c, r) then return tiles.city("camp_host_you"), true end
       local poi = poi_at[r * w + c]
       -- Glyph-mode Guild.Map can bake settlement/POI symbols into terrain
       -- rows, just like MUSHclient's map. Landmark metadata is optional.
       local sym = (poi and POI_TYPE_SYM[poi.type]) or terrain_glyph(r, c)
-      if sym == "X" then return tiles.city("camp_host_you") end
+      if sym == "X" then return tiles.city("camp_host_you"), true end
       local name = icons[sym]
-      if name then return tiles.city(name) end
+      if name then return tiles.city(name), true end
       if poi then return nil end -- unknown landmark: preserve its text marker
       return tile(c, r)
     end,
@@ -436,6 +439,57 @@ local function make_grid(poi_at)
       return { glyph = ch, color = VMAP_COLOR[ch] or VMAP_COLOR_FALLBACK }
     end,
   }
+end
+
+-- Print runtime facts needed to distinguish a bad PNG/compositor from a
+-- wrong module or stale profile.  This intentionally inspects the exact
+-- callbacks used by maplib rather than duplicating their rendering logic.
+function M.debug()
+  local tiles = require("tiles")
+  local maplib = require("maplib")
+  local function source_of(fn)
+    -- Production Lua may omit the global debug library.  Source
+    -- introspection is optional and must never make the probe fail.
+    local dbg = rawget(_G, "debug")
+    local info = type(fn) == "function" and type(dbg) == "table"
+      and type(dbg.getinfo) == "function" and dbg.getinfo(fn, "S") or nil
+    return info and info.source or "(debug unavailable)"
+  end
+
+  local w, h = tonumber(S.vmap_w) or 0, tonumber(S.vmap_h) or 0
+  local rows = S.vmap_rows or {}
+  local pois = S.vmap_pois or {}
+  local grid = make_grid(poi_lookup())
+  local image_cells, overlay_cells, under_cells, paired_cells = 0, 0, 0, 0
+  local first_icon
+  for r = 0, h - 1 do
+    for c = 0, w - 1 do
+      local path, overlay
+      if grid.image then path, overlay = grid.image(c, r) end
+      if path then
+        image_cells = image_cells + 1
+        if overlay then overlay_cells = overlay_cells + 1 end
+        local base = grid.under and grid.under(c, r) or nil
+        if base then
+          under_cells = under_cells + 1
+          paired_cells = paired_cells + 1
+        end
+        if not first_icon and overlay then
+          first_icon = string.format("(%d,%d) icon=%s base=%s", c, r,
+            tostring(path), tostring(base))
+        end
+      end
+    end
+  end
+  buffer.color_print(nil, "DAA520", string.format(
+    "Viking mapdebug: map.lua=%s maplib=%s tiles=%s draw=%s",
+    source_of(M.debug), source_of(maplib.geometry),
+    tostring(tiles.available()), source_of(tiles.draw)))
+  buffer.color_print(nil, "DAA520", string.format(
+    "  grid=%dx%d rows=%d pois=%d tile_enabled=%s image=%d overlay=%d under=%d paired=%d",
+    w, h, #rows, #pois, tostring(tiles.enabled("map")), image_cells,
+    overlay_cells, under_cells, paired_cells))
+  buffer.color_print(nil, "DAA520", "  " .. (first_icon or "no overlay icon cells found"))
 end
 
 -- Compact rendering: one character per cell, no wall overlays.
@@ -799,7 +853,7 @@ function M.on_pointer(ev, ctx)
     return nil
   end
 
--- RIGHT-click anywhere on the grid: this page's context menu (page_menu.lua
+  -- RIGHT-click anywhere on the grid: this page's context menu (page_menu.lua
   -- -- LEGACY's PAGE_MENUS[7], whose right-click hotspot covered the whole
   -- page body). Same record-on-down / match-on-up discipline as the POI path
   -- below, and deliberately NOT gated on landing on a POI: LEGACY's page-body
@@ -822,7 +876,9 @@ function M.on_pointer(ev, ctx)
   end
 
   if ev.kind == "down" then
-    if ev.button ~= "left" or not poi_at_cell(poi_at, c, r) then return nil end
+    hover = cell_tip(poi_at, c, r)
+    ui.dirty()
+    if ev.button ~= "left" then return nil end
     track.record({ kind = "cell", c = c, r = r })
     return true
   end
@@ -830,8 +886,8 @@ function M.on_pointer(ev, ctx)
   -- ev.kind == "up"
   local matched = track.matches({ kind = "cell", c = c, r = r })
   track.clear()
-  if matched and poi_at_cell(poi_at, c, r) then
-    open_poi_menu()
+  if matched then
+    travel_to_cell(c, r)
     return true
   end
   return nil

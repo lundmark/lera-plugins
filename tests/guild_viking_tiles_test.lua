@@ -167,17 +167,109 @@ local map=require("popups.map")
 local poi_images=map.geometry(100).images
 local expected={"castle","mead_hall","longhouse","herbyrgi","woods","rock",
   "farm","skald_hall","camp_host_you"}
-assert(#poi_images==#expected)
+-- Two images per cell, ground then marker: a POI marker is drawn with a
+-- transparent backdrop, so the board emits the terrain underneath it first
+-- (maplib's `under`) and lets the marker composite over it. Without the
+-- ground pass the renderer's clear colour showed through the transparency.
+assert(#poi_images==#expected*2)
 for i,name in ipairs(expected) do
-  ends(poi_images[i].path,"/"..name..".png")
-  tiles.draw(rect(i*2,0,2,1),poi_images[i].path)
-  assert(loads[poi_images[i].path], name)
+  local ground, marker = poi_images[i*2-1], poi_images[i*2]
+  ends(ground.path,"/plain.png")
+  ends(marker.path,"/"..name..".png")
+  assert(ground.x==marker.x and ground.y==marker.y, name)
+  tiles.draw(rect(i*2,0,2,1),marker.path)
+  assert(loads[marker.path], name)
 end
 -- Metadata overlays still win over baked symbols, then the current player.
+-- Ground and marker alternate, so column c's marker is image 2c+2.
+local function marker_at(c) return map.geometry(100).images[c*2+2] end
 S.vmap_pois={{type="capital",x=2,y=0}}
-ends(map.geometry(100).images[3].path,"/castle.png")
+ends(marker_at(2).path,"/castle.png")
 S.vmap_px=2; S.vmap_py=0
-ends(map.geometry(100).images[3].path,"/camp_host_you.png")
+ends(marker_at(2).path,"/camp_host_you.png")
 S.vmap_px=-1; S.vmap_pois={{type="future_type",x=2,y=0}}
-ends(map.geometry(100).images[3].path,"/longhouse.png")
+ends(marker_at(2).path,"/longhouse.png")
+-- A campaign row SHORTER than the grid -- or any glyph the board's own table
+-- does not map -- used to leave those cells with no terrain tile at all,
+-- because the ground inference ran for kind == "map" only. A camp_* marker is
+-- ~75% transparent by design, so one standing on such a cell showed the
+-- renderer's black clear colour instead of ground. That was the black
+-- background on the campaign map.
+opts.set("show_war_ascii", false)
+S.war_map={active=true,dim=2,rows={"ff"},units={{id="A",c=1,r=1,size=10}},town="t"}
+local camp=require("popups.war_campaign")
+local cimgs=camp.geometry(80).images
+local ground=0
+for _,im in ipairs(cimgs) do if im.path:find("woods_wang",1,true) then ground=ground+1 end end
+assert(ground==4, "every cell needs ground, got "..ground)
+local marker=cimgs[#cimgs]
+ends(marker.path,"/camp_host_you.png")
+local beneath=cimgs[#cimgs-1]
+assert(beneath.x==marker.x and beneath.y==marker.y,
+  "the marker cell has no ground tile beneath it")
+
+-- Two cells that used to draw NOTHING on a tiled board, both showing the
+-- renderer's black clear colour: the SELECTED cell (blanked so its
+-- reverse-video glyph can be read) and a cell whose overlay id the board does
+-- not recognise. Ground is emitted from grid.under regardless of whether there
+-- is a marker to put on it, so neither is a hole any more.
+opts.set("show_war_ascii", false)
+S.war_map={active=true,dim=2,rows={"ff","ff"},town="t",units={
+  {id="A",c=0,r=0,size=10},                     -- selected by default (your host)
+  {id="ZZZ",kind="mystery",c=1,r=1,size=3},     -- an id the board has no marker for
+}}
+local camp2=require("popups.war_campaign")
+local function camp_covered()
+  local at={}
+  for _,im in ipairs(camp2.geometry(80).images) do
+    assert(im.path and #im.path>0, "an image with no path")
+    at[im.x..","..im.y]=true
+  end
+  local n=0
+  for _ in pairs(at) do n=n+1 end
+  return n
+end
+-- Unknown overlay id: covered because the board falls through to the terrain
+-- rather than to nil.
+assert(camp_covered()==4, "unknown-overlay cell left a hole: "..camp_covered())
+
+-- Now SELECT your host by clicking it. The selected cell has its marker blanked
+-- so the reverse-video glyph can be read, so this is the case where image()
+-- legitimately yields nil and only `under` can keep the cell from going black.
+local function ctx_at(c,r)
+  return { cell_from_xy=function() return c,r end, close=function() end }
+end
+camp2.on_pointer({kind="down",x=0,y=0,inside=true,button="left"}, ctx_at(0,0))
+camp2.on_pointer({kind="up",x=0,y=0,inside=true,button="left"}, ctx_at(0,0))
+assert(camp_covered()==4, "the SELECTED cell left a hole: "..camp_covered())
+
+-- rock.png is a crag-and-ruin SPRITE on a transparent backdrop, not a ground
+-- tile, and it was a rock cell's only image -- every rock square on the
+-- campaign map was black around its rocks. The board must put ground under it,
+-- both bare and with a marker standing on it.
+do
+  local rockimg=assert(io.open(root.."images/viking_cityplan/rock.png","rb"))
+  rockimg:close()
+  local _,_,rground=tiles.board("campaign",{"r"},1,1)
+  ends(rground(0,0),"/plain.png")
+  local _,_,fground=tiles.board("campaign",{"f"},1,1)
+  ends(fground(0,0),"woods_wang_0000.png")
+
+  S.war_map={active=true,dim=2,rows={"rr","rr"},town="t",units={
+    {id="3",c=1,r=1,size=4}}}
+  local at={}
+  for _,im in ipairs(require("popups.war_campaign").geometry(80).images) do
+    local k=im.x..","..im.y
+    at[k]=at[k] or {}
+    table.insert(at[k],im.path)
+  end
+  local cells=0
+  for k,list in pairs(at) do
+    cells=cells+1
+    ends(list[1],"/plain.png")
+    assert(#list==2, "rock cell "..k.." needs ground plus one image, got "..#list)
+  end
+  assert(cells==4, "expected 4 covered cells, got "..cells)
+end
+
 print("Viking tiles: masks, assets, GUI gating, clipping, cache, battle orientation, tabs PASS")

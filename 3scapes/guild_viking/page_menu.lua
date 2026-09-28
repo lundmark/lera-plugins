@@ -181,6 +181,15 @@ local PAGE_MENUS = {
     { key = "show_war_council",   label = "Show War Council" },
     { key = "show_war_campaigns", label = "Show Campaigns" },
     { key = "show_war_houses",    label = "Show Great Houses" },
+    -- Auto-War belongs on this page for the same reason Auto-Herd sits on
+    -- livestock: the automation follows its content. It was the one
+    -- automation of the five with no menu presence at all, so the engine in
+    -- autowar.lua could not be switched on from the client -- LEGACY's own
+    -- awar menu was a MUSHclient miniwindow and never got ported.
+    { key = "auto_battle",        label = "Auto-War (campaign + battle)" },
+    { action = "awar_config",     label = "Auto-War settings..." },
+    { action = "war_saga",        label = "Recent war/battle log (15)" },
+    { action = "war_saga_full",   label = "Full war/battle log..." },
   },
   -- LEGACY [14]
   trade = {
@@ -243,6 +252,28 @@ local function dispatch_action(action)
     open_auto("autovoyage")
   elseif action == "aherd_config" then
     open_auto("autoherd")
+  elseif action == "awar_config" then
+    open_auto("autowar")
+  elseif action == "war_saga" then
+    -- The last 15 beats, straight to the output -- a glance, not a session
+    -- in a popup. saga.h keeps 40, and "Full war/battle log..." below opens
+    -- the scrolling view of all of them.
+    local sg = require("popups.war_saga")
+    local n = 0
+    for _, cat in ipairs({ "war", "battle" }) do
+      local rows = sg.entries(cat, 15)
+      if #rows > 0 then
+        ColourNote("orange", "", "[Viking] " .. (cat == "war" and "War" or "Battle")
+          .. " saga, last " .. #rows .. ":")
+        for _, r in ipairs(rows) do
+          ColourNote("darkorange", "", "  " .. (r.text or ""))
+        end
+        n = n + #rows
+      end
+    end
+    if n == 0 then ColourNote("orange", "", "[Viking] No deeds recorded yet.") end
+  elseif action == "war_saga_full" then
+    require("popups").toggle("war_saga")
   elseif action == "travel" then
     require("popups.map").open_poi_menu()
   end
