@@ -49,11 +49,8 @@ register_handlers(city)
 local livestock = require("handlers.livestock")
 register_handlers(livestock)
 
--- Guild.State's vitals block. Registered like any other handler module, but
--- note the ordering constraint it does NOT have: the hp-bar triggers below are
--- registered later and stand down at runtime via S.vitals_gmcp, not by being
--- skipped here -- they are also what gags the prompt lines out of the main
--- buffer, so they must be registered either way.
+-- Guild.State's vitals block -- the only source of the status values (the
+-- hp-bar screen-scrape triggers are gone; 'autohp' hides the lines MUD-wide).
 local vitals = require("handlers.vitals")
 register_handlers(vitals)
 
@@ -69,10 +66,9 @@ local stats_page = require("pages.stats")
 -- file's header comment for the renderer-module contract.
 local popups = require("popups")
 
--- Task 8: combat composite + hp-bar triggers. The FFF MIP composite this used
--- to read is gone; Char.Combat carries the attacker block now (subscribed in
--- on_load), and the hp-bar text triggers stay registered either way because
--- they are also what gags the prompt lines out of the main buffer.
+-- Task 8: combat. The FFF MIP composite and the hp-bar text triggers are gone;
+-- Char.Combat carries the attacker block (subscribed in on_load) and
+-- Guild.State the rest.
 local combat = require("combat")
 
 -- Task 9: push notifications + the per-second countdown timer. `pushn` is
@@ -128,7 +124,6 @@ function M.state()
 end
 
 local gmcp_id, combat_gmcp_id, countdown_id
-local combat_trigger_ids = {}
 local notify_trigger_ids = {}
 local vik_command_id, resetvikxp_id, kill_listener_id
 
@@ -142,46 +137,6 @@ local function do_resetxp()
   S.xp_session_start = nil
   buffer.color_print(nil, "DAA520", "Viking XP session counter reset.")
   ui.dirty()
-end
-
--- Hp-bar gagging (stage-1 ruling, landed here per Task 3): the 8 combat/
--- hp-bar triggers (combat.triggers) go into the main output buffer raw
--- unless gagged -- LEGACY never printed them there either (they only ever
--- fed its detached window), and now that the Stats page (pages/stats.lua)
--- shows the same data in the pane, gagging keeps lera's main output as quiet
--- as LEGACY's was. `page_opts.get("gag_status_lines")` is read fresh each
--- time this registers, so a later re-registration (below) picks up a
--- changed setting without a reconnect/reload.
-local function combat_trigger_opts()
-  if page_opts.get("gag_status_lines") then
-    return { omit_from_output = true }
-  end
-  return nil
-end
-
-local function register_combat_triggers()
-  local opts = combat_trigger_opts()
-  for _, t in ipairs(combat.triggers) do
-    combat_trigger_ids[#combat_trigger_ids + 1] = trigger.add(t.pattern, t.fn, opts)
-  end
-end
-
-local function unregister_combat_triggers()
-  for _, tid in ipairs(combat_trigger_ids) do
-    trigger.remove(tid)
-  end
-  combat_trigger_ids = {}
-end
-
--- `/vik set gag_status_lines on|off` needs the new setting to take effect
--- immediately rather than only on the next reconnect: simplest fix is to
--- tear the 8 triggers down and re-add them reading the option fresh. Called
--- once from on_load (via register_combat_triggers directly, since there's
--- nothing to tear down yet) and again from set_opt below whenever that one
--- option changes.
-local function reregister_combat_triggers()
-  unregister_combat_triggers()
-  register_combat_triggers()
 end
 
 -- "ready" convention: same as pages/stats.lua's own fmt_time (secs <= 0 ->
@@ -395,9 +350,6 @@ local function set_opt(rest)
     return
   end
   page_opts.set(opt, new_val)
-  if opt == "gag_status_lines" then
-    reregister_combat_triggers()
-  end
   buffer.color_print(nil, "DAA520", "Viking: " .. opt .. " = " .. (new_val and "on" or "off"))
 end
 
@@ -512,18 +464,8 @@ function M.on_load()
   -- here.
   gmcp_id = gmcp.on("Guild", function(pkg, data) protocol.on_gmcp(pkg, data) end)
 
-  -- Fix 1: persist.load() must run BEFORE the initial combat-trigger
-  -- registration, not after. register_combat_triggers() reads
-  -- page_opts.get("gag_status_lines") fresh at call time (see its comment
-  -- above), so a persisted gag_status_lines=false has to already be applied
-  -- by the time this first registration happens -- otherwise every session
-  -- silently re-gags the 8 hp-bar triggers regardless of what the user last
-  -- saved, and only a subsequent /vik set flip would notice. persist.load
-  -- depends only on market/protocol/page_opts/window, all required above
-  -- this point, so moving it earlier has no ordering hazard of its own.
   persist.load()
 
-  register_combat_triggers()
   for _, t in ipairs(notify.triggers) do
     notify_trigger_ids[#notify_trigger_ids + 1] = trigger.add(t.pattern, t.fn)
   end
@@ -622,7 +564,6 @@ function M.on_unload()
   gmcp.remove(gmcp_id)
   gmcp.remove(combat_gmcp_id)
   timer.cancel(countdown_id)
-  unregister_combat_triggers()
   for _, tid in ipairs(notify_trigger_ids) do
     trigger.remove(tid)
   end

@@ -215,8 +215,7 @@ local MAP = {
   vfind_offers = "VFIND", vfind_auctions = "VFIND",
 
   -- Guild.State. The vitals block routes to the one VITALS writer declared
-  -- above; combat.lua's output-line triggers are the fallback for it now,
-  -- latched off once a frame arrives, rather than the sole source they were.
+  -- above; it is the only source now (the output-line triggers are gone).
   -- The attacker block stays with Char.Combat -- a purpose-built package that
   -- carries the enemy hp percent Guild.State's target group does not.
   hp = "VITALS", sp = "VITALS", points = "VITALS", chain = "VITALS",

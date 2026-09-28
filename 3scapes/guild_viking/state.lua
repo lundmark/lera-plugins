@@ -50,12 +50,9 @@ local state = {
   -- triggers scrape, or Guild.State's fx.stfx, which the mudlib pre-renders in
   -- the same format.
   stfx = {},
-  -- True once a Guild.State frame has written the vitals block. While set,
-  -- combat.lua's eight hp-bar triggers stop writing state (they stay
-  -- REGISTERED -- they are also what gags the prompt lines from the main
-  -- buffer). Per-connection, like the MIP per-key latch: cleared by
-  -- reset_connection so a reconnect that never negotiates GMCP falls back to
-  -- the triggers instead of freezing on the last connection's numbers.
+  -- True once a Guild.State frame has written the vitals block this
+  -- connection; cleared by reset_connection. (It used to stand the hp-bar
+  -- screen-scrape triggers down; those are gone -- GMCP is the only source.)
   vitals_gmcp = false,
   -- City / trade / farm / blot (from mip.viking_extra / send_mip_city)
   carts      = {},   -- { mode, good, village, return_in, amount, halfway_in, quality_pct, cart_id, tier, durability, cap, refit }
