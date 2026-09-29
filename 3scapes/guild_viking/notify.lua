@@ -39,6 +39,7 @@ local autoraid = optional_require("autoraid")
 local autovoyage = optional_require("autovoyage")
 local autoherd = optional_require("autoherd")
 local autowar = optional_require("autowar")
+local autoroster = optional_require("autoroster")
 
 local M = {}
 
@@ -379,6 +380,7 @@ function M.countdown_tick()
   if autovoyage then autovoyage.tick() end
   if autoherd then autoherd.tick() end
   if autowar then autowar.tick() end
+  if autoroster then autoroster.tick() end
 end
 
 return M

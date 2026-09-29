@@ -361,14 +361,27 @@ end
 -- '!'-separated sections. The server sends the three lists only when the hall
 -- exists, so a frame with no hall carries none of them.
 --
--- The offer and auction records carry more than MIP did (stat, trait, age,
--- post_id, upkeep / stat, skill, trait, age, part). Those are ignored here:
--- nothing renders them, and inventing state for them would be state with no
--- reader.
+-- The offer and auction records carry more than MIP did. The fields the
+-- private auto-roster reads (autoroster.lua, in 3s-lera) are kept: an offer's
+-- stat, trait, age, post_id, upkeep and full stat line (`stats`, the staff
+-- roster's fixed order), and the hall's max_finds (posting slots).
+-- An offer's `stats` string -> { combat = n, ... }, or nil when the server
+-- did not send one (older servers), so a reader can tell "unknown" from 0.
+local function offer_stats(str)
+  if type(str) ~= "string" or str == "" then return nil end
+  local out, si = {}, 0
+  for v in str:gmatch("[^,]+") do
+    si = si + 1
+    if STAFF_STAT_ORDER[si] then out[STAFF_STAT_ORDER[si]] = tonumber(v) or 0 end
+  end
+  return out
+end
+
 local function write_vfind(parts)
   if type(parts) ~= "table" then return end
   if type(parts.vfind_hall) == "table" then
     S.vfind.tier = tonumber(parts.vfind_hall.tier) or 0
+    S.vfind.max_postings = tonumber(parts.vfind_hall.max_finds) or S.vfind.tier
   end
   if type(parts.vfind_posts) == "table" then
     local posts = {}
@@ -397,6 +410,12 @@ local function write_vfind(parts)
           haggles    = tonumber(r.haggles) or 0,
           -- `secs` -> expires_in.
           expires_in = tonumber(r.secs) or 0,
+          stat       = tostring(r.stat or "?"),
+          trait      = tostring(r.trait or "0"),
+          age        = tostring(r.age or "?"),
+          post_id    = tonumber(r.post_id) or 0,
+          upkeep     = tonumber(r.upkeep) or 0,
+          stats      = offer_stats(r.stats),
         })
       end
     end
