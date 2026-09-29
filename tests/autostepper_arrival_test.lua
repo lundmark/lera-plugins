@@ -23,7 +23,12 @@ local function engine()
   local handlers, timers, triggers = {}, {}, {}
   local next_id = 0
   lera = { time = function() return E.now / 1000 end }
-  mud = { send = function(cmd) E.sent[#E.sent + 1] = cmd end }
+  -- Lera runs every mud.send() through the plugins' on_send hooks before it
+  -- returns; the stepper tells its own sends from anyone else's by that.
+  mud = { send = function(cmd)
+    E.sent[#E.sent + 1] = cmd
+    if E.as and E.as.on_send then E.as.on_send(cmd) end
+  end }
   buffer = { color_print = function(...)
     local parts = {}
     for i = 3, select("#", ...), 3 do parts[#parts + 1] = tostring(select(i, ...)) end
@@ -1410,7 +1415,7 @@ local function fake_store(saved)
     load = function() return s.loads_ok end,
     get = function() if s.loads_ok then return s.saved end end,
     set = function(d) s.saved = d; s.sets = s.sets + 1; return true end,
-    save = function() return true end,
+    save = function() s.saves = (s.saves or 0) + 1; return s.saves_ok ~= false end,
     path = function() return "/profile/.storage" end,
   }
   return s
@@ -1493,6 +1498,63 @@ do
   store = old_store
 end
 
+
+
+-- A move sent by a script -- an alias or trigger calling mud.send("north") --
+-- never passes on_input, and lands while the stepper awaits its own entry
+-- exactly as a typed one does. on_send sees it; the stepper's own sends are
+-- told apart because they are made inside own_send().
+do
+  local e = engine()
+  e.begin({n = 0, s = 0}, {})
+  check("the stepper's own sends through on_send do not stop the run",
+    e.as.is_running() and e.sent[1] == "n" and e.mode.stats().rooms == 1)
+  mud.send("north")
+  check("a direction sent by a script mid-run stops it and drops the map",
+    not e.as.is_running() and e.mode.stats().rooms == 0
+      and count_logs(e, "Moved by a script (\"north\"); stopping") == 1)
+end
+
+do
+  local e = engine()
+  e.begin({n = 0, s = 0}, {})
+  e.info({n = 0, s = 0}); e.contents({}, nil, true)
+  mud.send("say onward")
+  check("a script's other sends do not touch the run",
+    e.as.is_running() and e.mode.stats().rooms == 2)
+end
+
+-- Across a disconnect nobody knows whether the move sent was delivered, so
+-- it is not held: an entry after it is not taken as that move.
+do
+  local e = engine()
+  e.begin({n = 0, s = 0}, {})
+  e.as.on_disconnect()
+  e.info({n = 0, s = 0}); e.contents({}, nil, true)
+  check("an entry after a disconnect is not committed as the move in flight",
+    not e.as.is_running() and e.mode.stats().rooms == 0)
+end
+
+-- A dump that failed to save is not "already dumped": re-exhausting the same
+-- map tries again.
+do
+  local old_store = store
+  local fs = fake_store({})
+  fs.saves_ok = false
+  store = fs.api
+  local e = engine()
+  e.begin({n = 0}, {})
+  e.info({s = 0}); e.contents({}, nil, true)
+  check("dump retry setup: the first save failed",
+    fs.saves == 1 and count_logs(e, "Could not save the explore dump") == 1)
+  fs.saves_ok = true
+  e.command("explore"); e.info({s = 0}); e.contents({})
+  check("re-exhausting the same map retries a dump that failed to save",
+    fs.saves == 2 and count_logs(e, "Map dump saved") == 1)
+  e.command("explore"); e.info({s = 0}); e.contents({})
+  check("once saved, the same map is not dumped again", fs.saves == 2)
+  store = old_store
+end
 
 print(string.format("%d checks, %d failures", checks, failures))
 if failures > 0 then os.exit(1) end

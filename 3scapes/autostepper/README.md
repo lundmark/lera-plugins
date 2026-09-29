@@ -52,12 +52,14 @@ and enters it. Only this automatic restart sends the setup commands.
 Position in the sea is dead reckoned, so a move the stepper did not send drops
 the map, and the next `/step explore` maps afresh from where you stand:
 
-- A direction you type while exploring stops the run ("Moved by hand").
+- A direction you type, or an alias or trigger sends, while exploring stops the
+  run ("Moved by hand" / "Moved by a script").
 - Any other room entry outside a step -- wimpy, a mob moving you, a move while
   paused -- stops a running explore with "Moved outside the stepper". During a
   route run it only drops a retained explore map; the route carries on.
 - Stopping mid-step (`-!`) keeps the move already sent: if it lands within the
   five-second arrival window it is committed, and the paused map stays good.
+  A disconnect does not keep it: whether it was delivered is unknown.
 
 When exploring ends "no unvisited exits remain", the stepper saves a report in
 the profile's `.storage/autostepper.json` under `explore_dumps` (last 5, newest
