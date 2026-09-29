@@ -237,7 +237,10 @@ end
 local function write_staff(parts)
   if type(parts) ~= "table" then return end
 
-  if parts.staff_total ~= nil then S.staff_total = tonumber(parts.staff_total) or 0 end
+  if parts.staff_total ~= nil then
+    S.staff_total = tonumber(parts.staff_total) or 0
+    S.staff_seen = true   -- a real staff frame arrived (the total defaults to 0)
+  end
   if parts.staff_slices ~= nil then S.staff_slices = tonumber(parts.staff_slices) or 0 end
 
   S.staff_parts = S.staff_parts or {}
@@ -258,6 +261,7 @@ local function write_staff(parts)
         table.insert(S.staff_list, {
           name        = tostring(r.name or ""),
           -- `assigned` -> assigned_to, `stat` -> stat_key, `arrive` -> arrive_at.
+          id          = tonumber(r.id) or 0,  -- for `vdrill <id>` (auto-roster)
           assigned_to = tostring(r.assigned or "0"),
           stat_key    = tostring(r.stat or ""),
           stats       = stats,
@@ -367,6 +371,11 @@ end
 -- roster's fixed order), and the hall's max_finds (posting slots).
 -- An offer's `stats` string -> { combat = n, ... }, or nil when the server
 -- did not send one (older servers), so a reader can tell "unknown" from 0.
+-- How long an unstaffed-building need survives without being re-sent. The
+-- server rotates six needs per Roster push (~30s), so a list of up to ~40
+-- buildings is fully re-seen well inside this.
+local RNEEDS_TTL = 600
+
 local function offer_stats(str)
   if type(str) ~= "string" or str == "" then return nil end
   local out, si = {}, 0
@@ -432,10 +441,42 @@ local function write_vfind(parts)
           my_bid    = tonumber(r.my_bid) or 0,
           -- `secs` -> closes_in on this one, not expires_in.
           closes_in = tonumber(r.secs) or 0,
+          -- Read by the private auto-roster's bidding: the specialty stat and
+          -- the recruit's skill in it, trait, age, which of OUR postings put
+          -- us in the auction (`part`), and the full stat line.
+          stat      = tostring(r.stat or "?"),
+          skill     = tonumber(r.skill) or 0,
+          trait     = tostring(r.trait or "0"),
+          age       = tostring(r.age or "?"),
+          part      = tonumber(r.part) or 0,
+          stats     = offer_stats(r.stats),
         })
       end
     end
     S.vfind.auctions = auctions
+  end
+  -- rneeds_c: at most six "target:stat[:trait]" needs per push, rotating
+  -- through the full list. Accumulated by target, each stamped when last
+  -- seen; a need not repeated for RNEEDS_TTL seconds (it was staffed, or the
+  -- building is gone) drops out. An empty string means nothing is unstaffed.
+  if parts.rneeds_c ~= nil then
+    local now = os.time()
+    S.rneeds = S.rneeds or {}
+    local str = tostring(parts.rneeds_c)
+    if str == "" then
+      S.rneeds = {}
+    else
+      for entry in str:gmatch("[^;]+") do
+        local target, stat, trait = entry:match("^([^:]+):([^:]+):?([^:]*)$")
+        if target then
+          S.rneeds[target] = { target = target, stat = stat,
+                               trait = (trait ~= "" and trait) or "0", seen = now }
+        end
+      end
+    end
+    for t, n in pairs(S.rneeds) do
+      if now - (n.seen or 0) > RNEEDS_TTL then S.rneeds[t] = nil end
+    end
   end
 end
 
