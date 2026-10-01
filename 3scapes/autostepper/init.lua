@@ -85,6 +85,20 @@ local function trace(msg)
   log("trace: " .. msg, COLOR_TRACE)
 end
 
+-- Every command the stepper sends goes through here. Lera runs mud.send()
+-- through the plugins' on_send hooks before it returns, so M.on_send() can
+-- tell the stepper's own sends from a script's (an alias or trigger calling
+-- mud.send) by this flag alone.
+local own_sending = false
+
+local function own_send(cmd)
+  own_sending = true
+  local ok, result = pcall(mud.send, cmd)
+  own_sending = false
+  if not ok then error(result, 0) end
+  return result
+end
+
 local sw = nil      -- speedwalk plugin (set in on_load)
 local ri = nil      -- roominfo plugin (set in on_load)
 local explore = require("explore.mode")
@@ -798,7 +812,7 @@ local function do_attack(monster)
   local cmd = config.attack_cmd .. " " .. send_target
   log("Attacking: " .. monster, COLOR_FIGHT)
   notify(on_attack_callbacks, monster, cmd)
-  mud.send(cmd)
+  own_send(cmd)
 end
 
 -- These route commands do not move the player. Other custom commands may
@@ -844,6 +858,9 @@ end
 -- missing file and an unreadable one look the same from here -- is never
 -- followed by a save: writing then would replace a file that merely failed to
 -- parse, ignore list and all. The report goes to lera.log instead.
+--
+-- Returns saved, why-not, kept: kept is true when the report is safely
+-- somewhere -- the store, or lera.log in full -- and false when it is lost.
 local function store_explore_dump(text)
   if not (store and store.load and store.get and store.set and store.save) then
     return false, "no plugin store"
@@ -852,7 +869,7 @@ local function store_explore_dump(text)
     if lera and lera.log then
       for line in (text .. "\n"):gmatch("([^\n]*)\n") do lera.log("[autostepper dump] " .. line) end
       return false, "autostepper.json did not load (missing or unreadable), so it was "
-        .. "left alone; the dump went to lera.log instead"
+        .. "left alone; the dump went to lera.log instead", true
     end
     return false, "autostepper.json did not load (missing or unreadable), so it was left alone"
   end
@@ -863,25 +880,26 @@ local function store_explore_dump(text)
   while #dumps > DUMP_KEEP do table.remove(dumps, 1) end
   data.explore_dumps = dumps
   if not (store.set(data) and store.save()) then return false, "the store did not save" end
-  return true
+  return true, nil, true
 end
 
 -- automatic: taken by an exhausted run, and skipped when the map is the one
 -- already dumped, so retrying a resume of an exhausted map cannot push the
--- report of the real exhaustion out of the last DUMP_KEEP.
+-- report of the real exhaustion out of the last DUMP_KEEP. The map counts as
+-- dumped only once its report is kept: a save that failed is retried the next
+-- time the same map is exhausted.
 local function write_explore_dump(why, automatic)
   -- A diagnostic must never be what breaks a run: building and saving are
   -- both inside the pcall, and any failure is logged and swallowed.
   local ok, saved, err = pcall(function()
     local text, map_text = build_explore_dump(why)
-    if automatic then
-      if map_text == last_auto_dump_map then
-        trace("map unchanged since the last automatic dump; not saving another")
-        return nil
-      end
-      last_auto_dump_map = map_text
+    if automatic and map_text == last_auto_dump_map then
+      trace("map unchanged since the last automatic dump; not saving another")
+      return nil
     end
-    return store_explore_dump(text)
+    local stored, why_not, kept = store_explore_dump(text)
+    if automatic and kept then last_auto_dump_map = map_text end
+    return stored, why_not
   end)
   if ok and saved == nil then return false end
   if ok and saved then
@@ -1013,7 +1031,7 @@ local function do_step(monsters)
     -- Callbacks and test transports can stop or complete a step synchronously.
     if not enabled or step_dispatch ~= dispatch then return false end
     dispatch.sent = dispatch.sent + 1
-    mud.send(cmd)
+    own_send(cmd)
   end
   if not enabled or step_dispatch ~= dispatch then return false end
   if not moves then return do_step(monsters) end
@@ -1516,9 +1534,14 @@ function M.on_unload()
   log("Unloaded", COLOR_RUN)
 end
 
--- A disconnected run cannot confirm any pending move or fight.
+-- A disconnected run cannot confirm any pending move or fight. Nor is a move
+-- sent before the drop held for its entry, as an ordinary stop holds it:
+-- across the connection boundary nobody knows whether it was delivered, so an
+-- entry after it is unasked and drops the map instead of committing that move.
 function M.on_disconnect()
   M.stop()
+  cancel_in_flight()
+  if explore and explore.drop_in_flight then explore.drop_in_flight() end
 end
 
 -- A re-dive invalidates a retained map. Pause/resume keeps the map across a
@@ -1574,18 +1597,21 @@ for _, dir in ipairs({ "n", "s", "e", "w", "ne", "nw", "se", "sw", "u", "d",
   HAND_MOVES[dir] = true
 end
 
-local function check_hand_move(text)
+-- how: "by hand" from on_input, "by a script" from on_send -- a move an alias
+-- or trigger sends with mud.send() never passes on_input, and lands exactly
+-- as a typed one does.
+local function check_hand_move(text, how)
   if type(text) ~= "string" then return end
   if not (explore and explore.holds_rooms and explore.holds_rooms()) then return end
   for part in text:gmatch("[^;]+") do
     local word = part:match("^%s*(.-)%s*$"):lower()
     if HAND_MOVES[word] then
       if enabled and run_mode == "explore" then
-        log("Moved by hand (\"" .. word .. "\"); stopping", COLOR_WARN)
+        log("Moved " .. how .. " (\"" .. word .. "\"); stopping", COLOR_WARN)
         M.stop()
       end
       cancel_in_flight()
-      explore.reset("moved by hand; position unknown")
+      explore.reset("moved " .. how .. "; position unknown")
       return
     end
   end
@@ -1596,12 +1622,13 @@ end
 -- sea) the player or a script just issued.
 function M.on_input(text)
   check_instance_reset(text)
-  check_hand_move(text)
+  check_hand_move(text, "by hand")
   return text
 end
 
 function M.on_send(text)
   check_instance_reset(text)
+  if not own_sending then check_hand_move(text, "by a script") end
   return text
 end
 
@@ -1796,7 +1823,7 @@ restart_chaossea = function()
   local commands = prof.restart({ level = level, difficulty = difficulty })
   local setup_sent = true
   for _, cmd in ipairs(commands) do
-    if mud.send(cmd) == false then setup_sent = false end
+    if own_send(cmd) == false then setup_sent = false end
   end
   log(string.format("Chaos Sea setup sent (level %d, %s)", level, difficulty), COLOR_RUN)
   if setup_sent then
