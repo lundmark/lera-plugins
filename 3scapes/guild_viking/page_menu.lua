@@ -173,6 +173,10 @@ local PAGE_MENUS = {
     { key = "show_army_levy",  label = "Show Levy" },
     { key = "show_army_units", label = "Show Units" },
     { key = "show_army_siege", label = "Show Siege Park" },
+    -- Captains for Auto-War's companies. The rows only do something where
+    -- the private autoroster module exists (open_auto is a no-op otherwise).
+    { key = "auto_roster",     label = "Auto-Roster (hire captains)" },
+    { action = "aroster_config", label = "Auto-Roster settings..." },
   },
   -- LEGACY [13]
   war = {
@@ -254,6 +258,8 @@ local function dispatch_action(action)
     open_auto("autoherd")
   elseif action == "awar_config" then
     open_auto("autowar")
+  elseif action == "aroster_config" then
+    open_auto("autoroster")
   elseif action == "war_saga" then
     -- The last 15 beats, straight to the output -- a glance, not a session
     -- in a popup. saga.h keeps 40, and "Full war/battle log..." below opens
