@@ -255,12 +255,21 @@ local config = {
   explore_policy = nil,      -- "clear" | "dive"; see explore/map.lua
 }
 
--- Full display names only: fold case and whitespace, never patterns/substrings.
+-- Plain substrings of the display name: fold case and whitespace, never patterns.
 local ignored_monsters = {}
 local function normalize_mob_name(name)
   if type(name) ~= "string" or name:find("[%z\1-\8\11\12\14-\31\127]") then return nil end
   local normalized = name:lower():gsub("%s+", " "):match("^%s*(.-)%s*$")
   if normalized ~= "" then return normalized end
+end
+
+local function is_ignored_monster(name)
+  local normalized = normalize_mob_name(name)
+  if not normalized then return false end
+  for entry in pairs(ignored_monsters) do
+    if normalized:find(entry, 1, true) then return true end
+  end
+  return false
 end
 
 local function load_mobignore()
@@ -313,7 +322,7 @@ local function dispatch_mobignore(rest)
     local names = {}
     for n in pairs(ignored_monsters) do names[#names + 1] = n end
     table.sort(names)
-    log("Ignored mobs (exact normalized display names): " .. #names)
+    log("Ignored mobs (substrings of normalized display names): " .. #names)
     for _, n in ipairs(names) do log("  " .. n) end
   elseif action == "clear" and name == "" then
     ignored_monsters = {}
@@ -1063,7 +1072,7 @@ function process_room()
   -- decision, and removing an ignore must not lose a still-present monster.
   local monsters = {}
   for _, monster in ipairs(room_monsters) do
-    if not ignored_monsters[normalize_mob_name(monster) or ""] then
+    if not is_ignored_monster(monster) then
       monsters[#monsters + 1] = monster
     end
   end
@@ -1406,8 +1415,8 @@ local function register_command()
       .. "walks an excluded exit, so the final step out is still the player's own. "
       .. "'mobignore add|remove <name>', "
       .. "'mobignore list' and 'mobignore clear' manage a per-profile saved ignore list. "
-      .. "Names match the entire GMCP display name after lowercasing, trimming and "
-      .. "collapsing whitespace; punctuation and articles are literal. Ignored mobs "
+      .. "An entry ignores any mob whose GMCP display name contains it after lowercasing, "
+      .. "trimming and collapsing whitespace; plain text, not a pattern. Ignored mobs "
       .. "are neither attacked nor counted in route/explore/farm decisions. "
       .. "Changes apply on the next room decision, not by cancelling a current fight. "
       .. "Complete entry contents track each move; no prompt setup is needed. "

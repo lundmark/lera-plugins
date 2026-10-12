@@ -126,15 +126,14 @@ entries. Missing names, unknown operations, extra arguments to list/clear,
 and non-whitespace control characters are rejected without changing the list.
 Duplicates are harmless; listing is sorted.
 
-Names match the **entire GMCP monster display name**, lowercased with Lua's
-`string.lower`, with leading/trailing whitespace removed and runs of Lua `%s`
-whitespace collapsed to one space. This is not Unicode case folding.
-Punctuation, articles, and all other words remain significant. For example,
-`A gentle guide` matches `  a  GENTLE guide ` but not `a gentle guide captain`.
-There are no substring, wildcard, or Lua-pattern matches; `.*` is literal.
-Use the full name reported by roominfo, not just a kill-command keyword.
-The legacy XML's `-mobignore` used Lua-pattern substring matching; this list
-is intentionally safer and is not automatically imported.
+An entry ignores every mob whose **GMCP monster display name contains it**.
+Both sides are lowercased with Lua's `string.lower`, trimmed, and have runs of
+Lua `%s` whitespace collapsed to one space. This is not Unicode case folding.
+Matching is a plain substring search: `warband` ignores
+`A warband in service to Lennart [Legendary] [Grey-bearded] [5]`, and
+`A gentle guide` matches `  a  GENTLE guide captain`. Entries are not
+wildcards or Lua patterns; `.*` is literal. Keep entries specific enough not to
+hide mobs you want to fight (e.g. `guide` would also skip `a guide captain`).
 
 Changes are saved immediately in autostepper's Lera plugin store, isolated by
 Lera profile (not by explorer area). A failed save is reported; the in-memory
