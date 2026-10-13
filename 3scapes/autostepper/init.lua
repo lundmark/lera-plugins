@@ -794,7 +794,7 @@ end
 -- forget_monster() strikes names out of room_monsters, which is seeded from
 -- Room.Contents display names, not from the keyword vocabulary. What actually
 -- goes out on the wire is resolved separately, below.
-local function do_attack(monster)
+local function do_attack(monster, any_mob)
   state = "fighting"
   current_target = monster
 
@@ -807,7 +807,7 @@ local function do_attack(monster)
   --    the one string the mob is guaranteed not to answer to.
   local send_target = match_vocabulary(monster)
   if not send_target then
-    local targets = (not config.targets_only) and vocabulary() or {}
+    local targets = (any_mob or not config.targets_only) and vocabulary() or {}
     if #targets > 0 then
       send_target = targets[1]
       log("No target keyword matched \"" .. monster .. "\"; guessing \""
@@ -981,6 +981,15 @@ local function do_step(monsters)
         end)
         return false
       end
+      if at_completion then
+        -- Claim the cask and leave through the portal. The sea is finished,
+        -- so its map is discarded rather than paused: the portal's entry must
+        -- not be read as an unasked move, and "-." must not resume a dead sea.
+        if explore.discard then explore.discard() end
+        for _, cmd in ipairs(prof.finish or {}) do own_send(cmd) end
+        notify(on_complete_callbacks)
+        return false
+      end
       -- Exhaustion ends the RUN, not just the stepping (6.5). Left active, the
       -- next "-." would re-enter explore mode, instantly re-exhaust the same
       -- map and never reach route mode at all.
@@ -1077,6 +1086,24 @@ function process_room()
     end
   end
   local room = ri.room() or "unknown"
+
+  -- The cask/portal room ends the run, so nothing in it is skipped: every
+  -- non-ignored mob is fought -- targets-only or not, players or not -- and no
+  -- other exit is taken while one stands. The boss shares no word with the
+  -- profile's vocabulary, so targets-only would otherwise step past it and
+  -- leave the cask behind.
+  local completion_room = prof and prof.name == "chaossea" and prof.complete
+    and ri.items and prof.complete({ items = ri.items() })
+  if completion_room and #monsters > 0 then
+    if config.auto_attack then
+      do_attack(monsters[1], true)
+    else
+      log("Cask/portal room still holds " .. monsters[1]
+          .. " and auto_attack is off; stopping", COLOR_WARN)
+      M.stop()
+    end
+    return
+  end
 
   -- Check if player in room
   if #players > 0 and config.step_on_player then
@@ -1175,7 +1202,7 @@ local function show_help()
   log("Stop the active run before starting another. Resume a paused run with -.")
   log("Start in the current Sea with /step explore [chaossea]; farm config sends no setup commands.")
   log("Stop cancels pending restarts but keeps farm settings; farm off disables repeats.")
-  log("Chaos Sea stops at the cask/portal after clearing non-ignored mobs; configured farm then restarts.")
+  log("Chaos Sea fights every non-ignored mob at the cask/portal, then opens the cask and enters the portal; configured farm then restarts.")
   log("Farm restarts wait through the portal lobby for confirmed entry into the new maze.")
   log("Push alerts: /pushn toggle chaossea_cask and /pushn toggle chaossea_farm (default off).")
   log("Cask alerts fire on discovery, before combat; farm alerts fire when setup commands are sent.")
@@ -1398,8 +1425,9 @@ local function register_command()
       .. "difficulty is risky, alarming or deadly. Start in the current Sea with "
       .. "'explore [chaossea]'. Stops cancel pending restarts but keep the configuration; "
       .. "'chaossea farm off' disables repeats without stopping exploration. "
-      .. "Chaos Sea stops at the cask/portal after "
-      .. "clearing non-ignored mobs; farm mode then starts the next instance, waiting "
+      .. "Chaos Sea fights every non-ignored mob at the cask/portal (targets-only "
+      .. "included), then opens the cask and enters the portal; farm mode instead "
+      .. "starts the next instance, waiting "
       .. "through the portal lobby for confirmed entry into the new maze. "
       .. "Push channels 'chaossea_cask' (discovery, before combat) and 'chaossea_farm' "
       .. "(each automatic restart), plus 'explore_exhausted' (no reachable unvisited rooms), "

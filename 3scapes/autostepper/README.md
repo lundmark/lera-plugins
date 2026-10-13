@@ -159,9 +159,13 @@ moving again. It waits three seconds per attempt and retries twice if needed.
 After three unanswered attempts (nine seconds total), it stops with the target
 still tracked. A complete reply, stop, disconnect, or unload cancels the retries.
 
-Chaos Sea runs stop at the cask or portal after clearing its non-ignored mobs,
-even with unexplored rooms remaining. Farm mode starts its next instance from
-there. If the server truncates that room's contents, the run stops with a warning
+Chaos Sea runs stop at the cask or portal, even with unexplored rooms
+remaining. In that room every non-ignored mob is fought, even in targets-only
+mode (the boss shares no word with the area's vocabulary) and even with other
+players present; the stepper never walks away from it while one stands. With
+auto-attack off it stops there instead. Once the room is clear it sends
+`open cask` and `enter portal`; farm mode instead sends its full setup
+sequence, which starts with those two, and starts the next instance. If the server truncates that room's contents, the run stops with a warning
 without declaring completion or restarting, since omitted mobs may still exist.
 
 For example, ignore a guide while exploring:

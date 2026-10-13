@@ -488,13 +488,47 @@ do
   check("a surviving boss beside the cask is fought again", e.sent[3] == "kill mutant" and e.as.is_running() and completed == 0)
   e.deliver("Char.Combat", {attacker = ""})
   e.contents({}, nil, false, {cask, portal})
-  check("clearing the cask room stops before backtracking to other unexplored exits", not e.as.is_running() and not e.mode.active() and #e.sent == 3 and e.pos() == "0,1,0")
+  check("clearing the cask room stops before backtracking to other unexplored exits", not e.as.is_running() and not e.mode.active() and #e.sent == 5)
+  check("a cleared cask room opens the cask and enters the portal", e.sent[4] == "open cask" and e.sent[5] == "enter portal", table.concat(e.sent, ","))
+  check("a finished sea's map is discarded, not paused for a resume", not e.mode.retained())
   check("cask completion notifies once", completed == 1)
   check("cask completion reports the destination instead of exhausted exits", table.concat(e.logs, "\n"):find("Chaos Sea complete: cask/portal reached", 1, true) ~= nil)
   e.contents({}, nil, false, {cask, portal})
   e.advance(10000)
   check("boss refreshes and duplicate contents do not repeat the cask push", #e.pushes == 1)
-  check("duplicate contents and old timers cannot resume a completed cask run", not e.as.is_running() and #e.sent == 3 and completed == 1)
+  check("duplicate contents and old timers cannot resume a completed cask run", not e.as.is_running() and #e.sent == 5 and completed == 1)
+end
+
+-- Targets-only skips mobs outside the vocabulary, and the boss's short shares
+-- no word with it. In the cask room that skip used to send the explorer on to
+-- the next frontier with the boss still standing beside the cask.
+for _, extra in ipairs({false, true}) do
+  local e = engine()
+  e.begin({n = 0, e = 0}, {}, true)
+  e.info({s = 0})
+  e.contents(extra and {boss, "A strange wanderer"} or {boss}, nil, true, {cask, portal})
+  local label = extra and "targets-only cask room with a non-target" or "targets-only cask room"
+  check(label .. " fights the boss instead of stepping on",
+    table.concat(e.sent, ",") == "n,kill mutant" and e.as.get_state() == "fighting", table.concat(e.sent, ","))
+  e.deliver("Char.Combat", {attacker = ""})
+  e.contents(extra and {"A strange wanderer"} or {}, nil, false, {cask, portal})
+  if extra then
+    check(label .. " also clears mobs outside the vocabulary", e.sent[3] == "kill mutant", table.concat(e.sent, ","))
+    e.deliver("Char.Combat", {attacker = ""})
+    e.contents({}, nil, false, {cask, portal})
+  end
+  check(label .. " finishes through the portal once cleared",
+    not e.as.is_running() and table.concat(e.sent, ",", #e.sent - 1) == "open cask,enter portal", table.concat(e.sent, ","))
+end
+
+do
+  local e = engine()
+  e.command("set attack off")
+  e.begin({n = 0, e = 0}, {})
+  e.info({s = 0})
+  e.contents({boss}, nil, true, {cask})
+  check("a cask room it may not fight in stops instead of walking away",
+    not e.as.is_running() and table.concat(e.sent, ",") == "n", table.concat(e.sent, ","))
 end
 
 for _, item in ipairs({cask, portal}) do
@@ -503,7 +537,7 @@ for _, item in ipairs({cask, portal}) do
   e.info({s = 0, n = 0})
   e.contents({}, nil, true, {item})
   check(item .. " only sends a discovery push for an actual cask", #e.pushes == (item == cask and 1 or 0))
-  check(item .. " stops an empty destination room immediately", not e.as.is_running() and #e.sent == 1 and e.pos() == "0,1,0")
+  check(item .. " stops an empty destination room immediately", not e.as.is_running() and table.concat(e.sent, ",") == "n,open cask,enter portal", table.concat(e.sent, ","))
 end
 
 do
@@ -512,7 +546,7 @@ do
   assert(e.as.explore_start("chaossea"))
   assert(e.as.start(false))
   e.contents({}, nil, false, {cask})
-  check("starting at the cleared cask completes without moving", not e.as.is_running() and #e.sent == 0)
+  check("starting at the cleared cask completes without moving", not e.as.is_running() and table.concat(e.sent, ",") == "open cask,enter portal", table.concat(e.sent, ","))
 end
 
 for _, cancel in ipairs({false, true}) do
@@ -656,12 +690,12 @@ for _, farm in ipairs({false, true}) do
   check("cask completion still fights a non-ignored boss", e.sent[sent + 1] == "kill mutant" and e.as.is_running())
   e.deliver("Char.Combat", {attacker = ""})
   e.contents({"A gentle guide"}, nil, false, {cask})
-  check((farm and "farm" or "ordinary") .. " cask completion excludes ignored mobs", not e.as.is_running() and #e.sent == sent + 1)
+  check((farm and "farm" or "ordinary") .. " cask completion excludes ignored mobs", not e.as.is_running() and #e.sent == sent + (farm and 1 or 3))
   e.advance(1000)
   if farm then
     check("farm restarts when only ignored mobs remain beside the cask", #e.sent == sent + 6 and e.sent[sent + 2] == "open cask")
   else
-    check("ordinary cask run stays stopped beside an ignored mob", #e.sent == sent + 1 and not e.as.is_running())
+    check("ordinary cask run stays stopped beside an ignored mob", #e.sent == sent + 3 and not e.as.is_running())
   end
 end
 
@@ -739,7 +773,7 @@ do
   e.info({n = 0, e = 0}); e.contents({}, nil, true)
   e.info({w = 0}); e.contents({}, nil, true, {cask})
   check("a cask at the speedwalk destination stops before another frontier",
-    not e.as.is_running() and e.pos() == "1,0,0" and #e.sent == before + 3)
+    not e.as.is_running() and #e.sent == before + 5 and e.sent[before + 4] == "open cask")
 end
 
 do
@@ -1187,7 +1221,8 @@ do
     e.as.is_running() and e.as.get_state() == "fighting" and #e.sent == sent)
   e.deliver("Char.Combat", {attacker = ""}); e.contents({}, nil, false, {cask})
   e.advance(1000)
-  check("disabled farm stops at the cask without restarting", not e.as.is_running() and #e.sent == sent)
+  check("disabled farm stops at the cask without restarting", not e.as.is_running()
+    and table.concat(e.sent, ",", sent + 1) == "open cask,enter portal", table.concat(e.sent, ","))
 end
 
 for _, cancel in ipairs({"chaossea farm off", "stop"}) do
