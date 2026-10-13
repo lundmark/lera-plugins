@@ -963,8 +963,16 @@ local function do_step(monsters)
         log("Chaos Sea complete: cask/portal reached", COLOR_RUN)
       elseif reason == "at origin" then
         log("Explored: back at the origin", COLOR_RUN)
+      elseif reason == "in flight" then
+        log("Asked for a step while a move is still unconfirmed; stopping "
+            .. "(the map is NOT exhausted -- please report this)", COLOR_WARN)
+      elseif reason == "inactive" then
+        log("Explore map unavailable; stopping (not exhausted)", COLOR_WARN)
       else
         log("Explored: no unvisited exits remain", COLOR_RUN)
+      end
+      if not at_completion and reason == "in flight" then
+        write_explore_dump("explore stopped: " .. reason)
       end
       enabled = false
       state = "idle"

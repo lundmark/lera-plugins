@@ -191,6 +191,8 @@ check("host becomes A", by_id.A ~= nil and by_id.A.c == 0 and by_id.A.r == 1
       and by_id.A.size == 60 and by_id.A.f == "E")
 check("objective becomes *", by_id["*"] ~= nil and by_id["*"].c == 3
       and by_id["*"].r == 3)
+check("an ally keeps its own id", by_id.F ~= nil and by_id.F.c == 2
+      and by_id.F.r == 1 and by_id.F.size == 10 and by_id.F.kind == "ally")
 check("a foe keeps its numeric id", by_id["3"] ~= nil and by_id["3"].size == 40
       and by_id["3"].f == "S")
 -- Queue labels are 1-based squares; the client converts them to 0-based cells.

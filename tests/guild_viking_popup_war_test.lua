@@ -13,9 +13,14 @@ local function check(name, ok, detail)
   end
 end
 
+-- Strips ANSI before matching, which is what the name always implied. It
+-- used to search the raw line, so a needle only matched while the whole
+-- phrase happened to be one colour -- colouring the goods and figures
+-- individually broke every such match without changing a character of the
+-- text the player reads.
 local function find_plain(lines, needle)
   for _, l in ipairs(lines) do
-    if l:find(needle, 1, true) then return true end
+    if tostring(l):gsub("\27%[[%d;]*m", ""):find(needle, 1, true) then return true end
   end
   return false
 end
