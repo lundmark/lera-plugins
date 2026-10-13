@@ -112,6 +112,7 @@ local autoherd = optional_require("autoherd")
 -- notify.lua owns its paced tick and this module only provides configuration
 -- and status here.
 local autowar = optional_require("autowar")
+local autoroster = optional_require("autoroster")
 
 local S = state_mod.S
 
@@ -217,6 +218,13 @@ local function print_automation_status()
     page_opts.get("auto_battle") and "ON" or "off", autowar.status().phase,
     aw.status ~= "" and aw.status or "none",
     fmt_next((aw.last or 0) + (autowar.AW_INTERVAL or 4))))
+  end
+
+  if autoroster then
+  local st = autoroster.status()
+  buffer.color_print(nil, "DAA520", string.format(
+    "  Auto-Roster: %s | captains %d free / want %d | %s",
+    st.enabled and "ON" or "off", st.free, st.want, tostring(st.status)))
   end
 end
 
@@ -410,6 +418,8 @@ function M.vik_command(args)
     autoherd.herd_command(rest)
   elseif (sub_lower == "awar" or sub_lower == "autowar") and autowar then
     autowar.config(rest)
+  elseif sub_lower == "roster" and autoroster then
+    autoroster.config(rest)
   elseif sub_lower == "voyage" and autovoyage and rest:sub(1, 4):lower() == "auto"
       and (#rest == 4 or rest:sub(5, 5):match("%s")) then
     -- "/vik voyage auto [<sub>]" -- strip the "auto" token (case-
@@ -445,7 +455,7 @@ function M.vik_command(args)
       "Usage: /vik [status | trace | save | source | resetxp | "
       .. "map | sea | voyage | cityplan | war | saga | page <page> | pop <page> | "
       .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | raid [<sub>] | "
-      .. "voyage auto [<sub>] | herd [<sub>] | awar [<sub>]]")
+      .. "voyage auto [<sub>] | herd [<sub>] | awar [<sub>] | roster [<sub>]]")
   end
 end
 
@@ -491,7 +501,7 @@ function M.on_load()
     usage = "/vik [status | trace | save | source | resetxp | "
       .. "map | sea | voyage | cityplan | war | page <page> | pop <page> | "
       .. "<page> | opts | set <opt> on|off|toggle | trader [<sub>] | raid [<sub>] | "
-      .. "voyage auto [<sub>] | herd [<sub>] | awar [<sub>]]",
+      .. "voyage auto [<sub>] | herd [<sub>] | awar [<sub>] | roster [<sub>]]",
     summary = "Viking guild data, pane, and controls",
     description = "Ingestion status and counters, plus each automation's "
       .. "on/off state and last-action/next-eligible summary (status), key tracing "

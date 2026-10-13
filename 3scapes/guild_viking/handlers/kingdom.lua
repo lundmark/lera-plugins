@@ -134,7 +134,10 @@ end
 local function write_hird(parts)
   if type(parts) ~= "table" then return end
 
-  if parts.hird_total ~= nil then S.hird_total = tonumber(parts.hird_total) or 0 end
+  if parts.hird_total ~= nil then
+    S.hird_total = tonumber(parts.hird_total) or 0
+    S.hird_seen = true    -- a real hird frame arrived (the total defaults to 0)
+  end
   if parts.hird_slices ~= nil then S.hird_slices = tonumber(parts.hird_slices) or 0 end
 
   S.hird_parts = S.hird_parts or {}

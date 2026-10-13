@@ -276,6 +276,10 @@ function M.reset_connection()
   -- Guild data itself is deliberately preserved across a reconnect, but the
   -- claim that it has ARRIVED this connection is not -- see the field comment.
   state.livestock_seen = false
+  -- Same for the rosters: the private auto-roster acts only once both have
+  -- arrived this connection (handlers/trade.lua, kingdom.lua set these).
+  state.staff_seen = false
+  state.hird_seen = false
   state.herd_connection_epoch = (state.herd_connection_epoch or 0) + 1
   state.herd_observed = {}
   -- The map planes themselves are left standing (a reconnect redraws them on
