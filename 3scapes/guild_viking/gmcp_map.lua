@@ -32,7 +32,7 @@ M.COMPOSITE = {
   COURIER   = { "courier", "courier_tier" },
   SPY       = { "spy", "spy_scouts" },
   VARANG    = { "varang_out", "varang_in" },
-  VFIND     = { "vfind_hall", "vfind_posts", "vfind_offers", "vfind_auctions" },
+  VFIND     = { "vfind_hall", "vfind_posts", "vfind_offers", "vfind_auctions", "rneeds_c" },
   -- Guild.Trade. Three of these are the same depth-limit flattening raidlog
   -- uses: a cart's legs, a queued job's legs and a refinery's grade breakdown
   -- are containers, which a record used as a container element may not hold,
@@ -227,6 +227,10 @@ local MAP = {
   varang_out = "VARANG", varang_in = "VARANG",
   vfind_hall = "VFIND", vfind_posts = "VFIND",
   vfind_offers = "VFIND", vfind_auctions = "VFIND",
+  -- rneeds_c: the budget-safe compact form of rneeds (a rotating window of
+  -- unstaffed buildings, "target:stat[:trait];..."), read by the private
+  -- auto-roster alongside the vfind lists it acts on.
+  rneeds_c = "VFIND",
 
   -- Guild.State. The vitals block routes to the one VITALS writer declared
   -- above; it is the only source now (the output-line triggers are gone).

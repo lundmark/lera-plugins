@@ -45,6 +45,7 @@ local function ar_module() return optional_require("autoraid") end
 local function av_module() return optional_require("autovoyage") end
 local function ah_module() return optional_require("autoherd") end
 local function aw_module() return optional_require("autowar") end
+local function ar_module() return optional_require("autoroster") end
 
 -- Snapshot one automation module's slice, or nil when it is not installed.
 local function auto_snapshot(mod_fn, key)
@@ -75,6 +76,7 @@ function M.save()
     autovoyage = auto_snapshot(av_module, "autovoyage") or prev.autovoyage,
     autoherd = auto_snapshot(ah_module, "autoherd") or prev.autoherd,
     autowar = auto_snapshot(aw_module, "autowar") or prev.autowar,
+    autoroster = auto_snapshot(ar_module, "autoroster") or prev.autoroster,
   }) == false then
     error("store.set failed: persistence snapshot was not accepted")
   end
@@ -114,6 +116,9 @@ function M.load()
   end
   if data.autoherd then
     if ah_module() then ah_module().restore({ autoherd = data.autoherd }) end
+  end
+  if data.autoroster then
+    if ar_module() then ar_module().restore({ autoroster = data.autoroster }) end
   end
   if data.autowar then
     if aw_module() then aw_module().restore({ autowar = data.autowar }) end
