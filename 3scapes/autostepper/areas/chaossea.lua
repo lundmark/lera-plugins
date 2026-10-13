@@ -92,6 +92,10 @@ function M.cask_found(ctx)
   return has_item(ctx, { "cask of chaotic energy" })
 end
 
+-- What a cleared completion room sends to leave the finished sea: claim the
+-- cask, then step through the portal it guards.
+M.finish = { "open cask", "enter portal" }
+
 local DIFFICULTIES = { risky = true, alarming = true, deadly = true }
 
 -- Legacy's cycle, plus the difficulty word it never sent. 'setsea <level>
@@ -103,13 +107,12 @@ function M.restart(opts)
   local level = tonumber(opts.level) or 0
   local difficulty = opts.difficulty
   if not (difficulty and DIFFICULTIES[difficulty]) then difficulty = "risky" end
-  return {
-    "open cask",
-    "enter portal",
-    "unsetsea",
-    "setsea " .. math.floor(level) .. " " .. difficulty,
-    "enter sea",
-  }
+  local commands = {}
+  for _, cmd in ipairs(M.finish) do commands[#commands + 1] = cmd end
+  commands[#commands + 1] = "unsetsea"
+  commands[#commands + 1] = "setsea " .. math.floor(level) .. " " .. difficulty
+  commands[#commands + 1] = "enter sea"
+  return commands
 end
 
 -- Commands that end this instance and start a different one. Watched for on

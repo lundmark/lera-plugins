@@ -66,6 +66,27 @@ ui = {
 local sent = {}
 mud = { send = function(t) sent[#sent + 1] = t end }
 
+-- A fake clock: recursive uall/lall pace their commands through timer.after(),
+-- so a walk only reaches the wire when drain() runs what is due.
+local timers, next_timer = {}, 0
+timer = {
+  after = function(_, fn) next_timer = next_timer + 1
+                          timers[next_timer] = fn; return next_timer end,
+  cancel = function(id) timers[id] = nil end,
+}
+local function drain(limit)
+  for _ = 1, limit or 50 do
+    if next(timers) == nil then return end
+    local ids = {}
+    for id in pairs(timers) do ids[#ids + 1] = id end
+    table.sort(ids)
+    for _, id in ipairs(ids) do
+      local fn = timers[id]; timers[id] = nil
+      if fn then fn() end
+    end
+  end
+end
+
 local protocol = require("protocol")
 local pane = require("pane")
 
@@ -326,24 +347,27 @@ pick_overlay("yes", 30, 10)
 check("buttons: answering Yes runs it against the cwd",
       #sent == 1 and sent[1] == "uall /players/simon", tostring(sent[1]))
 
--- The recursive path from the toolbar: cwd first, then everything under it.
+-- The recursive path from the toolbar: cwd first, then everything under it
+-- that holds code. Cached listings let the walk descend without a round trip;
+-- only archive/ and areas/ contain .c files.
+for name, files in pairs({ zebra = { "readme" }, archive = { "old.c" },
+                           mmm = {}, areas = { "room.c", "room.h" } }) do
+  protocol.store("/players/simon/" .. name,
+                 { dirs = {}, files = files, complete = true, truncated = false })
+end
 sent = {}
 pane.on_pointer({ kind = "down", button = "left", x = 12, y = 1,
                   inside = true, width = 30, height = 10 })
 pick_overlay("uall -r", 30, 10)
 pick_overlay("yes", 30, 10)
+check("buttons: a recursive run is paced, not sent in one burst", #sent == 0,
+      table.concat(sent, " | "))
+drain()
 check("buttons: the recursive choice walks from the cwd",
       #sent >= 1 and sent[1] == "uall /players/simon", tostring(sent[1]))
--- The cwd holds four folders, so a recursive run is the cwd plus those four.
--- Their own listings are not cached, so the walk stops there rather than
--- inventing depth it has not been told about.
-check("buttons: and reaches every folder listed in it",
-      #sent == 5 and sent[1] == "uall /players/simon", table.concat(sent, " | "))
-do
-  local joined = table.concat(sent, " | ")
-  check("buttons: including the one clicked on elsewhere in these cases",
-        joined:find("uall /players/simon/archive", 1, true) ~= nil, joined)
-end
+check("buttons: and reaches only the folders under it that hold code",
+      #sent == 3 and sent[2] == "uall /players/simon/archive"
+        and sent[3] == "uall /players/simon/areas", table.concat(sent, " | "))
 
 -- A walk still waiting on listings must not block the next one.
 actions_reset()
@@ -541,6 +565,7 @@ pick_overlay("lall -r", 30, 10)
 check("dir: choosing one still asks before sending", #sent == 0, tostring(sent[1]))
 check("dir: and the question replaces it in the same place", overlay.active())
 pick_overlay("yes", 30, 10)
+drain()
 check("dir: confirming a recursive run walks from that folder",
       #sent >= 1 and sent[1] == "lall /players/simon/archive", tostring(sent[1]))
 

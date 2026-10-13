@@ -126,15 +126,14 @@ entries. Missing names, unknown operations, extra arguments to list/clear,
 and non-whitespace control characters are rejected without changing the list.
 Duplicates are harmless; listing is sorted.
 
-Names match the **entire GMCP monster display name**, lowercased with Lua's
-`string.lower`, with leading/trailing whitespace removed and runs of Lua `%s`
-whitespace collapsed to one space. This is not Unicode case folding.
-Punctuation, articles, and all other words remain significant. For example,
-`A gentle guide` matches `  a  GENTLE guide ` but not `a gentle guide captain`.
-There are no substring, wildcard, or Lua-pattern matches; `.*` is literal.
-Use the full name reported by roominfo, not just a kill-command keyword.
-The legacy XML's `-mobignore` used Lua-pattern substring matching; this list
-is intentionally safer and is not automatically imported.
+An entry ignores every mob whose **GMCP monster display name contains it**.
+Both sides are lowercased with Lua's `string.lower`, trimmed, and have runs of
+Lua `%s` whitespace collapsed to one space. This is not Unicode case folding.
+Matching is a plain substring search: `warband` ignores
+`A warband in service to Lennart [Legendary] [Grey-bearded] [5]`, and
+`A gentle guide` matches `  a  GENTLE guide captain`. Entries are not
+wildcards or Lua patterns; `.*` is literal. Keep entries specific enough not to
+hide mobs you want to fight (e.g. `guide` would also skip `a guide captain`).
 
 Changes are saved immediately in autostepper's Lera plugin store, isolated by
 Lera profile (not by explorer area). A failed save is reported; the in-memory
@@ -160,9 +159,13 @@ moving again. It waits three seconds per attempt and retries twice if needed.
 After three unanswered attempts (nine seconds total), it stops with the target
 still tracked. A complete reply, stop, disconnect, or unload cancels the retries.
 
-Chaos Sea runs stop at the cask or portal after clearing its non-ignored mobs,
-even with unexplored rooms remaining. Farm mode starts its next instance from
-there. If the server truncates that room's contents, the run stops with a warning
+Chaos Sea runs stop at the cask or portal, even with unexplored rooms
+remaining. In that room every non-ignored mob is fought, even in targets-only
+mode (the boss shares no word with the area's vocabulary) and even with other
+players present; the stepper never walks away from it while one stands. With
+auto-attack off it stops there instead. Once the room is clear it sends
+`open cask` and `enter portal`; farm mode instead sends its full setup
+sequence, which starts with those two, and starts the next instance. If the server truncates that room's contents, the run stops with a warning
 without declaring completion or restarting, since omitted mobs may still exist.
 
 For example, ignore a guide while exploring:
