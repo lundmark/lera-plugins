@@ -410,6 +410,10 @@ function M.lines(width)
       grudges_lines(add, width)
     end
 
+    if S.trade_queue_complete == false then
+      add(pagelib.trunc(C.yellow .. "Trade queue: refreshing; previous snapshot shown"
+          .. pagelib.RESET, width))
+    end
     if S.trade_queue and #S.trade_queue > 0 then
       trade_queue_lines(add, width)
     end

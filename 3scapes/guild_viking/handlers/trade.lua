@@ -618,28 +618,10 @@ local function write_carts(parts)
   end
 end
 
--- queue + queue_legs. A queued job's displayed mode/good/amount/village are
--- its FIRST leg's -- MIP had no other way to express it and the pages read it
--- that way -- so a job whose legs did not arrive has nothing to show and is
--- skipped, exactly as the MIP handler skipped a job that parsed no legs.
+-- Legacy queue headers/details remain readable, but an incomplete refresh
+-- preserves the last complete display. New servers stream Guild.TradeQueue.
 local function write_queue(parts)
-  if type(parts) ~= "table" then return end
-  if type(parts.queue) ~= "table" then return end
-  local legs_by_job = group_by(parts.queue_legs, "job")
-  S.trade_queue = {}
-  for _, r in ipairs(parts.queue) do
-    if type(r) == "table" then
-      local legs = leg_records(legs_by_job[r.job])
-      if #legs > 0 then
-        table.insert(S.trade_queue, {
-          mode = legs[1].mode, good = legs[1].good,
-          amount = legs[1].amount, village = legs[1].village,
-          escort = tonumber(r.escort) or 0,
-          legs = legs,
-        })
-      end
-    end
-  end
+  require("trade_queue").legacy(parts)
 end
 
 -- cidle. `slot` is the cart id; MIP called the same number `cid`. `horses` is
@@ -941,6 +923,7 @@ M._gmcp = {
   VFIND    = write_vfind,
   CARTS    = write_carts,
   TQUEUE   = write_queue,
+  TQUEUE_STREAM = function(parts) require("trade_queue").stream(parts) end,
   CIDLE    = write_cidle,
   CUPG     = write_cupg,
   ROUTES   = write_routes,

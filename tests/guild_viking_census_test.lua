@@ -176,7 +176,7 @@ local EXPECTED_GMCP_WRITERS = {
   "STAFF", "BONDS", "TRAIN", "COURIER", "SPY", "VFIND", "HIRD", "THRALLS",
   "THRALL_FOLLOWER", "VARANG",
   -- Guild.Trade (10) and Guild.TradeGoods (1, split per lineage server-side)
-  "CARTS", "TQUEUE", "CIDLE", "CUPG", "ROUTES", "BLOCKS", "REFINERY", "MARKET",
+  "CARTS", "TQUEUE", "TQUEUE_STREAM", "CIDLE", "CUPG", "ROUTES", "BLOCKS", "REFINERY", "MARKET",
   "INCOMING", "WSTOCK", "TGOODS",
   -- Guild.City (21, including the city plan -- one composite where MIP spread
   -- it over CPLAN/CPT/CPB/CPU/CPP with a commit protocol)
