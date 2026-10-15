@@ -261,6 +261,9 @@ local state = {
 local M = { S = state }
 
 function M.reset_connection()
+  state.trade_queue_count = nil -- server evidence belongs to this connection
+  state.trade_queue_complete = false
+  state.trade_queue_stream, state.trade_queue_revision = nil, nil
   state.combat = false
   state.chain = 0
   state.bsdepth = 0

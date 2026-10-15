@@ -162,6 +162,7 @@ M.COMPOSITE = {
 M.PACKAGE_KEY = {
   war = "BATTLE",
   tradegoods = "TGOODS",
+  tradequeue = "TQUEUE_STREAM",
 }
 
 -- The sub-package a Guild.* package name names, lowercased, or nil.
