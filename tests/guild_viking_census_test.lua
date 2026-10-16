@@ -175,10 +175,9 @@ local EXPECTED_GMCP_WRITERS = {
   -- Guild.Roster (10)
   "STAFF", "BONDS", "TRAIN", "COURIER", "SPY", "VFIND", "HIRD", "THRALLS",
   "THRALL_FOLLOWER", "VARANG",
-  -- Guild.Trade (10), Guild.TradeGoods (1, split per lineage server-side) and
-  -- Guild.Warehouse's Matbur (LARDER, a composite over larder/larder_stock)
+  -- Guild.Trade (10) and Guild.TradeGoods (1, split per lineage server-side)
   "CARTS", "TQUEUE", "CIDLE", "CUPG", "ROUTES", "BLOCKS", "REFINERY", "MARKET",
-  "INCOMING", "WSTOCK", "TGOODS", "LARDER",
+  "INCOMING", "WSTOCK", "TGOODS",
   -- Guild.City (21, including the city plan -- one composite where MIP spread
   -- it over CPLAN/CPT/CPB/CPU/CPP with a commit protocol)
   "BUILDS", "BUILDINGS", "MONUMENTS", "BLOT", "FARM", "DCYCLE", "NEXTTICK",
@@ -197,6 +196,8 @@ local EXPECTED_GMCP_WRITERS = {
   -- Guild.State (4 -- its hp/points/gxp/ledung groups have no MIP twin and are
   -- owned by combat.lua's protocol-independent triggers)
   "DALER", "GOD_POWER", "VMREG", "VMNEW",
+  -- Guild.Warehouse's Matbur (1, a composite over larder/larder_stock)
+  "LARDER",
 }
 
 local function collect_gmcp_writers()
