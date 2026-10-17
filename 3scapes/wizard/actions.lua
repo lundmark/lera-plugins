@@ -401,18 +401,61 @@ local MAX_VIEW_LINES = 20000
 -- prefix did -- left that line, and so the first line of every page after the
 -- first, unpainted. Split it instead: the status stays plain and whatever
 -- follows is file content like any other.
-local PAGER_STATUS = "^More: %["
+local PAGER_STATUS = "More: ["
+
+-- The pager paints its status line (ansi_string("hicyan", ...) in
+-- cmds/secure/more.c), so on the wire it opens with a colour code and the
+-- status ends in a reset before the joined content starts:
+--
+--   ESC[1;36mMore: [x.c] Line: [48/48] Cmds: [u/d/q] ESC[0m/*
+--
+-- Matching the bare text at column one never saw that line. It then fell to
+-- the "already coloured, leave it alone" rule below, so the page's first line
+-- was neither painted nor fed to the lexer -- and when that line opened a
+-- comment or a string, the lexer state was wrong for the rest of the view.
+local SGR = "^\27%[[%d;]*m"
+
+-- Index of the first character at or after i that is not part of an SGR run.
+local function skip_sgr(s, i)
+  while true do
+    local _, e = s:find(SGR, i)
+    if not e then return i end
+    i = e + 1
+  end
+end
 
 -- Returns the status run and the rest of the line, or nil when this is not a
 -- status line at all. The rest is "" for a status line that does stand alone.
 local function split_pager(line)
-  if not line:match(PAGER_STATUS) then return nil end
-  -- Anchored on the LAST bracketed field (Cmds), so a path containing "] "
-  -- cannot end the match early.
-  local head, rest = line:match("^(More: %[.*Cmds: %[[^%]]*%]%s*)(.*)$")
-  if not head then return line, "" end
-  return head, rest
+  local i = skip_sgr(line, 1)
+  if line:sub(i, i + #PAGER_STATUS - 1) ~= PAGER_STATUS then return nil end
+  -- Anchored on the LAST "Cmds: [" field, so a path containing "] " cannot
+  -- end the match early.
+  local last, from = nil, i
+  while true do
+    local a = line:find("Cmds: [", from, true)
+    if not a then break end
+    last, from = a, a + 1
+  end
+  local close = last and line:find("]", last, true)
+  if not close then return line, "" end
+  -- Spaces and colour codes after the field (the status's own reset) belong
+  -- to the status, not to the file.
+  local j = close + 1
+  while true do
+    local k = skip_sgr(line, j)
+    local _, ws = line:find("^%s+", k)
+    if ws then j = ws + 1
+    elseif k ~= j then j = k
+    else break end
+  end
+  return line:sub(1, j - 1), line:sub(j)
 end
+
+-- cat() -- which the pager pages with -- stops at its own line limit and says
+-- so. The lines it dropped never arrive, so the lexer state is no longer the
+-- state of the next line that does.
+local TRUNCATED = "^%*+TRUNCATED%*+%s*$"
 
 -- What `more` reads at its prompt. Anything else the wizard types means they
 -- have moved on, whatever the pager thinks.
@@ -446,6 +489,11 @@ end
 -- exactly what came in.
 function M.on_line(line)
   if not viewing or type(line) ~= "string" then return line end
+
+  if line:match(TRUNCATED) then
+    viewing.state = lpc.new_state()
+    return line
+  end
 
   local head, rest = split_pager(line)
   if head then
@@ -490,7 +538,10 @@ end
 function M.on_input(text)
   if not viewing then return end
   local key = (text or ""):match("^%s*(%S*)%s*$")
-  if not key or not PAGER_KEYS[key:lower()] then stop_viewing() end
+  if not key or not PAGER_KEYS[key:lower()] then stop_viewing(); return end
+  -- Paging back jumps to an earlier page: start the lexer fresh there rather
+  -- than carry the state of the page just shown.
+  if key:lower() == "u" then viewing.state = lpc.new_state() end
 end
 
 function M.file_menu(path, anchor, entry)
