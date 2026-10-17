@@ -439,6 +439,14 @@ end
 -- ---------------------------------------------------------------------------
 
 local BLDG_LABELS = {
+  -- The buildings the server added after this table was ported. Without them
+  -- the fallback below turned "herbyrgi" into "Herbyrgi" (it is the Levy
+  -- Grounds) and "throne_room" into "Throne room". Names as vbuild prints them.
+  hiring_hall = "Hiring Hall", moat = "Moat", castle = "Castle",
+  herbyrgi = "Levy Grounds", throne_room = "Throne Room", prison = "Prison",
+  siege_workshop = "Siege Workshop", sheepfold = "Sheepfold", henhouse = "Henhouse",
+  piggery = "Piggery", byre = "Byre", stable = "Stable", butchery = "Butchery",
+  weaver = "Weaver", smokehouse = "Smokehouse", creamery = "Creamery",
   warehouse = "Warehouse", trading_post = "Trading Post", dock = "Dock",
   courier_post = "Courier Post", beacon = "Beacon", shadow_house = "Shadow-House",
   training_yard = "Training Yard", lumber_yard = "Lumber Yard", mine = "Mine",

@@ -49,6 +49,11 @@ local BLDG_NAMES = {
   skald_hall = "Skald's Hall", moat = "Moat", castle = "Castle",
   throne_room = "Throne Room", hiring_hall = "Hiring Hall", herbyrgi = "Levy Grounds",
   siege_workshop = "Siege Workshop", prison = "Prison",
+  -- Added after the port; the fallback got these right already, but keep both
+  -- pages reading from one complete list.
+  sheepfold = "Sheepfold", henhouse = "Henhouse", piggery = "Piggery", byre = "Byre",
+  stable = "Stable", butchery = "Butchery", weaver = "Weaver", smokehouse = "Smokehouse",
+  creamery = "Creamery", matbur = "Matbur",
 }
 
 local function bldg_display(id)
