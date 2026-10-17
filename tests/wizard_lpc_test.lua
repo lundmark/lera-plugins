@@ -239,6 +239,51 @@ check("view: and ordinary output afterwards is left alone",
       actions.on_line("int x;") == "int x;",
       "the filter must not still be painting the room description")
 
+-- The pager colours its status hicyan (cmds/secure/more.c), so the real line
+-- opens with a colour code and closes the status with a reset before the
+-- joined content. Matching the bare text missed it, and the page's first line
+-- was skipped by the lexer -- a comment opened there was never seen.
+do
+  local HI = "\27[1;36m"
+  local status = HI .. "More: [x.c] Line: [21/174] Cmds: [u/d/q] " .. RESET
+  actions.view("/x/armour.c")
+  local joined = actions.on_line(status .. "/*")
+  check("view: a coloured status is still recognised",
+        joined:find(status, 1, true) == 1, joined)
+  check("view: and the content joined to it is painted",
+        joined:find(C.comment, #status + 1, true) ~= nil, joined)
+  local inside = actions.on_line(" * the hauberk's rivets")
+  check("view: the comment it opened carries on to the next line",
+        inside:find(C.comment, 1, true) ~= nil and count(inside, C.string) == 0, inside)
+  actions.on_line(" */")
+  local tail = actions.on_line(HI .. "More: [x.c] Line: [174/174] Cmds: [u/d/q] "
+                               .. RESET .. "EOF")
+  check("view: a coloured EOF status still ends the view", actions.viewing() == nil, tail)
+end
+
+-- cat() drops what is past its limit and says so; the next line that arrives
+-- is not the one after the last, so the lexer starts over.
+do
+  actions.view("/x/armour.c")
+  actions.on_line("/* a comment the page was cut inside")
+  check("view: the truncation marker is passed through as is",
+        actions.on_line("*****TRUNCATED****") == "*****TRUNCATED****")
+  local after = actions.on_line("int x;")
+  check("view: after truncation the lexer starts fresh",
+        after:find(C.type .. "int" .. RESET, 1, true) ~= nil, after)
+end
+
+-- Paging back is a jump too.
+do
+  actions.view("/x/armour.c")
+  actions.on_line("/* a comment the page ended inside")
+  actions.on_input("u")
+  local back = actions.on_line("int x;")
+  check("view: paging up starts the lexer fresh",
+        back:find(C.type .. "int" .. RESET, 1, true) ~= nil, back)
+  check("view: and the view keeps running", actions.viewing() ~= nil)
+end
+
 -- Paging keeps it running; anything else does not.
 actions.view("/players/x/foo.c")
 actions.on_input("d")
