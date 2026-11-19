@@ -196,6 +196,8 @@ local EXPECTED_GMCP_WRITERS = {
   -- Guild.State (4 -- its hp/points/gxp/ledung groups have no MIP twin and are
   -- owned by combat.lua's protocol-independent triggers)
   "DALER", "GOD_POWER", "VMREG", "VMNEW",
+  -- Guild.Warehouse's Matbur (1, a composite over larder/larder_stock)
+  "LARDER",
 }
 
 local function collect_gmcp_writers()

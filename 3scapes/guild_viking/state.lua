@@ -56,7 +56,7 @@ local state = {
   vitals_gmcp = false,
   -- City / trade / farm / blot (from mip.viking_extra / send_mip_city)
   carts      = {},   -- { mode, good, village, return_in, amount, halfway_in, quality_pct, cart_id, tier, durability, cap, refit }
-  courier    = { tier = 0, runs = {} },  -- Courier Post: tier + { good, village, return_in, amount, cost, fee }
+  courier    = { tier = 0, runs = {} },  -- Courier Post: tier + { good, village, return_in, amount, cost, fee, gift, rep }
   spy        = { tier = 0, mode = "", village = "", secs = 0, sab_pct = 0, sab_secs = 0, cd_secs = 0, scouts = {} },  -- Shadow-House
   train      = { tier = 0, name = "", stat = "", trained = 0, secs = 0 },  -- Training Yard
   heat       = {},   -- shared lineage heat, values for lineage ids 1..13
@@ -65,6 +65,8 @@ local state = {
   ships      = {},   -- { name, tier, state, target, return_in, ship_id, crew }
   wstock     = {},   -- { good, amount, freshness_pct }
   wh_cap     = nil,  -- real warehouse capacity incl. steward/lager/star bonuses
+  larder     = nil,  -- Matbur header { tier, cap, used, overflow, food, hours } (nil until sent)
+  larder_stock = {}, -- Matbur rows, wstock shape { good, amount, freshness_pct, grade }
   market_orders = {},  -- { id, buyer, good, remaining, price, age_secs }
   vfind = { tier = 0, postings = {}, offers = {}, auctions = {} },
   incoming_fills = {},  -- { good, seller, amount, arrives_in }
