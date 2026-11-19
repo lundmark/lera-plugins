@@ -440,5 +440,20 @@ do
   check("every trade row's visible width is <= the requested width", width_ok, widest)
 end
 
+-- ---- city page: names for the buildings added after the port -------------
+do
+  local saved = S.buildings
+  S.buildings = { herbyrgi = 2, throne_room = 1, siege_workshop = 3, creamery = 1 }
+  local all = joined(city_page.lines(WIDTH))
+  check("buildings: herbyrgi shows as the Levy Grounds",
+        all:find("Levy Grounds T2", 1, true) ~= nil, all)
+  check("buildings: throne_room is title-cased",
+        all:find("Throne Room T1", 1, true) ~= nil, all)
+  check("buildings: siege_workshop is title-cased",
+        all:find("Siege Workshop T3", 1, true) ~= nil, all)
+  check("buildings: creamery is named", all:find("Creamery T1", 1, true) ~= nil, all)
+  S.buildings = saved
+end
+
 if failures > 0 then os.exit(1) end
 print("ALL GUILD_VIKING PAGES2 TESTS PASSED")
