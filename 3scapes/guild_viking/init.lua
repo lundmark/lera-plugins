@@ -629,6 +629,9 @@ function M.on_connect()
   -- the true state within the hold window above.
   S.carts       = {}
   S.trade_queue = {}
+  S.trade_queue_count = nil
+  S.trade_queue_complete = false
+  S.trade_queue_stream, S.trade_queue_revision = nil, nil
   S.idle_carts  = {}
 end
 

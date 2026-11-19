@@ -135,9 +135,10 @@ check("a job displays its first leg by seq, not by arrival",
 check("job escort", S.trade_queue[1].escort == 3 and S.trade_queue[2].escort == 0)
 check("job legs kept in seq order", #S.trade_queue[1].legs == 2
       and S.trade_queue[1].legs[2].good == "fur")
--- A job with no legs has nothing to display, exactly as over MIP.
+-- Missing details invalidate freshness and retain the last complete routes.
 trade({ queue = { { job = 7, escort = 1 } }, queue_legs = {} })
-check("a job with no legs is skipped", #S.trade_queue == 0, #S.trade_queue)
+check("missing legs retain the last complete queue", #S.trade_queue == 2
+      and not S.trade_queue_complete and S.trade_queue_count == 1)
 
 -- ---- cidle -----------------------------------------------------------------
 -- The idle-cart record calls the cart id `slot`.
