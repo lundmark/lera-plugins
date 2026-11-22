@@ -255,7 +255,12 @@ function M.on_gmcp(pkg, data)
     end
   end
 
-  if not ALWAYS_MERGE[sub] and (data.full == 1 or not mirrors[sub]) then
+  -- A full push the server splits over several frames stamps full:1 on
+  -- EVERY page, so only its first page may start the mirror afresh; later
+  -- pages add to it (replacing on each page kept only the last one -- Market
+  -- showed only "orders", losing material_orders, exchanges and auctions).
+  local first_page = data.page == nil or tonumber(data.page) == 1
+  if not ALWAYS_MERGE[sub] and ((data.full == 1 and first_page) or not mirrors[sub]) then
     mirrors[sub] = ordinary
   else
     local mirror = mirrors[sub] or {}

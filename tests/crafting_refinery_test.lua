@@ -305,5 +305,20 @@ local mo = state.get().material_orders
 check("chunked material orders join in order",
       #mo == 3 and mo[1].material_name == "A" and mo[3].material_name == "C")
 
+-- A full push the server splits over pages stamps full:1 on every page: the
+-- first page replaces the mirror, the later ones add to it.
+local protocol = require("protocol")
+protocol.reset_connection()
+protocol.on_gmcp("Craft.Market", { full = 1, page = 1, pages = 2,
+                                   exchanges = {}, auctions = { { id = 1 } } })
+protocol.on_gmcp("Craft.Market", { full = 1, page = 2, pages = 2, orders = {} })
+local mm = protocol.mirror("Market")
+check("a paged full push keeps every page's keys",
+      mm and mm.auctions ~= nil and mm.exchanges ~= nil and mm.orders ~= nil)
+protocol.on_gmcp("Craft.Market", { full = 1, page = 1, pages = 1, orders = {} })
+mm = protocol.mirror("Market")
+check("the next full push starts the mirror afresh",
+      mm and mm.orders ~= nil and mm.auctions == nil)
+
 emit(string.format("\n%d failures (final)", failures))
 os.exit(failures == 0 and 0 or 1)
