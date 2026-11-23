@@ -15,24 +15,10 @@
 -- the numbered keys back into one flat table when it reads the mirror.
 local M = {}
 
--- Server sends "infodata"/"statedata", not "info"/"state": those two are
--- reserved names in the daemon's own _c_push() (routed through a driver
--- path that silently drops every mapping-valued field, confirmed via
--- /craft status's field-shape dump -- Info and State are pushed as
--- infodata/statedata instead to take the generic path everything else
--- already uses successfully). The internal sub-key here ("Info"/"State")
--- is unchanged, so state.lua and every page reading it needed no changes.
---
--- Buildings hit an equivalent wall: field renames, chunk-size/pacing
--- changes, and record-shape changes (mapping -> flattened string) all
--- failed identically to fix "owned" ever arriving, while every OTHER
--- package worked -- pointing at the PACKAGE NAME "buildings"/"Craft.
--- Buildings" itself as reserved/colliding somewhere below this file's
--- visibility (see crafting_daemon's gmcp.h _cgmcp_push_buildings_step
--- comment). Wire package renamed to "structures" (Craft.Structures); the
--- internal sub-key stays "Buildings" so state.lua/buildings.lua need no
--- changes beyond this mapping.
+-- Info and State have compatibility wire names. Structures is exposed
+-- internally as Buildings so the same page can consume it.
 local PACKAGES = {
+  info = "Info", state = "State",
   infodata = "Info", statedata = "State", skills = "Skills",
   structures = "Buildings", jobs = "Jobs", recipes = "Recipes",
   market = "Market",
@@ -65,7 +51,7 @@ local ENVELOPE = { full = true, page = true, pages = true }
 -- going to matter while this file discarded every earlier chunk on arrival.
 local ALWAYS_MERGE = { Skills = true, Recipes = true, State = true, Buildings = true }
 
-local mirrors, seen, counters
+local mirrors, seen, counters, wire_names
 local apply_cb, handler_id
 -- Materials staging (see handle_materials below): { gen, chunks = {[key]=rows}, expected }.
 local materials_stage
@@ -82,6 +68,7 @@ function M.reset_connection()
   mirrors = {}
   seen = {}
   counters = blank_counters()
+  wire_names = {}
   materials_stage = blank_materials_stage()
 end
 
@@ -118,7 +105,8 @@ local function subpackage(pkg)
   if type(pkg) ~= "string" then return nil end
   local suffix = pkg:match("^[Cc][Rr][Aa][Ff][Tt]%.(.+)$")
   if not suffix then return nil end
-  return PACKAGES[suffix:lower()]
+  suffix = suffix:lower()
+  return PACKAGES[suffix], suffix
 end
 
 local function accepted(data)
@@ -231,7 +219,7 @@ end
 function M.on_gmcp(pkg, data)
   counters.frames = counters.frames + 1
 
-  local sub = subpackage(pkg)
+  local sub, suffix = subpackage(pkg)
   if not sub then
     counters.bad_package = counters.bad_package + 1
     return false
@@ -239,6 +227,13 @@ function M.on_gmcp(pkg, data)
   if type(data) ~= "table" then
     counters.bad_payload = counters.bad_payload + 1
     return false
+  end
+
+  -- Use the first wire name received for each feed until reconnect. Servers
+  -- sending both aliases have separate delta streams, including material chunks.
+  if sub == "Info" or sub == "State" then
+    if wire_names[sub] and wire_names[sub] ~= suffix then return true end
+    wire_names[sub] = suffix
   end
 
   local keys = accepted(data)
