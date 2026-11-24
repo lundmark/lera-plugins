@@ -1,7 +1,12 @@
 lera = { time = function() return 1 end }
 local protocol = dofile("3scapes/crafting/protocol.lua")
+local state = dofile("3scapes/crafting/state.lua")
+state.reset()
 local applied = 0
-protocol.on_apply(function() applied = applied + 1 end)
+protocol.on_apply(function(sub, mirror)
+  applied = applied + 1
+  state.apply(sub, mirror)
+end)
 
 local function jobs(data)
   assert(protocol.on_gmcp("Craft.Jobs", data))
@@ -41,12 +46,40 @@ current = jobs({ page = 2, pages = 2, queues = {forge} })
 assert(applied == 5 and #current.queues == 2 and current.queues[1] == loom)
 assert(current.queue_cap == 40)
 
--- Market uses the same driver page envelope for its smaller categories.
+-- Older Market pushes can use both driver pages and numbered list keys.
 protocol.on_gmcp("Craft.Market", { full = 1, page = 1, pages = 2, orders = {forge} })
 assert(protocol.mirror("Market") == nil)
-protocol.on_gmcp("Craft.Market", { full = 1, page = 2, pages = 2, auctions = {loom} })
-assert(protocol.mirror("Market").orders[1] == forge)
-assert(protocol.mirror("Market").auctions[1] == loom)
+protocol.on_gmcp("Craft.Market", { full = 1, page = 2, pages = 2, orders_1 = {loom} })
+local market = state.snapshot()
+assert(#market.orders == 2 and market.orders[2].building == "Mana Loom")
+
+local function market_batch(gen, index, count, code, rows)
+  local key = string.format("mkt_%s_%d_%d_%s", gen, index, count, code)
+  assert(protocol.on_gmcp("Craft.Market", { full = 1, [key] = rows }))
+end
+
+-- A larger book crosses the driver's eight-page allowance. Only batch 11
+-- commits it. A gap and a concurrent Jobs push must leave Market intact.
+market_batch("d", 1, 3, "a", {{ id = 1 }})
+market_batch("d", 3, 3, "l", {})
+assert(#state.snapshot().orders == 2)
+for i = 1, 9 do
+  market_batch("e", i, 11, "m", {{ id = i }})
+end
+assert(#state.snapshot().orders == 2)
+jobs({ full = 1, jobs_f_1_2_q = {forge} })
+market_batch("e", 10, 11, "c", {"Iron Axe", "Mana Loom"})
+jobs({ full = 1, jobs_f_2_2_l = {1, 40} })
+assert(#state.snapshot().queues == 1 and #state.snapshot().orders == 2)
+market_batch("e", 11, 11, "l", {})
+market = state.snapshot()
+assert(#market.orders == 0 and #market.auctions == 0)
+assert(#market.material_orders == 9 and market.material_orders[9].id == 9)
+assert(#market.scroll_outbox == 2 and market.scroll_outbox[2] == "Mana Loom")
+protocol.on_gmcp("Craft.Market", { full = 1, material_orders = {{ id = 10 }} })
+market = state.snapshot()
+assert(#market.material_orders == 1 and market.material_orders[1].id == 10)
+assert(#market.scroll_outbox == 0)
 
 jobs({ full = 1, jobs_c_1_2_q = {loom} })
 protocol.reset_connection()

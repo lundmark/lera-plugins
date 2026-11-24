@@ -69,7 +69,7 @@ local mirrors, seen, counters
 local apply_cb, handler_id
 -- Materials staging (see handle_materials below): { gen, chunks = {[key]=rows}, expected }.
 local materials_stage
-local jobs_stage
+local batch_stages
 local paged_stages
 
 local function blank_counters()
@@ -85,7 +85,7 @@ function M.reset_connection()
   seen = {}
   counters = blank_counters()
   materials_stage = blank_materials_stage()
-  jobs_stage = nil
+  batch_stages = {}
   paged_stages = {}
 end
 
@@ -232,7 +232,14 @@ local function handle_materials(keys)
   end
 end
 
-local JOB_LISTS = { b = "builds", p = "pending_builds", m = "masterwork", q = "queues", r = "ready" }
+local BATCH_LISTS = {
+  Jobs = { b = "builds", p = "pending_builds", m = "masterwork", q = "queues", r = "ready" },
+  Market = {
+    o = "orders", m = "material_orders", e = "exchanges", a = "auctions",
+    s = "scroll_orders", u = "scroll_auctions", c = "scroll_outbox",
+  },
+}
+local BATCH_PREFIXES = { Jobs = "jobs", Market = "mkt" }
 
 local function append_rows(target, rows)
   for _, row in ipairs(rows) do target[#target + 1] = row end
@@ -240,29 +247,32 @@ end
 
 -- Crafting batches arrive in TCP order. A new first batch replaces an
 -- incomplete snapshot, while a gap keeps the live mirror intact.
-local function accept_jobs_batch(key, rows)
-  local gen, index, count, code = key:match("^jobs_(%x+)_(%d+)_(%d+)_([a-z])$")
-  if not gen then return false end
+local function accept_batch(sub, key, rows)
+  local prefix, gen, index, count, code = key:match("^([a-z]+)_(%x+)_(%d+)_(%d+)_([a-z])$")
+  if prefix ~= BATCH_PREFIXES[sub] then return false end
+  local lists = BATCH_LISTS[sub]
   index, count = tonumber(index), tonumber(count)
   if type(rows) ~= "table" or index < 1 or index > count then return true end
-  if code ~= "l" and not JOB_LISTS[code] then return true end
+  if code ~= "l" and not lists[code] then return true end
   if index == 1 then
-    jobs_stage = { gen = gen, count = count, next = 1, snapshot = {} }
-    for _, name in pairs(JOB_LISTS) do jobs_stage.snapshot[name] = {} end
+    local snapshot = {}
+    for _, name in pairs(lists) do snapshot[name] = {} end
+    batch_stages[sub] = { gen = gen, count = count, next = 1, snapshot = snapshot }
   end
-  local stage = jobs_stage
+  local stage = batch_stages[sub]
   if not stage or stage.gen ~= gen or stage.count ~= count or stage.next ~= index then
     return true
   end
   if code == "l" then
-    if index ~= count or type(rows[1]) ~= "number" or type(rows[2]) ~= "number" then
-      return true
+    if index ~= count then return true end
+    if sub == "Jobs" then
+      if type(rows[1]) ~= "number" or type(rows[2]) ~= "number" then return true end
+      stage.snapshot.queue_total, stage.snapshot.queue_cap = rows[1], rows[2]
     end
-    stage.snapshot.queue_total, stage.snapshot.queue_cap = rows[1], rows[2]
-    jobs_stage = nil
+    batch_stages[sub] = nil
     return true, stage.snapshot
   end
-  append_rows(stage.snapshot[JOB_LISTS[code]], rows)
+  append_rows(stage.snapshot[lists[code]], rows)
   stage.next = index + 1
   return true
 end
@@ -317,9 +327,9 @@ function M.on_gmcp(pkg, data)
   end
 
   local keys = accepted(data)
-  if sub == "Jobs" then
+  if BATCH_LISTS[sub] then
     for key, value in pairs(keys) do
-      local is_batch, snapshot = accept_jobs_batch(key, value)
+      local is_batch, snapshot = accept_batch(sub, key, value)
       if is_batch then
         paged_stages[sub] = nil
         if not snapshot then return true end
@@ -327,9 +337,7 @@ function M.on_gmcp(pkg, data)
         return applied(sub)
       end
     end
-    jobs_stage = nil
-  end
-  if sub == "Jobs" or sub == "Market" then
+    batch_stages[sub] = nil
     keys = accept_pages(sub, data, keys)
     if not keys then return true end
   end

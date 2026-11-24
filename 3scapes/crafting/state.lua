@@ -283,13 +283,13 @@ local function apply_recipes(m)
 end
 
 local function apply_market(m)
-  rec.orders = m.orders or {}
-  rec.material_orders = m.material_orders or {}
-  rec.exchanges = m.exchanges or {}
-  rec.auctions = m.auctions or {}
-  rec.scroll_auctions = m.scroll_auctions or {}
-  rec.scroll_orders = m.scroll_orders or {}
-  rec.scroll_outbox = m.scroll_outbox or {}
+  rec.orders = collect_rows(m, "orders")
+  rec.material_orders = collect_rows(m, "material_orders")
+  rec.exchanges = collect_rows(m, "exchanges")
+  rec.auctions = collect_rows(m, "auctions")
+  rec.scroll_auctions = collect_rows(m, "scroll_auctions")
+  rec.scroll_orders = collect_rows(m, "scroll_orders")
+  rec.scroll_outbox = collect_rows(m, "scroll_outbox")
 end
 
 local APPLY = {
