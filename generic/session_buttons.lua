@@ -1,6 +1,5 @@
 -- Session buttons: the original rounded strip above the profile layout.
-local M = { name = "session_buttons", version = "1.0" }
-local wm = require("wm")
+local M = { name = "session_buttons", version = "1.1" }
 local spans = {}
 local enabled = true
 local command_id
@@ -8,7 +7,7 @@ local command
 local ok, module = pcall(require, "command")
 if ok then command = module end
 
-local function visible()
+function M.visible()
   return enabled and #session.list() > 1
 end
 
@@ -32,7 +31,7 @@ function M.render(rect)
 end
 
 function M.on_pointer(event)
-  if not visible() or event.kind ~= "down" or event.button ~= "left"
+  if not M.visible() or event.kind ~= "down" or event.button ~= "left"
       or not event.inside then return false end
   for _, span in ipairs(spans) do
     if event.x >= span.first and event.x <= span.last then
@@ -55,11 +54,9 @@ function M.set_enabled(value)
 end
 
 function M.on_load()
-  if not (wm.top_bar and session.active and session.switch) then
-    error("session_buttons requires Lera's plugin top-bar and session-switch APIs")
+  if not (session.active and session.switch) then
+    error("session_buttons requires Lera's session-switch API")
   end
-  local opened, reason = wm.top_bar.open(M, 3, visible)
-  if not opened then error(reason) end
   if command then
     command_id = command.register({
       name = "/tabs", usage = "/tabs [on|off]", accepts_args = true,
@@ -77,9 +74,8 @@ function M.on_load()
 end
 
 function M.on_unload()
-  spans = {}
+  M.set_enabled(false)
   if command_id then command.unregister(command_id); command_id = nil end
-  wm.top_bar.close()
 end
 
 return M

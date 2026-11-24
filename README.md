@@ -11,9 +11,8 @@ Plugin collection for the Lera MUD client.
 ## Session buttons
 
 [`generic/session_buttons.lua`](generic/session_buttons.md) adds the rounded
-connection buttons above your existing layout. Click to switch connections;
-`/tabs [on|off]` controls visibility. No layout configuration is required.
-It needs the plugin top-bar and session-switch APIs from Lera PR #70.
+connection buttons in a three-row, collapsing slot in your profile layout.
+Click to switch connections. Use `/tabs [on|off]` to control visibility.
 
 ## Chat padding
 
