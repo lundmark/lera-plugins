@@ -6,8 +6,7 @@ local state = require("state")
 local C = pagelib.C
 local M = {}
 
-local function countdown(closes)
-  local left = (closes or 0) - lera.time()
+local function countdown(left)
   if left <= 0 then return "ended", C.dim end
   local m = math.floor(left / 60)
   local s = left % 60
@@ -38,6 +37,13 @@ function M.lines(width)
   local s = state.get()
   local lines = {}
   local function add(text) lines[#lines + 1] = text end
+  local now = lera.time()
+  local live_countdown = false
+  local function auction_countdown(closes)
+    local left = (closes or 0) - now
+    if left > 0 then live_countdown = true end
+    return countdown(left)
+  end
 
   add(pagelib.header(width, "Reagent Offers (token-priced barter)"))
   if #s.orders == 0 then
@@ -94,7 +100,7 @@ function M.lines(width)
   else
     for _, a in ipairs(s.auctions) do
       local bid = (a.high_bid or 0) > 0 and tostring(a.high_bid) or "---"
-      local ctext, ccolor = countdown(a.closes)
+      local ctext, ccolor = auction_countdown(a.closes)
       add(pagelib.trunc(string.format("  #%d %s%s%s  %sx %s  bid %s%s%s  reserve %s  %s%s%s",
         a.id or 0, C.white, a.seller or "?", pagelib.RESET,
         tostring(a.qty or 0), mat_name(a),
@@ -132,7 +138,7 @@ function M.lines(width)
   else
     for _, a in ipairs(s.scroll_auctions) do
       local bid = (a.high_bid or 0) > 0 and tostring(a.high_bid) or "---"
-      local ctext, ccolor = countdown(a.closes)
+      local ctext, ccolor = auction_countdown(a.closes)
       -- recipe_name is resolved server-side, so the client never needs its own
       -- copy of the recipe catalogue to render a listing.
       add(pagelib.trunc(string.format("  #%d %s%s%s  %s  bid %s%s%s  reserve %s  %s%s%s",
@@ -156,7 +162,7 @@ function M.lines(width)
     end
   end
 
-  return lines
+  return lines, live_countdown
 end
 
 return M

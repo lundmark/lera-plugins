@@ -1,5 +1,5 @@
 -- Tab bar + page shell for the crafting popup, opened by /craft. Pages are
--- pure builders (`mod.lines(width) -> array of strings`, reading state.lua's
+-- pure builders (`mod.lines(width) -> array of strings[, live_countdown]`, reading state.lua's
 -- data only); this module owns the tab bar, the page registry, per-page
 -- scroll offsets, and tab-click routing. Modeled on guild_viking/window.lua,
 -- trimmed for a v1 with no right-click page menu and no clickable body rows
@@ -41,14 +41,24 @@ for _, p in ipairs(window.PAGES) do
 end
 
 local current_key = window.PAGES[1].key
+local countdown_pending = false
 
 function window.current_page() return current_key end
 
 function window.set_page(key)
   if not pages_by_key[key] then return false end
+  if key ~= current_key then countdown_pending = false end
   current_key = key
   ui.dirty()
   return true
+end
+
+function window.countdown_tick()
+  if not countdown_pending then return end
+  -- Consume the previous render's request even if the deadline has passed.
+  -- The next render draws the final "ready" state and only rearms if needed.
+  countdown_pending = false
+  ui.dirty()
 end
 
 function window.scroll(delta) return scrollers[current_key].scroll(delta) end
@@ -114,7 +124,8 @@ function window.render(rect, opts)
   if body_h <= 0 then return end
 
   local page = pages_by_key[current_key]
-  local lines = page.mod.lines(w)
+  local lines, live_countdown = page.mod.lines(w)
+  if live_countdown then countdown_pending = true end
 
   local sc = scrollers[current_key]
   if lera.render_pass() ~= "remote" then

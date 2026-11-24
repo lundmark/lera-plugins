@@ -1,8 +1,8 @@
 -- Jobs page: building construction, masterwork queue, typed production
 -- queues, and finished items waiting to be collected (Craft.Jobs). Every
 -- timer here is an absolute `due` epoch from the server; the countdown is
--- computed fresh on every render (init.lua's 1s timer keeps the popup
--- redrawing while it's open, so this reads live even with no new GMCP frame).
+-- computed fresh on every render. The second result tells the window whether
+-- to request another render for a live countdown.
 local pagelib = require("pagelib")
 local state = require("state")
 
@@ -15,8 +15,8 @@ local function countdown_color(left)
   return C.white
 end
 
-local function countdown(due)
-  local left = (due or 0) - lera.time()
+local function countdown(due, now)
+  local left = (due or 0) - now
   if left <= 0 then return "ready", countdown_color(left) end
   local h = math.floor(left / 3600)
   local m = math.floor((left % 3600) / 60)
@@ -28,17 +28,22 @@ local function countdown(due)
   return text, countdown_color(left)
 end
 
-local function due_line(add, width, prefix, name, due)
-  local text, color = countdown(due)
-  add(pagelib.trunc(string.format("  %s%s%s  %s(%s)%s",
-    C.white, prefix .. name, pagelib.RESET, color, text, pagelib.RESET), width))
-end
-
 function M.lines(width)
   width = width or 80
   local s = state.get()
   local lines = {}
   local function add(text) lines[#lines + 1] = text end
+  local now = lera.time()
+  local live_countdown = false
+  local function job_countdown(due)
+    if due and due > now then live_countdown = true end
+    return countdown(due, now)
+  end
+  local function due_line(prefix, name, due)
+    local text, color = job_countdown(due)
+    add(pagelib.trunc(string.format("  %s%s%s  %s(%s)%s",
+      C.white, prefix .. name, pagelib.RESET, color, text, pagelib.RESET), width))
+  end
 
   if #s.builds > 0 then
     local sorted = {}
@@ -46,7 +51,7 @@ function M.lines(width)
     table.sort(sorted, function(a, b) return (a.building or "") < (b.building or "") end)
     add(pagelib.header(width, "Under Construction"))
     for _, b in ipairs(sorted) do
-      due_line(add, width, "", string.format("%s -> T%d", b.building or "?", b.tier or 0), b.due)
+      due_line("", string.format("%s -> T%d", b.building or "?", b.tier or 0), b.due)
     end
     add("")
   end
@@ -76,7 +81,7 @@ function M.lines(width)
     for _, mw in ipairs(s.masterwork) do
       local label = (mw.name or "item") .. (mw.target and mw.target > 0
         and (" (level " .. tostring(mw.target) .. ")") or "")
-      due_line(add, width, "", label, mw.due)
+      due_line("", label, mw.due)
     end
     add("")
   end
@@ -94,7 +99,7 @@ function M.lines(width)
       .. C.dim .. "  (" .. (q.depth or 0) .. "/" .. (q.cap or 0) .. " queued)" .. pagelib.RESET,
       width))
     if q.current_id and q.current_id ~= "" then
-      due_line(add, width, "> ", pagelib.title(q.current_name or q.current_id), q.current_due)
+      due_line("> ", pagelib.title(q.current_name or q.current_id), q.current_due)
     elseif q.stalled == 1 then
       add(pagelib.trunc("  " .. C.bright_red .. "(stalled -- missing materials)"
         .. pagelib.RESET, width))
@@ -116,7 +121,7 @@ function M.lines(width)
         -- An outbox item with no time left is already pruned server-side
         -- before a frame could ever report it, so "expires" here is always
         -- still in the future -- no "ready"/zero case to special-case.
-        local text, ecolor = countdown(item.expires)
+        local text, ecolor = job_countdown(item.expires)
         expiry = C.dim .. "  expires in " .. ecolor .. text .. pagelib.RESET
       end
       add(pagelib.trunc("  " .. C.bright_green .. (item.name or "item") .. pagelib.RESET
@@ -125,7 +130,7 @@ function M.lines(width)
     end
   end
 
-  return lines
+  return lines, live_countdown
 end
 
 return M
