@@ -8,6 +8,11 @@
 
 Plugin collection for the Lera MUD client.
 
+## Input shortcuts
+
+[`generic/input_shortcuts.lua`](generic/input_shortcuts.md) adds optional
+command stacking and counted speedwalks, with per-profile settings.
+
 ## Session buttons
 
 [`generic/session_buttons.lua`](generic/session_buttons.md) adds the rounded
