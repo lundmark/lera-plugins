@@ -69,6 +69,8 @@ local mirrors, seen, counters
 local apply_cb, handler_id
 -- Materials staging (see handle_materials below): { gen, chunks = {[key]=rows}, expected }.
 local materials_stage
+local jobs_stage
+local paged_stages
 
 local function blank_counters()
   return { frames = 0, applied = 0, bad_package = 0, bad_payload = 0 }
@@ -83,6 +85,8 @@ function M.reset_connection()
   seen = {}
   counters = blank_counters()
   materials_stage = blank_materials_stage()
+  jobs_stage = nil
+  paged_stages = {}
 end
 
 M.reset_connection()
@@ -228,6 +232,77 @@ local function handle_materials(keys)
   end
 end
 
+local JOB_LISTS = { b = "builds", p = "pending_builds", m = "masterwork", q = "queues", r = "ready" }
+
+local function append_rows(target, rows)
+  for _, row in ipairs(rows) do target[#target + 1] = row end
+end
+
+-- Crafting batches arrive in TCP order. A new first batch replaces an
+-- incomplete snapshot, while a gap keeps the live mirror intact.
+local function accept_jobs_batch(key, rows)
+  local gen, index, count, code = key:match("^jobs_(%x+)_(%d+)_(%d+)_([a-z])$")
+  if not gen then return false end
+  index, count = tonumber(index), tonumber(count)
+  if type(rows) ~= "table" or index < 1 or index > count then return true end
+  if code ~= "l" and not JOB_LISTS[code] then return true end
+  if index == 1 then
+    jobs_stage = { gen = gen, count = count, next = 1, snapshot = {} }
+    for _, name in pairs(JOB_LISTS) do jobs_stage.snapshot[name] = {} end
+  end
+  local stage = jobs_stage
+  if not stage or stage.gen ~= gen or stage.count ~= count or stage.next ~= index then
+    return true
+  end
+  if code == "l" then
+    if index ~= count or type(rows[1]) ~= "number" or type(rows[2]) ~= "number" then
+      return true
+    end
+    stage.snapshot.queue_total, stage.snapshot.queue_cap = rows[1], rows[2]
+    jobs_stage = nil
+    return true, stage.snapshot
+  end
+  append_rows(stage.snapshot[JOB_LISTS[code]], rows)
+  stage.next = index + 1
+  return true
+end
+
+-- Driver pages carry the same full/delta flag. Concatenate list slices,
+-- then apply the combined payload using that flag.
+local function accept_pages(sub, data, keys)
+  local index, count = tonumber(data.page), tonumber(data.pages)
+  if not index or not count then
+    paged_stages[sub] = nil
+    return keys
+  end
+  if index == 1 then
+    paged_stages[sub] = { count = count, next = 1, keys = {} }
+  end
+  local stage = paged_stages[sub]
+  if not stage or stage.count ~= count or stage.next ~= index then return end
+  for key, value in pairs(keys) do
+    if type(value) == "table" and #value > 0 then
+      local rows = stage.keys[key] or {}
+      append_rows(rows, value)
+      stage.keys[key] = rows
+    else
+      stage.keys[key] = value
+    end
+  end
+  if index == count then
+    paged_stages[sub] = nil
+    return stage.keys
+  end
+  stage.next = index + 1
+end
+
+local function applied(sub)
+  seen[sub] = lera.time()
+  counters.applied = counters.applied + 1
+  if apply_cb then apply_cb(sub, mirrors[sub]) end
+  return true
+end
+
 function M.on_gmcp(pkg, data)
   counters.frames = counters.frames + 1
 
@@ -242,6 +317,22 @@ function M.on_gmcp(pkg, data)
   end
 
   local keys = accepted(data)
+  if sub == "Jobs" then
+    for key, value in pairs(keys) do
+      local is_batch, snapshot = accept_jobs_batch(key, value)
+      if is_batch then
+        paged_stages[sub] = nil
+        if not snapshot then return true end
+        mirrors[sub] = snapshot
+        return applied(sub)
+      end
+    end
+    jobs_stage = nil
+  end
+  if sub == "Jobs" or sub == "Market" then
+    keys = accept_pages(sub, data, keys)
+    if not keys then return true end
+  end
 
   -- Materials chunk/count/gen keys are staged and committed separately (see
   -- handle_materials) -- pulled out of the ordinary merge below so a
@@ -265,10 +356,7 @@ function M.on_gmcp(pkg, data)
 
   if sub == "State" then handle_materials(keys) end
 
-  seen[sub] = lera.time()
-  counters.applied = counters.applied + 1
-  if apply_cb then apply_cb(sub, mirrors[sub]) end
-  return true
+  return applied(sub)
 end
 
 function M.subscribe()

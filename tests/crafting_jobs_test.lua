@@ -1,0 +1,54 @@
+lera = { time = function() return 1 end }
+local protocol = dofile("3scapes/crafting/protocol.lua")
+local applied = 0
+protocol.on_apply(function() applied = applied + 1 end)
+
+local function jobs(data)
+  assert(protocol.on_gmcp("Craft.Jobs", data))
+  return protocol.mirror("Jobs")
+end
+
+local old = jobs({ full = 1, ready = {{ name = "Iron Axe" }}, queue_cap = 40 })
+local forge, loom = { building = "Grand Forge" }, { building = "Mana Loom" }
+
+-- A missing middle batch must leave the previous complete view in place.
+assert(jobs({ full = 1, jobs_a_1_3_q = {forge} }) == old)
+assert(jobs({ full = 1, jobs_a_3_3_l = {2, 40} }) == old)
+assert(applied == 1)
+
+-- A replacement generation contains every list, including implicit empties.
+assert(jobs({ full = 1, jobs_b_1_3_q = {forge} }) == old)
+assert(jobs({ full = 1, jobs_a_2_3_q = {forge} }) == old)
+assert(jobs({ full = 1, jobs_b_2_3_q = {loom} }) == old)
+local current = jobs({ full = 1, jobs_b_3_3_l = {2, 40} })
+assert(applied == 2 and #current.queues == 2 and #current.ready == 0)
+assert(current.queues[1] == forge and current.queues[2] == loom)
+assert(current.queue_total == 2 and current.queue_cap == 40)
+
+-- Switching back to an ordinary update clears rows that left the queue.
+current = jobs({ full = 1, queues = {}, ready = {}, queue_total = 0, queue_cap = 40 })
+assert(applied == 3 and #current.queues == 0)
+
+-- Old server full and delta pages also combine repeats before applying.
+local first_page = { full = 1, page = 1, pages = 3, queues = {forge} }
+assert(jobs(first_page) == current)
+assert(jobs({ full = 1, page = 2, pages = 3, queue_cap = 40 }) == current)
+current = jobs({ full = 1, page = 3, pages = 3, queues = {loom} })
+assert(applied == 4 and #current.queues == 2 and current.queue_cap == 40)
+assert(#first_page.queues == 1)
+assert(jobs({ page = 1, pages = 2, queues = {loom} }) == current)
+current = jobs({ page = 2, pages = 2, queues = {forge} })
+assert(applied == 5 and #current.queues == 2 and current.queues[1] == loom)
+assert(current.queue_cap == 40)
+
+-- Market uses the same driver page envelope for its smaller categories.
+protocol.on_gmcp("Craft.Market", { full = 1, page = 1, pages = 2, orders = {forge} })
+assert(protocol.mirror("Market") == nil)
+protocol.on_gmcp("Craft.Market", { full = 1, page = 2, pages = 2, auctions = {loom} })
+assert(protocol.mirror("Market").orders[1] == forge)
+assert(protocol.mirror("Market").auctions[1] == loom)
+
+jobs({ full = 1, jobs_c_1_2_q = {loom} })
+protocol.reset_connection()
+assert(jobs({ full = 1, jobs_c_2_2_l = {1, 40} }) == nil)
+print("crafting jobs tests passed")
