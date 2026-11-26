@@ -25,7 +25,10 @@ local function open_popup()
     title = "Crafting",
     width = 0.7,
     height = 0.65,
-    on_close = function() popup_open = false end,
+    on_close = function()
+      popup_open = false
+      window.reset_actions()
+    end,
   })
   popup_open = true
 end
@@ -152,8 +155,12 @@ local function show_status()
   end
 end
 
+local CRAFT_USAGE = "/craft [overview | inventory | skills | buildings | refinery | production | recipes | market | status]"
+
 local function dispatch(args)
   local word = tostring(args or ""):match("^%s*(%S*)"):lower()
+  if word == "overview" then word = "info" end
+  if word == "production" then word = "jobs" end
   if word == "" then
     toggle_popup()
     return
@@ -169,8 +176,7 @@ local function dispatch(args)
       return
     end
   end
-  buffer.color_print(nil, "DAA520",
-    "Usage: /craft [info | inventory | skills | buildings | jobs | recipes | market | status]")
+  buffer.color_print(nil, "DAA520", "Usage: " .. CRAFT_USAGE)
 end
 
 local command_id = nil
@@ -179,12 +185,11 @@ local function install_command()
   local command = require("command")
   local id, err = command.register({
     name = "/craft",
-    usage = "/craft [info | inventory | skills | buildings | jobs | recipes | market | status]",
+    usage = CRAFT_USAGE,
     summary = "Crafting state from the Craft.* GMCP namespace",
     description = "Opens (or closes) the crafting window. A page name opens "
-      .. "straight to that tab: info (realm standing), inventory (tokens/"
-      .. "souls/materials), skills, buildings, jobs (builds/production "
-      .. "queues/ready items), recipes, or market.",
+      .. "straight to that tab. Skills offers training, and Production shows "
+      .. "buildings, queues, available recipes, and finished items.",
     accepts_args = true,
     handler = function(args) dispatch(args) end,
   })

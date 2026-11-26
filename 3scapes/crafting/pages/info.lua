@@ -10,8 +10,32 @@ local REALMS = { "Chaos", "Fantasy", "Science" }
 function M.lines(width)
   width = width or 80
   local s = state.get()
-  local lines = {}
+  local lines, actions = {}, {}
   local function add(text) lines[#lines + 1] = text end
+
+  local ready, stalled = 0, 0
+  for _, skill in pairs(s.skills) do
+    if skill.unlocked == 1 and skill.can_train == 1 then ready = ready + 1 end
+  end
+  for _, queue in ipairs(s.queues) do
+    if queue.stalled == 1 then stalled = stalled + 1 end
+  end
+  if ready + stalled + #s.ready > 0 then
+    add(pagelib.header(width, "Needs Attention"))
+    if #s.ready > 0 then
+      pagelib.action_row(lines, actions, width, { { label = "Collect all", command = "ccollect" } },
+        #s.ready .. " finished")
+    end
+    if ready > 0 then
+      pagelib.action_row(lines, actions, width, { { label = "Skills", page = "skills" } },
+        ready .. " ready to train")
+    end
+    if stalled > 0 then
+      pagelib.action_row(lines, actions, width, { { label = "Production", page = "jobs" } },
+        stalled .. " stalled")
+    end
+    add("")
+  end
 
   add(pagelib.header(width, "Realm Standing"))
   for _, name in ipairs(REALMS) do
@@ -45,7 +69,7 @@ function M.lines(width)
       .. pagelib.RESET, width))
   end
 
-  return lines
+  return lines, actions
 end
 
 return M

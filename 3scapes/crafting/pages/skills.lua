@@ -1,75 +1,84 @@
--- Skills page: every skill's rank/xp/gating (Craft.Skills).
+-- Craft.Skills, grouped by realm with available training first in each realm.
 local pagelib = require("pagelib")
 local state = require("state")
 
 local C = pagelib.C
+local RESET = pagelib.RESET
 local M = {}
 
-local CAN_TRAIN_LABEL = {
-  [1] = "ready", [-1] = "maxed", [-2] = "locked",
-  [-3] = "need xp", [-4] = "need tokens",
+local STATUS = {
+  [1] = "Ready", [-1] = "Maxed", [-2] = "Locked",
+  [-3] = "Needs XP", [-4] = "Needs tokens",
 }
-local CAN_TRAIN_COLOR = {
-  [1] = C.bright_green, [-1] = C.cyan, [-2] = C.dim,
-  [-3] = C.yellow, [-4] = C.yellow,
-}
+local REALMS = { "Chaos", "Fantasy", "Science", "General" }
+
+local function trainable(skill)
+  return skill.unlocked == 1 and skill.can_train == 1
+end
+
+local function skill_line(width, name, skill)
+  local rank = tostring(skill.rank or 0)
+  if (skill.rank or 0) ~= (skill.trained or 0) then
+    rank = rank .. "/" .. tostring(skill.trained or 0)
+  end
+  local status = skill.unlocked == 1 and (STATUS[skill.can_train] or "Waiting") or "Locked"
+  local text = pagelib.title(name) .. "  R" .. rank .. "  " .. status
+  if width >= 58 and (skill.to_next or 0) > 0 and status ~= "Locked" then
+    text = text .. "  " .. pagelib.fmt_num(skill.into) .. "/" .. pagelib.fmt_num(skill.to_next) .. " XP"
+  end
+  if (skill.train_cost or 0) > 0 and status ~= "Locked" then
+    text = text .. "  " .. pagelib.fmt_num(skill.train_cost) .. "x " .. (skill.train_abbr or "?")
+  end
+  return text
+end
 
 function M.lines(width)
   width = width or 80
-  local s = state.get()
-  local lines = {}
-  local function add(text) lines[#lines + 1] = text end
-
-  local names = {}
-  for name in pairs(s.skills) do names[#names + 1] = name end
-  table.sort(names)
-
-  if #names == 0 then
-    add(pagelib.trunc(C.dim .. "No Craft.Skills data received yet." .. pagelib.RESET, width))
-    return lines
+  local skills = state.get().skills
+  local lines, actions = {}, {}
+  if not next(skills) then
+    return { pagelib.trunc(C.dim .. "Waiting for crafting skills." .. RESET, width) }
   end
 
-  add(pagelib.header(width, "Skills"))
-  local rows, colors = {}, {}
-  for _, name in ipairs(names) do
-    local r = s.skills[name]
-    local rank_s = tostring(r.rank or 0)
-    if (r.rank or 0) ~= (r.trained or 0) then
-      rank_s = rank_s .. "/" .. tostring(r.trained or 0)
+  local groups = { Chaos = {}, Fantasy = {}, Science = {}, General = {} }
+  for name, skill in pairs(skills) do
+    local realm = pagelib.title(skill.train_realm) or "General"
+    local group = groups[realm] or groups.General
+    group[#group + 1] = name
+  end
+
+  for _, realm in ipairs(REALMS) do
+    local names = groups[realm]
+    if #names > 0 then
+      local ready = 0
+      for _, name in ipairs(names) do
+        if trainable(skills[name]) then ready = ready + 1 end
+      end
+      table.sort(names, function(a, b)
+        local ar, br = trainable(skills[a]), trainable(skills[b])
+        if ar ~= br then return ar end
+        return a < b
+      end)
+      lines[#lines + 1] = pagelib.header(width, realm .. " Skills (" .. ready .. " ready)")
+      for _, name in ipairs(names) do
+        local skill = skills[name]
+        local buttons = {}
+        local arg = pagelib.command_arg(name)
+        if arg and trainable(skill) then
+          buttons[#buttons + 1] = { label = "Train", command = "ctrain " .. arg }
+        end
+        if arg and skill.autotrain ~= nil and (skill.unlocked == 1 or skill.autotrain == 1) then
+          buttons[#buttons + 1] = {
+            label = skill.autotrain == 1 and "Auto on" or "Auto off",
+            command = "ctrain auto " .. arg,
+          }
+        end
+        pagelib.action_row(lines, actions, width, buttons, skill_line(width, name, skill))
+      end
+      lines[#lines + 1] = ""
     end
-    local prog = (r.to_next and r.to_next > 0)
-      and (pagelib.fmt_num(r.into) .. "/" .. pagelib.fmt_num(r.to_next)) or "max"
-    local locked = r.unlocked ~= 1
-    local status = locked and "locked" or (CAN_TRAIN_LABEL[r.can_train] or "?")
-    -- Token cost to train the next rank (ctrain.c's own cost preview), shown
-    -- as "1x dnt" -- short token abbreviation, not the spelled-out realm/tier
-    -- -- colored by the token's own realm (same REALM_COLOR every other
-    -- realm-tagged row in this plugin uses). 0 means maxed / no cost row.
-    local cost = "-"
-    if (r.train_cost or 0) > 0 then
-      local cost_color = (r.train_realm == "any") and C.white
-        or (pagelib.REALM_COLOR[r.train_realm] or C.white)
-      cost = cost_color .. pagelib.fmt_num(r.train_cost) .. "x "
-        .. (r.train_abbr or "?") .. pagelib.RESET
-    end
-    rows[#rows + 1] = { pagelib.title(name), rank_s, prog, status, cost }
-    colors[#colors + 1] = locked and C.dim or (CAN_TRAIN_COLOR[r.can_train] or C.white)
   end
-
-  local cols = pagelib.columns(width, {
-    { title = "Skill", w = "*" },
-    { title = "Rank", w = 10 },
-    { title = "XP", w = 16 },
-    { title = "Status", w = 12 },
-    { title = "Train Cost", w = 12 },
-  }, rows)
-  add(cols[1])
-  local i
-  for i = 2, #cols do
-    add(colors[i - 1] .. cols[i] .. pagelib.RESET)
-  end
-
-  return lines
+  return lines, actions
 end
 
 return M

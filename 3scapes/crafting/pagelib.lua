@@ -261,4 +261,26 @@ function pagelib.columns(width, cols, rows)
   return out
 end
 
+-- Add visible buttons before a row's detail and record their cell ranges.
+function pagelib.action_row(lines, actions, width, buttons, detail)
+  local row, spans, col = {}, {}, 0
+  for _, button in ipairs(buttons) do
+    local label = "[" .. button.label .. "]"
+    local last = col + #label
+    if last > width then break end
+    row[#row + 1] = pagelib.C.bright_cyan .. label .. pagelib.RESET .. " "
+    spans[#spans + 1] = { first = col, last = last, command = button.command,
+      page = button.page, menu = button.menu }
+    col = last + 1
+  end
+  lines[#lines + 1] = pagelib.trunc(table.concat(row) .. (detail or ""), width)
+  actions[#lines] = spans
+end
+
+-- GMCP labels become arguments only after rejecting control and stacking delimiters.
+function pagelib.command_arg(value)
+  if type(value) ~= "string" or not value:match("%S") or value:find("[%c;]") then return nil end
+  return value
+end
+
 return pagelib

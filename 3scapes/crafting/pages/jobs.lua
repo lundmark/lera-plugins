@@ -8,6 +8,7 @@ local state = require("state")
 
 local C = pagelib.C
 local M = {}
+local REALMS = { "chaos", "fantasy", "science" }
 
 local function countdown_color(left)
   if left <= 0 then return C.bright_green end
@@ -34,11 +35,97 @@ local function due_line(add, width, prefix, name, due)
     C.white, prefix .. name, pagelib.RESET, color, text, pagelib.RESET), width))
 end
 
+local function queue_batches(add, width, items)
+  local previous, count
+  local function flush()
+    if not previous then return end
+    local label = count > 1 and (count .. " x " .. previous) or previous
+    add(pagelib.trunc("    " .. C.dim .. "+ " .. pagelib.RESET .. label, width))
+  end
+  for item in (items or ""):gmatch("[^,]+") do
+    item = item:match("^%s*(.-)%s*$")
+    if item == previous then
+      count = count + 1
+    else
+      flush()
+      previous, count = item, 1
+    end
+  end
+  flush()
+end
+
+local function free_queue_slots(s, q)
+  local room = s.queue_cap > 0 and s.queue_cap - s.queue_total or 1
+  if q and (q.cap or 0) > 0 then room = math.min(room, q.cap - (q.depth or 0)) end
+  return room
+end
+
+local function queue_buttons(command, recipe, room)
+  local buttons = { { label = "Queue 1", command = command .. " 1" } }
+  if room > 1 then
+    local items = {}
+    for quantity = 2, math.min(room, 5) do
+      items[#items + 1] = { label = "Queue " .. quantity, value = command .. " " .. quantity }
+    end
+    buttons[#buttons + 1] = { label = "More", menu = { title = recipe, items = items } }
+  end
+  return buttons
+end
+
+-- The catalogue supplies the realm and required building tier. Known recipes
+-- supply costs and names. Only exact production matches become cmake actions.
+local function realm_buildings(s, realm, tiers, queues)
+  local buildings = {}
+  for _, recipe in ipairs(s.recipes_catalogue[realm] or {}) do
+    local building = recipe.building
+    if building and recipe.name and (tiers[building] or queues[building]) then
+      local group = buildings[building] or { recipe_tiers = {}, recipes = {} }
+      buildings[building] = group
+      group.recipe_tiers[recipe.name] = recipe.tier or 0
+    end
+  end
+
+  for _, recipe in ipairs(s.recipes_known[realm] or {}) do
+    local group = buildings[recipe.building]
+    local id = recipe.id or ""
+    local tier = group and group.recipe_tiers[recipe.name]
+    if tier and (id:match("^prod%-") or id:match("^starter%-")) then
+      group.recipes[#group.recipes + 1] = { recipe = recipe, tier = tier }
+    end
+  end
+
+  local names = {}
+  for name, group in pairs(buildings) do
+    -- Owned refinery catalogue entries are not typed production jobs.
+    if queues[name] or #group.recipes > 0 then names[#names + 1] = name end
+    table.sort(group.recipes, function(a, b) return a.recipe.name < b.recipe.name end)
+  end
+  table.sort(names)
+  return names, buildings
+end
+
 function M.lines(width)
   width = width or 80
   local s = state.get()
-  local lines = {}
+  local lines, actions = {}, {}
   local function add(text) lines[#lines + 1] = text end
+  local function action(label, command, detail)
+    pagelib.action_row(lines, actions, width, { { label = label, command = command } }, detail)
+  end
+
+  if #s.ready > 0 then
+    add(pagelib.header(width, "Ready to Collect"))
+    action("Collect all", "ccollect", #s.ready .. " finished")
+    for _, item in ipairs(s.ready) do
+      local expiry = ""
+      if item.expires and item.expires > 0 then
+        expiry = "  expires in " .. countdown(item.expires)
+      end
+      add(pagelib.trunc("  " .. (item.name or "item") .. C.dim .. "  quality "
+        .. tostring(item.quality or 0) .. expiry .. pagelib.RESET, width))
+    end
+    add("")
+  end
 
   if #s.builds > 0 then
     local sorted = {}
@@ -81,51 +168,87 @@ function M.lines(width)
     add("")
   end
 
-  local q_sorted = {}
-  for _, q in ipairs(s.queues) do q_sorted[#q_sorted + 1] = q end
-  table.sort(q_sorted, function(a, b) return (a.building or "") < (b.building or "") end)
-  add(pagelib.header(width, "Production Queues"))
+  local queues, tiers, shown = {}, {}, {}
+  for _, q in ipairs(s.queues) do if q.building then queues[q.building] = q end end
+  for _, b in ipairs(s.buildings) do if b.name then tiers[b.name] = b.tier end end
+  add(pagelib.header(width, "Production"))
   add(pagelib.kv(width, "Total queued:", s.queue_total .. " / " .. s.queue_cap, C.bright_cyan))
-  if #q_sorted == 0 then
-    add(pagelib.trunc(C.dim .. "  No queued production." .. pagelib.RESET, width))
-  end
-  for _, q in ipairs(q_sorted) do
-    add(pagelib.trunc(C.bright_cyan .. (q.building or "?") .. pagelib.RESET
-      .. C.dim .. "  (" .. (q.depth or 0) .. "/" .. (q.cap or 0) .. " queued)" .. pagelib.RESET,
-      width))
+
+  local function draw_queue(q)
+    if not q then
+      add(pagelib.trunc("  " .. C.dim .. "Idle" .. pagelib.RESET, width))
+      return
+    end
     if q.current_id and q.current_id ~= "" then
-      due_line(add, width, "> ", pagelib.title(q.current_name or q.current_id), q.current_due)
+      due_line(add, width, "Making ", q.current_name or q.current_id, q.current_due)
     elseif q.stalled == 1 then
-      add(pagelib.trunc("  " .. C.bright_red .. "(stalled -- missing materials)"
+      add(pagelib.trunc("  " .. C.bright_red .. "Stalled (missing materials)"
         .. pagelib.RESET, width))
     else
-      add(pagelib.trunc("  " .. C.dim .. "(waiting for you to be online to start)"
-        .. pagelib.RESET, width))
+      add(pagelib.trunc("  " .. C.dim .. "Waiting to start" .. pagelib.RESET, width))
     end
-    if q.items and q.items ~= "" then
-      add(pagelib.trunc("    " .. C.dim .. "+ " .. pagelib.RESET .. q.items, width))
-    end
+    queue_batches(add, width, q.items)
   end
 
-  if #s.ready > 0 then
-    add("")
-    add(pagelib.header(width, "Ready to Collect (ccollect)"))
-    for _, item in ipairs(s.ready) do
-      local expiry = ""
-      if item.expires and item.expires > 0 then
-        -- An outbox item with no time left is already pruned server-side
-        -- before a frame could ever report it, so "expires" here is always
-        -- still in the future -- no "ready"/zero case to special-case.
-        local text, ecolor = countdown(item.expires)
-        expiry = C.dim .. "  expires in " .. ecolor .. text .. pagelib.RESET
+  local function draw_building(name, group)
+    local q, tier = queues[name], tiers[name] or 0
+    local building_arg = pagelib.command_arg(name)
+    local queued = q and ("  " .. (q.depth or 0) .. "/" .. (q.cap or 0) .. " queued") or ""
+    add(pagelib.trunc(C.bright_cyan .. name .. pagelib.RESET .. queued, width))
+    draw_queue(q)
+    if q and (q.depth or 0) > 0 and building_arg then
+      pagelib.action_row(lines, actions, width, {
+        { label = "Clear queue", menu = { title = name, items = {
+          { label = "Keep queued items", value = false },
+          { label = "Remove all pending items", value = "cmake cancel " .. building_arg },
+        } } },
+      })
+    end
+    local room = free_queue_slots(s, q)
+    for _, row in ipairs(group.recipes) do
+      local recipe = row.recipe
+      local skill = s.skills[recipe.skill]
+      local detail = recipe.name .. "  " .. (recipe.materials or "")
+      if (recipe.time or 0) > 0 then
+        detail = detail .. "  " .. math.ceil(recipe.time / 60) .. " min base"
       end
-      add(pagelib.trunc("  " .. C.bright_green .. (item.name or "item") .. pagelib.RESET
-        .. C.dim .. "  quality " .. tostring(item.quality or 0) .. pagelib.RESET
-        .. expiry, width))
+      local recipe_arg = pagelib.command_arg(recipe.name)
+      if tier < row.tier then
+        add(pagelib.trunc("  Needs T" .. row.tier .. "  " .. detail, width))
+      elseif skill and (skill.rank or 0) < (recipe.rank or 0) then
+        add(pagelib.trunc("  Needs R" .. recipe.rank .. "  " .. detail, width))
+      elseif room > 0 and building_arg and recipe_arg then
+        local buttons = queue_buttons("cmake " .. building_arg .. " " .. recipe_arg, recipe.name, room)
+        pagelib.action_row(lines, actions, width, buttons, detail)
+      else
+        add(pagelib.trunc("  " .. detail, width))
+      end
+    end
+    add("")
+  end
+
+  for _, realm in ipairs(REALMS) do
+    local names, buildings = realm_buildings(s, realm, tiers, queues)
+    if #names > 0 then
+      add(pagelib.header(width, pagelib.title(realm)))
+      for _, name in ipairs(names) do
+        shown[name] = true
+        draw_building(name, buildings[name])
+      end
     end
   end
 
-  return lines
+  local other = {}
+  for name in pairs(queues) do
+    if not shown[name] then other[#other + 1] = name end
+  end
+  table.sort(other)
+  for _, name in ipairs(other) do draw_building(name, { recipes = {} }) end
+  if not next(shown) and #other == 0 then
+    add(pagelib.trunc(C.dim .. "No production jobs or available recipes." .. pagelib.RESET, width))
+  end
+
+  return lines, actions
 end
 
 return M
