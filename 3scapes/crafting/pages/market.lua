@@ -45,7 +45,17 @@ end
 function M.lines(width)
   width = pagelib.page_width(width)
   local s = state.get()
-  local lines = {}
+  local lines, actions = {}, {}
+  if #s.scroll_outbox > 0 then
+    lines[#lines + 1] = pagelib.header(width, "Scrolls Ready to Collect")
+    pagelib.action_row(lines, actions, width, {
+      { label = "Collect scrolls", command = "cmarket scroll collect" },
+    }, #s.scroll_outbox .. " waiting")
+    for _, name in ipairs(s.scroll_outbox) do
+      lines[#lines + 1] = pagelib.trunc("  " .. pagelib.title(tostring(name)), width)
+    end
+    lines[#lines + 1] = ""
+  end
   local function book(title, records, spec, row, empty)
     lines[#lines + 1] = pagelib.header(width, title)
     if #records == 0 then
@@ -102,15 +112,7 @@ function M.lines(width)
     return { o.id, recipe_name(o), o.seller, bid(o), number(o.reserve), countdown(o.closes) }
   end, "No active auctions.")
 
-  if #s.scroll_outbox > 0 then
-    lines[#lines + 1] = pagelib.header(width, "Scrolls Ready to Collect")
-    lines[#lines + 1] = pagelib.trunc(C.bright_green .. #s.scroll_outbox .. " waiting" .. RESET
-      .. "  cmarket scroll collect", width)
-    for _, name in ipairs(s.scroll_outbox) do
-      lines[#lines + 1] = pagelib.trunc("  " .. pagelib.title(tostring(name)), width)
-    end
-  end
-  return lines
+  return lines, actions
 end
 
 return M

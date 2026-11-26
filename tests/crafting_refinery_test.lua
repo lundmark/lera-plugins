@@ -275,7 +275,7 @@ check("market page shows the resolved recipe name",
       mbody:find("Refine Black Blood") ~= nil)
 check("market page shows the bid", mbody:find("250") ~= nil)
 check("market page surfaces the collect prompt",
-      mbody:find("cmarket scroll collect") ~= nil, mbody:sub(-200))
+      mbody:find("[Collect scrolls]", 1, true) ~= nil, mbody:sub(1, 200))
 check("market page lists each waiting scroll",
       mbody:find("Refine Void Tar") ~= nil and mbody:find("Refine Ember Seeds") ~= nil)
 
@@ -286,7 +286,7 @@ local empty = table.concat(market.lines(90), "\n")
 check("empty scroll book still renders its section",
       empty:find("Recipe Scroll Auctions") ~= nil)
 check("empty scroll outbox shows no collect prompt",
-      empty:find("cmarket scroll collect") == nil)
+      empty:find("[Collect scrolls]", 1, true) == nil)
 
 -- A server that predates the scroll book sends neither key.
 state.apply("Market", { orders = {}, material_orders = {}, exchanges = {}, auctions = {} })

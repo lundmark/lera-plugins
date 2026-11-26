@@ -1,5 +1,6 @@
 -- Known recipes and the full production catalogue, grouped by realm and station.
 local pagelib = require("pagelib")
+local production = require("production")
 local recipe_inputs = require("recipe_inputs")
 local state = require("state")
 
@@ -18,12 +19,9 @@ local function matches(recipe)
 end
 
 local function can_make(recipe, tiers, owned, skills, stock)
-  local id = recipe.id or ""
   local required = tiers[recipe.building] and tiers[recipe.building][recipe.name]
-  local skill = skills[recipe.skill]
-  return (id:match("^prod%-") or id:match("^starter%-")) and required
-    and (owned[recipe.building] or 0) >= required
-    and skill and skill.unlocked == 1 and (skill.rank or 0) >= (recipe.rank or 0)
+  return production.is_recipe(recipe)
+    and not production.eligibility(recipe, owned[recipe.building], required, skills[recipe.skill])
     and recipe_inputs.has_stock(recipe_inputs.parse(recipe.materials), stock)
 end
 
@@ -52,11 +50,12 @@ local function building_groups(records)
   return names, groups
 end
 
-local function render_list(lines, width, records, known)
+local function render_list(lines, width, records, actions, recipe_actions)
   local names, groups = building_groups(records)
-  local spec = known and {
-    { title = "Recipe", w = "*" }, { title = "Rank", w = 6 },
-    { title = "Base time", w = 11 }, { title = "Ingredients", w = math.floor(width / 2) },
+  local spec = recipe_actions and {
+    { title = "Recipe", w = "*" }, { title = "Rank", w = 5 },
+    { title = "Base time", w = 10 }, { title = "Ingredients", w = 23 },
+    { title = "Action / Status", w = 27 },
   } or {
     { title = "Recipe", w = "*" }, { title = "Tier", w = 9 }, { title = "Rank", w = 9 },
   }
@@ -65,17 +64,19 @@ local function render_list(lines, width, records, known)
     local group = groups[name]
     table.sort(group, function(a, b) return (a.name or a.id or "") < (b.name or b.id or "") end)
     lines[#lines + 1] = pagelib.header(width, name, C.bright_cyan)
-    local rows = {}
+    local rows, buttons = {}, {}
     for _, r in ipairs(group) do
       local recipe_name = r.name or r.id or "?"
-      if known then
+      if recipe_actions then
         local materials = r.materials and r.materials ~= "" and r.materials or "-"
-        rows[#rows + 1] = { recipe_name, r.rank or "-", duration(r.time), materials }
+        local row_buttons, status = recipe_actions(r)
+        rows[#rows + 1] = { recipe_name, r.rank or "-", duration(r.time), materials, status }
+        buttons[#rows] = row_buttons
       else
         rows[#rows + 1] = { recipe_name, r.tier or "-", r.rank or "-" }
       end
     end
-    pagelib.add_table(lines, width, spec, rows)
+    pagelib.add_table(lines, width, spec, rows, actions, recipe_actions and buttons)
     lines[#lines + 1] = ""
   end
 end
@@ -84,6 +85,14 @@ function M.lines(width)
   width = pagelib.page_width(width)
   local s = state.get()
   local lines, actions = {}, {}
+  if #s.ready > 0 then
+    pagelib.action_row(lines, actions, width, {
+      { label = "Collect all", command = "ccollect" },
+    }, #s.ready .. " finished")
+  end
+  pagelib.action_row(lines, actions, width, {
+    { label = "Production", page = "jobs" }, { label = "Inventory", page = "inventory" },
+  })
   local filters = { {
     label = craftable_only and "All recipes" or "Can craft now",
     activate = function() craftable_only = not craftable_only end,
@@ -102,20 +111,17 @@ function M.lines(width)
   end
   lines[#lines + 1] = ""
 
-  local owned, stock, visible = {}, nil, 0
-  if craftable_only then
-    for _, building in ipairs(s.buildings) do owned[building.name] = building.tier end
-    stock = recipe_inputs.stock(s.materials)
-  end
+  local owned, queues, visible = {}, {}, 0
+  for _, building in ipairs(s.buildings) do owned[building.name] = building.tier end
+  for _, queue in ipairs(s.queues) do if queue.building then queues[queue.building] = queue end end
+  local stock = craftable_only and recipe_inputs.stock(s.materials)
   for _, realm in ipairs(REALMS) do
     local key = realm:lower()
     local known, tiers = {}, {}
-    if craftable_only then
-      for _, entry in ipairs(s.recipes_catalogue[key] or {}) do
-        if entry.building and entry.name then
-          tiers[entry.building] = tiers[entry.building] or {}
-          tiers[entry.building][entry.name] = entry.tier
-        end
+    for _, entry in ipairs(s.recipes_catalogue[key] or {}) do
+      if entry.building and entry.name then
+        tiers[entry.building] = tiers[entry.building] or {}
+        tiers[entry.building][entry.name] = entry.tier
       end
     end
     for _, recipe in ipairs(s.recipes_known[key] or {}) do
@@ -127,7 +133,11 @@ function M.lines(width)
       visible = visible + #known
       lines[#lines + 1] = pagelib.header(width, realm .. " Known Recipes (" .. #known .. ")",
         pagelib.REALM_COLOR[realm])
-      render_list(lines, width, known, true)
+      render_list(lines, width, known, actions, function(recipe)
+        local building = recipe.building
+        local required = tiers[building] and tiers[building][recipe.name]
+        return production.actions(s, recipe, queues[building], owned[building], required)
+      end)
     end
   end
 
@@ -145,7 +155,7 @@ function M.lines(width)
         end
         visible = visible + #catalogue
         lines[#lines + 1] = pagelib.header(width, realm, pagelib.REALM_COLOR[realm])
-        render_list(lines, width, catalogue, false)
+        render_list(lines, width, catalogue)
       end
     end
   end

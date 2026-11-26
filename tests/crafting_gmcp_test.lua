@@ -233,12 +233,14 @@ state.apply("State", {
 state.apply("Buildings", { bldgs = { "Grand Forge|2" },
   refineries = { "Grove Mill|1|Oak Timber|75|2|4|1" } })
 state.apply("Jobs", {
+  ready = { { name = "Healthy Tonic" } }, queue_cap = 5, queue_total = 1,
   builds = { { building = "Grand Forge", tier = 3, due = 1090, duration = 120 } },
   masterwork = { { name = "Crystal Ring", target = 2, due = 1090, duration = 120 } },
   queues = { { building = "Grand Forge", current_id = "axe", current_name = "Mana Crystal Axe",
     current_due = 1090, current_duration = 120, depth = 1, cap = 5 } },
 })
 state.apply("Market", {
+  scroll_outbox = { "Mana Crystal Axe" },
   exchanges = { { id = 4, player = "Crafter", give_qty = 10, give_token = "fantasy_1",
     want_qty = 2, want_token = "chaos_1" } },
   auctions = { { id = 5, seller = "Crafter", material_name = "Mana Crystal",
@@ -264,15 +266,35 @@ window.set_page("recipes")
 recipes.search("mana crystal")
 render()
 assert(button("Mana Crystal Axe") and not visible("Star Silver Axe"))
+assert(click(button("[Collect all]")) and sent[#sent] == "ccollect")
+assert(click(button("[Queue 1]")) and sent[#sent] == "cmake Grand Forge Mana Crystal Axe 1")
+assert(click(button("[More]")) and #menu.items == 3)
+menu.on_select(menu.items[3].value)
+assert(sent[#sent] == "cmake Grand Forge Mana Crystal Axe 4")
 assert(click(button("[Can craft now]")))
 render()
 assert(button("Mana Crystal Axe") and not visible("Production Catalogue"))
+render(48, 35)
+assert(button("[Queue 1]"), "compact recipe view lost the queue button")
+render()
 assert(click(button("[Clear search]")))
 render()
 assert(not visible("Search: mana crystal"))
 assert(click(button("[All recipes]")))
 render()
 assert(button("Star Silver Axe"))
+assert(visible("Needs T3"), "a tier-locked recipe lost its status")
+assert(click(button("[Inventory]")) and window.current_page() == "inventory")
+render()
+assert(click(button("[Collect all]")) and sent[#sent] == "ccollect")
+window.set_page("market")
+render()
+assert(click(button("[Collect scrolls]")) and sent[#sent] == "cmarket scroll collect")
+window.set_page("recipes")
+state.apply("Jobs", { queue_cap = 5, queue_total = 5 })
+render()
+assert(visible("Queue full") and not visible("[Queue 1]"))
+assert(not visible("[Collect all]"), "empty outbox still offers collection")
 local jobs = require("pages.jobs")
 state.apply("Jobs", {
   queues = { { building = "Grand Forge", current_id = "axe", current_due = 1090,

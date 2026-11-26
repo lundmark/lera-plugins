@@ -14,8 +14,14 @@ local REALMS = { "Chaos", "Fantasy", "Science" }
 function M.lines(width)
   width = pagelib.page_width(width)
   local s = state.get()
-  local lines = {}
+  local lines, actions = {}, {}
   local function add(text) lines[#lines + 1] = text end
+
+  if #s.ready > 0 then
+    pagelib.action_row(lines, actions, width, {
+      { label = "Collect all", command = "ccollect" },
+    }, #s.ready .. " finished")
+  end
 
   add(pagelib.header(width, "Storage and Souls"))
   local capacity = {
@@ -109,7 +115,7 @@ function M.lines(width)
       .. pagelib.RESET, width))
   end
 
-  return lines
+  return lines, actions
 end
 
 return M

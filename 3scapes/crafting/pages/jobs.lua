@@ -4,7 +4,7 @@
 -- computed fresh on every render (init.lua's 1s timer keeps the popup
 -- redrawing while it's open, so this reads live even with no new GMCP frame).
 local pagelib = require("pagelib")
-local recipe_inputs = require("recipe_inputs")
+local production = require("production")
 local state = require("state")
 
 local C = pagelib.C
@@ -30,38 +30,6 @@ local function queue_batches(add, width, items)
   flush()
 end
 
-local function free_queue_slots(s, q)
-  local room = s.queue_cap > 0 and s.queue_cap - s.queue_total or 1
-  local building_room = q and (q.cap or 0) > 0 and q.cap - (q.depth or 0) or 5
-  room = math.min(room, building_room)
-  return room
-end
-
-local function queue_buttons(args, recipe, room, can_repeat)
-  local command = "cmake " .. args
-  local buttons = {}
-  if room > 0 then
-    buttons[#buttons + 1] = { label = "Queue 1", command = command .. " 1" }
-  end
-  if room > 1 then
-    local items = {}
-    local inputs = recipe_inputs.parse(recipe.materials)
-    for quantity = 2, room do
-      local cost = recipe_inputs.total(inputs, quantity)
-      local time = (recipe.time or 0) > 0 and math.ceil(recipe.time * quantity / 60) .. " min base"
-      local detail = (cost or "Cost unavailable") .. " | " .. (time or "Time unavailable")
-      items[#items + 1] = { label = "Queue " .. quantity .. " | " .. detail,
-        value = command .. " " .. quantity }
-    end
-    buttons[#buttons + 1] = { label = "More",
-      menu = { title = recipe.name .. " | " .. room .. " free slots", items = items } }
-  end
-  if can_repeat then
-    buttons[#buttons + 1] = { label = "Repeat", command = "cmake auto repeat " .. args }
-  end
-  return buttons
-end
-
 -- The catalogue supplies the realm and required building tier. Known recipes
 -- supply costs and names. Only exact production matches become cmake actions.
 local function realm_buildings(s, realm, tiers, queues)
@@ -78,9 +46,8 @@ local function realm_buildings(s, realm, tiers, queues)
 
   for _, recipe in ipairs(s.recipes_known[realm] or {}) do
     local group = buildings[recipe.building]
-    local id = recipe.id or ""
     local tier = group and group.recipe_tiers[recipe.name]
-    if tier and (id:match("^prod%-") or id:match("^starter%-")) then
+    if tier and production.is_recipe(recipe) then
       group.is_production = true
       group.recipes[#group.recipes + 1] = { recipe = recipe, tier = tier }
     end
@@ -242,24 +209,12 @@ function M.lines(width)
         } } },
       })
     end
-    local room = free_queue_slots(s, q)
     local rows, recipe_buttons = {}, {}
     for _, row in ipairs(group.recipes) do
       local recipe = row.recipe
-      local skill = s.skills[recipe.skill]
       local base = (recipe.time or 0) > 0 and (math.ceil(recipe.time / 60) .. " min") or "-"
-      local recipe_arg = pagelib.command_arg(recipe.name)
-      local note = ""
-      if tier < row.tier then
-        note = "Needs T" .. row.tier
-      elseif skill and (skill.rank or 0) < (recipe.rank or 0) then
-        note = "Needs R" .. recipe.rank
-      elseif (room > 0 or s.automation) and building_arg and recipe_arg then
-        recipe_buttons[#rows + 1] = queue_buttons(building_arg .. " " .. recipe_arg,
-          recipe, room, s.automation)
-      elseif room <= 0 then
-        note = "Queue full"
-      end
+      local buttons, note = production.actions(s, recipe, q, tier, row.tier)
+      recipe_buttons[#rows + 1] = buttons
       rows[#rows + 1] = { recipe.name, recipe.rank or "-", base, recipe.materials or "-", note }
     end
     if #rows > 0 then
