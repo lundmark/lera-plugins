@@ -73,8 +73,11 @@ end
 
 state.apply("Skills", { skills_0 = {
   woodwork = { unlocked = 1, can_train = 1, train_realm = "Fantasy", rank = 2, trained = 2,
-    train_cost = 3, train_abbr = "wrn", autotrain = 0 },
-  gemcraft = { unlocked = 1, can_train = -3, train_realm = "Fantasy" },
+    train_cost = 3, train_abbr = "wrn", autotrain = 0, into = 140, to_next = -40, xp_rank = 4 },
+  gemcraft = { unlocked = 1, can_train = -3, train_realm = "Fantasy", rank = 1,
+    into = 50, to_next = 0, xp_rank = 2 },
+  reaving = { unlocked = 1, can_train = 0, train_realm = "any", rank = 3,
+    into = 45, to_next = 105, xp_rank = 3 },
   bladesmithing = { unlocked = 0, can_train = -2, train_realm = "Fantasy" },
 } })
 state.apply("Buildings", { bldgs = { "Grand Forge|2" } })
@@ -104,6 +107,14 @@ render()
 local train_x, train_y = button("[Train]")
 local _, realm_y = button("Fantasy Skills")
 assert(train_y > realm_y and drawn[train_y]:find("3x wrn", 1, true))
+assert(drawn[train_y]:find("100/100", 1, true), "banked XP did not fill the next-rank bar")
+local _, reaving_y = button("Reaving")
+assert(drawn[reaving_y]:find("45/150", 1, true) and drawn[reaving_y]:find("Needs XP", 1, true))
+local _, gemcraft_y = button("Gemcraft")
+assert(drawn[gemcraft_y]:find("50/50", 1, true)
+  and drawn[gemcraft_y]:find("Needs tokens", 1, true))
+assert(drawn[reaving_y]:find("[", 1, true) == drawn[train_y]:find("[", 1, true),
+  "skill XP bars are not in the same column")
 assert(not click(55, train_y), "plain skill text must not send a command")
 pass = "remote"
 render(12, 4)
@@ -112,6 +123,8 @@ assert(click(train_x, train_y) and sent[#sent] == "ctrain woodwork")
 assert(click(train_x, train_y) and #sent == 2, "double click sent a second train")
 render()
 assert(click(button("[Auto off]")) and sent[#sent] == "ctrain auto woodwork")
+render(48, 35)
+assert(button("45/150") and button("[Train]"), "compact Skills view lost progress or actions")
 window.set_page("jobs")
 render()
 local _, fantasy_y = button("Fantasy")

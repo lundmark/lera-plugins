@@ -219,10 +219,9 @@ function pagelib.kv(width, label, value, value_color)
 end
 
 -- cols: array of { title = string, w = number | "*" } -- exactly one "*"
--- column takes the leftover width. Returns an array: one header row
--- (titles, dim) followed by one row per entry in `rows` (each entry an
--- array of cell strings). Every cell is truncated independently via trunc,
--- so a too-long colored cell can never bleed its color into its neighbor.
+-- column takes the leftover width. Returns the formatted rows and the
+-- resolved cell widths for hit-testing. Each input row is an array of cell
+-- strings. Truncating cells independently keeps colors within their cells.
 function pagelib.columns(width, cols, rows)
   local n = #cols
   local fixed_total, star_idx = 0, nil
@@ -258,7 +257,7 @@ function pagelib.columns(width, cols, rows)
   for _, r in ipairs(rows) do
     out[#out + 1] = row_str(r)
   end
-  return out
+  return out, widths
 end
 
 -- Add visible buttons before a row's detail and record their cell ranges.
