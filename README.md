@@ -8,6 +8,13 @@
 
 Plugin collection for the Lera MUD client.
 
+## License
+
+Lera Plugins is licensed under the
+[PolyForm Noncommercial License 1.0.0](LICENSE). Noncommercial use,
+modification, and distribution are permitted; commercial use requires a
+separate license from Simon Lundmark <simon@dagg.ai>.
+
 ## Input shortcuts
 
 [`generic/input_shortcuts.lua`](generic/input_shortcuts.md) adds optional
