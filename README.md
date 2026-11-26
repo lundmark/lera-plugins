@@ -13,7 +13,8 @@ Plugin collection for the Lera MUD client.
 Lera Plugins is licensed under the
 [PolyForm Noncommercial License 1.0.0](LICENSE). Noncommercial use,
 modification, and distribution are permitted; commercial use requires a
-separate license from Simon Lundmark <simon@dagg.ai>.
+separate license from Simon Lundmark <simon@dagg.ai>. If this summary and the
+official license text differ, the official license text controls.
 
 ## Input shortcuts
 
