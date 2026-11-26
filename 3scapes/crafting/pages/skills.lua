@@ -7,6 +7,7 @@ local RESET = pagelib.RESET
 local M = {}
 
 local REALMS = { "Chaos", "Fantasy", "Science", "General" }
+local show_locked = false
 local STATUS = {
   [1] = { "Ready", C.bright_green },
   [0] = { "Needs XP", C.dim },
@@ -48,7 +49,13 @@ local function next_cost(skill)
     return "-"
   end
   local color = pagelib.REALM_COLOR[pagelib.title(skill.train_realm)] or C.white
-  return color .. pagelib.fmt_num(skill.train_cost) .. "x " .. (skill.train_abbr or "?") .. RESET
+  local cost = pagelib.fmt_num(skill.train_cost)
+  if type(skill.train_have) == "number" then
+    cost = cost .. "/" .. pagelib.fmt_num(skill.train_have)
+  else
+    cost = cost .. "x"
+  end
+  return color .. cost .. " " .. (skill.train_abbr or "?") .. RESET
 end
 
 local function skill_buttons(name, skill)
@@ -79,13 +86,13 @@ local function add_button_span(spans, button, col)
 end
 
 local function render_columns(lines, actions, width, names, skills)
-  local show_ceiling = width >= 96
-  local progress_width = math.min(30, width - (show_ceiling and 75 or 65))
+  local show_ceiling = width >= 100
+  local progress_width = math.min(26, width - (show_ceiling and 81 or 73))
   local spec = {
     { title = "Skill", w = "*" },
     { title = "Rank", w = 5 },
     { title = "XP to next rank", w = progress_width },
-    { title = "Base cost", w = 9 },
+    { title = "Cost / Have", w = 19 },
     { title = "Training", w = 12 },
     { title = "Train", w = 7 },
     { title = "Autotrain", w = 10 },
@@ -138,7 +145,8 @@ local function render_compact(lines, actions, width, names, skills)
       .. RESET, width)
     if skill.unlocked == 1 and skill.can_train ~= -1 then
       local xp = progress_text(skill, math.min(24, width - 2))
-      lines[#lines + 1] = pagelib.trunc("  " .. xp .. " XP  " .. next_cost(skill), width)
+      lines[#lines + 1] = pagelib.trunc("  " .. xp .. " XP", width)
+      lines[#lines + 1] = pagelib.trunc("  Cost / Have: " .. next_cost(skill), width)
     end
     local train, auto = skill_buttons(name, skill)
     local buttons = {}
@@ -156,38 +164,40 @@ function M.lines(width)
     return { pagelib.trunc(C.dim .. "Waiting for crafting skills." .. RESET, width) }
   end
 
-  local groups = { Chaos = {}, Fantasy = {}, Science = {}, General = {} }
+  local groups, ready, locked = { Chaos = {}, Fantasy = {}, Science = {}, General = {} }, {}, {}
   for name, skill in pairs(skills) do
-    local realm = pagelib.title(skill.train_realm) or "General"
+    local realm = pagelib.title(skill.train_realm)
     local group = groups[realm] or groups.General
+    if trainable(skill) then group = ready
+    elseif skill.unlocked ~= 1 then group = locked end
     group[#group + 1] = name
   end
 
-  for _, realm in ipairs(REALMS) do
-    local names = groups[realm]
-    if #names > 0 then
-      local ready = 0
-      for _, name in ipairs(names) do
-        if trainable(skills[name]) then ready = ready + 1 end
-      end
-      table.sort(names, function(a, b)
-        local ar, br = trainable(skills[a]), trainable(skills[b])
-        if ar ~= br then return ar end
-        local au, bu = skills[a].unlocked == 1, skills[b].unlocked == 1
-        if au ~= bu then return au end
-        return a < b
-      end)
-      local heading = realm .. " Skills"
-      if ready > 0 then heading = heading .. "  |  " .. ready .. " ready" end
-      local color = pagelib.REALM_COLOR[realm] or C.yellow
-      lines[#lines + 1] = pagelib.header(width, heading, color)
-      if width >= 82 then
-        render_columns(lines, actions, width, names, skills)
-      else
-        render_compact(lines, actions, width, names, skills)
-      end
-      lines[#lines + 1] = ""
+  if #locked > 0 then
+    pagelib.action_row(lines, actions, width, { {
+      label = show_locked and "Hide locked" or "Show locked",
+      activate = function() show_locked = not show_locked end,
+    } })
+  end
+  local function section(names, heading, color)
+    if #names == 0 then return end
+    table.sort(names)
+    lines[#lines + 1] = pagelib.header(width, heading, color)
+    if width >= 90 then
+      render_columns(lines, actions, width, names, skills)
+    else
+      render_compact(lines, actions, width, names, skills)
     end
+    lines[#lines + 1] = ""
+  end
+
+  section(ready, "Ready to Train (" .. #ready .. ")", C.bright_green)
+  for _, realm in ipairs(REALMS) do
+    section(groups[realm], realm .. " Skills", pagelib.REALM_COLOR[realm] or C.yellow)
+  end
+  if show_locked then section(locked, "Locked Skills", C.dim) end
+  if #lines == 1 and #locked > 0 then
+    lines[#lines + 1] = pagelib.trunc("No unlocked skills.", width)
   end
   return lines, actions
 end

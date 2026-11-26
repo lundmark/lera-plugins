@@ -1,10 +1,31 @@
 -- Known recipes and the full production catalogue, grouped by realm and station.
 local pagelib = require("pagelib")
+local recipe_inputs = require("recipe_inputs")
 local state = require("state")
 
 local C = pagelib.C
 local M = {}
 local REALMS = { "Chaos", "Fantasy", "Science" }
+local query, craftable_only = "", false
+
+function M.search(text)
+  query = text:gsub("[%c]", ""):match("^%s*(.-)%s*$"):lower()
+end
+
+local function matches(recipe)
+  return query == "" or (recipe.name or ""):lower():find(query, 1, true)
+    or (recipe.materials or ""):lower():find(query, 1, true)
+end
+
+local function can_make(recipe, tiers, owned, skills, stock)
+  local id = recipe.id or ""
+  local required = tiers[recipe.building] and tiers[recipe.building][recipe.name]
+  local skill = skills[recipe.skill]
+  return (id:match("^prod%-") or id:match("^starter%-")) and required
+    and (owned[recipe.building] or 0) >= required
+    and skill and skill.unlocked == 1 and (skill.rank or 0) >= (recipe.rank or 0)
+    and recipe_inputs.has_stock(recipe_inputs.parse(recipe.materials), stock)
+end
 
 local function duration(seconds)
   if not seconds or seconds <= 0 then return "-" end
@@ -62,32 +83,77 @@ end
 function M.lines(width)
   width = pagelib.page_width(width)
   local s = state.get()
-  local lines = {}
+  local lines, actions = {}, {}
+  local filters = { {
+    label = craftable_only and "All recipes" or "Can craft now",
+    activate = function() craftable_only = not craftable_only end,
+  } }
+  if query ~= "" then
+    filters[#filters + 1] = { label = "Clear search", activate = function() M.search("") end }
+  end
+  pagelib.action_row(lines, actions, width, filters)
+  if query ~= "" then
+    lines[#lines + 1] = pagelib.trunc("Search: " .. query, width)
+  else
+    lines[#lines + 1] = pagelib.trunc(C.dim .. "/craft recipes <name or ingredient>" .. pagelib.RESET, width)
+  end
+  if craftable_only then
+    lines[#lines + 1] = pagelib.trunc("Known production recipes with a qualified station and enough stock for one.", width)
+  end
+  lines[#lines + 1] = ""
+
+  local owned, stock, visible = {}, nil, 0
+  if craftable_only then
+    for _, building in ipairs(s.buildings) do owned[building.name] = building.tier end
+    stock = recipe_inputs.stock(s.materials)
+  end
   for _, realm in ipairs(REALMS) do
     local key = realm:lower()
-    local known = s.recipes_known[key] or {}
-    lines[#lines + 1] = pagelib.header(width, realm .. " Known Recipes (" .. #known .. ")",
-      pagelib.REALM_COLOR[realm])
-    if #known == 0 then
-      lines[#lines + 1] = "No learned recipes."
-      lines[#lines + 1] = ""
-    else
+    local known, tiers = {}, {}
+    if craftable_only then
+      for _, entry in ipairs(s.recipes_catalogue[key] or {}) do
+        if entry.building and entry.name then
+          tiers[entry.building] = tiers[entry.building] or {}
+          tiers[entry.building][entry.name] = entry.tier
+        end
+      end
+    end
+    for _, recipe in ipairs(s.recipes_known[key] or {}) do
+      if matches(recipe) and (not craftable_only or can_make(recipe, tiers, owned, s.skills, stock)) then
+        known[#known + 1] = recipe
+      end
+    end
+    if #known > 0 then
+      visible = visible + #known
+      lines[#lines + 1] = pagelib.header(width, realm .. " Known Recipes (" .. #known .. ")",
+        pagelib.REALM_COLOR[realm])
       render_list(lines, width, known, true)
     end
   end
 
-  lines[#lines + 1] = pagelib.header(width, "Production Catalogue")
-  local count = 0
-  for _, realm in ipairs(REALMS) do
-    local catalogue = s.recipes_catalogue[realm:lower()] or {}
-    if #catalogue > 0 then
-      count = count + #catalogue
-      lines[#lines + 1] = pagelib.header(width, realm, pagelib.REALM_COLOR[realm])
-      render_list(lines, width, catalogue, false)
+  if not craftable_only then
+    local showed_catalogue = false
+    for _, realm in ipairs(REALMS) do
+      local catalogue = {}
+      for _, recipe in ipairs(s.recipes_catalogue[realm:lower()] or {}) do
+        if matches(recipe) then catalogue[#catalogue + 1] = recipe end
+      end
+      if #catalogue > 0 then
+        if not showed_catalogue then
+          lines[#lines + 1] = pagelib.header(width, "Production Catalogue")
+          showed_catalogue = true
+        end
+        visible = visible + #catalogue
+        lines[#lines + 1] = pagelib.header(width, realm, pagelib.REALM_COLOR[realm])
+        render_list(lines, width, catalogue, false)
+      end
     end
   end
-  if count == 0 then lines[#lines + 1] = "Waiting for catalogue data." end
-  return lines
+  if visible == 0 then
+    lines[#lines + 1] = query ~= "" and "No matching recipes."
+      or (craftable_only and "No production recipes can start with current stock." or "Waiting for recipes.")
+  end
+  return lines, actions
 end
 
 return M

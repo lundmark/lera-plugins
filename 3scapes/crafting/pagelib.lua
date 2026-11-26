@@ -365,7 +365,7 @@ function pagelib.action_row(lines, actions, width, buttons, detail)
     if last > width then break end
     row[#row + 1] = pagelib.C.bright_cyan .. label .. pagelib.RESET .. " "
     spans[#spans + 1] = { first = col, last = last, command = button.command,
-      page = button.page, menu = button.menu }
+      page = button.page, menu = button.menu, activate = button.activate }
     col = last + 1
   end
   lines[#lines + 1] = pagelib.trunc(table.concat(row) .. (detail or ""), width)

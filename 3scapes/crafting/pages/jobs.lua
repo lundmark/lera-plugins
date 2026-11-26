@@ -4,6 +4,7 @@
 -- computed fresh on every render (init.lua's 1s timer keeps the popup
 -- redrawing while it's open, so this reads live even with no new GMCP frame).
 local pagelib = require("pagelib")
+local recipe_inputs = require("recipe_inputs")
 local state = require("state")
 
 local C = pagelib.C
@@ -31,7 +32,8 @@ end
 
 local function free_queue_slots(s, q)
   local room = s.queue_cap > 0 and s.queue_cap - s.queue_total or 1
-  if q and (q.cap or 0) > 0 then room = math.min(room, q.cap - (q.depth or 0)) end
+  local building_room = q and (q.cap or 0) > 0 and q.cap - (q.depth or 0) or 5
+  room = math.min(room, building_room)
   return room
 end
 
@@ -43,10 +45,16 @@ local function queue_buttons(args, recipe, room, can_repeat)
   end
   if room > 1 then
     local items = {}
-    for quantity = 2, math.min(room, 5) do
-      items[#items + 1] = { label = "Queue " .. quantity, value = command .. " " .. quantity }
+    local inputs = recipe_inputs.parse(recipe.materials)
+    for quantity = 2, room do
+      local cost = recipe_inputs.total(inputs, quantity)
+      local time = (recipe.time or 0) > 0 and math.ceil(recipe.time * quantity / 60) .. " min base"
+      local detail = (cost or "Cost unavailable") .. " | " .. (time or "Time unavailable")
+      items[#items + 1] = { label = "Queue " .. quantity .. " | " .. detail,
+        value = command .. " " .. quantity }
     end
-    buttons[#buttons + 1] = { label = "More", menu = { title = recipe, items = items } }
+    buttons[#buttons + 1] = { label = "More",
+      menu = { title = recipe.name .. " | " .. room .. " free slots", items = items } }
   end
   if can_repeat then
     buttons[#buttons + 1] = { label = "Repeat", command = "cmake auto repeat " .. args }
@@ -63,6 +71,7 @@ local function realm_buildings(s, realm, tiers, queues)
     if building and recipe.name and (tiers[building] or queues[building]) then
       local group = buildings[building] or { recipe_tiers = {}, recipes = {} }
       buildings[building] = group
+      group.is_production = group.is_production or recipe.production == 1
       group.recipe_tiers[recipe.name] = recipe.tier or 0
     end
   end
@@ -72,6 +81,7 @@ local function realm_buildings(s, realm, tiers, queues)
     local id = recipe.id or ""
     local tier = group and group.recipe_tiers[recipe.name]
     if tier and (id:match("^prod%-") or id:match("^starter%-")) then
+      group.is_production = true
       group.recipes[#group.recipes + 1] = { recipe = recipe, tier = tier }
     end
   end
@@ -79,11 +89,42 @@ local function realm_buildings(s, realm, tiers, queues)
   local names = {}
   for name, group in pairs(buildings) do
     -- Owned refinery catalogue entries are not typed production jobs.
-    if queues[name] or #group.recipes > 0 then names[#names + 1] = name end
+    if queues[name] or group.is_production then names[#names + 1] = name end
     table.sort(group.recipes, function(a, b) return a.recipe.name < b.recipe.name end)
   end
   table.sort(names)
   return names, buildings
+end
+
+local function draw_attention(lines, actions, width, s, queues, realms)
+  local rows, buttons, idle = {}, {}, {}
+  for _, q in ipairs(s.queues) do
+    if q.stalled == 1 then
+      local missing = q.shortfall and q.shortfall ~= "" and q.shortfall or "materials"
+      rows[#rows + 1] = { q.building or "?", "Missing " .. missing }
+      buttons[#rows] = { { label = "Inventory", page = "inventory" },
+        { label = "Refinery", page = "refinery" } }
+    end
+  end
+  for _, realm in ipairs(REALMS) do
+    for _, name in ipairs(realms[realm].names) do
+      if not queues[name] then idle[#idle + 1] = name end
+    end
+  end
+  if #rows == 0 and #idle == 0 then return end
+  local function add(line) lines[#lines + 1] = line end
+  add(pagelib.header(width, "Needs Attention"))
+  if #rows > 0 then
+    pagelib.add_table(lines, width, {
+      { title = "Stalled building", w = 23 }, { title = "Why it stopped", w = "*" },
+      { title = "Open", w = 25 },
+    }, rows, actions, buttons)
+  end
+  if #idle > 0 then
+    add(pagelib.header(width, "Idle Buildings (" .. #idle .. ")", C.dim))
+    for _, name in ipairs(idle) do add(pagelib.trunc("  " .. name, width)) end
+  end
+  add("")
 end
 
 function M.lines(width)
@@ -107,6 +148,15 @@ function M.lines(width)
     }, rows)
     add("")
   end
+
+  local queues, tiers, shown, realms = {}, {}, {}, {}
+  for _, q in ipairs(s.queues) do if q.building then queues[q.building] = q end end
+  for _, b in ipairs(s.buildings) do if b.name then tiers[b.name] = b.tier end end
+  for _, realm in ipairs(REALMS) do
+    local names, buildings = realm_buildings(s, realm, tiers, queues)
+    realms[realm] = { names = names, buildings = buildings }
+  end
+  draw_attention(lines, actions, width, s, queues, realms)
 
   if #s.builds > 0 then
     local sorted = {}
@@ -156,9 +206,6 @@ function M.lines(width)
     add("")
   end
 
-  local queues, tiers, shown = {}, {}, {}
-  for _, q in ipairs(s.queues) do if q.building then queues[q.building] = q end end
-  for _, b in ipairs(s.buildings) do if b.name then tiers[b.name] = b.tier end end
   add(pagelib.header(width, "Production"))
   add(pagelib.kv(width, "Total queued:", pagelib.meter(s.queue_total, s.queue_cap, 33)))
 
@@ -172,7 +219,8 @@ function M.lines(width)
         { title = "In production", w = "*" }, { title = "Completion", w = 32 },
       }, { { q.current_name or q.current_id, pagelib.job_time(q.current_due, q.current_duration, s.jobs_clock) } })
     elseif q.stalled == 1 then
-      add(pagelib.trunc("  " .. C.bright_red .. "Stalled (missing materials)"
+      add(pagelib.trunc("  " .. C.bright_red .. "Stalled: missing "
+        .. (q.shortfall and q.shortfall ~= "" and q.shortfall or "materials")
         .. pagelib.RESET, width))
     else
       add(pagelib.trunc("  " .. C.dim .. "Waiting to start" .. pagelib.RESET, width))
@@ -208,7 +256,7 @@ function M.lines(width)
         note = "Needs R" .. recipe.rank
       elseif (room > 0 or s.automation) and building_arg and recipe_arg then
         recipe_buttons[#rows + 1] = queue_buttons(building_arg .. " " .. recipe_arg,
-          recipe.name, room, s.automation)
+          recipe, room, s.automation)
       elseif room <= 0 then
         note = "Queue full"
       end
@@ -224,7 +272,7 @@ function M.lines(width)
   end
 
   for _, realm in ipairs(REALMS) do
-    local names, buildings = realm_buildings(s, realm, tiers, queues)
+    local names, buildings = realms[realm].names, realms[realm].buildings
     if #names > 0 then
       local label = pagelib.title(realm)
       add(pagelib.header(width, label, pagelib.REALM_COLOR[label]))

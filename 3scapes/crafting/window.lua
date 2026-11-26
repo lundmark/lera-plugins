@@ -70,6 +70,9 @@ function window.scroll_to_bottom()
   body_hits = {}
   return scrollers[current_key].scroll_to_bottom()
 end
+function window.scroll_to_top()
+  return window.scroll(-#last_lines[current_key])
+end
 function window.following_tail() return scrollers[current_key].following_tail() end
 
 -- Recorded from the most recent LOCAL render pass, for tab-click hit-testing
@@ -176,6 +179,12 @@ function window.on_pointer(event)
   for _, button in ipairs(body_hits[event.y] or {}) do
     if event.x >= button.first and event.x < button.last then
       if button.page then return window.set_page(button.page) end
+      if button.activate then
+        button.activate()
+        window.scroll_to_top()
+        ui.dirty()
+        return true
+      end
       if button.menu then
         local generation = action_generation
         require("menu").open({

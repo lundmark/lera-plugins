@@ -59,12 +59,17 @@ local function render(width, height)
   window.render(rect(0, 0, width or 90, height or 35))
 end
 
-local function button(label)
+local function visible(label)
   for y, row in pairs(drawn) do
     local x = row:find(label, 1, true)
     if x then return x - 1, y end
   end
-  error("missing button " .. label)
+end
+
+local function button(label)
+  local x, y = visible(label)
+  assert(x, "missing button " .. label)
+  return x, y
 end
 
 local function click(x, y)
@@ -73,7 +78,8 @@ end
 
 state.apply("Skills", { skills_0 = {
   woodwork = { unlocked = 1, can_train = 1, train_realm = "Fantasy", rank = 2, trained = 2,
-    train_cost = 3, train_abbr = "wrn", autotrain = 0, into = 140, to_next = -40, xp_rank = 4 },
+    train_cost = 3, train_have = 24, train_abbr = "wrn", autotrain = 0,
+    into = 140, to_next = -40, xp_rank = 4 },
   gemcraft = { unlocked = 1, can_train = -3, train_realm = "Fantasy", rank = 1,
     into = 50, to_next = 0, xp_rank = 2 },
   reaving = { unlocked = 1, can_train = 0, train_realm = "any", rank = 3,
@@ -88,14 +94,14 @@ state.apply("Recipes", {
   },
   known_fantasy = {
     { building = "Grand Forge", name = "Mana Crystal Axe", id = "prod-14-axe",
-      materials = "2x Mana Crystal", time = 4200 },
+      skill = "woodwork", rank = 1, materials = "2x Mana Crystal", time = 4200 },
     { building = "Grand Forge", name = "Star Silver Axe", id = "prod-14-star-axe" },
     { building = "Grand Forge", name = "Refine Mana Crystal", id = "refine-example" },
   },
 })
 state.apply("Jobs", {
   queue_cap = 5, queue_total = 3, ready = { { name = "Healthy Tonic" } },
-  queues = { { building = "Grand Forge", depth = 3, cap = 5, stalled = 1,
+  queues = { { building = "Grand Forge", depth = 3, cap = 5, stalled = 1, shortfall = "2 Mana Crystal",
     items = "Mana Crystal Axe, Mana Crystal Axe, Star Silver Axe" } },
 })
 window.set_page("info")
@@ -106,7 +112,7 @@ assert(click(button("[Skills]")) and window.current_page() == "skills")
 render()
 local train_x, train_y = button("[Train]")
 local _, realm_y = button("Fantasy Skills")
-assert(train_y > realm_y and drawn[train_y]:find("3x wrn", 1, true))
+assert(train_y < realm_y and drawn[train_y]:find("3/24 wrn", 1, true))
 assert(drawn[train_y]:find("100/100", 1, true), "banked XP did not fill the next-rank bar")
 local _, reaving_y = button("Reaving")
 assert(drawn[reaving_y]:find("45/150", 1, true) and drawn[reaving_y]:find("Needs XP", 1, true))
@@ -123,15 +129,24 @@ assert(click(train_x, train_y) and sent[#sent] == "ctrain woodwork")
 assert(click(train_x, train_y) and #sent == 2, "double click sent a second train")
 render()
 assert(click(button("[Auto off]")) and sent[#sent] == "ctrain auto woodwork")
+assert(not visible("Bladesmithing"), "locked skill visible by default")
+assert(click(button("[Show locked]")))
+render()
+assert(button("Bladesmithing"))
+assert(click(button("[Hide locked]")))
 render(48, 35)
 assert(button("45/150") and button("[Train]"), "compact Skills view lost progress or actions")
 window.set_page("jobs")
 render()
 local _, fantasy_y = button("Fantasy")
-local _, forge_y = button("Grand Forge")
-assert(forge_y > fantasy_y and button("2 x Mana Crystal Axe"))
+local _, stall_y = button("Missing 2 Mana Crystal")
+assert(stall_y < fantasy_y and button("2 x Mana Crystal Axe"))
+assert(click(button("[Inventory]")) and window.current_page() == "inventory")
+window.set_page("jobs")
+render()
 assert(click(button("[Queue 1]")) and sent[#sent] == "cmake Grand Forge Mana Crystal Axe 1")
 assert(click(button("[More]")) and #menu.items == 1)
+assert(menu.items[1].label:find("4x Mana Crystal | 140 min base", 1, true))
 menu.on_select(menu.items[1].value)
 assert(sent[#sent] == "cmake Grand Forge Mana Crystal Axe 2")
 assert(click(button("[Clear queue]")))
@@ -169,7 +184,7 @@ assert(protocol.on_gmcp("Craft.Jobs", { jobs_a1_2_4_q = {
 } }))
 assert(protocol.on_gmcp("Craft.Jobs", { jobs_a1_3_4_a = {
   { realm = "Fantasy", building = "Grand Forge", recipe = "Mana Crystal Axe",
-    status = "Idle or offline" },
+    status = "Needs 3 more Mana Crystal (keeps 10 in reserve)" },
 } }))
 assert(not state.get().automation and #sent == calls)
 assert(protocol.on_gmcp("Craft.Jobs", { jobs_a1_4_4_l = { 0, 15 } }))
@@ -190,6 +205,7 @@ assert(sent[#sent] == "cmake auto repeat Grand Forge Mana Crystal Axe")
 window.set_page("automation")
 render()
 assert(button("Auto-scrap is on"))
+assert(button("Needs 3 more Mana Crystal"))
 assert(click(button("[Pause]")) and sent[#sent] == "cmake auto off")
 assert(click(button("[Auto-collect off]")))
 assert(sent[#sent] == "cmake auto collect on")
@@ -243,6 +259,20 @@ for _, page in ipairs(window.PAGES) do
     end
   end
 end
+local recipes = require("pages.recipes")
+window.set_page("recipes")
+recipes.search("mana crystal")
+render()
+assert(button("Mana Crystal Axe") and not visible("Star Silver Axe"))
+assert(click(button("[Can craft now]")))
+render()
+assert(button("Mana Crystal Axe") and not visible("Production Catalogue"))
+assert(click(button("[Clear search]")))
+render()
+assert(not visible("Search: mana crystal"))
+assert(click(button("[All recipes]")))
+render()
+assert(button("Star Silver Axe"))
 local jobs = require("pages.jobs")
 state.apply("Jobs", {
   queues = { { building = "Grand Forge", current_id = "axe", current_due = 1090,

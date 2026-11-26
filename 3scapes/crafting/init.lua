@@ -156,7 +156,7 @@ local function show_status()
 end
 
 local CRAFT_USAGE = "/craft [overview | inventory | skills | buildings | refinery | production "
-  .. "| automation | recipes | market | status]"
+  .. "| automation | recipes [search] | market | status]"
 
 local function dispatch(args)
   local word = tostring(args or ""):match("^%s*(%S*)"):lower()
@@ -174,6 +174,11 @@ local function dispatch(args)
     if p.key == word then
       if not popup_open then open_popup() end
       window.set_page(word)
+      local search = tostring(args or ""):match("^%s*%S+%s+(.+)")
+      if word == "recipes" and search then
+        p.mod.search(search)
+        window.scroll_to_top()
+      end
       return
     end
   end

@@ -69,8 +69,8 @@ function M.lines(width)
         if building then buttons[#rows] = { { label = "Clear", command = "cmake auto clear " .. building } } end
       end
       pagelib.add_table(lines, width, {
-        { title = "Building", w = 23 }, { title = "Recipe", w = "*" },
-        { title = "Status", w = 25 }, { title = "Action", w = 9 },
+        { title = "Building", w = 21 }, { title = "Recipe", w = 23 },
+        { title = "Status", w = "*" }, { title = "Action", w = 9 },
       }, rows, actions, buttons)
       add("")
     end
