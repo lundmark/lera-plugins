@@ -12,15 +12,16 @@ local M = {}
 local REALMS = { "Chaos", "Fantasy", "Science" }
 
 function M.lines(width)
-  width = width or 80
+  width = pagelib.page_width(width)
   local s = state.get()
   local lines = {}
   local function add(text) lines[#lines + 1] = text end
 
-  add(pagelib.header(width, "Stock"))
-  add(pagelib.kv(width, "Storage used:", s.stock_used .. " / " .. s.stock_cap, C.bright_cyan))
-  add(pagelib.kv(width, "Souls:", s.souls .. " / " .. s.soul_cap, C.bright_cyan))
-  add(pagelib.trunc("  " .. pagelib.gradient_bar(math.min(width - 2, 40), s.souls, s.soul_cap), width))
+  add(pagelib.header(width, "Storage and Souls"))
+  local capacity = {
+    { "Material storage", pagelib.meter(s.stock_used, s.stock_cap, 32) },
+    { "All souls", pagelib.meter(s.souls, s.soul_cap, 32) },
+  }
   -- Same tier names + T#/cap rows as csouls, not a bare "T1 50" tally.
   local any_tier = false
   for _, t in ipairs(s.soul_tiers) do
@@ -32,11 +33,14 @@ function M.lines(width)
     table.sort(sorted_tiers, function(a, b) return (a.tier or 0) < (b.tier or 0) end)
     for _, t in ipairs(sorted_tiers) do
       if (t.cap or 0) > 0 or (t.count or 0) > 0 then
-        add(pagelib.kv(width, "  T" .. tostring(t.tier) .. " " .. (t.name or "?") .. ":",
-          tostring(t.count or 0) .. " / " .. tostring(t.cap or 0), C.white))
+        capacity[#capacity + 1] = { "T" .. tostring(t.tier) .. " " .. (t.name or "?"),
+          pagelib.meter(t.count, t.cap, 32) }
       end
     end
   end
+  pagelib.add_table(lines, width, {
+    { title = "Resource", w = "*" }, { title = "Used / Capacity", w = 32 },
+  }, capacity)
 
   add("")
   add(pagelib.header(width, "Currency Tokens"))
@@ -44,7 +48,6 @@ function M.lines(width)
   -- every tier is listed here even at 0 -- no more guessing whether an
   -- absent realm means "you have none" or "dropped somewhere".
   do
-    local col_shown = false
     for _, realm in ipairs(REALMS) do
       local rc = pagelib.REALM_COLOR[realm] or C.white
       local rows_in = {}
@@ -52,24 +55,18 @@ function M.lines(width)
         if t.realm == realm then rows_in[#rows_in + 1] = t end
       end
       table.sort(rows_in, function(a, b) return (a.level or 0) < (b.level or 0) end)
-      add(pagelib.trunc(rc .. realm .. " Realm" .. pagelib.RESET, width))
       local rows = {}
       for _, t in ipairs(rows_in) do
         rows[#rows + 1] = { (t.name or ("T" .. tostring(t.level))) .. " token",
           pagelib.fmt_num(t.qty or 0) }
       end
-      local cols = pagelib.columns(width - 2, {
-        { title = "Token", w = 20 }, { title = "Qty", w = "*" },
-      }, rows)
-      if not col_shown then
-        add("  " .. cols[1])
-        col_shown = true
+      if #rows > 0 then
+        add(pagelib.header(width, realm, rc))
+        pagelib.add_table(lines, width, {
+          { title = "Token", w = "*" }, { title = "In stock", w = 12 },
+        }, rows)
+        add("")
       end
-      local i
-      for i = 2, #cols do
-        add("  " .. C.white .. cols[i] .. pagelib.RESET)
-      end
-      add("")
     end
   end
 
@@ -89,29 +86,20 @@ function M.lines(width)
     local rank = { Chaos = 1, Fantasy = 2, Science = 3, ["Cross-Realm"] = 4 }
     table.sort(order, function(a, b) return (rank[a] or 9) < (rank[b] or 9) end)
 
-    local col_shown = false
     for _, realm in ipairs(order) do
       local rows_in = groups[realm]
       table.sort(rows_in, function(a, b) return (a.name or "") < (b.name or "") end)
       local rc = pagelib.REALM_COLOR[realm] or C.bright_cyan
-      add(pagelib.trunc(rc .. realm .. (realm ~= "Cross-Realm" and " Realm" or "") .. pagelib.RESET, width))
+      add(pagelib.header(width, realm, rc))
       local rows = {}
       for _, m in ipairs(rows_in) do
-        rows[#rows + 1] = { pagelib.title(m.name or "?"), tostring(m.qty or 0),
+        rows[#rows + 1] = { pagelib.title(m.name or "?"), pagelib.fmt_num(m.qty),
           m.category or "", (m.quality and m.quality ~= "") and m.quality or "-" }
       end
-      local cols = pagelib.columns(width - 2, {
-        { title = "Material", w = 20 }, { title = "Qty", w = 6 },
-        { title = "Type", w = 9 }, { title = "Quality", w = "*" },
+      pagelib.add_table(lines, width, {
+        { title = "Material", w = "*" }, { title = "In stock", w = 9 },
+        { title = "Type", w = 12 }, { title = "Quality spread", w = math.floor(width / 2) },
       }, rows)
-      if not col_shown then
-        add("  " .. cols[1])
-        col_shown = true
-      end
-      local i
-      for i = 2, #cols do
-        add("  " .. pagelib.zebra(i - 2) .. cols[i] .. pagelib.RESET)
-      end
     end
   end
 

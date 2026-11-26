@@ -149,7 +149,7 @@ local function render_compact(lines, actions, width, names, skills)
 end
 
 function M.lines(width)
-  width = math.min(width or 100, 106)
+  width = pagelib.page_width(width)
   local skills = state.get().skills
   local lines, actions = {}, {}
   if not next(skills) then
@@ -180,8 +180,7 @@ function M.lines(width)
       local heading = realm .. " Skills"
       if ready > 0 then heading = heading .. "  |  " .. ready .. " ready" end
       local color = pagelib.REALM_COLOR[realm] or C.yellow
-      lines[#lines + 1] = pagelib.trunc(color .. heading .. RESET
-        .. " " .. C.dim .. string.rep("-", width) .. RESET, width)
+      lines[#lines + 1] = pagelib.header(width, heading, color)
       if width >= 82 then
         render_columns(lines, actions, width, names, skills)
       else

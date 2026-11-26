@@ -1,16 +1,12 @@
--- Server-owned automation. The panel sends settings, never runs a queue loop.
+-- Saved server settings and the repeat plan by realm.
 local pagelib = require("pagelib")
 local state = require("state")
 
 local M = {}
 local REALMS = { "Chaos", "Fantasy", "Science", "Other" }
 
-local function add_button(lines, actions, width, label, command, text)
-  pagelib.action_row(lines, actions, width, { { label = label, command = command } }, text)
-end
-
 function M.lines(width)
-  width = width or 80
+  width = pagelib.page_width(width)
   local s = state.get()
   local plan = s.automation
   local lines, actions = { pagelib.header(width, "Crafting Automation") }, {}
@@ -21,24 +17,26 @@ function M.lines(width)
     return lines
   end
 
-  local running = plan.enabled == 1
-  add_button(lines, actions, width, running and "Pause" or "Start",
-    running and "cmake auto off" or "cmake auto on",
-    running and (plan.idle == 1 and "Paused while idle" or "Repeat plan enabled") or "Repeat plan paused")
-
-  local collect = plan.collect == 1
+  local running, collect = plan.enabled == 1, plan.collect == 1
   local recipient = collect and plan.recipient and plan.recipient ~= ""
-    and ("Delivers to " .. pagelib.title(plan.recipient)) or "Delivers to inventory while active"
-  add_button(lines, actions, width, collect and "Auto-collect on" or "Auto-collect off",
-    collect and "cmake auto collect off" or "cmake auto collect on", recipient)
-
+    and ("On for " .. pagelib.title(plan.recipient)) or (collect and "On" or "Off")
   local items = {}
   for _, n in ipairs({ 0, 5, 10, 20, 50, 100 }) do
     items[#items + 1] = { label = tostring(n), value = "cmake auto reserve " .. n }
   end
-  pagelib.action_row(lines, actions, width, {
-    { label = "Reserve", menu = { title = "Keep this many of each input", items = items } },
-  }, (plan.reserve or 0) .. " of each input kept in stock")
+  pagelib.add_table(lines, width, {
+    { title = "Setting", w = "*" }, { title = "Current value", w = 27 },
+    { title = "Action", w = 22 },
+  }, {
+    { "Repeat plan", running and (plan.idle == 1 and "Paused while idle" or "Enabled") or "Paused" },
+    { "Auto-collect", recipient },
+    { "Material reserve", (plan.reserve or 0) .. " of each input" },
+  }, actions, {
+    { { label = running and "Pause" or "Start", command = running and "cmake auto off" or "cmake auto on" } },
+    { { label = collect and "Auto-collect on" or "Auto-collect off",
+      command = collect and "cmake auto collect off" or "cmake auto collect on" } },
+    { { label = "Reserve", menu = { title = "Keep this many of each input", items = items } } },
+  })
 
   add("")
   add("Manual queues take priority over repeat recipes.")
@@ -49,7 +47,7 @@ function M.lines(width)
     { label = "Choose recipes", page = "jobs" },
     { label = "Autotrain skills", page = "skills" },
     { label = "Refineries", page = "refinery" },
-  }, "")
+  })
   add("")
 
   local groups = { Chaos = {}, Fantasy = {}, Science = {}, Other = {} }
@@ -63,20 +61,20 @@ function M.lines(width)
     local group = groups[realm]
     if #group > 0 then
       table.sort(group, function(a, b) return a.building < b.building end)
-      add(pagelib.header(width, realm))
+      add(pagelib.header(width, realm .. " Repeat Recipes", pagelib.REALM_COLOR[realm]))
+      local rows, buttons = {}, {}
       for _, rule in ipairs(group) do
         local building = pagelib.command_arg(rule.building)
-        local text = rule.building .. " - " .. (rule.recipe or "?")
-        if building then
-          add_button(lines, actions, width, "Clear", "cmake auto clear " .. building, text)
-        else
-          add(text)
-        end
-        add("  " .. (rule.status or "Waiting"))
+        rows[#rows + 1] = { rule.building, rule.recipe or "?", rule.status or "Waiting" }
+        if building then buttons[#rows] = { { label = "Clear", command = "cmake auto clear " .. building } } end
       end
+      pagelib.add_table(lines, width, {
+        { title = "Building", w = 23 }, { title = "Recipe", w = "*" },
+        { title = "Status", w = 25 }, { title = "Action", w = 9 },
+      }, rows, actions, buttons)
+      add("")
     end
   end
-
   return lines, actions
 end
 

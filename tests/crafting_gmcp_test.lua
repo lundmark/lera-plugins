@@ -205,3 +205,51 @@ assert(not state.get().jobs_clock and #state.get().repeat_rules == 0)
 render()
 assert(click(button("[Start]")) and sent[#sent] == "cmake auto on")
 print("Crafting automation settings, repeat controls and paused timers: PASS")
+
+-- Every tab must fit both a desktop popup and a narrow pane.
+state.apply("State", {
+  stock_used = 120, stock_cap = 200, souls = 30, soul_cap = 60,
+  soul_tiers = { { tier = 1, count = 30, cap = 60 } },
+  tokens_fantasy = { { realm = "Fantasy", name = "Worn", qty = 10, level = 1 } },
+  materials = { { realm = "Fantasy", name = "Mana Crystal", qty = 15,
+    category = "Refined", quality = "15 good" } },
+})
+state.apply("Buildings", { bldgs = { "Grand Forge|2" },
+  refineries = { "Grove Mill|1|Oak Timber|75|2|4|1" } })
+state.apply("Jobs", {
+  builds = { { building = "Grand Forge", tier = 3, due = 1090, duration = 120 } },
+  masterwork = { { name = "Crystal Ring", target = 2, due = 1090, duration = 120 } },
+  queues = { { building = "Grand Forge", current_id = "axe", current_name = "Mana Crystal Axe",
+    current_due = 1090, current_duration = 120, depth = 1, cap = 5 } },
+})
+state.apply("Market", {
+  exchanges = { { id = 4, player = "Crafter", give_qty = 10, give_token = "fantasy_1",
+    want_qty = 2, want_token = "chaos_1" } },
+  auctions = { { id = 5, seller = "Crafter", material_name = "Mana Crystal",
+    qty = 2, high_bid = 100, reserve = 90, closes = 1090 } },
+})
+local expected = {
+  info = "120/200", inventory = "30/60", skills = "XP to next rank",
+  buildings = "50%", refinery = "75%", jobs = "50%",
+  automation = "Crafting Automation", recipes = "Ingredients", market = "High bid",
+}
+for _, page in ipairs(window.PAGES) do
+  local wide = table.concat(page.mod.lines(106), "\n")
+  assert(wide:find(expected[page.key], 1, true), "missing content from " .. page.key)
+  for _, width in ipairs({ 24, 48, 80, 106, 160 }) do
+    local lines = page.mod.lines(width)
+    for _, line in ipairs(lines) do
+      assert(pagelib.visible_width(line) <= width, page.key .. " overflowed width " .. width)
+    end
+  end
+end
+local jobs = require("pages.jobs")
+state.apply("Jobs", {
+  queues = { { building = "Grand Forge", current_id = "axe", current_due = 1090,
+    current_duration = 120 } },
+  automation = { { idle = 1 } },
+})
+lera.time = function() return 1060 end
+local frozen = table.concat(jobs.lines(106), "\n")
+assert(frozen:find("50%", 1, true), "paused job bar advanced")
+print("All crafting tabs fit and timed job progress uses original duration: PASS")

@@ -25,6 +25,10 @@ pagelib.REALM_COLOR = {
   Chaos = pagelib.C.red, Fantasy = pagelib.C.magenta, Science = pagelib.C.cyan,
 }
 
+function pagelib.page_width(width)
+  return math.min(width or 106, 106)
+end
+
 -- Title-cases a space/hyphen-separated display string ("one-handed sword"
 -- -> "One-Handed Sword"). Several Craft.* fields arrive lowercase (skill
 -- keys used directly as labels, item "display" strings, etc).
@@ -204,9 +208,10 @@ end
 -- Section header: text then a dash fill to exactly `width`, all in one
 -- fixed header color. Overflow (text alone at/past width) truncates via
 -- trunc exactly like every other primitive.
-function pagelib.header(width, text)
+function pagelib.header(width, text, color)
   text = text or ""
-  local raw = pagelib.C.yellow .. text .. " " .. string.rep("-", width)
+  local raw = (color or pagelib.C.yellow) .. text .. pagelib.RESET
+    .. " " .. pagelib.C.dim .. string.rep("-", width)
   return pagelib.trunc(raw, width)
 end
 
@@ -239,13 +244,20 @@ function pagelib.columns(width, cols, rows)
   for i, c in ipairs(cols) do
     widths[i] = (star_idx == i) and leftover or c.w
   end
+  if fixed_total + sep_total > width then
+    local available = math.max(0, width - sep_total)
+    for i, w in ipairs(widths) do
+      widths[i] = math.floor(w * available / fixed_total)
+    end
+  end
 
   local function row_str(cells)
     local parts = {}
     for i = 1, n do
       parts[i] = pagelib.trunc(tostring(cells[i] or ""), widths[i])
     end
-    return table.concat(parts, " ")
+    local row = table.concat(parts, " ")
+    return width < sep_total and pagelib.trunc(row, width) or row
   end
 
   local out = {}
@@ -258,6 +270,90 @@ function pagelib.columns(width, cols, rows)
     out[#out + 1] = row_str(r)
   end
   return out, widths
+end
+
+-- Append a table with optional per-row actions in the last column.
+function pagelib.add_table(lines, width, spec, rows, actions, buttons)
+  local fixed, flexible = #spec - 1, nil
+  for i, col in ipairs(spec) do
+    if col.w == "*" then flexible = i else fixed = fixed + col.w end
+  end
+  if width < fixed + (flexible and 14 or 0) then
+    local primary = flexible or 1
+    lines[#lines + 1] = pagelib.trunc(pagelib.C.dim .. spec[primary].title .. pagelib.RESET, width)
+    for i, row in ipairs(rows) do
+      lines[#lines + 1] = pagelib.trunc(tostring(row[primary] or "-"), width)
+      for col, column in ipairs(spec) do
+        local value = row[col]
+        if col ~= primary and value ~= nil and value ~= "" and value ~= "-" then
+          value = tostring(value)
+          if pagelib.visible_width(value) + #column.title + 4 > width then
+            value = value:gsub("^%[[^%]]*%] ", "")
+          end
+          lines[#lines + 1] = pagelib.trunc("  " .. column.title .. ": " .. value, width)
+        end
+      end
+      if buttons and buttons[i] then pagelib.action_row(lines, actions, width, buttons[i]) end
+    end
+    return
+  end
+
+  local formatted, widths = pagelib.columns(width, spec, rows)
+  local last = #widths
+  local action_col = 0
+  if buttons then
+    for col = 1, last - 1 do action_col = action_col + widths[col] + 1 end
+  end
+  lines[#lines + 1] = formatted[1]
+  for i = 1, #rows do
+    local row_buttons = buttons and buttons[i]
+    if row_buttons and #row_buttons > 0 and widths[last] > 0 and action_col < width then
+      local button_lines, ranges = {}, {}
+      pagelib.action_row(button_lines, ranges, widths[last], row_buttons)
+      lines[#lines + 1] = pagelib.trunc(formatted[i + 1], action_col) .. button_lines[1]
+      local spans = ranges[1]
+      if #spans < #row_buttons then
+        lines[#lines] = formatted[i + 1]
+        pagelib.action_row(lines, actions, width, row_buttons)
+      else
+        for _, span in ipairs(spans) do
+          span.first, span.last = span.first + action_col, span.last + action_col
+        end
+        actions[#lines] = spans
+      end
+    else
+      lines[#lines + 1] = formatted[i + 1]
+      if row_buttons and #row_buttons > 0 then
+        pagelib.action_row(lines, actions, width, row_buttons)
+      end
+    end
+  end
+end
+
+function pagelib.meter(value, capacity, width, color)
+  value = value or 0
+  if not capacity or capacity < 1 then return pagelib.fmt_num(value) end
+  local label = pagelib.fmt_num(value) .. "/" .. pagelib.fmt_num(capacity)
+  local bar_width = math.min(18, width - 14)
+  if bar_width < 5 or #label > 13 then return label end
+  return pagelib.bar(bar_width, value, capacity, color or pagelib.C.bright_cyan) .. " " .. label
+end
+
+function pagelib.job_time(due, duration, clock)
+  if not due or due <= 0 then return "-" end
+  local left = math.max(0, due - (clock or lera.time()))
+  local eta = "ready"
+  if left >= 3600 then
+    eta = string.format("%dh %dm", math.floor(left / 3600), math.floor(left % 3600 / 60))
+  elseif left >= 60 then
+    eta = string.format("%dm %ds", math.floor(left / 60), left % 60)
+  elseif left > 0 then
+    eta = string.format("%ds", left)
+  end
+  if not duration or duration <= 0 then return "(" .. eta .. ")" end
+  local elapsed = math.max(0, duration - left)
+  local pct = math.floor(100 * elapsed / duration)
+  return pagelib.bar(14, elapsed, duration, pagelib.C.bright_cyan) .. " " .. pct .. "%  " .. eta
 end
 
 -- Add visible buttons before a row's detail and record their cell ranges.

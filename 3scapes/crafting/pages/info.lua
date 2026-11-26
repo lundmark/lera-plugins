@@ -1,14 +1,13 @@
--- Info page: realm standing, soul/storage tiers, global bonuses (Craft.Info).
+-- Overview: tasks that need attention, realm standing, and shared capacity.
 local pagelib = require("pagelib")
 local state = require("state")
 
-local C = pagelib.C
+local C, RESET = pagelib.C, pagelib.RESET
 local M = {}
-
 local REALMS = { "Chaos", "Fantasy", "Science" }
 
 function M.lines(width)
-  width = width or 80
+  width = pagelib.page_width(width)
   local s = state.get()
   local lines, actions = {}, {}
   local function add(text) lines[#lines + 1] = text end
@@ -20,55 +19,65 @@ function M.lines(width)
   for _, queue in ipairs(s.queues) do
     if queue.stalled == 1 then stalled = stalled + 1 end
   end
-  if ready + stalled + #s.ready > 0 then
+
+  local attention, buttons = {}, {}
+  local function show_attention(task, count, button)
+    if count < 1 then return end
+    attention[#attention + 1] = { task, count }
+    buttons[#attention] = { button }
+  end
+  show_attention("Finished items", #s.ready, { label = "Collect all", command = "ccollect" })
+  show_attention("Skills ready to train", ready, { label = "Skills", page = "skills" })
+  show_attention("Stalled buildings", stalled, { label = "Production", page = "jobs" })
+  if #attention > 0 then
     add(pagelib.header(width, "Needs Attention"))
-    if #s.ready > 0 then
-      pagelib.action_row(lines, actions, width, { { label = "Collect all", command = "ccollect" } },
-        #s.ready .. " finished")
-    end
-    if ready > 0 then
-      pagelib.action_row(lines, actions, width, { { label = "Skills", page = "skills" } },
-        ready .. " ready to train")
-    end
-    if stalled > 0 then
-      pagelib.action_row(lines, actions, width, { { label = "Production", page = "jobs" } },
-        stalled .. " stalled")
-    end
+    pagelib.add_table(lines, width, {
+      { title = "Task", w = "*" }, { title = "Count", w = 8 }, { title = "Action", w = 18 },
+    }, attention, actions, buttons)
     add("")
   end
 
   add(pagelib.header(width, "Realm Standing"))
+  local standing = {}
   for _, name in ipairs(REALMS) do
-    local rc = pagelib.REALM_COLOR[name] or C.white
     local r = s.realms[name] or { level = 0, bonus = 0, xp = 0, license = 0 }
     local st = s.standing[name] or { drop_rank = 0, drop_extra = 0, drop_bump = 0 }
-    add(pagelib.trunc(string.format("%s%-8s%s  %sR%-3d%s  %s+%d%%%s  xp %s  license %d",
-      rc, name, pagelib.RESET,
-      C.bright_green, r.level, pagelib.RESET,
-      C.yellow, r.bonus, pagelib.RESET,
-      pagelib.fmt_num(r.xp), r.license), width))
-    add(pagelib.trunc("  " .. C.dim .. string.format(
-      "drop rank %d, +%d%% extra, +%d%% bump", st.drop_rank, st.drop_extra, st.drop_bump)
-      .. pagelib.RESET, width))
+    standing[#standing + 1] = { pagelib.REALM_COLOR[name] .. name .. RESET, r.level,
+      pagelib.fmt_num(r.xp), "+" .. r.bonus .. "%", r.license, st.drop_rank,
+      "+" .. st.drop_extra .. "%", "+" .. st.drop_bump .. "%" }
   end
+  pagelib.add_table(lines, width, {
+    { title = "Realm", w = "*" }, { title = "Level", w = 6 }, { title = "Total XP", w = 10 },
+    { title = "Bonus", w = 7 }, { title = "License", w = 8 }, { title = "Drop rank", w = 10 },
+    { title = "Extra drop", w = 11 }, { title = "Tier bump", w = 10 },
+  }, standing)
 
   add("")
-  add(pagelib.header(width, "Global Standing"))
-  add(pagelib.kv(width, "Soul Well tier:", s.soul_tier, C.bright_cyan))
-  add(pagelib.kv(width, "Storage tier:", s.storage_tier .. "  (cap " .. s.storage_cap .. ")",
-    C.bright_cyan))
-  add(pagelib.kv(width, "Speed bonus:", "+" .. s.bonus_speed .. "%", C.yellow))
-  add(pagelib.trunc("  " .. C.dim .. "(not yet applied to craft time)" .. pagelib.RESET, width))
-  add(pagelib.kv(width, "Logistics bonus:", "+" .. s.bonus_logistics .. " storage", C.yellow))
-  add(pagelib.kv(width, "Soul capacity bonus:", "+" .. s.bonus_soul_cap, C.yellow))
-  add(pagelib.kv(width, "Soul gain bonus:", "+" .. s.bonus_soul_gain .. "%", C.yellow))
+  add(pagelib.header(width, "Capacity"))
+  pagelib.add_table(lines, width, {
+    { title = "Resource", w = "*" }, { title = "Tier", w = 6 },
+    { title = "Used / Capacity", w = 33 },
+  }, {
+    { "Material storage", s.storage_tier, pagelib.meter(s.stock_used, s.stock_cap, 33) },
+    { "Soul Well", s.soul_tier, pagelib.meter(s.souls, s.soul_cap, 33) },
+    { "Production queue", "-", pagelib.meter(s.queue_total, s.queue_cap, 33) },
+  })
+
+  add("")
+  add(pagelib.header(width, "Bonuses"))
+  pagelib.add_table(lines, width, {
+    { title = "Bonus", w = "*" }, { title = "Value", w = 16 },
+  }, {
+    { "Crafting speed", "+" .. s.bonus_speed .. "%" },
+    { "Storage", "+" .. s.bonus_logistics },
+    { "Soul capacity", "+" .. s.bonus_soul_cap .. "%" },
+    { "Soul gain", "+" .. s.bonus_soul_gain .. "%" },
+  })
 
   if not state.has_data() then
     add("")
-    add(pagelib.trunc(C.dim .. "No Craft.* data received yet this connection."
-      .. pagelib.RESET, width))
+    add(pagelib.trunc(C.dim .. "No Craft.* data received yet this connection." .. RESET, width))
   end
-
   return lines, actions
 end
 
