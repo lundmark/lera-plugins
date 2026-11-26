@@ -155,7 +155,8 @@ local function show_status()
   end
 end
 
-local CRAFT_USAGE = "/craft [overview | inventory | skills | buildings | refinery | production | recipes | market | status]"
+local CRAFT_USAGE = "/craft [overview | inventory | skills | buildings | refinery | production "
+  .. "| automation | recipes | market | status]"
 
 local function dispatch(args)
   local word = tostring(args or ""):match("^%s*(%S*)"):lower()
@@ -189,7 +190,8 @@ local function install_command()
     summary = "Crafting state from the Craft.* GMCP namespace",
     description = "Opens (or closes) the crafting window. A page name opens "
       .. "straight to that tab. Skills offers training, and Production shows "
-      .. "buildings, queues, available recipes, and finished items.",
+      .. "buildings, queues, available recipes, and finished items. Automation "
+      .. "manages repeat recipes, material reserves, and automatic collection.",
     accepts_args = true,
     handler = function(args) dispatch(args) end,
   })

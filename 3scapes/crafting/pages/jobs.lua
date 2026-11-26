@@ -16,8 +16,8 @@ local function countdown_color(left)
   return C.white
 end
 
-local function countdown(due)
-  local left = (due or 0) - lera.time()
+local function countdown(due, clock)
+  local left = (due or 0) - (clock or lera.time())
   if left <= 0 then return "ready", countdown_color(left) end
   local h = math.floor(left / 3600)
   local m = math.floor((left % 3600) / 60)
@@ -29,8 +29,8 @@ local function countdown(due)
   return text, countdown_color(left)
 end
 
-local function due_line(add, width, prefix, name, due)
-  local text, color = countdown(due)
+local function due_line(add, width, prefix, name, due, clock)
+  local text, color = countdown(due, clock)
   add(pagelib.trunc(string.format("  %s%s%s  %s(%s)%s",
     C.white, prefix .. name, pagelib.RESET, color, text, pagelib.RESET), width))
 end
@@ -60,14 +60,21 @@ local function free_queue_slots(s, q)
   return room
 end
 
-local function queue_buttons(command, recipe, room)
-  local buttons = { { label = "Queue 1", command = command .. " 1" } }
+local function queue_buttons(args, recipe, room, can_repeat)
+  local command = "cmake " .. args
+  local buttons = {}
+  if room > 0 then
+    buttons[#buttons + 1] = { label = "Queue 1", command = command .. " 1" }
+  end
   if room > 1 then
     local items = {}
     for quantity = 2, math.min(room, 5) do
       items[#items + 1] = { label = "Queue " .. quantity, value = command .. " " .. quantity }
     end
     buttons[#buttons + 1] = { label = "More", menu = { title = recipe, items = items } }
+  end
+  if can_repeat then
+    buttons[#buttons + 1] = { label = "Repeat", command = "cmake auto repeat " .. args }
   end
   return buttons
 end
@@ -133,7 +140,8 @@ function M.lines(width)
     table.sort(sorted, function(a, b) return (a.building or "") < (b.building or "") end)
     add(pagelib.header(width, "Under Construction"))
     for _, b in ipairs(sorted) do
-      due_line(add, width, "", string.format("%s -> T%d", b.building or "?", b.tier or 0), b.due)
+      due_line(add, width, "", string.format("%s -> T%d", b.building or "?", b.tier or 0),
+        b.due, s.jobs_clock)
     end
     add("")
   end
@@ -163,7 +171,7 @@ function M.lines(width)
     for _, mw in ipairs(s.masterwork) do
       local label = (mw.name or "item") .. (mw.target and mw.target > 0
         and (" (level " .. tostring(mw.target) .. ")") or "")
-      due_line(add, width, "", label, mw.due)
+      due_line(add, width, "", label, mw.due, s.jobs_clock)
     end
     add("")
   end
@@ -180,7 +188,7 @@ function M.lines(width)
       return
     end
     if q.current_id and q.current_id ~= "" then
-      due_line(add, width, "Making ", q.current_name or q.current_id, q.current_due)
+      due_line(add, width, "Making ", q.current_name or q.current_id, q.current_due, s.jobs_clock)
     elseif q.stalled == 1 then
       add(pagelib.trunc("  " .. C.bright_red .. "Stalled (missing materials)"
         .. pagelib.RESET, width))
@@ -217,8 +225,8 @@ function M.lines(width)
         add(pagelib.trunc("  Needs T" .. row.tier .. "  " .. detail, width))
       elseif skill and (skill.rank or 0) < (recipe.rank or 0) then
         add(pagelib.trunc("  Needs R" .. recipe.rank .. "  " .. detail, width))
-      elseif room > 0 and building_arg and recipe_arg then
-        local buttons = queue_buttons("cmake " .. building_arg .. " " .. recipe_arg, recipe.name, room)
+      elseif (room > 0 or s.automation) and building_arg and recipe_arg then
+        local buttons = queue_buttons(building_arg .. " " .. recipe_arg, recipe.name, room, s.automation)
         pagelib.action_row(lines, actions, width, buttons, detail)
       else
         add(pagelib.trunc("  " .. detail, width))

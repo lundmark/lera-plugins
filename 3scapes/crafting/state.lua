@@ -63,6 +63,7 @@ function M.reset()
     buildings = {}, refineries = {},
 
     builds = {}, pending_builds = {}, masterwork = {}, queues = {}, queue_total = 0, queue_cap = 0, ready = {},
+    repeat_rules = {},
 
     recipes_known = {}, recipes_catalogue = {},
 
@@ -272,6 +273,16 @@ local function apply_jobs(m)
   rec.queue_total = num(m.queue_total)
   rec.queue_cap = num(m.queue_cap)
   rec.ready = m.ready or {}
+  local rows = type(m.automation) == "table" and m.automation or {}
+  rec.automation = type(rows[1]) == "table" and rows[1] or nil
+  rec.jobs_clock = rec.automation and rec.automation.idle == 1 and lera.time() or nil
+  rec.repeat_rules = {}
+  for i = 2, #rows do
+    local rule = rows[i]
+    if type(rule) == "table" and type(rule.building) == "string" then
+      rec.repeat_rules[#rec.repeat_rules + 1] = rule
+    end
+  end
 end
 
 

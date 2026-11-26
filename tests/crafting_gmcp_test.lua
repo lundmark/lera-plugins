@@ -142,3 +142,53 @@ before = #sent
 menu.on_select(menu.items[2].value)
 assert(#sent == before, "old confirmation survived popup close")
 print("Crafting realm groups and popup actions: PASS")
+
+-- Jobs batches include the automation settings and must not apply until complete.
+protocol.reset_connection()
+protocol.on_apply(function(sub, mirror) state.apply(sub, mirror) end)
+local calls = #sent
+assert(protocol.on_gmcp("Craft.Jobs", { jobs_a1_1_4_a = {
+  { enabled = 1, collect = 0, reserve = 10, idle = 1, scrap = 2 },
+} }))
+assert(protocol.on_gmcp("Craft.Jobs", { jobs_a1_2_4_q = {
+  { building = "Grand Forge", current_id = "axe", current_name = "Mana Crystal Axe",
+    current_due = 1120, depth = 0, cap = 5 },
+} }))
+assert(protocol.on_gmcp("Craft.Jobs", { jobs_a1_3_4_a = {
+  { realm = "Fantasy", building = "Grand Forge", recipe = "Mana Crystal Axe",
+    status = "Idle or offline" },
+} }))
+assert(not state.get().automation and #sent == calls)
+assert(protocol.on_gmcp("Craft.Jobs", { jobs_a1_4_4_l = { 0, 15 } }))
+assert(state.get().queue_cap == 15 and state.get().repeat_rules[1].building == "Grand Forge")
+assert(state.get().jobs_clock == 1000)
+assert(protocol.on_gmcp("Craft.Jobs", { jobs_a2_1_3_a = {
+  { enabled = 0, collect = 0, reserve = 0, idle = 0 },
+} }))
+assert(protocol.on_gmcp("Craft.Jobs", { jobs_a2_3_3_l = { 2, 15 } }))
+assert(state.get().automation.enabled == 1, "incomplete batch replaced active plan")
+
+lera.time = function() return 1030 end
+window.set_page("jobs")
+render()
+assert(button("(2m 0s)"), "paused Jobs countdown decreased")
+assert(click(button("[Repeat]")))
+assert(sent[#sent] == "cmake auto repeat Grand Forge Mana Crystal Axe")
+window.set_page("automation")
+render()
+assert(button("Auto-scrap is on"))
+assert(click(button("[Pause]")) and sent[#sent] == "cmake auto off")
+assert(click(button("[Auto-collect off]")))
+assert(sent[#sent] == "cmake auto collect on")
+assert(click(button("[Reserve]")))
+menu.on_select(menu.items[3].value)
+assert(sent[#sent] == "cmake auto reserve 10")
+assert(click(button("[Clear]")) and sent[#sent] == "cmake auto clear Grand Forge")
+
+assert(protocol.on_gmcp("Craft.Jobs", { full = 1, queue_total = 1, queue_cap = 15,
+  automation = { { enabled = 0, collect = 0, reserve = 0, idle = 0 } },
+}))
+assert(not state.get().jobs_clock and #state.get().repeat_rules == 0)
+render()
+assert(click(button("[Start]")) and sent[#sent] == "cmake auto on")
+print("Crafting automation settings, repeat controls and paused timers: PASS")

@@ -52,6 +52,7 @@ local ENVELOPE = { full = true, page = true, pages = true }
 local ALWAYS_MERGE = { Skills = true, Recipes = true, State = true, Buildings = true }
 
 local mirrors, seen, counters, wire_names
+local jobs_stage
 local apply_cb, handler_id
 -- Materials staging (see handle_materials below): { gen, chunks = {[key]=rows}, expected }.
 local materials_stage
@@ -65,6 +66,7 @@ local function blank_materials_stage()
 end
 
 function M.reset_connection()
+  jobs_stage = nil
   mirrors = {}
   seen = {}
   counters = blank_counters()
@@ -216,6 +218,48 @@ local function handle_materials(keys)
   end
 end
 
+local JOB_LISTS = {
+  b = "builds", p = "pending_builds", m = "masterwork",
+  q = "queues", r = "ready", a = "automation",
+}
+
+-- Server batches carry one complete snapshot. Keep the previous timers and
+-- controls until the matching final frame arrives with both queue limits.
+local function accept_jobs_batch(key, rows)
+  local gen, index, count, code = key:match("^jobs_(%x+)_(%d+)_(%d+)_([a-z])$")
+  if not gen then return false end
+  index, count = tonumber(index), tonumber(count)
+  if type(rows) ~= "table" or index < 1 or index > count then return true end
+  if code ~= "l" and not JOB_LISTS[code] then return true end
+  if index == 1 then
+    jobs_stage = { gen = gen, count = count, next = 1, snapshot = {} }
+    for _, name in pairs(JOB_LISTS) do jobs_stage.snapshot[name] = {} end
+  end
+  local stage = jobs_stage
+  if not stage or stage.gen ~= gen or stage.count ~= count or stage.next ~= index then
+    return true
+  end
+  if code == "l" then
+    if index ~= count or type(rows[1]) ~= "number" or type(rows[2]) ~= "number" then
+      return true
+    end
+    stage.snapshot.queue_total, stage.snapshot.queue_cap = rows[1], rows[2]
+    jobs_stage = nil
+    return true, stage.snapshot
+  end
+  local target = stage.snapshot[JOB_LISTS[code]]
+  for _, row in ipairs(rows) do target[#target + 1] = row end
+  stage.next = index + 1
+  return true
+end
+
+local function applied(sub)
+  seen[sub] = lera.time()
+  counters.applied = counters.applied + 1
+  if apply_cb then apply_cb(sub, mirrors[sub]) end
+  return true
+end
+
 function M.on_gmcp(pkg, data)
   counters.frames = counters.frames + 1
 
@@ -237,6 +281,17 @@ function M.on_gmcp(pkg, data)
   end
 
   local keys = accepted(data)
+  if sub == "Jobs" then
+    for key, value in pairs(keys) do
+      local is_batch, snapshot = accept_jobs_batch(key, value)
+      if is_batch then
+        if not snapshot then return true end
+        mirrors[sub] = snapshot
+        return applied(sub)
+      end
+    end
+    jobs_stage = nil
+  end
 
   -- Materials chunk/count/gen keys are staged and committed separately (see
   -- handle_materials) -- pulled out of the ordinary merge below so a
@@ -265,10 +320,7 @@ function M.on_gmcp(pkg, data)
 
   if sub == "State" then handle_materials(keys) end
 
-  seen[sub] = lera.time()
-  counters.applied = counters.applied + 1
-  if apply_cb then apply_cb(sub, mirrors[sub]) end
-  return true
+  return applied(sub)
 end
 
 function M.subscribe()
