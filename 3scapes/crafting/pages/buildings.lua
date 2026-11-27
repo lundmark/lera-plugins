@@ -7,6 +7,7 @@ local state = require("state")
 
 local C = pagelib.C
 local M = {}
+local REALMS = { "Chaos", "Fantasy", "Science", "Global" }
 
 local function tier_color(t)
   if t >= 5 then return C.bright_green end
@@ -15,13 +16,77 @@ local function tier_color(t)
   return C.dim
 end
 
+local function plan_blocker(plan, entries, skills)
+  local prerequisite = entries[plan.prerequisite]
+  if plan.prerequisite ~= "" and (not prerequisite or (prerequisite.tier or 0) < 1) then
+    return "Build " .. plan.prerequisite .. " first"
+  end
+  local skill = skills[plan.skill]
+  if skill and skill.unlocked == 0 then
+    return "Unlock " .. pagelib.title(plan.skill)
+  end
+end
+
+local function build_menu(name, cost, duration, blocker)
+  local arg = pagelib.command_arg(name)
+  if not arg then return nil end
+  local items = { { label = "View cost and requirements", value = "cbuild construct " .. arg } }
+  if not blocker then
+    items[#items + 1] = { label = "Queue Tier 1 construction", value = "cbuild construct " .. arg .. " confirm" }
+  end
+  return { title = name .. " | " .. cost .. " | " .. duration, items = items }
+end
+
+local function add_unbuilt(lines, actions, width, s, entries)
+  local groups = { Chaos = {}, Fantasy = {}, Science = {}, Global = {} }
+  for _, plan in ipairs(s.build_plans) do
+    local group = groups[plan.realm]
+    if group and not entries[plan.name] then group[#group + 1] = plan end
+  end
+  local heading = false
+  for _, realm in ipairs(REALMS) do
+    local plans = groups[realm]
+    if #plans > 0 then
+      if not heading then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = pagelib.header(width, "Unbuilt Buildings")
+        heading = true
+      end
+      table.sort(plans, function(a, b) return a.name < b.name end)
+      lines[#lines + 1] = pagelib.header(width, realm, pagelib.REALM_COLOR[realm])
+      local rows, buttons = {}, {}
+      for _, plan in ipairs(plans) do
+        local blocker = plan_blocker(plan, entries, s.skills)
+        local cost = pagelib.fmt_num(plan.cost) .. " " .. plan.token
+        local minutes = math.ceil(plan.duration / 60)
+        local duration = minutes >= 60 and string.format("%dh %02dm", math.floor(minutes / 60), minutes % 60)
+          or (minutes .. "m")
+        local menu = build_menu(plan.name, cost, duration, blocker)
+        local label = menu and C.bright_cyan .. plan.name .. pagelib.RESET or plan.name
+        rows[#rows + 1] = { label, cost, duration, blocker or "Available", "" }
+        if menu then
+          buttons[#rows] = {
+            { label = blocker and "Details" or "Build", menu = menu },
+            primary = { key = plan.name, menu = menu, left_menu = true },
+          }
+        end
+      end
+      pagelib.add_table(lines, width, {
+        { title = "Building", w = "*" }, { title = "T1 cost", w = 16 }, { title = "Build time", w = 10 },
+        { title = "Requirements", w = 28 }, { title = "Action", w = 11 },
+      }, rows, actions, buttons)
+      lines[#lines + 1] = ""
+    end
+  end
+end
+
 function M.lines(width)
   width = pagelib.page_width(width)
   local s = state.get()
-  local lines = {}
+  local lines, actions = {}, {}
   local function add(text) lines[#lines + 1] = text end
 
-  if #s.buildings == 0 and #s.builds == 0 and #s.pending_builds == 0 then
+  if #s.buildings == 0 and #s.builds == 0 and #s.pending_builds == 0 and #s.build_plans == 0 then
     add(pagelib.trunc(C.dim .. "No buildings constructed yet." .. pagelib.RESET, width))
     return lines
   end
@@ -39,7 +104,6 @@ function M.lines(width)
   for _, b in ipairs(s.builds) do entry(b.building or "?").build = b end
   table.sort(names)
 
-  add(pagelib.header(width, "Buildings"))
   local rows = {}
   for _, name in ipairs(names) do
     local b = entries[name]
@@ -49,10 +113,14 @@ function M.lines(width)
     local timer = b.build and pagelib.job_time(b.build.due, b.build.duration, s.jobs_clock) or "-"
     rows[#rows + 1] = { name, current, target and ("T" .. target) or "-", status, timer }
   end
-  pagelib.add_table(lines, width, {
-    { title = "Building", w = "*" }, { title = "Tier", w = 6 }, { title = "Target", w = 7 },
-    { title = "Status", w = 20 }, { title = "Completion", w = 29 },
-  }, rows)
+  if #rows > 0 then
+    add(pagelib.header(width, "Buildings"))
+    pagelib.add_table(lines, width, {
+      { title = "Building", w = "*" }, { title = "Tier", w = 6 }, { title = "Target", w = 7 },
+      { title = "Status", w = 20 }, { title = "Completion", w = 29 },
+    }, rows)
+  end
+  add_unbuilt(lines, actions, width, s, entries)
 
   -- Refineries have their own tab now. This used to inline every allocation
   -- here, which was reasonable while the server sent only the stages that had
@@ -73,7 +141,7 @@ function M.lines(width)
       allocated, allocated == 1 and "" or "s", pagelib.RESET), width))
   end
 
-  return lines
+  return lines, actions
 end
 
 return M

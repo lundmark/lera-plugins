@@ -352,3 +352,44 @@ lera.time = function() return 1060 end
 local frozen = table.concat(jobs.lines(106), "\n")
 assert(frozen:find("50%", 1, true), "paused job bar advanced")
 print("All crafting tabs fit and timed job progress uses original duration: PASS")
+
+-- Structures plans arrive as separate chunks alongside, not in place of, owned tiers.
+protocol.reset_connection()
+assert(protocol.on_gmcp("Craft.Structures", { bldgs = { "Grand Forge|2" } }))
+assert(protocol.on_gmcp("Craft.Structures", { buildplans = {
+  "Grand Forge|Fantasy|||400|worn|3600",
+  "Soul Well|Global|||400|each realm|3600",
+  "Bone Forge|Chaos|Boneworks|soulsmithing|400|cracked|3600",
+} }))
+assert(protocol.on_gmcp("Craft.Structures", { buildplans_1 = {
+  "Gem Atelier|Fantasy|||400|worn|3600",
+  "Weaver's Hall|Fantasy|||400|worn|3600",
+} }))
+assert(#state.get().buildings == 1 and #state.get().build_plans == 5)
+state.apply("Jobs", {
+  pending_builds = { { building = "Gem Atelier", tier = 1 } },
+  builds = { { building = "Weaver's Hall", tier = 1, due = 1100, duration = 60 } },
+})
+window.set_page("buildings")
+render(106, 44)
+assert(visible("Under construction") and visible("Awaiting funding"))
+assert(visible("Build Boneworks first") and visible("400 each realm"))
+before = #sent
+assert(click(button("Soul Well")))
+assert(#sent == before, "clicking a building spent tokens before confirmation")
+assert(menu.title:find("400 each realm", 1, true))
+choose("Queue Tier 1 construction")
+assert(sent[#sent] == "cbuild construct Soul Well confirm")
+assert(click(button("Bone Forge")) and #menu.items == 1)
+choose("View cost and requirements")
+assert(sent[#sent] == "cbuild construct Bone Forge")
+assert(not click(button("Grand Forge")))
+assert(not click(button("Gem Atelier")))
+assert(not click(button("Weaver's Hall")))
+render(48, 50)
+assert(click(button("Soul Well")), "compact view lost construction menu")
+state.reset()
+state.apply("Buildings", { buildplans = { "Soul Well|Global|||400|each realm|3600" } })
+render()
+assert(visible("Unbuilt Buildings") and click(button("Soul Well")), "empty account could not build")
+print("Unbuilt building catalogue and construction actions: PASS")

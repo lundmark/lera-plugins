@@ -220,9 +220,14 @@ function window.on_pointer(event)
       return window.set_page(s.key)
     end
   end
-  if primary and primary.command and event.x >= primary.first and event.x < primary.last then
-    send_command(primary.command, primary.allow_repeat)
-    return true
+  if primary and event.x >= primary.first and event.x < primary.last then
+    if primary.left_menu then
+      open_menu(primary.menu)
+      return true
+    elseif primary.command then
+      send_command(primary.command, primary.allow_repeat)
+      return true
+    end
   end
   for _, button in ipairs(hits) do
     if event.x >= button.first and event.x < button.last then

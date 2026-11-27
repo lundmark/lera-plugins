@@ -279,7 +279,7 @@ local function mark_primary(actions, line, button, label, width)
   spans.primary = {
     first = 0, last = math.min(width, pagelib.visible_width(tostring(label))),
     key = button.key, command = button.command, allow_repeat = button.allow_repeat,
-    menu = button.menu,
+    menu = button.menu, left_menu = button.left_menu,
   }
 end
 
