@@ -245,11 +245,9 @@ function M.on_load()
   protocol.subscribe()
   install_command()
 
-  -- Craft.Jobs timers are absolute `due` epochs; redraw once a second while
-  -- the window is open so a countdown reads live between GMCP frames, same
-  -- pattern as mudstatus.lua's reboot countdown.
+  -- Refresh live countdowns between GMCP frames.
   timer_id = timer.every(1000, function()
-    if popup_open then ui.dirty() end
+    if popup_open then window.countdown_tick() end
   end)
 end
 

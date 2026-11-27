@@ -88,6 +88,7 @@ LERA_ROOT=$lera_root "$luajit" tests/mercenary_command_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/mercenary_init_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/crafting_refinery_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/crafting_gmcp_test.lua
+LERA_ROOT=$lera_root "$luajit" tests/crafting_countdown_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_gmcp_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_gmcp_settlement_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/guild_viking_gmcp_grid_test.lua

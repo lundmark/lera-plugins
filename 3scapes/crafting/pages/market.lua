@@ -7,6 +7,7 @@ local M = {}
 
 local function countdown(closes)
   local left = (closes or 0) - lera.time()
+  pagelib.note_countdown(left)
   if left <= 0 then return C.dim .. "ended" .. RESET end
   local color = left <= 30 and C.yellow or C.white
   local minutes = math.floor(left / 60)
