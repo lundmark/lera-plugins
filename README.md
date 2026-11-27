@@ -8,12 +8,25 @@
 
 Plugin collection for the Lera MUD client.
 
+## License
+
+Lera Plugins is licensed under the
+[PolyForm Noncommercial License 1.0.0](LICENSE). Noncommercial use,
+modification, and distribution are permitted; commercial use requires a
+separate license from Simon Lundmark <simon@dagg.ai>. If this summary and the
+official license text differ, the official license text controls.
+
+## Input shortcuts
+
+[`generic/input_shortcuts.lua`](generic/input_shortcuts.md) adds optional
+command stacking and counted walks, with per-profile settings. Both start off.
+
 ## Session buttons
 
-[`generic/session_buttons.lua`](generic/session_buttons.md) adds the rounded
-connection buttons above your existing layout. Click to switch connections;
-`/tabs [on|off]` controls visibility. No layout configuration is required.
-It needs the plugin top-bar and session-switch APIs from Lera PR #70.
+[`generic/session_buttons.lua`](generic/session_buttons.md) draws rounded
+session tabs; click one to switch sessions, and `/tabs [on|off]` controls
+visibility. Your profile places it in a sized, collapsing split of its layout
+(see the plugin's page), so the layout stays yours.
 
 ## Chat padding
 
@@ -351,10 +364,12 @@ arguments rather than declaring one alias pattern per form.
 before plugins loaded keeps it — a plugin cannot replace a profile-owned
 command. Hosted mode used to be that case; it no longer registers one.
 
-Two plugins keep raw `alias.add` alongside their command, for input that cannot
+Some plugins keep raw `alias.add` alongside their command, for input that cannot
 be spelled as a slash token: `speedwalk`'s `.`, `..`, `.,`, `.place` and
 `.from-to`, and `autostepper`'s `-`, `-.`, `->` and `-!`. Those are movement
 syntax; everything word-shaped lives under `/speedwalk` and `/step`.
+`input_shortcuts` also uses aliases for optional stacking and counted walks;
+its settings live under `/input-shortcuts`.
 
 ## Chat history selection
 
@@ -441,6 +456,7 @@ This is the reusable plugin API only. Packaging or converting the existing
 | `gmcp_state` | `/gmcp` | Subscribes to GMCP packages, tracks state, formats vitals bars |
 | `help` | *(none)* | Help content library; commands come from `require('commands')` |
 | `input_echo` | *(none)* | Display sent commands in output |
+| [`input_shortcuts`](generic/input_shortcuts.md) | `/input-shortcuts` | Optional command stacking and counted walks |
 | `mxp_links` | `/link` | Makes MXP `<send>`/`<a>` links usable via a popup picker |
 | `push_notify` | `/pushn` | Push notifications via Pushover |
 

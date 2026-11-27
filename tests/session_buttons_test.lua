@@ -19,20 +19,14 @@ ui = {
   box=function(r, style) boxes[#boxes+1] = {r=r, style=style} end,
   text_ansi=function(r, label) labels[#labels+1] = {r=r, label=label} end,
 }
-local surface, command_spec, removed, closed
-package.loaded.wm = {top_bar={
-  open=function(renderer, height, visible)
-    surface = {renderer=renderer, height=height, visible=visible}; return true
-  end,
-  close=function() closed = true end,
-}}
+local command_spec, removed
 package.loaded.command = {
   register=function(spec) command_spec = spec; return 17 end,
   unregister=function(id) removed = id end,
 }
 local buttons = dofile("generic/session_buttons.lua")
 buttons.on_load()
-check("three-row top bar, no layout API needed", surface.height == 3 and surface.visible())
+check("visible with two sessions", buttons.visible())
 buttons.render(rect(0, 0, 80, 3))
 check("original rounded boxes", #boxes == 2 and boxes[1].style == "rounded"
       and boxes[1].r:w() == 12 and boxes[2].r:x() == 12 and boxes[2].r:h() == 3)
@@ -51,19 +45,19 @@ boxes, labels = {}, {}
 buttons.render(rect(0, 0, 12, 3))
 check("narrow viewport clips whole tabs", #boxes == 1 and #labels == 1)
 items = {"Livsfara"}
-check("single connection hides bar", not surface.visible())
+check("single connection hides bar", not buttons.visible())
 check("stale clicks after session closes ignored", not buttons.on_pointer({kind="down",
       button="left", inside=true, x=1, y=1}))
 items = {"Livsfara", "Skuggis"}
 command_spec.handler("off")
-check("tabs off hides bar", not surface.visible())
+check("tabs off hides bar", not buttons.visible())
 command_spec.handler("on")
-check("tabs on restores bar", surface.visible())
+check("tabs on restores bar", buttons.visible())
 command_spec.handler("")
-check("tabs toggles", not surface.visible())
+check("tabs toggles", not buttons.visible())
 command_spec.handler("on invalid")
-check("invalid argument keeps state", not surface.visible())
+check("invalid argument keeps state", not buttons.visible())
 buttons.on_unload()
-check("unload clears bar and command", closed and removed == 17)
+check("unload removes the command", removed == 17)
 print(failures == 0 and "ALL PASS" or failures .. " FAILURES")
 os.exit(failures == 0 and 0 or 1)

@@ -869,30 +869,38 @@ local function paint_spans(lines, consumed, spans, source)
   if #bounds == 0 then return lines end
 
   local painted = {}
-  local offset = 0
+  local offset, active = 0, 1
+  local has_inline_ansi = source:find("\27[", 1, true)
   for i, line in ipairs(lines) do
-    local opening, span_start = bounds[1].code, 0
-    for _, bound in ipairs(bounds) do
-      if bound.at <= offset then opening, span_start = bound.code, bound.at end
+    while bounds[active + 1] and bounds[active + 1].at <= offset do
+      active = active + 1
     end
+    local opening, span_start = bounds[active].code, bounds[active].at
     -- Inline ANSI in a message must also resume after a word-wrap boundary.
-    local carry = {}
-    for code in source:sub(span_start+1, offset):gmatch("\27%[[0-9;]*m") do
-      carry[#carry+1] = code
+    if has_inline_ansi and offset > span_start then
+      local carry = { opening }
+      for code in source:sub(span_start + 1, offset):gmatch("\27%[[0-9;]*m") do
+        carry[#carry + 1] = code
+      end
+      opening = table.concat(carry)
     end
 
-    local parts, cursor = { opening, table.concat(carry) }, 0
-    for _, bound in ipairs(bounds) do
-      local rel = bound.at - offset
-      if rel > 0 and rel < #line then
+    local next_bound = bounds[active + 1]
+    if next_bound and next_bound.at < offset + #line then
+      local parts, cursor = { opening }, 0
+      for j = active + 1, #bounds do
+        local bound = bounds[j]
+        local rel = bound.at - offset
+        if rel >= #line then break end
         parts[#parts + 1] = line:sub(cursor + 1, rel)
         parts[#parts + 1] = bound.code
         cursor = rel
       end
+      parts[#parts + 1] = line:sub(cursor + 1)
+      painted[i] = table.concat(parts)
+    else
+      painted[i] = opening .. line
     end
-    parts[#parts + 1] = line:sub(cursor + 1)
-
-    painted[i] = table.concat(parts)
     offset = offset + (consumed[i] or #line)
   end
   return painted

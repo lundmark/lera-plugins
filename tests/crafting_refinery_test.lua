@@ -275,7 +275,7 @@ check("market page shows the resolved recipe name",
       mbody:find("Refine Black Blood") ~= nil)
 check("market page shows the bid", mbody:find("250") ~= nil)
 check("market page surfaces the collect prompt",
-      mbody:find("cmarket scroll collect") ~= nil, mbody:sub(-200))
+      mbody:find("[Collect scrolls]", 1, true) ~= nil, mbody:sub(1, 200))
 check("market page lists each waiting scroll",
       mbody:find("Refine Void Tar") ~= nil and mbody:find("Refine Ember Seeds") ~= nil)
 
@@ -286,7 +286,7 @@ local empty = table.concat(market.lines(90), "\n")
 check("empty scroll book still renders its section",
       empty:find("Recipe Scroll Auctions") ~= nil)
 check("empty scroll outbox shows no collect prompt",
-      empty:find("cmarket scroll collect") == nil)
+      empty:find("[Collect scrolls]", 1, true) == nil)
 
 -- A server that predates the scroll book sends neither key.
 state.apply("Market", { orders = {}, material_orders = {}, exchanges = {}, auctions = {} })
@@ -294,6 +294,31 @@ check("missing scroll keys default to empty, not nil",
       #state.get().scroll_auctions == 0 and #state.get().scroll_outbox == 0)
 check("market page still renders against a pre-scroll server",
       (function() local ok = pcall(market.lines, 90) return ok end)())
+
+-- The mud cuts long market lists into keys that each fit a GMCP frame; the
+-- chunks join in order, and a list that shrank sends its old chunks empty.
+state.apply("Market", { orders = {}, exchanges = {}, auctions = {},
+                        material_orders = { { material_name = "A" } },
+                        material_orders_1 = { { material_name = "B" }, { material_name = "C" } },
+                        material_orders_2 = {} })
+local mo = state.get().material_orders
+check("chunked material orders join in order",
+      #mo == 3 and mo[1].material_name == "A" and mo[3].material_name == "C")
+
+-- A full push the server splits over pages stamps full:1 on every page: the
+-- first page replaces the mirror, the later ones add to it.
+local protocol = require("protocol")
+protocol.reset_connection()
+protocol.on_gmcp("Craft.Market", { full = 1, page = 1, pages = 2,
+                                   exchanges = {}, auctions = { { id = 1 } } })
+protocol.on_gmcp("Craft.Market", { full = 1, page = 2, pages = 2, orders = {} })
+local mm = protocol.mirror("Market")
+check("a paged full push keeps every page's keys",
+      mm and mm.auctions ~= nil and mm.exchanges ~= nil and mm.orders ~= nil)
+protocol.on_gmcp("Craft.Market", { full = 1, page = 1, pages = 1, orders = {} })
+mm = protocol.mirror("Market")
+check("the next full push starts the mirror afresh",
+      mm and mm.orders ~= nil and mm.auctions == nil)
 
 emit(string.format("\n%d failures (final)", failures))
 os.exit(failures == 0 and 0 or 1)

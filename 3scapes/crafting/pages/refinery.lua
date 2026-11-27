@@ -27,7 +27,7 @@ local function stage_color(locked, pct)
 end
 
 function M.lines(width)
-  width = width or 80
+  width = pagelib.page_width(width)
   local s = state.get()
   local lines = {}
   local function add(text) lines[#lines + 1] = text end
@@ -81,41 +81,31 @@ function M.lines(width)
       if total == 0 then tcol = C.dim
       elseif total > 100 then tcol = C.bright_red
       elseif total < 100 then tcol = C.yellow end
-      add(pagelib.trunc(string.format("  %sallocated %d%%%s", tcol, total,
-        pagelib.RESET), width))
+      add(pagelib.trunc("  " .. tcol .. "allocated " .. total .. "%" .. pagelib.RESET
+        .. "  " .. pagelib.meter(total, 100, 33, tcol), width))
 
-      local trows, colors = {}, {}
+      local trows = {}
       for _, r in ipairs(rows) do
         local stage = r.tier or 0
         local locked = (not legacy) and max_tier and stage > max_tier
         local pct = r.percent or 0
-        local statecell
-        if locked then
-          statecell = "locked"
-        elseif pct > 0 then
-          statecell = pct .. "%"
-        else
-          statecell = "-"
-        end
+        local color = stage_color(locked, pct)
         trows[#trows + 1] = {
           "T" .. stage,
-          pagelib.title(r.material or ""),
+          color .. pagelib.title(r.material or "") .. pagelib.RESET,
           r.min_rank and ("R" .. r.min_rank) or "",
-          statecell,
+          locked and "locked" or (pct > 0 and "allocated" or "available"),
+          locked and "-" or (pagelib.bar(14, pct, 100, color) .. " " .. pct .. "%"),
         }
-        colors[#colors + 1] = stage_color(locked, pct)
       end
 
-      local cols = pagelib.columns(width - 2, {
+      pagelib.add_table(lines, width, {
         { title = "Stage",    w = 6 },
         { title = "Material", w = "*" },
         { title = "Rank",     w = 6 },
-        { title = "Alloc",    w = 8 },
+        { title = "Status",   w = 11 },
+        { title = "Allocation", w = 20 },
       }, trows)
-      add("  " .. cols[1])
-      for i = 2, #cols do
-        add("  " .. colors[i - 1] .. cols[i] .. pagelib.RESET)
-      end
     end
   end
 

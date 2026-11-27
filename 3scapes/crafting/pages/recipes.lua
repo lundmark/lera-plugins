@@ -1,137 +1,174 @@
--- Recipes page: known recipes per realm (with what they need and how long
--- they take), plus the production catalogue -- what each building can
--- eventually make, both grouped by the building that teaches/produces them
--- (Craft.Recipes).
+-- Known recipes and the full production catalogue, grouped by realm and station.
 local pagelib = require("pagelib")
+local production = require("production")
+local recipe_inputs = require("recipe_inputs")
 local state = require("state")
 
 local C = pagelib.C
 local M = {}
+local REALMS = { "Chaos", "Fantasy", "Science" }
+local query, craftable_only = "", false
 
-local REALM_KEYS = { "chaos", "fantasy", "science" }
-local REALM_LABELS = { chaos = "Chaos", fantasy = "Fantasy", science = "Science" }
-
-local function fmt_time(secs)
-  secs = secs or 0
-  if secs <= 0 then return "-" end
-  local h = math.floor(secs / 3600)
-  local m = math.floor((secs % 3600) / 60)
-  local s = secs % 60
-  if h > 0 then return string.format("%dh%02dm", h, m) end
-  if m > 0 then return string.format("%dm%02ds", m, s) end
-  return string.format("%ds", s)
+function M.search(text)
+  query = text:gsub("[%c]", ""):match("^%s*(.-)%s*$"):lower()
 end
 
--- Groups `rows` by `rows[i][key_field]`, sorted by group name, each group's
--- own rows sorted by `sort_field`. Returns an ordered array of
--- {name=group, rows={...}}.
-local function group_by(rows, key_field, sort_field)
-  local groups, order = {}, {}
-  for _, r in ipairs(rows) do
-    local k = r[key_field] or "?"
-    if not groups[k] then groups[k] = {}; order[#order + 1] = k end
-    table.insert(groups[k], r)
-  end
-  table.sort(order)
-  local out = {}
-  for _, k in ipairs(order) do
-    table.sort(groups[k], function(a, b) return (a[sort_field] or "") < (b[sort_field] or "") end)
-    out[#out + 1] = { name = k, rows = groups[k] }
-  end
-  return out
+local function matches(recipe)
+  return query == "" or (recipe.name or ""):lower():find(query, 1, true)
+    or (recipe.materials or ""):lower():find(query, 1, true)
 end
 
--- A building/refinery sub-header: colored name, dash-filled to width, same
--- shape as pagelib.header() but a distinct color and one indent level -- so
--- it reads unambiguously as a section break and never as a data row sharing
--- the zebra rhythm of the rows underneath it.
-local function subheader(width, text, color)
-  local raw = color .. text .. " " .. string.rep("-", width)
-  return pagelib.trunc(raw, width)
+local function can_make(recipe, tiers, owned, skills, stock)
+  local required = tiers[recipe.building] and tiers[recipe.building][recipe.name]
+  return production.is_recipe(recipe)
+    and not production.eligibility(recipe, owned[recipe.building], required, skills[recipe.skill])
+    and recipe_inputs.has_stock(recipe_inputs.parse(recipe.materials), stock)
+end
+
+local function duration(seconds)
+  if not seconds or seconds <= 0 then return "-" end
+  local hours = math.floor(seconds / 3600)
+  local minutes = math.floor(seconds % 3600 / 60)
+  if hours > 0 then return string.format("%dh %dm", hours, minutes) end
+  if minutes > 0 then return string.format("%dm %ds", minutes, seconds % 60) end
+  return seconds .. "s"
+end
+
+local function building_groups(records)
+  local groups, names = {}, {}
+  for _, record in ipairs(records) do
+    local name = record.building
+    if not name or name == "" or name == "?" then name = "Other" end
+    if not groups[name] then
+      names[#names + 1] = name
+      groups[name] = {}
+    end
+    local group = groups[name]
+    group[#group + 1] = record
+  end
+  table.sort(names)
+  return names, groups
+end
+
+local function render_list(lines, width, records, actions, recipe_actions)
+  local names, groups = building_groups(records)
+  local spec = recipe_actions and {
+    { title = "Recipe", w = "*" }, { title = "Rank", w = 5 },
+    { title = "Base time", w = 10 }, { title = "Ingredients", w = 23 },
+    { title = "Action / Status", w = 27 },
+  } or {
+    { title = "Recipe", w = "*" }, { title = "Tier", w = 9 }, { title = "Rank", w = 9 },
+  }
+
+  for _, name in ipairs(names) do
+    local group = groups[name]
+    table.sort(group, function(a, b) return (a.name or a.id or "") < (b.name or b.id or "") end)
+    lines[#lines + 1] = pagelib.header(width, name, C.bright_cyan)
+    local rows, buttons = {}, {}
+    for _, r in ipairs(group) do
+      local recipe_name = r.name or r.id or "?"
+      if recipe_actions then
+        local materials = r.materials and r.materials ~= "" and r.materials or "-"
+        local row_buttons, status = recipe_actions(r)
+        if row_buttons and row_buttons.primary then
+          recipe_name = C.bright_cyan .. recipe_name .. pagelib.RESET
+        end
+        rows[#rows + 1] = { recipe_name, r.rank or "-", duration(r.time), materials, status }
+        buttons[#rows] = row_buttons
+      else
+        rows[#rows + 1] = { recipe_name, r.tier or "-", r.rank or "-" }
+      end
+    end
+    pagelib.add_table(lines, width, spec, rows, actions, recipe_actions and buttons)
+    lines[#lines + 1] = ""
+  end
 end
 
 function M.lines(width)
-  width = width or 80
+  width = pagelib.page_width(width)
   local s = state.get()
-  local lines = {}
-  local function add(text) lines[#lines + 1] = text end
+  local lines, actions = {}, {}
+  if #s.ready > 0 then
+    pagelib.action_row(lines, actions, width, {
+      { label = "Collect all", command = "ccollect" },
+    }, #s.ready .. " finished")
+  end
+  pagelib.action_row(lines, actions, width, {
+    { label = "Production", page = "jobs" }, { label = "Inventory", page = "inventory" },
+  })
+  local filters = { {
+    label = craftable_only and "All recipes" or "Can craft now",
+    activate = function() craftable_only = not craftable_only end,
+  } }
+  if query ~= "" then
+    filters[#filters + 1] = { label = "Clear search", activate = function() M.search("") end }
+  end
+  pagelib.action_row(lines, actions, width, filters)
+  if query ~= "" then
+    lines[#lines + 1] = pagelib.trunc("Search: " .. query, width)
+  else
+    lines[#lines + 1] = pagelib.trunc(C.dim .. "/craft recipes <name or ingredient>" .. pagelib.RESET, width)
+  end
+  if craftable_only then
+    lines[#lines + 1] = pagelib.trunc("Known production recipes with a qualified station and enough stock for one.", width)
+  end
+  lines[#lines + 1] = pagelib.trunc(C.dim .. "Click a recipe to queue one. Right-click for more."
+    .. pagelib.RESET, width)
+  lines[#lines + 1] = ""
 
-  for _, rk in ipairs(REALM_KEYS) do
-    local known = s.recipes_known[rk] or {}
-    add(pagelib.header(width, REALM_LABELS[rk] .. " Recipes (" .. #known .. " known)"))
-    if #known == 0 then
-      add(pagelib.trunc(C.dim .. "  none learned yet" .. pagelib.RESET, width))
-    else
-      -- Grouped under the refinery/building that teaches each recipe's
-      -- skill (the server resolves skill -> building name): one column
-      -- title row for the whole realm, then a building sub-header per
-      -- group with just that building's recipes underneath it.
-      local groups = group_by(known, "building", "name")
-      local col_cache = {}
-      for _, g in ipairs(groups) do
-        local rows = {}
-        for _, r in ipairs(g.rows) do
-          rows[#rows + 1] = {
-            pagelib.title(r.name or r.id or "?"),
-            tostring(r.rank or 0),
-            fmt_time(r.time),
-            (r.materials and r.materials ~= "") and r.materials or "-",
-          }
-        end
-        col_cache[#col_cache + 1] = { name = g.name, cols = pagelib.columns(width - 2, {
-          { title = "Recipe", w = 24 }, { title = "Rank", w = 5 },
-          { title = "Time", w = 8 }, { title = "Uses", w = "*" },
-        }, rows) }
+  local owned, queues, visible = {}, {}, 0
+  for _, building in ipairs(s.buildings) do owned[building.name] = building.tier end
+  for _, queue in ipairs(s.queues) do if queue.building then queues[queue.building] = queue end end
+  local stock = craftable_only and recipe_inputs.stock(s.materials)
+  for _, realm in ipairs(REALMS) do
+    local key = realm:lower()
+    local known, tiers = {}, {}
+    for _, entry in ipairs(s.recipes_catalogue[key] or {}) do
+      if entry.building and entry.name then
+        tiers[entry.building] = tiers[entry.building] or {}
+        tiers[entry.building][entry.name] = entry.tier
       end
-      add("  " .. col_cache[1].cols[1])
-      for _, g in ipairs(col_cache) do
-        local bname = (g.name ~= "" and g.name ~= "?") and g.name or "Other"
-        add("  " .. subheader(width - 2, bname, C.bright_cyan))
-        local i
-        for i = 2, #g.cols do
-          add("  " .. pagelib.zebra(i - 2) .. g.cols[i] .. pagelib.RESET)
-        end
+    end
+    for _, recipe in ipairs(s.recipes_known[key] or {}) do
+      if matches(recipe) and (not craftable_only or can_make(recipe, tiers, owned, s.skills, stock)) then
+        known[#known + 1] = recipe
       end
     end
-    add("")
+    if #known > 0 then
+      visible = visible + #known
+      lines[#lines + 1] = pagelib.header(width, realm .. " Known Recipes (" .. #known .. ")",
+        pagelib.REALM_COLOR[realm])
+      render_list(lines, width, known, actions, function(recipe)
+        local building = recipe.building
+        local required = tiers[building] and tiers[building][recipe.name]
+        return production.actions(s, recipe, queues[building], owned[building], required)
+      end)
+    end
   end
 
-  add(pagelib.header(width, "Production Catalogue (by building)"))
-  local all_rows = {}
-  for _, rk in ipairs(REALM_KEYS) do
-    for _, c in ipairs(s.recipes_catalogue[rk] or {}) do
-      all_rows[#all_rows + 1] = c
+  if not craftable_only then
+    local showed_catalogue = false
+    for _, realm in ipairs(REALMS) do
+      local catalogue = {}
+      for _, recipe in ipairs(s.recipes_catalogue[realm:lower()] or {}) do
+        if matches(recipe) then catalogue[#catalogue + 1] = recipe end
+      end
+      if #catalogue > 0 then
+        if not showed_catalogue then
+          lines[#lines + 1] = pagelib.header(width, "Production Catalogue")
+          showed_catalogue = true
+        end
+        visible = visible + #catalogue
+        lines[#lines + 1] = pagelib.header(width, realm, pagelib.REALM_COLOR[realm])
+        render_list(lines, width, catalogue)
+      end
     end
   end
-  if #all_rows == 0 then
-    add(pagelib.trunc(C.dim .. "  no catalogue data received yet" .. pagelib.RESET, width))
-    return lines
+  if visible == 0 then
+    lines[#lines + 1] = query ~= "" and "No matching recipes."
+      or (craftable_only and "No production recipes can start with current stock." or "Waiting for recipes.")
   end
-
-  local groups = group_by(all_rows, "building", "name")
-  local col_shown = false
-  for _, g in ipairs(groups) do
-    add(subheader(width - 2, g.name, C.bright_cyan))
-    local rows = {}
-    for _, c in ipairs(g.rows) do
-      rows[#rows + 1] = { pagelib.title(c.name or ""), "T" .. tostring(c.tier or 0),
-        tostring(c.rank or 0) }
-    end
-    local cols = pagelib.columns(width - 2, {
-      { title = "Makes", w = "*" }, { title = "Tier", w = 6 }, { title = "Rank", w = 6 },
-    }, rows)
-    if not col_shown then
-      add("  " .. cols[1])
-      col_shown = true
-    end
-    local i
-    for i = 2, #cols do
-      add("  " .. pagelib.zebra(i - 2) .. cols[i] .. pagelib.RESET)
-    end
-    add("")
-  end
-
-  return lines
+  return lines, actions
 end
 
 return M
