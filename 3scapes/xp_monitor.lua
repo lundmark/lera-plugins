@@ -15,7 +15,6 @@ local state = { total = 0, spend = 0, gain30 = 0, to_next = 0, per_hour = 0, eta
                 modifier = 0, baseline = 0, reset_at = 0, max = false, mode = "stats", kills = {} }
 local gmcp_id, command_id, kill_listener, popup_open = nil, nil, nil, false
 local pending_kill, seen_frame
-local save_pending = false
 -- Forward local: window.on_pointer() below is defined before changed() and
 -- would otherwise capture a nil global instead of it -- clicking [Stats] or
 -- [Kills] raised "attempt to call a nil value" on the old file for that reason.
@@ -31,10 +30,7 @@ local function eta_text()
   local h, m = math.floor(state.eta/3600), math.floor(state.eta/60)%60
   return "\27[96mLevel in:    \27[92m"..(h > 0 and (h.."h "..m.."m") or (m.."m")).."\27[0m"
 end
-local function save()
-  store.set(state)
-  save_pending = store.save() == false
-end
+local function save() store.set(state); store.save() end
 local function lines(w)
   local out = { "\27[96m[Stats] [Kills] [Close]\27[0m" }
   if state.mode == "kills" then
@@ -74,18 +70,10 @@ local function close_popup()
   popup_open = false
 end
 
-local function update(key, value)
-  if state[key] == value then return false end
-  state[key] = value
-  return true
-end
-
--- Partial or malformed frames retain the previous counters. The two flags
--- default to zero when omitted, like the original snapshot handling.
+-- One frame is one complete snapshot: every key ships every time, so a missing
+-- key means a malformed frame, not "unchanged", and the old value is kept.
 local function on_frame(_, data)
   if type(data) ~= "table" then return end
-  local modified = false
-  local first_frame = not seen_frame
   local n = tonumber(data.xp)
   if n then
     -- Attribution needs a previous reading to subtract from. The first frame
@@ -93,28 +81,23 @@ local function on_frame(_, data)
     -- only seeds -- otherwise a stale pending_kill would be credited with the
     -- character's entire lifetime xp.
     local gain = seen_frame and (n - (state.total or 0)) or 0
-    modified = update("total", n)
-    if state.baseline == 0 then
-      modified = update("baseline", n) or modified
-      modified = update("reset_at", os.time()) or modified
-    end
+    state.total = n
+    if state.baseline == 0 then state.baseline = n; state.reset_at = os.time() end
     if gain > 0 and pending_kill then
       table.insert(state.kills, 1, { enemy = pending_kill, xp = gain })
       if #state.kills > 20 then table.remove(state.kills) end
       pending_kill = nil
-      modified = true
     end
   end
-  modified = update("spend", tonumber(data.to_spend) or state.spend) or modified
-  modified = update("gain30", tonumber(data.gain30) or state.gain30) or modified
-  modified = update("to_next", tonumber(data.to_next) or state.to_next) or modified
-  modified = update("per_hour", tonumber(data.per_hour) or state.per_hour) or modified
-  modified = update("eta", tonumber(data.eta_secs) or state.eta) or modified
-  modified = update("modifier", tonumber(data.modifier) or 0) or modified
-  modified = update("max", (tonumber(data.maxed) or 0) == 1) or modified
+  state.spend    = tonumber(data.to_spend) or state.spend
+  state.gain30   = tonumber(data.gain30)   or state.gain30
+  state.to_next  = tonumber(data.to_next)  or state.to_next
+  state.per_hour = tonumber(data.per_hour) or state.per_hour
+  state.eta      = tonumber(data.eta_secs) or state.eta
+  state.modifier = tonumber(data.modifier) or 0
+  state.max      = (tonumber(data.maxed) or 0) == 1
   seen_frame = true
-  if (modified or first_frame) and popup_open then ui.dirty() end
-  if modified or save_pending then save() end
+  changed()
 end
 M.on_gmcp = on_frame   -- exposed for tests and for profiles that fan GMCP out themselves
 

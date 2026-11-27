@@ -356,9 +356,21 @@ function pagelib.meter(value, capacity, width, color)
   return pagelib.bar(bar_width, value, capacity, color or pagelib.C.bright_cyan) .. " " .. label
 end
 
+-- Whether the page being rendered drew a countdown that is still running.
+-- window.render clears it before a page builds its lines and reads it after,
+-- so the 1s timer only redraws while something on screen is counting down.
+-- A paused jobs clock (s.jobs_clock) is frozen, so it never sets this.
+pagelib.live_countdown = false
+
+-- Note a countdown with `left` seconds to go; clock-frozen ones do not count.
+function pagelib.note_countdown(left, frozen)
+  if left > 0 and not frozen then pagelib.live_countdown = true end
+end
+
 function pagelib.job_time(due, duration, clock)
   if not due or due <= 0 then return "-" end
   local left = math.max(0, due - (clock or lera.time()))
+  pagelib.note_countdown(left, clock ~= nil)
   local eta = "ready"
   if left >= 3600 then
     eta = string.format("%dh %dm", math.floor(left / 3600), math.floor(left % 3600 / 60))

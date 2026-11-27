@@ -14,7 +14,6 @@ M.priority = 40
 local trigger_ids = {}
 local command_id = nil
 local enabled = { profession_advance = true }
-local replacements = {}
 
 local highlight = {
   sadist = {
@@ -160,31 +159,20 @@ local function literal_line(pattern)
   return (text:gsub("\\(.)", "%1"))
 end
 
-local function rebuild_replacements()
-  local by_line = {}
+function M.on_line(line)
+  local plain = (line or ""):gsub("\27%[[0-9;?]*[ -/]*[@-~]", "")
   for name in pairs(enabled) do
     local h = highlight[name]
     if h then
-      local start = h.start and literal_line(h.start)
-      local stop = h.stop and literal_line(h.stop)
-      if start and not by_line[start] then
-        by_line[start] = "\27[38;2;0;255;255m>> " .. name .. "\27[0m"
+      if h.start and literal_line(h.start) == plain then
+        return "\27[38;2;0;255;255m>> " .. name .. "\27[0m"
       end
-      if stop and not by_line[stop] then
-        by_line[stop] = "\27[38;2;51;204;204m<< " .. name .. "\27[0m"
+      if h.stop and literal_line(h.stop) == plain then
+        return "\27[38;2;51;204;204m<< " .. name .. "\27[0m"
       end
     end
   end
-  replacements = by_line
-end
-
-function M.on_line(line)
-  if not line or not next(replacements) then return line end
-  local plain = line
-  if line:find("\27[", 1, true) then
-    plain = line:gsub("\27%[[0-9;?]*[ -/]*[@-~]", "")
-  end
-  return replacements[plain] or line
+  return line
 end
 
 local function on_chatline(name, line, c1, c2)
@@ -273,13 +261,11 @@ local function dispatch(args)
     show_status()
   elseif sub == "add" then
     if enable_profession(name) then
-      rebuild_replacements()
       store.set({ enabled = enabled }); store.save()
       notify("[professions] Enabled " .. name .. ".", "55AA55")
     else notify("[professions] Unknown profession: " .. name, "AA5555") end
   elseif sub == "remove" then
     if remove_profession(name) then
-      rebuild_replacements()
       store.set({ enabled = enabled }); store.save()
       notify("[professions] Removed " .. name .. ".", "AA5555")
     else notify("[professions] Profession is not active: " .. name, "AA5555") end
@@ -303,12 +289,10 @@ function M.on_load()
   for name in pairs(enabled) do initial[#initial + 1] = name end
   enabled = {}
   for _, name in ipairs(initial) do enable_profession(name) end
-  rebuild_replacements()
   notify("[professions] Loaded. Use /profs to query professions.", "DAA520")
 end
 
 function M.on_unload()
-  replacements = {}
   for _, id in ipairs(trigger_ids) do trigger.remove(id) end
   trigger_ids = {}
   if command_id then command.unregister(command_id); command_id = nil end

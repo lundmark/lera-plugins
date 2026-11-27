@@ -55,4 +55,17 @@ assert(render():find("5s", 1, true))
 window.set_page("info")
 render()
 tick(0)
+-- A paused crafting clock (#85: automation idle, s.jobs_clock) freezes the
+-- timers, so it must not keep asking for redraws.
+state.apply("Jobs", { builds = {{ building = "Mill", tier = 2, due = now + 60 }},
+  automation = {{ enabled = 1, collect = 0, reserve = 0, idle = 1 }} })
+window.set_page("jobs")
+render()
+now = now + 1
+tick(0)
+state.apply("Jobs", { builds = {{ building = "Mill", tier = 2, due = now + 60 }},
+  automation = {{ enabled = 1, collect = 0, reserve = 0, idle = 0 }} })
+render()
+now = now + 1
+tick(1)
 print("crafting_countdown_test: PASS")

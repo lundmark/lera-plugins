@@ -55,8 +55,22 @@ end
 
 function window.current_page() return current_key end
 
+-- Set by a render that drew a running countdown; consumed by countdown_tick.
+local countdown_pending = false
+
+-- Called once a second while the popup is open (init.lua): redraw only when
+-- the last render showed a running countdown. The request is consumed even
+-- if that deadline has passed, so the next render draws the final "ready" /
+-- "ended" state and only re-arms if something is still counting.
+function window.countdown_tick()
+  if not countdown_pending then return end
+  countdown_pending = false
+  ui.dirty()
+end
+
 function window.set_page(key)
   if not pages_by_key[key] then return false end
+  if key ~= current_key then countdown_pending = false end
   current_key = key
   body_hits = {}
   right_target = nil
@@ -141,7 +155,9 @@ function window.render(rect, opts)
   if body_h <= 0 then return end
 
   local page = pages_by_key[current_key]
+  pagelib.live_countdown = false
   local lines, actions = page.mod.lines(w)
+  if pagelib.live_countdown then countdown_pending = true end
 
   local sc = scrollers[current_key]
   if lera.render_pass() ~= "remote" then
