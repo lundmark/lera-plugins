@@ -14,17 +14,55 @@ local function free_slots(s, queue)
   return math.min(room, cap - (queue and queue.depth or 0))
 end
 
-local function batch_menu(command, recipe, room)
+local function batch_items(command, recipe, first, room)
   local items = {}
   local inputs = recipe_inputs.parse(recipe.materials)
-  for quantity = 2, room do
+  for quantity = first, room do
     local cost = recipe_inputs.total(inputs, quantity)
     local time = (recipe.time or 0) > 0 and math.ceil(recipe.time * quantity / 60) .. " min base"
     local detail = (cost or "Cost unavailable") .. " | " .. (time or "Time unavailable")
     items[#items + 1] = { label = "Queue " .. quantity .. " | " .. detail,
       value = command .. " " .. quantity }
   end
-  return { title = recipe.name .. " | " .. room .. " free slots", items = items }
+  return items
+end
+
+local function recipe_menu(recipe, room, items)
+  return { title = recipe.name .. " | " .. math.max(0, room) .. " free slots", items = items }
+end
+
+local function batch_menu(command, recipe, room)
+  local items = batch_items(command, recipe, 2, room)
+  return recipe_menu(recipe, room, items)
+end
+
+local function repeat_options(items, s, recipe, building, command)
+  if not s.automation then return end
+  local rule
+  for _, candidate in ipairs(s.repeat_rules) do
+    if candidate.building == recipe.building then
+      rule = candidate
+      break
+    end
+  end
+
+  local configured = rule and rule.recipe == recipe.name
+  local enabled = s.automation.enabled == 1
+  if configured then
+    local label = "Stop repeating this recipe"
+    if rule.status then label = label .. " | " .. rule.status end
+    items[#items + 1] = { label = label,
+      value = "cmake auto clear " .. building }
+  else
+    local label = rule and ("Replace repeat for " .. rule.recipe) or "Repeat this recipe"
+    items[#items + 1] = { label = enabled and label or (label .. " (save while paused)"),
+      value = command }
+  end
+  items[#items + 1] = {
+    label = enabled and "Pause all automation" or "Start all saved automation",
+    value = enabled and "cmake auto off" or "cmake auto on",
+  }
+  items[#items + 1] = { label = "Open Automation", value = { page = "automation" } }
 end
 
 function M.eligibility(recipe, tier, required, skill)
@@ -50,14 +88,31 @@ function M.actions(s, recipe, queue, tier, required)
   local command = "cmake " .. args
   local room = free_slots(s, queue)
   local buttons = {}
+  local single = room > 0 and (command .. " 1") or nil
+  local auto = "cmake auto repeat " .. args
   if room > 0 then
-    buttons[#buttons + 1] = { label = "Queue 1", command = command .. " 1" }
+    buttons[#buttons + 1] = { label = "Queue 1", command = single, allow_repeat = true }
   end
   if room > 1 then
-    buttons[#buttons + 1] = { label = "More", menu = batch_menu(command, recipe, room) }
+    buttons[#buttons + 1] = { label = "More",
+      menu = function() return batch_menu(command, recipe, room) end }
   end
   if s.automation then
-    buttons[#buttons + 1] = { label = "Repeat", command = "cmake auto repeat " .. args }
+    buttons[#buttons + 1] = { label = "Repeat", menu = function()
+      local items = {}
+      repeat_options(items, s, recipe, building, auto)
+      return { title = recipe.name, items = items }
+    end }
+  end
+  if single or s.automation then
+    buttons.primary = {
+      key = args, command = single, allow_repeat = true,
+      menu = function()
+        local items = batch_items(command, recipe, 1, room)
+        repeat_options(items, s, recipe, building, auto)
+        return recipe_menu(recipe, room, items)
+      end,
+    }
   end
   return buttons, room <= 0 and "Queue full" or ""
 end

@@ -215,7 +215,9 @@ function M.lines(width)
       local base = (recipe.time or 0) > 0 and (math.ceil(recipe.time / 60) .. " min") or "-"
       local buttons, note = production.actions(s, recipe, q, tier, row.tier)
       recipe_buttons[#rows + 1] = buttons
-      rows[#rows + 1] = { recipe.name, recipe.rank or "-", base, recipe.materials or "-", note }
+      local name_cell = buttons and buttons.primary and C.bright_cyan .. recipe.name .. pagelib.RESET
+        or recipe.name
+      rows[#rows + 1] = { name_cell, recipe.rank or "-", base, recipe.materials or "-", note }
     end
     if #rows > 0 then
       pagelib.add_table(lines, width, {

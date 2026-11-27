@@ -42,11 +42,13 @@ end
 
 local current_key = window.PAGES[1].key
 local body_hits = {}
+local right_target
 local last_command, last_command_at
 local action_generation = 0
 
 function window.reset_actions()
   body_hits = {}
+  right_target = nil
   last_command, last_command_at = nil, nil
   action_generation = action_generation + 1
 end
@@ -57,17 +59,20 @@ function window.set_page(key)
   if not pages_by_key[key] then return false end
   current_key = key
   body_hits = {}
+  right_target = nil
   ui.dirty()
   return true
 end
 
 function window.scroll(delta)
   body_hits = {}
+  right_target = nil
   return scrollers[current_key].scroll(delta)
 end
 
 function window.scroll_to_bottom()
   body_hits = {}
+  right_target = nil
   return scrollers[current_key].scroll_to_bottom()
 end
 function window.scroll_to_top()
@@ -158,25 +163,68 @@ function window.render(rect, opts)
   end
 end
 
-local function send_command(command)
+local function send_command(command, allow_repeat)
   if type(command) ~= "string" then return end
   local now = lera.time()
   -- Suppress accidental double clicks on a spending or toggle action.
-  if command ~= last_command or now - last_command_at >= 1 then
+  if allow_repeat or command ~= last_command or now - last_command_at >= 1 then
     mud.send(command)
     last_command, last_command_at = command, now
   end
 end
 
+local function open_menu(menu)
+  if type(menu) == "function" then menu = menu() end
+  local generation = action_generation
+  require("menu").open({
+    title = menu.title,
+    items = menu.items,
+    on_select = function(selection)
+      if generation ~= action_generation then return end
+      if type(selection) == "table" and selection.page then
+        window.set_page(selection.page)
+      else
+        send_command(selection)
+      end
+    end,
+  })
+end
+
+local function on_right_click(event, target)
+  if event.kind == "down" then
+    right_target = target and target.key
+    return right_target ~= nil
+  end
+  if event.kind == "up" then
+    local matched = event.inside ~= false and target and target.key == right_target
+    right_target = nil
+    if matched then
+      open_menu(target.menu)
+      return true
+    end
+  end
+  return false
+end
+
 function window.on_pointer(event)
-  if event.kind == "cancel" then return false end
+  if event.kind == "cancel" then
+    right_target = nil
+    return false
+  end
+  local hits = body_hits[event.y] or {}
+  local primary = hits.primary
+  if event.button == "right" then return on_right_click(event, primary) end
   if event.button ~= "left" or event.kind ~= "down" then return false end
   for _, s in ipairs(tab_spans) do
     if event.y == s.row and event.x >= s.col_start and event.x < s.col_end then
       return window.set_page(s.key)
     end
   end
-  for _, button in ipairs(body_hits[event.y] or {}) do
+  if primary and primary.command and event.x >= primary.first and event.x < primary.last then
+    send_command(primary.command, primary.allow_repeat)
+    return true
+  end
+  for _, button in ipairs(hits) do
     if event.x >= button.first and event.x < button.last then
       if button.page then return window.set_page(button.page) end
       if button.activate then
@@ -186,16 +234,9 @@ function window.on_pointer(event)
         return true
       end
       if button.menu then
-        local generation = action_generation
-        require("menu").open({
-          title = button.menu.title,
-          items = button.menu.items,
-          on_select = function(command)
-            if generation == action_generation then send_command(command) end
-          end,
-        })
+        open_menu(button.menu)
       else
-        send_command(button.command)
+        send_command(button.command, button.allow_repeat)
       end
       return true
     end

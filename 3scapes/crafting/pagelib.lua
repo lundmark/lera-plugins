@@ -272,7 +272,18 @@ function pagelib.columns(width, cols, rows)
   return out, widths
 end
 
--- Append a table with optional per-row actions in the last column.
+local function mark_primary(actions, line, button, label, width)
+  if not button then return end
+  local spans = actions[line] or {}
+  actions[line] = spans
+  spans.primary = {
+    first = 0, last = math.min(width, pagelib.visible_width(tostring(label))),
+    key = button.key, command = button.command, allow_repeat = button.allow_repeat,
+    menu = button.menu,
+  }
+end
+
+-- Append a table with row targets in the first column and buttons in the last.
 function pagelib.add_table(lines, width, spec, rows, actions, buttons)
   local fixed, flexible = #spec - 1, nil
   for i, col in ipairs(spec) do
@@ -283,6 +294,8 @@ function pagelib.add_table(lines, width, spec, rows, actions, buttons)
     lines[#lines + 1] = pagelib.trunc(pagelib.C.dim .. spec[primary].title .. pagelib.RESET, width)
     for i, row in ipairs(rows) do
       lines[#lines + 1] = pagelib.trunc(tostring(row[primary] or "-"), width)
+      local row_buttons = buttons and buttons[i]
+      mark_primary(actions, #lines, row_buttons and row_buttons.primary, row[primary], width)
       for col, column in ipairs(spec) do
         local value = row[col]
         if col ~= primary and value ~= nil and value ~= "" and value ~= "-" then
@@ -293,7 +306,9 @@ function pagelib.add_table(lines, width, spec, rows, actions, buttons)
           lines[#lines + 1] = pagelib.trunc("  " .. column.title .. ": " .. value, width)
         end
       end
-      if buttons and buttons[i] then pagelib.action_row(lines, actions, width, buttons[i]) end
+      if row_buttons and #row_buttons > 0 then
+        pagelib.action_row(lines, actions, width, row_buttons)
+      end
     end
     return
   end
@@ -307,6 +322,7 @@ function pagelib.add_table(lines, width, spec, rows, actions, buttons)
   lines[#lines + 1] = formatted[1]
   for i = 1, #rows do
     local row_buttons = buttons and buttons[i]
+    local primary_line = #lines + 1
     if row_buttons and #row_buttons > 0 and widths[last] > 0 and action_col < width then
       local button_lines, ranges = {}, {}
       pagelib.action_row(button_lines, ranges, widths[last], row_buttons)
@@ -327,6 +343,7 @@ function pagelib.add_table(lines, width, spec, rows, actions, buttons)
         pagelib.action_row(lines, actions, width, row_buttons)
       end
     end
+    mark_primary(actions, primary_line, row_buttons and row_buttons.primary, rows[i][1], widths[1])
   end
 end
 
@@ -365,7 +382,8 @@ function pagelib.action_row(lines, actions, width, buttons, detail)
     if last > width then break end
     row[#row + 1] = pagelib.C.bright_cyan .. label .. pagelib.RESET .. " "
     spans[#spans + 1] = { first = col, last = last, command = button.command,
-      page = button.page, menu = button.menu, activate = button.activate }
+      page = button.page, menu = button.menu, activate = button.activate,
+      allow_repeat = button.allow_repeat }
     col = last + 1
   end
   lines[#lines + 1] = pagelib.trunc(table.concat(row) .. (detail or ""), width)

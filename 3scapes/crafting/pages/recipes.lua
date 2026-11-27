@@ -70,6 +70,9 @@ local function render_list(lines, width, records, actions, recipe_actions)
       if recipe_actions then
         local materials = r.materials and r.materials ~= "" and r.materials or "-"
         local row_buttons, status = recipe_actions(r)
+        if row_buttons and row_buttons.primary then
+          recipe_name = C.bright_cyan .. recipe_name .. pagelib.RESET
+        end
         rows[#rows + 1] = { recipe_name, r.rank or "-", duration(r.time), materials, status }
         buttons[#rows] = row_buttons
       else
@@ -109,6 +112,8 @@ function M.lines(width)
   if craftable_only then
     lines[#lines + 1] = pagelib.trunc("Known production recipes with a qualified station and enough stock for one.", width)
   end
+  lines[#lines + 1] = pagelib.trunc(C.dim .. "Click a recipe to queue one. Right-click for more."
+    .. pagelib.RESET, width)
   lines[#lines + 1] = ""
 
   local owned, queues, visible = {}, {}, 0

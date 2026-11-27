@@ -76,6 +76,20 @@ local function click(x, y)
   return window.on_pointer({ x = x, y = y, kind = "down", button = "left" })
 end
 
+local function right(x, y, kind, inside)
+  return window.on_pointer({ x = x, y = y, kind = kind, button = "right", inside = inside })
+end
+
+local function choose(label)
+  for _, item in ipairs(menu.items) do
+    if item.label:find(label, 1, true) then
+      menu.on_select(item.value)
+      return
+    end
+  end
+  error("missing menu item " .. label)
+end
+
 state.apply("Skills", { skills_0 = {
   woodwork = { unlocked = 1, can_train = 1, train_realm = "Fantasy", rank = 2, trained = 2,
     train_cost = 3, train_have = 24, train_abbr = "wrn", autotrain = 0,
@@ -201,7 +215,9 @@ window.set_page("jobs")
 render()
 assert(button("(2m 0s)"), "paused Jobs countdown decreased")
 assert(click(button("[Repeat]")))
-assert(sent[#sent] == "cmake auto repeat Grand Forge Mana Crystal Axe")
+assert(menu.items[1].label:find("Needs 3 more Mana Crystal", 1, true))
+choose("Stop repeating this recipe")
+assert(sent[#sent] == "cmake auto clear Grand Forge")
 window.set_page("automation")
 render()
 assert(button("Auto-scrap is on"))
@@ -274,8 +290,25 @@ assert(sent[#sent] == "cmake Grand Forge Mana Crystal Axe 4")
 assert(click(button("[Can craft now]")))
 render()
 assert(button("Mana Crystal Axe") and not visible("Production Catalogue"))
+local recipe_x, recipe_y = button("Mana Crystal Axe")
+before = #sent
+for _ = 1, 5 do assert(click(recipe_x, recipe_y)) end
+assert(#sent == before + 5, "rapid recipe clicks were debounced")
+for i = before + 1, #sent do
+  assert(sent[i] == "cmake Grand Forge Mana Crystal Axe 1")
+end
+local previous_menu = menu
+assert(right(recipe_x, recipe_y, "down"))
+assert(not right(recipe_x, recipe_y, "up", false) and menu == previous_menu)
+assert(right(recipe_x, recipe_y, "down"))
+assert(right(recipe_x, recipe_y, "up", true))
+assert(#menu.items == 4 and menu.items[4].label:find("8x Mana Crystal", 1, true))
 render(48, 35)
 assert(button("[Queue 1]"), "compact recipe view lost the queue button")
+recipe_x, recipe_y = button("Mana Crystal Axe")
+assert(right(recipe_x, recipe_y, "down") and right(recipe_x, recipe_y, "up", true))
+choose("Queue 3 ")
+assert(sent[#sent] == "cmake Grand Forge Mana Crystal Axe 3")
 render()
 assert(click(button("[Clear search]")))
 render()
@@ -295,6 +328,20 @@ state.apply("Jobs", { queue_cap = 5, queue_total = 5 })
 render()
 assert(visible("Queue full") and not visible("[Queue 1]"))
 assert(not visible("[Collect all]"), "empty outbox still offers collection")
+state.apply("Jobs", {
+  queue_cap = 5, queue_total = 5, automation = { { enabled = 0 } },
+})
+recipes.search("mana crystal")
+render()
+recipe_x, recipe_y = button("Mana Crystal Axe")
+assert(not click(recipe_x, recipe_y), "queue-full recipe still starts a manual job")
+assert(right(recipe_x, recipe_y, "down") and right(recipe_x, recipe_y, "up", true))
+choose("Repeat this recipe (save while paused)")
+assert(sent[#sent] == "cmake auto repeat Grand Forge Mana Crystal Axe")
+choose("Start all saved automation")
+assert(sent[#sent] == "cmake auto on")
+choose("Open Automation")
+assert(window.current_page() == "automation")
 local jobs = require("pages.jobs")
 state.apply("Jobs", {
   queues = { { building = "Grand Forge", current_id = "axe", current_due = 1090,
