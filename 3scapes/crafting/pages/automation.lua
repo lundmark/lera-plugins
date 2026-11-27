@@ -66,7 +66,13 @@ function M.lines(width)
       for _, rule in ipairs(group) do
         local building = pagelib.command_arg(rule.building)
         rows[#rows + 1] = { rule.building, rule.recipe or "?", rule.status or "Waiting" }
-        if building then buttons[#rows] = { { label = "Clear", command = "cmake auto clear " .. building } } end
+        -- One-step confirm, like "Clear queue" on the Jobs page.
+        if building then
+          buttons[#rows] = { { label = "Clear", menu = { title = rule.building, items = {
+            { label = "Keep repeating " .. (rule.recipe or "this recipe"), value = false },
+            { label = "Stop repeating it", value = "cmake auto clear " .. building },
+          } } } }
+        end
       end
       pagelib.add_table(lines, width, {
         { title = "Building", w = 21 }, { title = "Recipe", w = 23 },

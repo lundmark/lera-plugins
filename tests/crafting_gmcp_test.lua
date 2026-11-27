@@ -228,7 +228,13 @@ assert(sent[#sent] == "cmake auto collect on")
 assert(click(button("[Reserve]")))
 menu.on_select(menu.items[3].value)
 assert(sent[#sent] == "cmake auto reserve 10")
-assert(click(button("[Clear]")) and sent[#sent] == "cmake auto clear Grand Forge")
+local before_clear = #sent
+assert(click(button("[Clear]")) and #sent == before_clear, "Clear asks before it clears")
+choose("Keep repeating Mana Crystal Axe")
+assert(#sent == before_clear, "keeping the rule sends nothing")
+assert(click(button("[Clear]")))
+choose("Stop repeating it")
+assert(sent[#sent] == "cmake auto clear Grand Forge")
 
 assert(protocol.on_gmcp("Craft.Jobs", { full = 1, queue_total = 1, queue_cap = 15,
   automation = { { enabled = 0, collect = 0, reserve = 0, idle = 0 } },
@@ -237,6 +243,30 @@ assert(not state.get().jobs_clock and #state.get().repeat_rules == 0)
 render()
 assert(click(button("[Start]")) and sent[#sent] == "cmake auto on")
 print("Crafting automation settings, repeat controls and paused timers: PASS")
+
+-- A closing frame with the wrong index drops the stage: the next batch applies.
+assert(protocol.on_gmcp("Craft.Jobs", { jobs_b1_1_3_a = {
+  { enabled = 1, collect = 0, reserve = 0, idle = 0 },
+} }))
+assert(protocol.on_gmcp("Craft.Jobs", { jobs_b1_2_3_l = { 0, 15 } }))
+assert(protocol.on_gmcp("Craft.Jobs", { jobs_b2_1_2_a = {
+  { enabled = 1, collect = 1, reserve = 5, idle = 0 },
+} }))
+assert(protocol.on_gmcp("Craft.Jobs", { jobs_b2_2_2_l = { 0, 15 } }))
+assert(state.get().automation.collect == 1, "a bad closing frame pinned the Jobs stage")
+print("Crafting Jobs batches recover from a bad closing frame: PASS")
+
+-- Market batches (mkt_<gen>_<i>_<n>_<code>) apply only once complete.
+assert(protocol.on_gmcp("Craft.Market", { mkt_c1_1_3_o = { { id = 1, good = "Iron" } } }))
+assert(protocol.on_gmcp("Craft.Market", { mkt_c1_2_3_c = { "Mana Crystal Axe" } }))
+local mirror = protocol.mirror and protocol.mirror("Market")
+assert(not (mirror and mirror.orders and mirror.orders[1] and mirror.orders[1].id == 1),
+  "an incomplete Market batch was applied")
+assert(protocol.on_gmcp("Craft.Market", { mkt_c1_3_3_l = {} }))
+mirror = protocol.mirror and protocol.mirror("Market")
+assert(mirror and mirror.orders[1].id == 1 and mirror.scroll_outbox[1] == "Mana Crystal Axe"
+  and #mirror.auctions == 0, "the complete Market batch is applied, unsent lists empty")
+print("Crafting Market batches: PASS")
 
 -- Every tab must fit both a desktop popup and a narrow pane.
 state.apply("State", {
