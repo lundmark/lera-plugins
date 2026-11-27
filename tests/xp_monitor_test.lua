@@ -13,8 +13,11 @@ end
 
 -- ---- stubs ------------------------------------------------------------------
 local stored = nil
+local saves, redraws = 0, 0
+local save_ok = true
 store = { load = function() end, get = function() return stored end,
-          set = function(d) stored = d end, save = function() end }
+          set = function(d) stored = d end,
+          save = function() saves = saves + 1; return save_ok end }
 
 local handlers, removed = {}, {}
 gmcp = {
@@ -23,7 +26,7 @@ gmcp = {
   enabled = function() return true end,
 }
 
-ui = { dirty = function() end, rect = function() end, text_ansi = function() end }
+ui = { dirty = function() redraws = redraws + 1 end, rect = function() end, text_ansi = function() end }
 
 local died_cb
 local kill_plugin = {
@@ -57,14 +60,19 @@ local function frame(t) handlers["Char.XP"]("Char.XP", t) end
 
 -- ---- first frame seeds, never attributes ------------------------------------
 died_cb(nil, "a rabid weasel")
+xp.open()
 frame({ xp = 4000000, to_next = 50000, to_spend = 1200, gain30 = 0,
         per_hour = 0, eta_secs = 0, maxed = 0, modifier = 0 })
 check("first frame seeds total", stored.total == 4000000, stored.total)
 check("first frame records no kill", #stored.kills == 0, #stored.kills)
 check("first frame sets the reset baseline", stored.baseline == 4000000, stored.baseline)
+check("first frame saves and redraws", saves == 1 and redraws == 1)
 
 -- ---- a kill's gain is attributed to the victim ------------------------------
 died_cb(nil, "a cave troll")
+frame({ xp = "4000000", to_next = 50000, to_spend = 1200, gain30 = 0,
+        per_hour = 0, eta_secs = 0, maxed = 0, modifier = 0 })
+check("identical effective values skip writes and redraws", saves == 1 and redraws == 1)
 frame({ xp = 4012000, to_next = 38000, to_spend = 13200, gain30 = 12000,
         per_hour = 24000, eta_secs = 5700, maxed = 0, modifier = 0 })
 check("gain is attributed to the pending victim",
@@ -72,6 +80,7 @@ check("gain is attributed to the pending victim",
       and stored.kills[1].xp == 12000, stored.kills[1] and stored.kills[1].xp)
 check("derived fields land", stored.per_hour == 24000 and stored.eta == 5700
       and stored.to_next == 38000, stored.per_hour)
+check("a gain saves immediately", saves == 2 and redraws == 2)
 
 -- ---- a frame with no kill behind it attributes nothing ----------------------
 frame({ xp = 4012500, to_next = 37500, to_spend = 13700, gain30 = 12500,
@@ -83,6 +92,16 @@ check("modifier is carried", stored.modifier == 1, stored.modifier)
 frame({ xp = 5000000, to_next = 0, to_spend = 0, gain30 = 100,
         per_hour = 200, eta_secs = 0, maxed = 1, modifier = 0 })
 check("maxed flag", stored.max == true, tostring(stored.max))
+
+-- A previous write failure must still be retried if the next frame repeats.
+local before_retry_saves, before_retry_redraws = saves, redraws
+save_ok = false
+frame({ gain30 = 101, maxed = 1 })
+save_ok = true
+frame({ gain30 = 101, maxed = 1 })
+check("identical frame retries a failed save without a redraw",
+      saves == before_retry_saves + 2 and redraws == before_retry_redraws + 1)
+frame({ gain30 = 100, maxed = 1 })
 
 -- ---- a malformed frame keeps the old numbers --------------------------------
 frame({})
