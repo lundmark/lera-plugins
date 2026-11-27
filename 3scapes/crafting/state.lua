@@ -60,9 +60,10 @@ function M.reset()
 
     skills = {},
 
-    buildings = {}, refineries = {},
+    buildings = {}, refineries = {}, build_plans = {},
 
     builds = {}, pending_builds = {}, masterwork = {}, queues = {}, queue_total = 0, queue_cap = 0, ready = {},
+    repeat_rules = {},
 
     recipes_known = {}, recipes_catalogue = {},
 
@@ -180,6 +181,15 @@ local function parse_owned_row(s)
   return { name = name, tier = tonumber(tier) }
 end
 
+local function parse_build_plan(row)
+  if type(row) ~= "string" then return nil end
+  local pattern = "^([^|]+)|([^|]+)|([^|]*)|([^|]*)|(%d+)|([^|]*)|(%d+)$"
+  local name, realm, prerequisite, skill, cost, token, duration = row:match(pattern)
+  if not name then return nil end
+  return { name = name, realm = realm, prerequisite = prerequisite, skill = skill,
+    cost = tonumber(cost), token = token, duration = tonumber(duration) }
+end
+
 -- Refinery rows carry the WHOLE chain now, one row per stage, not just the
 -- stages that happen to have an allocation:
 --   building | stage | material | percent | bldg_tier | max_tier | min_rank
@@ -249,6 +259,11 @@ local function parse_refinery_row(s)
 end
 
 local function apply_buildings(m)
+  rec.build_plans = {}
+  for _, row in ipairs(collect_rows(m, "buildplans")) do
+    local plan = parse_build_plan(row)
+    if plan then rec.build_plans[#rec.build_plans + 1] = plan end
+  end
   local owned_rows = {}
   for _, s in ipairs(collect_rows(m, "bldgs")) do
     local row = parse_owned_row(s)
@@ -272,6 +287,16 @@ local function apply_jobs(m)
   rec.queue_total = num(m.queue_total)
   rec.queue_cap = num(m.queue_cap)
   rec.ready = m.ready or {}
+  local rows = type(m.automation) == "table" and m.automation or {}
+  rec.automation = type(rows[1]) == "table" and rows[1] or nil
+  rec.jobs_clock = rec.automation and rec.automation.idle == 1 and lera.time() or nil
+  rec.repeat_rules = {}
+  for i = 2, #rows do
+    local rule = rows[i]
+    if type(rule) == "table" and type(rule.building) == "string" then
+      rec.repeat_rules[#rec.repeat_rules + 1] = rule
+    end
+  end
 end
 
 

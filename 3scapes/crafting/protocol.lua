@@ -52,6 +52,8 @@ local ENVELOPE = { full = true, page = true, pages = true }
 local ALWAYS_MERGE = { Skills = true, Recipes = true, State = true, Buildings = true }
 
 local mirrors, seen, counters, wire_names
+-- Batched snapshots being assembled, per package (Jobs, Market).
+local batch_stage = {}
 local apply_cb, handler_id
 -- Materials staging (see handle_materials below): { gen, chunks = {[key]=rows}, expected }.
 local materials_stage
@@ -65,6 +67,7 @@ local function blank_materials_stage()
 end
 
 function M.reset_connection()
+  batch_stage = {}
   mirrors = {}
   seen = {}
   counters = blank_counters()
@@ -216,6 +219,75 @@ local function handle_materials(keys)
   end
 end
 
+local JOB_LISTS = {
+  b = "builds", p = "pending_builds", m = "masterwork",
+  q = "queues", r = "ready", a = "automation",
+}
+
+-- Craft.Market batches (players/skuggis/crafting doc/GMCP.md): prefix mkt_,
+-- one code per list in the server's order, closing `l` with an empty array.
+local MARKET_LISTS = {
+  o = "orders", m = "material_orders", e = "exchanges", a = "auctions",
+  s = "scroll_orders", u = "scroll_auctions", c = "scroll_outbox",
+}
+
+-- Per package: key prefix, list codes, and what a valid closing `l` frame
+-- looks like (its rows are written into the
+-- snapshot by `close`).
+local BATCHES = {
+  Jobs = { prefix = "jobs", lists = JOB_LISTS,
+    close = function(rows, snapshot)
+      if type(rows[1]) ~= "number" or type(rows[2]) ~= "number" then return false end
+      snapshot.queue_total, snapshot.queue_cap = rows[1], rows[2]
+      return true
+    end },
+  Market = { prefix = "mkt", lists = MARKET_LISTS,
+    close = function() return true end },
+}
+
+-- Server batches carry one complete snapshot. Keep the previous timers and
+-- controls until the matching final frame arrives (for Jobs, with both
+-- queue limits). Returns is_batch, snapshot-when-complete. Any frame that
+-- does not fit the stage drops it, so a bad closing frame cannot pin the
+-- stage and block the batches after it until the next full snapshot.
+local function accept_batch(sub, key, rows)
+  local spec = BATCHES[sub]
+  if not spec then return false end
+  local prefix, gen, index, count, code = key:match("^(%a+)_(%x+)_(%d+)_(%d+)_([a-z])$")
+  if not gen or prefix ~= spec.prefix then return false end
+  index, count = tonumber(index), tonumber(count)
+  if type(rows) ~= "table" or index < 1 or index > count
+      or (code ~= "l" and not spec.lists[code]) then
+    batch_stage[sub] = nil
+    return true
+  end
+  if index == 1 then
+    batch_stage[sub] = { gen = gen, count = count, next = 1, snapshot = {} }
+    for _, name in pairs(spec.lists) do batch_stage[sub].snapshot[name] = {} end
+  end
+  local stage = batch_stage[sub]
+  if not stage or stage.gen ~= gen or stage.count ~= count or stage.next ~= index then
+    batch_stage[sub] = nil
+    return true
+  end
+  if code == "l" then
+    batch_stage[sub] = nil
+    if index ~= count or not spec.close(rows, stage.snapshot) then return true end
+    return true, stage.snapshot
+  end
+  local target = stage.snapshot[spec.lists[code]]
+  for _, row in ipairs(rows) do target[#target + 1] = row end
+  stage.next = index + 1
+  return true
+end
+
+local function applied(sub)
+  seen[sub] = lera.time()
+  counters.applied = counters.applied + 1
+  if apply_cb then apply_cb(sub, mirrors[sub]) end
+  return true
+end
+
 function M.on_gmcp(pkg, data)
   counters.frames = counters.frames + 1
 
@@ -237,6 +309,18 @@ function M.on_gmcp(pkg, data)
   end
 
   local keys = accepted(data)
+  if BATCHES[sub] then
+    for key, value in pairs(keys) do
+      local is_batch, snapshot = accept_batch(sub, key, value)
+      if is_batch then
+        if not snapshot then return true end
+        mirrors[sub] = snapshot
+        return applied(sub)
+      end
+    end
+    -- An ordinary frame between batches abandons a half-built snapshot.
+    batch_stage[sub] = nil
+  end
 
   -- Materials chunk/count/gen keys are staged and committed separately (see
   -- handle_materials) -- pulled out of the ordinary merge below so a
@@ -265,10 +349,7 @@ function M.on_gmcp(pkg, data)
 
   if sub == "State" then handle_materials(keys) end
 
-  seen[sub] = lera.time()
-  counters.applied = counters.applied + 1
-  if apply_cb then apply_cb(sub, mirrors[sub]) end
-  return true
+  return applied(sub)
 end
 
 function M.subscribe()
