@@ -61,6 +61,7 @@ LERA_ROOT=$lera_root "$luajit" tests/input_shortcuts_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/chat_monitor_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/chat_recording_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/push_notify_test.lua
+LERA_ROOT=$lera_root "$luajit" tests/command_stack_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/combat_notify_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/deadmans_test.lua
 LERA_ROOT=$lera_root "$luajit" tests/kill_trigger_test.lua

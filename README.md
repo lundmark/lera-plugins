@@ -21,6 +21,11 @@ official license text differ, the official license text controls.
 [`generic/input_shortcuts.lua`](generic/input_shortcuts.md) adds optional
 command stacking and counted walks, with per-profile settings. Both start off.
 
+## Command stack
+
+[`generic/command_stack.lua`](generic/command_stack.md) runs several commands
+typed on one line (`look;score`), as an ordinary alias.
+
 ## Session buttons
 
 [`generic/session_buttons.lua`](generic/session_buttons.md) draws rounded
