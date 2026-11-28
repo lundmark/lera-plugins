@@ -321,64 +321,77 @@ function M.companions(width)
 end
 
 -- ---------------------------------------------------------------------------
--- Discord -- leyline strain and what it is costing
+-- Discord -- local strain, realm totals, and damaged areas
 -- ---------------------------------------------------------------------------
+local LEYLINE_CAP = 100000
+local LEYLINE_REALMS = { "Chaos", "Fantasy", "Science" }
+local LEYLINE_COLORS = { C.bright_green, C.green, C.yellow, C.bright_red, C.red }
+
+local function discord_meter(value, width)
+  local filled = math.min(width, math.floor(math.max(0, value) * width / LEYLINE_CAP))
+  if value > 0 then filled = math.max(1, filled) end
+  local bar = {}
+  for i = 1, filled do
+    local color = LEYLINE_COLORS[1 + math.floor((i - 1) * #LEYLINE_COLORS / width)]
+    bar[i] = color .. "|" .. P.RESET
+  end
+  return "[" .. table.concat(bar) .. C.dim .. string.rep("-", width - filled) .. P.RESET .. "]"
+end
+
 function M.discord(width)
   width = width or 60
-  local L = {}
+  if not S.ley_ready then return { C.dim .. "Waiting for leyline data." .. P.RESET } end
+  local lines, tips = {}, {}
+  local bar_width = math.max(6, math.min(24, width - 45))
+  local label_width = width - bar_width - 12
 
-  L[#L + 1] = P.header(width, "Leyline discord")
-
-  -- Label only. The raw region key is no longer sent (it could be a
-  -- "path:/players/<wiz>/areas/..." fallback), so there is nothing to fall
-  -- back TO -- an unnamed area reports as unknown rather than as its path.
-  L[#L + 1] = P.kv("Here",
-                   (S.ley_here_label ~= "" and S.ley_here_label) or "unknown",
-                   C.white)
-  -- Discord is a 0-100 strain reading, so a HIGH value is bad -- pct_color
-  -- rates high as good, hence the inverted argument.
-  local dcol = P.pct_color(100 - S.ley_here_discord, 100)
-  L[#L + 1] = P.kv("Discord", S.ley_here_discord, dcol) .. " " ..
-              P.bar(math.max(8, math.min(24, width - 24)),
-                    S.ley_here_discord, 100, dcol)
-
-  -- No backlash block here. The server deliberately stopped sending the
-  -- shaman's own penalty on this panel (see send_gmcp_leyline()'s header in
-  -- players/shaman/obj/include/gmcp.h): discord is world state a client may
-  -- render, the damage a shaman is personally losing to it is not. This tab
-  -- shows realms and areas only.
-  L[#L + 1] = ""
-  L[#L + 1] = P.header(width, "Realms")
-  if #S.ley_realms == 0 then
-    L[#L + 1] = C.dim .. "  (no realm is disturbed)" .. P.RESET
-  else
-    for _, r in ipairs(S.ley_realms) do
-      local col = P.pct_color(100 - math.min(r.discord, 100), 100)
-      L[#L + 1] = string.format(" %s %s",
-        P.pad(col .. tostring(r.discord) .. P.RESET, 5),
-        P.pad(r.realm, 22))
+  local function row(label, value, detail)
+    local meter = discord_meter(value, bar_width) .. string.format(" %7d", value)
+    if label_width < 20 or #label > label_width then
+      lines[#lines + 1] = label
+      tips[#lines] = detail
+      lines[#lines + 1] = "  " .. meter
+    else
+      lines[#lines + 1] = P.pad(label, label_width) .. " " .. meter
     end
+    tips[#lines] = detail
   end
 
-  L[#L + 1] = ""
-  L[#L + 1] = P.header(width, "Disturbed areas")
+  lines[#lines + 1] = P.header(width, "Current area")
+  local here = S.ley_here_label ~= "" and S.ley_here_label or "Unknown area"
+  local emergency = S.ley_here_discord >= 25000 and " Use shcast urgens on site."
+    or " Emergency cleansing opens at 25,000."
+  row(here, S.ley_here_discord,
+    here .. " | " .. S.ley_here_discord .. " of 100,000 discord." .. emergency)
+
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = P.header(width, "Realms")
+  local realm_totals = {}
+  for _, r in ipairs(S.ley_realms) do realm_totals[pretty(r.realm:lower())] = r.discord end
+  local function realm_row(realm, total)
+    row(realm, total, realm .. " | " .. total .. " total discord across its areas. A full bar is 100,000.")
+  end
+  for _, realm in ipairs(LEYLINE_REALMS) do
+    realm_row(realm, realm_totals[realm] or 0)
+    realm_totals[realm] = nil
+  end
+  local other_realms = {}
+  for realm in pairs(realm_totals) do other_realms[#other_realms + 1] = realm end
+  table.sort(other_realms)
+  for _, realm in ipairs(other_realms) do realm_row(realm, realm_totals[realm]) end
+
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = P.header(width, "Disturbed areas")
   if #S.ley_regions == 0 then
-    L[#L + 1] = C.dim .. "  (the ley lines are calm)" .. P.RESET
-    return L
+    lines[#lines + 1] = C.dim .. "The ley lines are calm." .. P.RESET
   end
-  for i, r in ipairs(S.ley_regions) do
-    if i > 15 then
-      L[#L + 1] = C.dim .. string.format("  ... and %d more",
-        #S.ley_regions - 15) .. P.RESET
-      break
-    end
-    local col = P.pct_color(100 - r.discord, 100)
-    L[#L + 1] = string.format(" %s %s %s",
-      P.pad(col .. tostring(r.discord) .. P.RESET, 5),
-      P.pad(r.region, 22),
-      C.dim .. r.realm .. P.RESET)
+  for _, r in ipairs(S.ley_regions) do
+    local realm = r.realm ~= "" and (" (" .. pretty(r.realm:lower()) .. ")") or ""
+    local label = r.region .. realm
+    row(label, r.discord, label .. " | " .. r.discord
+      .. " of 100,000 discord. From the guild nexus, use shcast sanare " .. r.region .. ".")
   end
-  return L
+  return lines, nil, tips
 end
 
 M.PAGES = {

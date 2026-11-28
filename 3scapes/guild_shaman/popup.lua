@@ -52,6 +52,21 @@ local hover_rows, hover_row = {}, nil
 local sort_key, descending = "cat", false
 local sort_hit
 
+local function draw_hover_tip(text, x, y, width, height, first_row, selected_row)
+  local tip_width = math.min(58, width)
+  local wrapped = P.wrap(text, math.max(1, tip_width - 2))
+  local below, above = height - selected_row - 1, selected_row - first_row
+  local show_above = #wrapped > below and above > below
+  local count = math.min(#wrapped, show_above and above or below)
+  local top = show_above and selected_row - count or selected_row + 1
+  local content_width = 0
+  for i = 1, count do content_width = math.max(content_width, #wrapped[i] + 2) end
+  for i = 1, count do
+    ui.text_ansi(ui.rect(x, y + top + i - 1, tip_width, 1),
+      "\27[7m" .. P.pad(" " .. wrapped[i], math.min(tip_width, content_width)) .. P.RESET)
+  end
+end
+
 -- Draws the tab bar into the top of the rect, wrapping onto further rows when
 -- the labels outrun the width. Returns rows used. Column tracking is explicit
 -- rather than string length because the reverse-video escapes around the
@@ -118,8 +133,6 @@ local function wrap()
     -- only pages.powers builds one, and nil for every other page is exactly
     -- what disables body clicks there.
     local lines, targets, tips, columns = page.fn(w, sort_key, descending)
-    local detail_rows = tips and next(tips) and math.min(3, math.max(0, body_h - 1)) or 0
-    body_h = body_h - detail_rows
     last_count = #lines
     if last_page ~= current then
       sc.scroll_to_bottom()
@@ -136,20 +149,13 @@ local function wrap()
       if tips then visible_tips[used + i - 1] = tips[i + offset] end
       drawn = drawn + 1
     end
-    if detail_rows > 0 and lera.render_pass() ~= "remote" then
-      local detail = visible_tips[hover_row] or ""
-      local wrapped = P.wrap(detail, w)
-      for row = 1, math.min(detail_rows, #wrapped) do
-        ui.text_ansi(ui.rect(x, y + used + body_h + row - 1, w, 1),
-          P.C.bright_cyan .. wrapped[row] .. P.RESET)
-      end
-    end
-
     -- Same pass guard as tab_spans: a remote render must not overwrite the
     -- layout the local user is clicking on. body_top/body_offset are stored
     -- with the map because a click arrives in popup-local rows and has to be
     -- translated back through the CURRENT scroll offset to a line index.
     if lera.render_pass() ~= "remote" then
+      local tip = visible_tips[hover_row]
+      if tip then draw_hover_tip(tip, x, y, w, h, used, hover_row) end
       body_targets = targets
       body_top = used
       body_offset = offset

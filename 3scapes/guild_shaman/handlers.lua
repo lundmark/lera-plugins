@@ -125,6 +125,7 @@ end
 -- array is a real state ("the world is calm"), not a missing one -- which is
 -- exactly why the presence check is on the key and not on its length.
 local function write_leyline(d)
+  S.ley_ready = true
   -- d.here (the raw region key) is no longer sent and is not read: it could
   -- be a "path:/players/<wiz>/areas/..." fallback, which is an internal key,
   -- not an area name. here_label is the only place-name on this panel.

@@ -249,6 +249,20 @@ check("Leyline: sorted hottest first",
 frame("Guild.Leyline", { regions = {} })
 check("Leyline: empty region list is applied, not ignored", #S.ley_regions == 0)
 
+handlers.on_gmcp("Guild.Leyline", {
+  guild = "shaman", here_label = "The Dragon Realms", here_discord = 273,
+  realms = { { realm = "fantasy", d = 273 } },
+  regions = { { r = "The Dragon Realms", d = 273, realm = "fantasy" } },
+})
+local ley_lines, _, ley_tips = pages.discord(74)
+local ley_text = table.concat(ley_lines, "\n"):gsub("\27%[[%d;]*m", "")
+check("Discord uses the leyline scale and shows all three title-cased realms",
+  ley_text:find("[|-----------------------]", 1, true)
+  and ley_text:find("The Dragon Realms (Fantasy)", 1, true)
+  and ley_text:find("Chaos", 1, true) and ley_text:find("Science", 1, true))
+check("the current area hover explains when emergency cleansing opens",
+  ley_tips[2]:find("25,000", 1, true))
+
 -- ===========================================================================
 -- Pages render without error and produce content
 -- ===========================================================================
@@ -416,16 +430,21 @@ do
     if sent[1] == "shmaintain ulula" then unbonded_clicked = true end
   end
   check("unbonded pet opener does not send a command", not unbonded_clicked)
+  local hover_y
   for row, line in ipairs(lines) do
     if line:find("Ulula", 1, true) then
       r.on_pointer({ kind = "move", x = 4, y = row, inside = true })
+      hover_y = row
       break
     end
   end
   printed = {}
+  drawn_rects = {}
   r.render({ x = 0, y = 0, w = 60, h = 30 })
   check("a blocked power still has an effect tooltip",
     table.concat(printed, "\n"):find("Frightens the target.", 1, true))
+  check("tooltip starts directly below the hovered row",
+    drawn_rects[#drawn_rects] and drawn_rects[#drawn_rects].y == hover_y + 1)
   r.on_pointer({ kind = "move", x = 0, y = 0, inside = true })
   printed = {}
   r.render({ x = 0, y = 0, w = 60, h = 30 })
