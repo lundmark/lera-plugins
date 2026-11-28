@@ -70,9 +70,12 @@ lera = {
 }
 
 local gmcp_subs = {}
+local gmcp_sent = {}
 gmcp = {
   on = function(pkg, fn) gmcp_subs[#gmcp_subs + 1] = { pkg = pkg, fn = fn }; return #gmcp_subs end,
   remove = function() end,
+  enabled = function() return true end,
+  send = function(pkg, data) gmcp_sent[#gmcp_sent + 1] = { pkg = pkg, data = data } end,
 }
 
 local registered
@@ -306,6 +309,9 @@ check("status supports descending GXP sort",
 init.on_load()
 check("on_load subscribed to Guild", #gmcp_subs == 1 and gmcp_subs[1].pkg == "Guild",
       gmcp_subs[1] and gmcp_subs[1].pkg)
+check("on_load requests a fresh snapshot on an existing connection",
+  #gmcp_sent == 1 and gmcp_sent[1].pkg == "Core.Supports.Add"
+    and gmcp_sent[1].data[1] == "Guild 1")
 check("on_load registered /sham", registered ~= nil and registered.name == "/sham",
       registered and registered.name)
 init.on_setup()

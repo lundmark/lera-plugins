@@ -243,6 +243,9 @@ function M.skills(width)
   local pools = {}
   for _, cat in ipairs(S.skillcats) do pools[cat.cat] = cat.gxp end
   local lines, tips, category = {}, {}, nil
+  if not next(S.skill_help) then
+    lines[1] = C.dim .. "Waiting for skill descriptions." .. P.RESET
+  end
   for _, skill in ipairs(S.skill_details) do
     local pool = pools[skill.cat]
     if category ~= skill.cat then

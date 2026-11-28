@@ -96,10 +96,14 @@ local function sham_command(rest)
       S.last_frame_at > 0
         and (os.time() - S.last_frame_at) .. "s ago"
         or "never"))
+    local help_count = 0
+    for _, group in pairs(S.skill_help) do
+      for _ in pairs(group) do help_count = help_count + 1 end
+    end
     note("808080", string.format(
-      "[Shaman] powers %d | skills %s | companions %s | disturbed regions %d",
+      "[Shaman] powers %d | skills %s | skill descriptions %d | companions %s | disturbed regions %d",
       #S.powers, S.skill_details and #S.skill_details or "waiting",
-      S.companions and #S.companions or "waiting", #S.ley_regions))
+      help_count, S.companions and #S.companions or "waiting", #S.ley_regions))
     return
   end
 
@@ -183,6 +187,12 @@ function M.on_load()
       if ui and ui.dirty then ui.dirty() end
     end
   end)
+  -- Another plugin may already hold the Guild subscription. In that case
+  -- registering our handler does not re-advertise it, so the MUD's delta
+  -- cache still thinks this newly loaded plugin has the static descriptions.
+  if gmcp_id and gmcp.enabled and gmcp.send and gmcp.enabled() then
+    gmcp.send("Core.Supports.Add", { "Guild 1" })
+  end
 
   local id, err = command.register({
     name = "/sham",
