@@ -50,9 +50,10 @@ local ENVELOPE = { full = true, page = true, pages = true }
 -- fixes were all real bugs worth having fixed, but none of them were ever
 -- going to matter while this file discarded every earlier chunk on arrival.
 local ALWAYS_MERGE = { Skills = true, Recipes = true, State = true, Buildings = true }
+local PAGED_LISTS = { Buildings = true, Recipes = true }
 
 local mirrors, seen, counters, wire_names
-local structures_run
+local page_runs
 -- Batched snapshots being assembled, per package (Jobs, Market).
 local batch_stage = {}
 local apply_cb, handler_id
@@ -68,7 +69,7 @@ local function blank_materials_stage()
 end
 
 function M.reset_connection()
-  structures_run = nil
+  page_runs = {}
   batch_stage = {}
   mirrors = {}
   seen = {}
@@ -122,21 +123,21 @@ local function accepted(data)
   return out
 end
 
--- The namespace codec can split a single Structures array across several
+-- The namespace codec can split a single list across several
 -- pages under the same key. Assemble that run before merging the numbered
 -- crafting chunks into the mirror.
-local function structures_keys(data, keys)
+local function paged_keys(sub, data, keys)
   local page, pages = tonumber(data.page), tonumber(data.pages)
   if not page or not pages or pages <= 1 then
-    structures_run = nil
+    page_runs[sub] = nil
     return keys
   end
   if page == 1 then
-    structures_run = { pages = pages, next_page = 1, keys = {} }
+    page_runs[sub] = { pages = pages, next_page = 1, keys = {} }
   end
-  local run = structures_run
+  local run = page_runs[sub]
   if not run or page ~= run.next_page or pages ~= run.pages then
-    structures_run = nil
+    page_runs[sub] = nil
     return nil
   end
 
@@ -151,7 +152,7 @@ local function structures_keys(data, keys)
     end
   end
   if page == pages then
-    structures_run = nil
+    page_runs[sub] = nil
     return run.keys
   end
   run.next_page = page + 1
@@ -346,8 +347,8 @@ function M.on_gmcp(pkg, data)
   end
 
   local keys = accepted(data)
-  if sub == "Buildings" then
-    keys = structures_keys(data, keys)
+  if PAGED_LISTS[sub] then
+    keys = paged_keys(sub, data, keys)
     if not keys then return true end
   end
   if BATCHES[sub] then

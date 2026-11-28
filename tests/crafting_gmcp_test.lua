@@ -435,3 +435,30 @@ state.apply("Buildings", { buildplans = { "Soul Well|Global|||400|each realm|360
 render()
 assert(visible("Unbuilt Buildings") and click(button("Soul Well")), "empty account could not build")
 print("Unbuilt building catalogue and construction actions: PASS")
+
+protocol.reset_connection()
+local first = { building = "Grand Forge", name = "Star Silver Axe", production = 1 }
+local second = { building = "Grand Forge", name = "Star Silver Sword", production = 1 }
+assert(protocol.on_gmcp("Craft.Recipes", { full = 1, page = 1, pages = 2,
+  catalogue_fantasy = { first }, known_fantasy = { first } }))
+assert(protocol.on_gmcp("Craft.Structures", { full = 1, page = 1, pages = 2,
+  bldgs = { "Grand Forge|2" } }))
+assert(protocol.on_gmcp("Craft.Recipes", { full = 1, page = 2, pages = 2,
+  catalogue_fantasy = { second } }))
+assert(protocol.on_gmcp("Craft.Structures", { full = 1, page = 2, pages = 2,
+  bldgs = { "Bone Forge|1" } }))
+assert(#state.get().recipes_catalogue.fantasy == 2 and #state.get().recipes_known.fantasy == 1)
+assert(#state.get().buildings == 2, "interleaved pages lost building rows")
+
+state.apply("Jobs", { pending_builds = {
+  { building = "Bone Forge", tier = 1, token = "cracked", need = 400, shortfall = 27 },
+  { building = "Soul Well", tier = 1, global = 1, need = 400, shortfall = 720 },
+  { building = "Logistics Depot", tier = 1, global = 1, need = 400 },
+  { building = "Grand Forge", tier = 2, token = "weathered", need = 800, shortfall = 0 },
+} })
+local funding = table.concat(jobs.lines(106), "\n")
+assert(funding:find("27 cracked tokens left", 1, true))
+assert(funding:find("720 tokens left across realms", 1, true))
+assert(funding:find("Base cost: 400 tokens per realm", 1, true))
+assert(funding:find("Funded, waiting to start", 1, true))
+print("Paged recipes and pending construction funding: PASS")

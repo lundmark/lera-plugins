@@ -94,6 +94,20 @@ local function draw_attention(lines, actions, width, s, queues, realms)
   add("")
 end
 
+local function funding_text(build)
+  local global = build.global == 1
+  local unit = global and "tokens" or (build.token or "tier") .. " tokens"
+  if type(build.shortfall) == "number" and build.shortfall >= 0 then
+    if build.shortfall == 0 then return "Funded, waiting to start" end
+    local scope = global and " across realms" or ""
+    return pagelib.fmt_num(build.shortfall) .. " " .. unit .. " left" .. scope
+  end
+  -- Older servers report the base cost without the player's balance.
+  if type(build.need) ~= "number" then return "-" end
+  return "Base cost: " .. pagelib.fmt_num(build.need) .. " " .. unit
+    .. (global and " per realm" or "")
+end
+
 function M.lines(width)
   width = pagelib.page_width(width)
   local s = state.get()
@@ -147,16 +161,10 @@ function M.lines(width)
     add(pagelib.header(width, "Awaiting Funding"))
     local rows = {}
     for _, b in ipairs(sorted) do
-      local need_desc
-      if b.global == 1 then
-        need_desc = pagelib.fmt_num(b.need or 0) .. " tokens from each realm"
-      else
-        need_desc = pagelib.fmt_num(b.need or 0) .. " " .. (b.token or "") .. " " .. (b.realm or "") .. " tokens"
-      end
-      rows[#rows + 1] = { b.building or "?", b.tier or "-", need_desc }
+      rows[#rows + 1] = { b.building or "?", b.tier or "-", funding_text(b) }
     end
     pagelib.add_table(lines, width, {
-      { title = "Building", w = "*" }, { title = "Target tier", w = 12 }, { title = "Still needed", w = 36 },
+      { title = "Building", w = "*" }, { title = "Target tier", w = 12 }, { title = "Funding", w = 36 },
     }, rows)
     add("")
   end
