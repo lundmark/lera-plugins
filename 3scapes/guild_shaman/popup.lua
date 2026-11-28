@@ -26,7 +26,6 @@ local shown = nil
 -- against a length the page no longer has.
 -- Tab order. A table (not pairs over pages.PAGES) so the bar is stable --
 -- pairs() order is undefined and the tabs would shuffle between renders.
-local TAB_ORDER = { "status", "powers", "discord" }
 local SEPARATOR = " "
 
 -- Which tab the popup is currently showing. Module-level so a click can move
@@ -57,7 +56,7 @@ local function render_tabbar(x, y, w)
   local row_texts, spans = { "" }, {}
   local row, col = 0, 0
 
-  for _, key in ipairs(TAB_ORDER) do
+  for _, key in ipairs(pages.ORDER) do
     local page = pages.PAGES[key]
     if page then
       local text = page.title
@@ -92,6 +91,7 @@ end
 
 local function wrap()
   local last_count = 0
+  local last_page = current
   local sc = require("wm").make_scroller({ count = function() return last_count end })
 
   local wrapper = {}
@@ -115,6 +115,10 @@ local function wrap()
     -- what disables body clicks there.
     local lines, targets = page.fn(w)
     last_count = #lines
+    if last_page ~= current then
+      sc.scroll_to_bottom()
+      last_page = current
+    end
 
     local offset = sc.offset()
     local drawn = 0
@@ -159,6 +163,7 @@ local function wrap()
       for _, t in ipairs(tab_spans) do
         if event.y == t.row and event.x >= t.col_start and event.x < t.col_end then
           current = t.key
+          body_targets = nil
           -- scroll_to_bottom() sets offset = 0, and this renderer indexes
           -- lines[i + offset] from the top -- so offset 0 IS the top of the newly
           -- selected page. (The earlier extra sc.scroll(-1e9) was a redundant
@@ -176,7 +181,7 @@ local function wrap()
     -- current state and cannot desync from it. Nothing is sent optimistically
     -- and no local state is written: the authoritative answer arrives as the
     -- next Guild.Powers frame.
-    if body_targets then
+    if current == "powers" and body_targets then
       local row = event.y - body_top
       if row >= 0 and row < body_drawn then
         local target = body_targets[row + 1 + body_offset]
@@ -220,6 +225,7 @@ function M.toggle(key)
   -- Already open on a DIFFERENT tab: just switch, no reopen. This is what
   -- makes '/sham powers' behave like clicking the Powers tab.
   current = key
+  body_targets = nil
   if wm.popup.is_open() and shown then
     ui.dirty()
     return true
@@ -227,8 +233,8 @@ function M.toggle(key)
 
   wm.popup.open(wrap(), {
     title = "Shaman",
-    width = 0.8,
-    height = 0.8,
+    width = 76,
+    height = 33,
     -- Cleared on ANY close (a second toggle, Escape, a click outside, or
     -- being replaced by another popup), so the toggle above can never get
     -- out of step with what is actually on screen.

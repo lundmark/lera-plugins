@@ -50,6 +50,7 @@ end
 -- The server sends all six categories together or not at all, so this list is
 -- replaced wholesale when `cats` is present -- but only then.
 local function write_skills(d)
+  if d.can_train_here ~= nil then S.can_train_here = num(d.can_train_here) == 1 end
   if type(d.cats) ~= "table" then return end
   local out = {}
   for _, r in ipairs(d.cats) do
@@ -75,12 +76,46 @@ local function write_powers(d)
   if type(d.powers) ~= "table" then return end
   local out = {}
   for _, r in ipairs(d.powers) do
+    local needs_bond = num(r.k) == 3 and r.b ~= nil and num(r.b) == 0
     out[#out + 1] = {
       id = str(r.id), kind = num(r.k),
       on = num(r.on) == 1, maintained = num(r.m) == 1,
+      needs_bond = needs_bond,
     }
   end
   S.powers = out
+end
+
+local function write_skill_detail(d)
+  if type(d.rows) ~= "table" then return end
+  local out = {}
+  for _, row in ipairs(d.rows) do
+    if type(row) ~= "string" then return end
+    if row:sub(1, 1) == "|" then
+      local previous = out[#out]
+      if not previous then return end
+      previous.requirements = previous.requirements .. row:sub(2)
+    else
+      local cat, level, cap, cost, eligible, name, req =
+        row:match("^(%d+)|(%d+)|(%d+)|(%d+)|([01])|([^|]+)|(.*)$")
+      if not cat then return end
+      out[#out + 1] = {
+        cat = num(cat), level = num(level), cap = num(cap), cost = num(cost),
+        eligible = eligible == "1", name = name, requirements = req,
+      }
+    end
+  end
+  S.skill_details = out
+end
+
+local function write_companions(d)
+  if d.bond_cap ~= nil then S.bond_cap = num(d.bond_cap) end
+  if type(d.spirits) ~= "table" then return end
+  local out = {}
+  for _, r in ipairs(d.spirits) do
+    out[#out + 1] = { name = str(r.n), category = str(r.c), bonded = num(r.b) == 1 }
+  end
+  S.companions = out
 end
 
 -- ---------------------------------------------------------------------------
@@ -138,10 +173,12 @@ end
 -- merge_page has always done this; the shaman plugin never got it.
 local ENVELOPE = { guild = true, full = true, page = true, pages = true }
 
--- Open page runs, keyed by sub-package suffix. A run only ever spans the
--- frames of a single push, so an interrupted one is replaced rather than aged
--- out -- see the `page <= 1` reset below.
+-- Open page runs, keyed by sub-package suffix.
 local runs = {}
+
+function M.reset_connection()
+  runs = {}
+end
 
 -- An empty table is indistinguishable from an empty array in Lua, which is
 -- fine here: concatenating an empty slice into an empty slice is a no-op
@@ -157,10 +194,10 @@ local function merge_page(run, data)
   for key, value in pairs(data) do
     if not ENVELOPE[key] then
       local prev = run[key]
-      if prev == nil then
-        run[key] = value
-      elseif is_array(prev) and is_array(value) then
-        for i = 1, #value do prev[#prev + 1] = value[i] end
+      if is_array(value) then
+        local list = is_array(prev) and prev or {}
+        for i = 1, #value do list[#list + 1] = value[i] end
+        run[key] = list
       else
         run[key] = value
       end
@@ -171,6 +208,8 @@ end
 M.PANELS = {
   State   = write_state,
   Skills  = write_skills,
+  SkillDetail = write_skill_detail,
+  Companions = write_companions,
   Powers  = write_powers,
   Leyline = write_leyline,
 }
@@ -193,27 +232,36 @@ function M.on_gmcp(package, data)
   S.last_frame_at = os.time()
 
   -- Unpaged push (the common case): the frame IS the payload.
-  local pages = tonumber(data.pages) or 1
-  if pages <= 1 then
+  if data.pages == nil and data.page == nil then
     runs[suffix] = nil
     fn(data)
     return true
   end
 
-  -- Paged push: accumulate, and only run the writer once the last page lands.
-  -- Writers replace list keys wholesale, so handing them a partial run would
-  -- reintroduce exactly the truncation this exists to prevent.
-  local page = tonumber(data.page) or 1
+  local page, pages = tonumber(data.page), tonumber(data.pages)
+  if not page or not pages or page % 1 ~= 0 or pages % 1 ~= 0
+     or page < 1 or page > pages then
+    runs[suffix] = nil
+    return false
+  end
+
+  -- A replacement list requires the full ordered push. Page 1 starts a new
+  -- run and a gap invalidates it, even when the page that skipped ahead is last.
   local run = runs[suffix]
-  if not run or page <= 1 then
-    run = { guild = data.guild }
+  if page == 1 then
+    run = { payload = {}, pages = pages, next_page = 1 }
     runs[suffix] = run
   end
-  merge_page(run, data)
+  if not run or run.pages ~= pages or run.next_page ~= page then
+    runs[suffix] = nil
+    return false
+  end
+  merge_page(run.payload, data)
+  run.next_page = page + 1
   if page < pages then return false end
 
   runs[suffix] = nil
-  fn(run)
+  fn(run.payload)
   return true
 end
 

@@ -31,10 +31,13 @@ M.S = {
   -- One entry per skill category, keyed by the server's numeric category id.
   -- Each: { cat, gxp, last, skills, held, maxed, levels }.
   skillcats = {},
+  skill_details = false,
+  can_train_here = false,
+  companions = false,
+  bond_cap = 0,
 
   -- ---- Guild.Powers -----------------------------------------------------
-  -- Flat list of every toggleable power, each { id, k, on, m } where k is
-  -- 0 = combat power, 1 = maintained spell, 2 = De Societate power.
+  -- Runtime state and the player's auto-maintain setting are independent.
   powers = {},
   party = 0,
 

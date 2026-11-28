@@ -349,6 +349,7 @@ do
       { id = "vitare",           k = 0, on = 0, m = 0 },
       { id = "flumen_vitae",     k = 1, on = 1, m = 1 },
       { id = "duritia_ursi",     k = 3, on = 0, m = 1 },
+      { id = "ulula",            k = 3, on = 0, m = 0, b = 0 },
       { id = "damnum_repellere", k = 2, on = 0, m = 1 },
     },
   })
@@ -379,31 +380,31 @@ do
           not t.label:find("_", 1, true))
     if t.label == "duritia ursi" then saw_pet = true end
   end
-  check("every power row is clickable", n == 5, n)
+  check("every available power row is clickable", n == 5, n)
   check("a pet opener is clickable too", saw_pet)
+  check("unbonded pet opener explains why it is blocked", has_line("Needs bond"))
+  check("running and auto-maintain have separate labels", has_line("Running Auto-maintain"))
 
   -- Now click one, through the real pointer path.
   local sent = {}
   mud = { send = function(cmd) sent[#sent + 1] = cmd end }
   r.render({ x = 0, y = 0, w = 60, h = 30 })
 
-  -- Find the drawn row for a known power and click it.
-  local want_row
-  for idx, t in pairs(targets) do
-    if t.label == "scutum spiritale" then want_row = idx end
-  end
   -- Scan the body for the row that maps to this power rather than assuming
   -- the tab bar height and scroll offset: the mapping under test is
   -- line-index -> screen-row, and asserting exactly ONE screen row produces
   -- the command verifies it far better than hardcoding the arithmetic.
   local hits = {}
-  for probe_y = 0, 29 do
+  local unbonded_clicked = false
+  for probe_y = 1, 29 do
     sent = {}
     if r.on_pointer({ kind = "down", button = "left", x = 4, y = probe_y })
        and sent[1] == "shmaintain scutum spiritale" then
       hits[#hits + 1] = probe_y
     end
+    if sent[1] == "shmaintain ulula" then unbonded_clicked = true end
   end
+  check("unbonded pet opener does not send a command", not unbonded_clicked)
   check("exactly one body row toggles a given power", #hits == 1,
         table.concat(hits, ","))
   sent = {}
@@ -526,6 +527,51 @@ handlers.on_gmcp("Guild.Powers", {
   powers = { { id = "vitare", k = 0, on = 1, m = 1 } },
 })
 check("an unpaged push replaces, not appends", #S.powers == 1, #S.powers)
+
+local function skill_page(page, total, rows)
+  return handlers.on_gmcp("Guild.SkillDetail", {
+    guild = "shaman", page = page, pages = total, rows = rows,
+  })
+end
+
+local weapon_row = "0|20|100|125|1|Vitare|"
+local ward_row = "5|1|100|50|1|Scientia Ignis|"
+local ward_requirement = "|Scutum Spiritale 2"
+check("an orphaned last page is ignored", not skill_page(2, 2, { ward_row }))
+skill_page(1, 3, { weapon_row })
+check("a skipped middle page invalidates the run", not skill_page(3, 3, { ward_row }))
+check("an incomplete run leaves the previous detail untouched", S.skill_details == false)
+skill_page(1, 2, { weapon_row })
+init.on_disconnect()
+check("a disconnect discards the pending run", not skill_page(2, 2, { ward_row }))
+local first_slice = { weapon_row, ward_row }
+skill_page(1, 2, first_slice)
+check("a fresh ordered run publishes both skill rows", skill_page(2, 2, { ward_requirement })
+  and #S.skill_details == 2)
+check("reassembly leaves the original first page alone", #first_slice == 2)
+handlers.on_gmcp("Guild.Skills", { guild = "shaman", cats = { { cat = 0, gxp = 250 } } })
+local training = table.concat(pages.skills(72), "\n")
+check("skills show levels, costs, hall, ward training and requirements",
+  training:find("20/100", 1, true) and training:find("125", 1, true)
+  and training:find("At Memoria Maiorum", 1, true)
+  and training:find("De Praesidiis", 1, true) and training:find("Automatic", 1, true)
+  and training:find("Scutum Spiritale 2", 1, true))
+handlers.on_gmcp("Guild.Skills", { guild = "shaman", can_train_here = 1 })
+check("hall-only delta preserves the skill rows and enables training",
+  #S.skill_details == 2 and table.concat(pages.skills(72), "\n"):find("Ready", 1, true))
+
+handlers.on_gmcp("Guild.Companions", {
+  guild = "shaman", bond_cap = 2,
+  spirits = {
+    { n = "Ursus Avitus", c = "earth", b = 1 },
+    { n = "Aquila Avita", c = "sky", b = 0 },
+  },
+})
+local companions = table.concat(pages.companions(72), "\n")
+check("companions show names, learned and bonded status and slot capacity",
+  companions:find("Manifestations bonded 1/2", 1, true)
+  and companions:find("Ursus Avitus", 1, true) and companions:find("Bonded", 1, true)
+  and companions:find("Aquila Avita", 1, true) and companions:find("Learned", 1, true))
 
 -- ===========================================================================
 -- stats_window integration

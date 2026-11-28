@@ -19,8 +19,8 @@ local CAT_NAMES = {
   [1] = "Comes Spiritualis",
   [2] = "Magia Spiritualis",
   [3] = "De Natura",
-  [4] = "De Praesidiis",
-  [5] = "De Societate",
+  [4] = "De Societate",
+  [5] = "De Praesidiis",
 }
 
 -- Power kinds, matching gmcp.h's "k" tag.
@@ -129,11 +129,12 @@ function M.powers(width)
 
   -- Bucket once, preserving arrival order within a kind; the server emits
   -- COMBAT_POWER_IDS in a fixed order, so rows do not shuffle between frames.
-  local by_kind = {}
+  local by_kind, depellere = {}, false
   for _, p in ipairs(S.powers) do
     local k = p.kind or 0
     by_kind[k] = by_kind[k] or {}
     table.insert(by_kind[k], p)
+    if p.id == "depellere" then depellere = p.on end
   end
 
   local function row(p)
@@ -141,12 +142,24 @@ function M.powers(width)
     -- and resolves its target through resolve_skill()/query_spell(), both of
     -- which take the spaced display form ("scutum spiritale").
     local label = tostring(p.id or ""):gsub("_", " ")
-    local mark = p.on and (C.bright_green .. "on " .. P.RESET)
-                       or (C.dim .. "off" .. P.RESET)
-    local keep = p.maintained and (C.cyan .. "M" .. P.RESET) or " "
-    L[#L + 1] = string.format("  %s %s %s", mark, keep, P.pad(pretty(p.id), width - 8))
-    targets[#L] = { id = p.id, label = label }
+    local mark = p.on and (C.bright_green .. "On " .. P.RESET)
+                       or (C.dim .. "Off" .. P.RESET)
+    local keep = p.maintained and (C.cyan .. "On " .. P.RESET)
+                              or (C.dim .. "Off" .. P.RESET)
+    local blocked = p.needs_bond and "Needs bond"
+    if p.id == "responsum_ictu" and not p.on and not p.maintained and not depellere then
+      blocked = "Needs Depellere"
+    end
+    local disable = p.maintained or (p.kind ~= 1 and p.on)
+    local action = blocked and (C.yellow .. blocked .. P.RESET)
+      or (C.cyan .. (disable and "[Disable]" or "[Enable]") .. P.RESET)
+    L[#L + 1] = string.format("  %s %s     %s           %s",
+      P.pad(pretty(p.id), 27), mark, keep, action)
+    if not blocked then targets[#L] = { id = p.id, label = label } end
   end
+
+  L[#L + 1] = C.dim .. "  " .. P.pad("Power", 27)
+    .. " Running Auto-maintain Action" .. P.RESET
 
   local any = false
   for _, sec in ipairs(POWER_SECTIONS) do
@@ -163,12 +176,92 @@ function M.powers(width)
   end
 
   L[#L + 1] = ""
-  L[#L + 1] = C.dim .. "  M = flagged to re-maintain after a drop" .. P.RESET
-  L[#L + 1] = C.dim .. "  click a power to toggle it" .. P.RESET
+  L[#L + 1] = C.dim .. "  Auto-maintain recasts when the effect drops and you can use it." .. P.RESET
   if S.party == 1 then
     L[#L + 1] = C.bright_cyan .. "  De Societate party is active" .. P.RESET
   end
   return L, targets
+end
+
+function M.skills(width)
+  width = width or 72
+  if not S.skill_details then return { C.dim .. "Waiting for skill details." .. P.RESET } end
+
+  local pools = {}
+  for _, cat in ipairs(S.skillcats) do pools[cat.cat] = cat.gxp end
+  local lines, category = {}, nil
+  for _, skill in ipairs(S.skill_details) do
+    local pool = pools[skill.cat]
+    if category ~= skill.cat then
+      category = skill.cat
+      if #lines > 0 then lines[#lines + 1] = "" end
+      local title = CAT_NAMES[category] or ("Category " .. category)
+      if pool then title = title .. "  (" .. pool .. " GXP)" end
+      lines[#lines + 1] = P.header(width, title)
+      lines[#lines + 1] = C.dim .. "  " .. P.pad("Skill", 28)
+        .. P.pad("Level", 9) .. P.pad("Next GXP", 11) .. "Training" .. P.RESET
+    end
+
+    local maxed = skill.level >= skill.cap
+    local status, color
+    if maxed then
+      status, color = "Maxed", C.dim
+    elseif not skill.eligible then
+      status, color = "Needs requirements", C.yellow
+    elseif category == 5 then
+      status, color = "Automatic", C.cyan
+    elseif pool == nil or pool < skill.cost then
+      status, color = "Needs GXP", C.yellow
+    elseif not S.can_train_here then
+      status, color = "At Memoria Maiorum", C.yellow
+    else
+      status, color = "Ready", C.bright_green
+    end
+    lines[#lines + 1] = "  " .. P.pad(skill.name, 28)
+      .. P.pad(skill.level .. "/" .. skill.cap, 9)
+      .. P.pad(maxed and "-" or tostring(skill.cost), 11) .. color .. status .. P.RESET
+    if skill.requirements ~= "" then
+      local line = "    "
+      for word in skill.requirements:gmatch("%S+") do
+        if #line > 4 and #line + #word + 1 > width then
+          lines[#lines + 1] = C.dim .. line .. P.RESET
+          line = "    "
+        end
+        if #line > 4 then line = line .. " " end
+        line = line .. word
+      end
+      lines[#lines + 1] = C.dim .. line .. P.RESET
+    end
+  end
+  if #lines == 0 then lines[1] = "No skills available." end
+  return lines
+end
+
+function M.companions(width)
+  width = width or 72
+  if not S.companions then return { C.dim .. "Waiting for companion details." .. P.RESET } end
+
+  local bonded = 0
+  for _, spirit in ipairs(S.companions) do
+    if spirit.bonded then bonded = bonded + 1 end
+  end
+  local lines = { P.header(width, string.format("Manifestations bonded %d/%d", bonded, S.bond_cap)) }
+  for _, group in ipairs({ "earth", "sky" }) do
+    lines[#lines + 1] = C.bright_cyan .. pretty(group) .. P.RESET
+    local start = #lines
+    for _, spirit in ipairs(S.companions) do
+      if spirit.category == group then
+        lines[#lines + 1] = "  " .. P.pad(spirit.name, 36)
+          .. (spirit.bonded and (C.bright_green .. "Bonded") or (C.dim .. "Learned")) .. P.RESET
+      end
+    end
+    if #lines == start then lines[#lines + 1] = C.dim .. "  None learned" .. P.RESET end
+  end
+  if bonded < S.bond_cap then
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "Use 'bond manifestation' in the manifestation's room."
+  end
+  return lines
 end
 
 -- ---------------------------------------------------------------------------
@@ -234,10 +327,12 @@ end
 
 M.PAGES = {
   status  = { title = "Status",  fn = M.status },
+  skills  = { title = "Skills",  fn = M.skills },
   powers  = { title = "Powers",  fn = M.powers },
+  companions = { title = "Companions", fn = M.companions },
   discord = { title = "Discord", fn = M.discord },
 }
 
-M.ORDER = { "status", "powers", "discord" }
+M.ORDER = { "status", "powers", "skills", "companions", "discord" }
 
 return M
