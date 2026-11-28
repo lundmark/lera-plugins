@@ -423,3 +423,23 @@ state.apply("Buildings", { buildplans = { "Soul Well|Global|||400|each realm|360
 render()
 assert(visible("Unbuilt Buildings") and click(button("Soul Well")), "empty account could not build")
 print("Unbuilt building catalogue and construction actions: PASS")
+
+state.reset()
+state.apply("State", { materials = {
+  { name = "Abyss Gas", realm = "Chaos", category = "Raw", qty = 3, quality = "crude, poor" },
+  { name = "Flesh Pulp", realm = "Chaos", category = "Refined", qty = 5, quality = "2 good, superior" },
+  { name = "Prime Essence", category = "Special", qty = 1, quality = "legendary" },
+} })
+local inventory = require("pages.inventory")
+local C, reset = pagelib.C, pagelib.RESET
+for _, width in ipairs({ 48, 106 }) do
+  local lines = inventory.lines(width)
+  local body = table.concat(lines, "\n")
+  assert(body:find(C.white .. "Raw" .. reset, 1, true))
+  assert(body:find(C.bright_green .. "Refined" .. reset, 1, true))
+  assert(body:find(C.magenta .. "Special" .. reset, 1, true))
+  assert(body:find(C.yellow .. "crude" .. reset .. ", " .. C.dim .. "poor" .. reset, 1, true))
+  assert(body:find("2 " .. C.bright_green .. "good" .. reset .. ", " .. C.bright_cyan .. "superior" .. reset, 1, true))
+  assert(body:find(C.magenta .. "legendary" .. reset, 1, true))
+end
+print("Inventory color codes material types and individual quality labels: PASS")

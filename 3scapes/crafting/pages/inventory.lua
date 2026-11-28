@@ -10,6 +10,21 @@ local C = pagelib.C
 local M = {}
 
 local REALMS = { "Chaos", "Fantasy", "Science" }
+local TYPE_COLOR = { raw = C.white, refined = C.bright_green, special = C.magenta }
+local QUALITY_COLOR = {
+  crude = C.yellow, poor = C.dim, average = C.white,
+  good = C.bright_green, superior = C.bright_cyan, legendary = C.magenta,
+}
+
+local function color_label(text, colors)
+  local color = colors[text:lower()]
+  return color and (color .. text .. pagelib.RESET) or text
+end
+
+local function quality_spread(text)
+  if not text or text == "" then return "-" end
+  return (text:gsub("%a+", function(word) return color_label(word, QUALITY_COLOR) end))
+end
 
 function M.lines(width)
   width = pagelib.page_width(width)
@@ -100,7 +115,7 @@ function M.lines(width)
       local rows = {}
       for _, m in ipairs(rows_in) do
         rows[#rows + 1] = { pagelib.title(m.name or "?"), pagelib.fmt_num(m.qty),
-          m.category or "", (m.quality and m.quality ~= "") and m.quality or "-" }
+          color_label(m.category or "", TYPE_COLOR), quality_spread(m.quality) }
       end
       pagelib.add_table(lines, width, {
         { title = "Material", w = "*" }, { title = "In stock", w = 9 },
