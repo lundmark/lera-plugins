@@ -100,6 +100,26 @@ Copy plugins to your profile's plugin directory or load them directly:
 plugin.load("/path/to/lera-plugins/generic/deadmans")
 ```
 
+### Repeat the last command
+
+Add this to your profile's `init.lua` to enable Ctrl+R:
+
+```lua
+assert(plugin.load("/path/to/lera-plugins/generic/repeat_last_command.lua"))
+assert(bind.add("ctrl+r", function()
+  local repeat_command = plugin.get("repeat_last_command")
+  if repeat_command then repeat_command.run(history.get(0)) end
+end))
+```
+
+Lera makes keybindings and history available to profile scripts. Ctrl+R runs
+the newest history entry immediately, passes each line through aliases and
+input filters, and keeps any draft in the input box. An empty history does
+nothing.
+
+This uses Lera's scripted command path, so repeats leave scrollback in place
+and do not fire the `on_user_input` hook.
+
 ## Viking livestock GMCP chunks
 
 Viking already uses all 16 server package slots, so core and market pushes share
