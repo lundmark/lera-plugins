@@ -146,23 +146,32 @@ local function render_tabbar(rect)
   return row + 1
 end
 
-local function draw_hover(rect, top, height, text)
-  local row, width = 0, rect:w()
+local function draw_hover(rect, first_row, selected_row, text)
+  local width = math.min(62, rect:w())
+  local lines, content_width = {}, 0
   for part in text:gmatch("[^\n]+") do
     local line = ""
     for word in part:gmatch("%S+") do
-      if line ~= "" and pagelib.visible_width(line .. " " .. word) > width then
-        ui.text_ansi(ui.rect(rect:x(), top + row, width, 1),
-          pagelib.trunc(pagelib.C.bright_cyan .. line .. pagelib.RESET, width))
-        row, line = row + 1, ""
-        if row == height then return end
+      if line ~= "" and pagelib.visible_width(line .. " " .. word) > width - 2 then
+        lines[#lines + 1], line = line, ""
       end
       line = line == "" and word or (line .. " " .. word)
     end
-    ui.text_ansi(ui.rect(rect:x(), top + row, width, 1),
-      pagelib.trunc(pagelib.C.bright_cyan .. line .. pagelib.RESET, width))
-    row = row + 1
-    if row == height then return end
+    lines[#lines + 1] = line
+  end
+
+  local below, above = rect:h() - selected_row - 1, selected_row - first_row
+  local show_above = #lines > below and above > below
+  local count = math.min(#lines, show_above and above or below)
+  local top = show_above and selected_row - count or selected_row + 1
+  for i = 1, count do
+    content_width = math.max(content_width, pagelib.visible_width(lines[i]) + 2)
+  end
+  for i = 1, count do
+    local body = " " .. lines[i]
+    local padding = math.max(0, math.min(width, content_width) - pagelib.visible_width(body))
+    ui.text_ansi(ui.rect(rect:x(), rect:y() + top + i - 1, width, 1),
+      "\27[7m" .. pagelib.trunc(body, width) .. string.rep(" ", padding) .. pagelib.RESET)
   end
 end
 
@@ -183,8 +192,6 @@ function window.render(rect, opts)
   pagelib.live_countdown = false
   local lines, actions = page.mod.lines(w)
   if pagelib.live_countdown then countdown_pending = true end
-  local details_h = page.key == "buildings" and math.min(5, math.max(0, body_h - 1)) or 0
-  body_h = body_h - details_h
 
   local sc = scrollers[current_key]
   if lera.render_pass() ~= "remote" then
@@ -204,11 +211,11 @@ function window.render(rect, opts)
     ui.text_ansi(ui.rect(rect:x(), body_y + (i - first), w, 1),
       pagelib.trunc(lines[i], w))
   end
-  if local_render and details_h > 0 and hover_row and hover_row >= tab_rows
+  if local_render and hover_row and hover_row >= tab_rows
       and hover_row < tab_rows + last - first + 1 then
     local target = actions and actions[first + hover_row - tab_rows]
     if target and target.hover then
-      draw_hover(rect, body_y + body_h, details_h, target.hover)
+      draw_hover(rect, tab_rows, hover_row, target.hover)
     end
   end
 end

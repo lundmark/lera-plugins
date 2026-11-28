@@ -431,6 +431,8 @@ window.on_pointer({ x = 0, y = well_row, kind = "move", inside = true })
 render()
 assert(visible("Soul fuel storage for refineries") and visible("50 soul capacity"),
   "hover should show the building description and what its tier adds")
+local _, detail_row = visible("Soul fuel storage for refineries")
+assert(detail_row == well_row + 1, "building hover is not anchored to its row")
 assert(#sent == before, "hover sent a game command")
 window.on_pointer({ x = 0, y = 0, kind = "move", inside = true })
 render()
