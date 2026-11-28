@@ -383,19 +383,27 @@ local frozen = table.concat(jobs.lines(106), "\n")
 assert(frozen:find("50%", 1, true), "paused job bar advanced")
 print("All crafting tabs fit and timed job progress uses original duration: PASS")
 
--- Structures plans arrive as separate chunks alongside, not in place of, owned tiers.
+-- Structures chunks can span multiple codec pages under the same key.
 protocol.reset_connection()
 assert(protocol.on_gmcp("Craft.Structures", { bldgs = { "Grand Forge|2" } }))
-assert(protocol.on_gmcp("Craft.Structures", { buildplans = {
+assert(protocol.on_gmcp("Craft.Structures", { full = 1, page = 1, pages = 2, buildplans = {
+  "Rift Drills|Chaos|||400|cracked|3600",
+} }))
+assert(#state.get().build_plans == 0, "partial Structures run was shown")
+assert(protocol.on_gmcp("Craft.Structures", { full = 1, page = 2, pages = 2, buildplans = {
   "Grand Forge|Fantasy|||400|worn|3600",
   "Soul Well|Global|||400|each realm|3600",
   "Bone Forge|Chaos|Boneworks|soulsmithing|400|cracked|3600",
+  "Rift Foundry|Chaos|Rift Drills||400|cracked|3600",
 } }))
 assert(protocol.on_gmcp("Craft.Structures", { buildplans_1 = {
   "Gem Atelier|Fantasy|||400|worn|3600",
   "Weaver's Hall|Fantasy|||400|worn|3600",
 } }))
-assert(#state.get().buildings == 1 and #state.get().build_plans == 5)
+assert(#state.get().buildings == 1 and #state.get().build_plans == 7)
+assert(protocol.on_gmcp("Craft.Structures", { page = 1, pages = 3, buildplans = {} }))
+assert(protocol.on_gmcp("Craft.Structures", { page = 3, pages = 3, buildplans = {} }))
+assert(#state.get().build_plans == 7, "incomplete refresh replaced the building plans")
 state.apply("Jobs", {
   pending_builds = { { building = "Gem Atelier", tier = 1 } },
   builds = { { building = "Weaver's Hall", tier = 1, due = 1100, duration = 60 } },
@@ -404,6 +412,10 @@ window.set_page("buildings")
 render(106, 44)
 assert(visible("Under construction") and visible("Awaiting funding"))
 assert(visible("Build Boneworks first") and visible("400 each realm"))
+assert(visible("Build Rift Drills first"))
+assert(click(button("Rift Drills")))
+choose("Queue Tier 1 construction")
+assert(sent[#sent] == "cbuild construct Rift Drills confirm")
 before = #sent
 assert(click(button("Soul Well")))
 assert(#sent == before, "clicking a building spent tokens before confirmation")
