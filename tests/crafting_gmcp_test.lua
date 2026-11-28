@@ -50,7 +50,10 @@ local function rect(x, y, w, h)
     w = function() return w end, h = function() return h end }
 end
 local drawn = {}
-ui = { rect = rect, dirty = function() end, text_ansi = function(area, text)
+local hover_box
+ui = { rect = rect, dirty = function() end, fill = function() end,
+  box = function(area, style) hover_box = { area = area, style = style } end,
+  text_ansi = function(area, text)
   drawn[area:y()] = text:gsub("\27%[[%d;]*m", "")
 end }
 
@@ -431,8 +434,12 @@ window.on_pointer({ x = 0, y = well_row, kind = "move", inside = true })
 render()
 assert(visible("Soul fuel storage for refineries") and visible("50 soul capacity"),
   "hover should show the building description and what its tier adds")
-local _, detail_row = visible("Soul fuel storage for refineries")
-assert(detail_row == well_row + 1, "building hover is not anchored to its row")
+assert(hover_box.style == "single" and hover_box.area:x() == 1
+  and hover_box.area:y() == well_row + 1, "building tooltip is not beside the pointer")
+window.on_pointer({ x = 88, y = well_row, kind = "move", inside = true })
+render()
+assert(hover_box.area:x() + hover_box.area:w() == 88,
+  "building tooltip did not flip left at the right edge")
 assert(#sent == before, "hover sent a game command")
 window.on_pointer({ x = 0, y = 0, kind = "move", inside = true })
 render()

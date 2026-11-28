@@ -42,7 +42,7 @@ end
 
 local current_key = window.PAGES[1].key
 local body_hits = {}
-local hover_row
+local hover_row, hover_column
 local right_target
 local last_command, last_command_at
 local action_generation = 0
@@ -146,13 +146,14 @@ local function render_tabbar(rect)
   return row + 1
 end
 
-local function draw_hover(rect, first_row, selected_row, text)
-  local width = math.min(62, rect:w())
-  local lines, content_width = {}, 0
+local function draw_hover(rect, first_row, selected_row, column, text)
+  local width = math.min(56, rect:w())
+  if width < 5 then return end
+  local lines = {}
   for part in text:gmatch("[^\n]+") do
     local line = ""
     for word in part:gmatch("%S+") do
-      if line ~= "" and pagelib.visible_width(line .. " " .. word) > width - 2 then
+      if line ~= "" and pagelib.visible_width(line .. " " .. word) > width - 4 then
         lines[#lines + 1], line = line, ""
       end
       line = line == "" and word or (line .. " " .. word)
@@ -161,17 +162,23 @@ local function draw_hover(rect, first_row, selected_row, text)
   end
 
   local below, above = rect:h() - selected_row - 1, selected_row - first_row
-  local show_above = #lines > below and above > below
-  local count = math.min(#lines, show_above and above or below)
-  local top = show_above and selected_row - count or selected_row + 1
+  local show_above = #lines + 2 > below and above > below
+  local count = math.min(#lines, (show_above and above or below) - 2)
+  if count < 1 then return end
+  local box_width = 0
   for i = 1, count do
-    content_width = math.max(content_width, pagelib.visible_width(lines[i]) + 2)
+    box_width = math.max(box_width, pagelib.visible_width(lines[i]) + 4)
   end
+  box_width = math.min(box_width, width)
+  local left = column + 1
+  if left + box_width > rect:w() then left = math.max(0, column - box_width) end
+  local top = show_above and selected_row - count - 2 or selected_row + 1
+  local box = ui.rect(rect:x() + left, rect:y() + top, box_width, count + 2)
+  ui.fill(box)
+  ui.box(box, "single")
   for i = 1, count do
-    local body = " " .. lines[i]
-    local padding = math.max(0, math.min(width, content_width) - pagelib.visible_width(body))
-    ui.text_ansi(ui.rect(rect:x(), rect:y() + top + i - 1, width, 1),
-      "\27[7m" .. pagelib.trunc(body, width) .. string.rep(" ", padding) .. pagelib.RESET)
+    ui.text_ansi(ui.rect(rect:x() + left + 2, rect:y() + top + i, box_width - 4, 1),
+      pagelib.trunc(lines[i], box_width - 4))
   end
 end
 
@@ -215,7 +222,7 @@ function window.render(rect, opts)
       and hover_row < tab_rows + last - first + 1 then
     local target = actions and actions[first + hover_row - tab_rows]
     if target and target.hover then
-      draw_hover(rect, tab_rows, hover_row, target.hover)
+      draw_hover(rect, tab_rows, hover_row, hover_column, target.hover)
     end
   end
 end
@@ -267,8 +274,9 @@ function window.on_pointer(event)
   if event.kind == "move" then
     local hit = event.inside ~= false and body_hits[event.y]
     local row = hit and hit.hover and event.y or nil
-    if row ~= hover_row then
-      hover_row = row
+    local column = row and event.x or nil
+    if row ~= hover_row or column ~= hover_column then
+      hover_row, hover_column = row, column
       ui.dirty()
     end
     return false
