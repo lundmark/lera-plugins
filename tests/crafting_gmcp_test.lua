@@ -425,7 +425,9 @@ assert(sent[#sent] == "cbuild construct Soul Well confirm")
 assert(click(button("Bone Forge")) and #menu.items == 1)
 choose("View cost and requirements")
 assert(sent[#sent] == "cbuild construct Bone Forge")
-assert(not click(button("Grand Forge")))
+assert(click(button("Grand Forge")) and #menu.items == 1)
+choose("View cost and token breakdown")
+assert(sent[#sent] == "cbuild build Grand Forge")
 assert(not click(button("Gem Atelier")))
 assert(not click(button("Weaver's Hall")))
 render(48, 50)
@@ -462,3 +464,28 @@ assert(funding:find("720 tokens left across realms", 1, true))
 assert(funding:find("Base cost: 400 tokens per realm", 1, true))
 assert(funding:find("Funded, waiting to start", 1, true))
 print("Paged recipes and pending construction funding: PASS")
+
+state.reset()
+state.apply("Info", { upgrade_tiers = { "2|760|7200", "3|1520|14400" } })
+state.apply("Buildings", {
+  bldgs = { "Grand Forge|2", "Soul Well|1", "Rift Drills|5", "Bone Forge|1" },
+  buildplans = {
+    "Grand Forge|Fantasy|||380|worn|3600",
+    "Soul Well|Global|||380|each realm|3600",
+    "Rift Drills|Chaos|||380|cracked|3600",
+    "Bone Forge|Chaos|||380|cracked|3600",
+  },
+})
+state.apply("Jobs", { pending_builds = { { building = "Bone Forge", tier = 2 } } })
+window.set_page("buildings")
+render(106, 44)
+before = #sent
+assert(click(button("Grand Forge")) and #sent == before)
+assert(menu.title:find("1,520 T3 tokens (Fantasy) | 4h 00m", 1, true))
+choose("Queue Tier 3 upgrade")
+assert(sent[#sent] == "cbuild upgrade-to 3 Grand Forge confirm")
+assert(click(button("Soul Well")))
+assert(menu.title:find("760 T2 tokens per realm", 1, true))
+assert(not click(button("Rift Drills")), "maxed building offered an upgrade")
+assert(not click(button("Bone Forge")), "pending building offered an upgrade")
+print("Owned-building upgrade menus and targeted confirmation: PASS")

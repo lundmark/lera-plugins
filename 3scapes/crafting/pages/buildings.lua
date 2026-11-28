@@ -8,6 +8,7 @@ local state = require("state")
 local C = pagelib.C
 local M = {}
 local REALMS = { "Chaos", "Fantasy", "Science", "Global" }
+local LEGACY_MAX_TIER = 5
 
 local function tier_color(t)
   if t >= 5 then return C.bright_green end
@@ -37,6 +38,39 @@ local function build_menu(name, cost, duration, blocker)
   return { title = name .. " | " .. cost .. " | " .. duration, items = items }
 end
 
+local function duration_text(seconds)
+  local minutes = math.ceil(seconds / 60)
+  if minutes < 60 then return minutes .. "m" end
+  return string.format("%dh %02dm", math.floor(minutes / 60), minutes % 60)
+end
+
+local function upgrade_action(name, building, plans, tiers)
+  if not building.tier or building.tier < 1 or building.build or building.pending then return end
+  local arg = pagelib.command_arg(name)
+  local next_tier = building.tier + 1
+  local quote = tiers[next_tier]
+  if not arg or (not quote and building.tier >= LEGACY_MAX_TIER) then return end
+
+  local plan = plans[name]
+  local title = name .. " | Tier " .. next_tier
+  local menu = { title = title, items = {
+    { label = "View cost and token breakdown", value = "cbuild build " .. arg },
+  } }
+  if quote and plan then
+    local realm = plan.realm == "Global" and "per realm" or "(" .. plan.realm .. ")"
+    local cost = pagelib.fmt_num(quote.cost) .. " T" .. next_tier .. " tokens " .. realm
+    menu.title = title .. " | " .. cost .. " | " .. duration_text(quote.duration)
+    menu.items[#menu.items + 1] = {
+      label = "Queue Tier " .. next_tier .. " upgrade",
+      value = "cbuild upgrade-to " .. next_tier .. " " .. arg .. " confirm",
+    }
+  end
+  return {
+    { label = "Upgrade", menu = menu },
+    primary = { key = name, menu = menu, left_menu = true },
+  }
+end
+
 local function add_unbuilt(lines, actions, width, s, entries)
   local groups = { Chaos = {}, Fantasy = {}, Science = {}, Global = {} }
   for _, plan in ipairs(s.build_plans) do
@@ -58,9 +92,7 @@ local function add_unbuilt(lines, actions, width, s, entries)
       for _, plan in ipairs(plans) do
         local blocker = plan_blocker(plan, entries, s.skills)
         local cost = pagelib.fmt_num(plan.cost) .. " " .. plan.token
-        local minutes = math.ceil(plan.duration / 60)
-        local duration = minutes >= 60 and string.format("%dh %02dm", math.floor(minutes / 60), minutes % 60)
-          or (minutes .. "m")
+        local duration = duration_text(plan.duration)
         local menu = build_menu(plan.name, cost, duration, blocker)
         local label = menu and C.bright_cyan .. plan.name .. pagelib.RESET or plan.name
         rows[#rows + 1] = { label, cost, duration, blocker or "Available", "" }
@@ -104,21 +136,25 @@ function M.lines(width)
   for _, b in ipairs(s.builds) do entry(b.building or "?").build = b end
   table.sort(names)
 
-  local rows = {}
+  local rows, buttons, plans = {}, {}, {}
+  for _, plan in ipairs(s.build_plans) do plans[plan.name] = plan end
   for _, name in ipairs(names) do
     local b = entries[name]
     local current = b.tier and (tier_color(b.tier) .. "T" .. b.tier .. pagelib.RESET) or "-"
     local target = b.build and b.build.tier or b.pending
     local status = b.build and "Under construction" or b.pending and "Awaiting funding" or "Built"
     local timer = b.build and pagelib.job_time(b.build.due, b.build.duration, s.jobs_clock) or "-"
-    rows[#rows + 1] = { name, current, target and ("T" .. target) or "-", status, timer }
+    local button = upgrade_action(name, b, plans, s.upgrade_tiers)
+    local label = button and C.bright_cyan .. name .. pagelib.RESET or name
+    rows[#rows + 1] = { label, current, target and ("T" .. target) or "-", status, timer, "" }
+    buttons[#rows] = button
   end
   if #rows > 0 then
     add(pagelib.header(width, "Buildings"))
     pagelib.add_table(lines, width, {
       { title = "Building", w = "*" }, { title = "Tier", w = 6 }, { title = "Target", w = 7 },
-      { title = "Status", w = 20 }, { title = "Completion", w = 29 },
-    }, rows)
+      { title = "Status", w = 20 }, { title = "Completion", w = 25 }, { title = "Action", w = 11 },
+    }, rows, actions, buttons)
   end
   add_unbuilt(lines, actions, width, s, entries)
 
