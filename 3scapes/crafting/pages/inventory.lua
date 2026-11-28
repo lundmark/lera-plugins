@@ -4,12 +4,49 @@
 -- intact, so the server sends arrays of flat records instead -- every field
 -- here reads from those arrays, not from a lookup-by-name mapping.
 local pagelib = require("pagelib")
+local recipe_inputs = require("recipe_inputs")
 local state = require("state")
 
 local C = pagelib.C
 local M = {}
 
 local REALMS = { "Chaos", "Fantasy", "Science" }
+
+local function material_sources(s)
+  local sources, uses = {}, {}
+  for _, r in ipairs(s.refineries) do
+    if r.material and r.building then
+      sources[r.material:lower()] = r.building .. " stage " .. r.tier
+    end
+  end
+  for _, recipes in pairs(s.recipes_known) do
+    for _, recipe in ipairs(recipes) do
+      if recipe.name then
+        for _, input in ipairs(recipe_inputs.parse(recipe.materials) or {}) do
+          local key = input.name:lower()
+          uses[key] = uses[key] or {}
+          uses[key][recipe.name] = true
+        end
+      end
+    end
+  end
+  return sources, uses
+end
+
+local function material_hover(material, sources, uses)
+  local name = (material.name or ""):lower()
+  local lines = {}
+  if sources[name] then lines[#lines + 1] = "Produced at " .. sources[name] .. "." end
+  if uses[name] then
+    local recipes = {}
+    for recipe in pairs(uses[name]) do recipes[#recipes + 1] = recipe end
+    table.sort(recipes)
+    local count = #recipes
+    local extra = count > 3 and (" and " .. (count - 3) .. " more") or ""
+    lines[#lines + 1] = "Used by: " .. table.concat(recipes, ", ", 1, math.min(3, count)) .. extra .. "."
+  end
+  if #lines > 0 then return table.concat(lines, "\n") end
+end
 
 function M.lines(width)
   width = pagelib.page_width(width)
@@ -19,7 +56,8 @@ function M.lines(width)
 
   if #s.ready > 0 then
     pagelib.action_row(lines, actions, width, {
-      { label = "Collect all", command = "ccollect" },
+      { label = "Collect all", command = "ccollect",
+        hover = "Moves finished items from the outbox into your inventory if you can carry them." },
     }, #s.ready .. " finished")
   end
 
@@ -80,6 +118,7 @@ function M.lines(width)
   if #s.materials == 0 then
     add(pagelib.trunc(C.dim .. "  none in stock" .. pagelib.RESET, width))
   else
+    local sources, uses = material_sources(s)
     -- Grouped "Chaos Realm" / "Fantasy Realm" / "Science Realm", same as
     -- cinv -- plus a trailing Cross-Realm bucket for the handful of
     -- materials (Prime Essence and the like) that aren't realm-bound.
@@ -97,15 +136,16 @@ function M.lines(width)
       table.sort(rows_in, function(a, b) return (a.name or "") < (b.name or "") end)
       local rc = pagelib.REALM_COLOR[realm] or C.bright_cyan
       add(pagelib.header(width, realm, rc))
-      local rows = {}
+      local rows, details = {}, {}
       for _, m in ipairs(rows_in) do
         rows[#rows + 1] = { pagelib.title(m.name or "?"), pagelib.fmt_num(m.qty),
           m.category or "", (m.quality and m.quality ~= "") and m.quality or "-" }
+        details[#rows] = { hover = material_hover(m, sources, uses) }
       end
       pagelib.add_table(lines, width, {
         { title = "Material", w = "*" }, { title = "In stock", w = 9 },
         { title = "Type", w = 12 }, { title = "Quality spread", w = math.floor(width / 2) },
-      }, rows)
+      }, rows, actions, details)
     end
   end
 

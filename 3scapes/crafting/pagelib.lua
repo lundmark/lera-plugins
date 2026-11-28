@@ -279,7 +279,7 @@ local function mark_primary(actions, line, button, label, width)
   spans.primary = {
     first = 0, last = math.min(width, pagelib.visible_width(tostring(label))),
     key = button.key, command = button.command, allow_repeat = button.allow_repeat,
-    menu = button.menu, left_menu = button.left_menu,
+    menu = button.menu, left_menu = button.left_menu, hover = button.hover,
   }
 end
 
@@ -406,7 +406,7 @@ function pagelib.action_row(lines, actions, width, buttons, detail)
     row[#row + 1] = pagelib.C.bright_cyan .. label .. pagelib.RESET .. " "
     spans[#spans + 1] = { first = col, last = last, command = button.command,
       page = button.page, menu = button.menu, activate = button.activate,
-      allow_repeat = button.allow_repeat }
+      allow_repeat = button.allow_repeat, hover = button.hover }
     col = last + 1
   end
   lines[#lines + 1] = pagelib.trunc(table.concat(row) .. (detail or ""), width)

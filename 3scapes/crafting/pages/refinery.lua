@@ -56,12 +56,36 @@ local function allocation_buttons(realm, row, total, stage_one)
   local add = math.min(STEP, room, 100 - pct)
   local buttons = {}
   if trim > 0 and room + trim >= 0 then
-    buttons[#buttons + 1] = { label = "-" .. trim, command = command .. "-" .. trim, allow_repeat = true }
+    buttons[#buttons + 1] = { label = "-" .. trim, command = command .. "-" .. trim,
+      allow_repeat = true, hover = string.format("%s: %d%% to %d%%. Frees %d percentage points "
+        .. "for other materials. Freed capacity stays unused until assigned.", row.material, pct, pct - trim, trim) }
   end
   if add > 0 then
-    buttons[#buttons + 1] = { label = "+" .. add, command = command .. "+" .. add, allow_repeat = true }
+    local transfer = math.max(0, total + add - 100)
+    local source = transfer > 0 and ("Moves " .. transfer .. " percentage points from stage 1.")
+      or ("Uses " .. add .. " percentage points of unassigned capacity.")
+    if transfer > 0 and transfer < add then
+      source = source .. " Uses " .. (add - transfer) .. " points of unassigned capacity."
+    end
+    buttons[#buttons + 1] = { label = "+" .. add, command = command .. "+" .. add,
+      allow_repeat = true, hover = string.format("%s: %d%% to %d%%.\n%s", row.material, pct, pct + add, source) }
   end
   return buttons
+end
+
+local function stage_help(name, row, tier_locked, rank_locked, skill_id, blocked)
+  if tier_locked then
+    return string.format("Upgrade %s to tier %d to open %s.", name, math.ceil(row.tier / 2), row.material)
+  end
+  if rank_locked then
+    return string.format("Train %s to rank %d before allocating output to %s.",
+      pagelib.title(skill_id), row.min_rank, row.material)
+  end
+  if blocked then
+    return "Waiting for refinery rank data before enabling adjustments."
+  end
+  return "Allocation is this material's share of one refinery's production time. "
+    .. "Each refinery has a separate 100% budget. Higher stages can draw spare allocation from stage 1."
 end
 
 function M.lines(width)
@@ -113,6 +137,7 @@ function M.lines(width)
     if not legacy and bldg_tier < 1 then
       add(pagelib.header(width, name))
       add(pagelib.trunc("  " .. C.dim .. "not built" .. pagelib.RESET, width))
+      actions[#lines] = { hover = "Build " .. name .. " in the Buildings tab to allocate its output." }
     else
       local suffix = legacy and ""
         or string.format("  T%d  stages 1-%d", bldg_tier, max_tier or 0)
@@ -162,6 +187,9 @@ function M.lines(width)
         if not legacy and max_tier and stage >= 1 and not locked and know_rank then
           buttons[#trows] = allocation_buttons(realms[name], r, total, stage_one)
         end
+        buttons[#trows] = buttons[#trows] or {}
+        buttons[#trows].hover = stage_help(name, r, tier_locked, rank_locked, skill_id,
+          not legacy and not know_rank)
       end
 
       pagelib.add_table(lines, width, {

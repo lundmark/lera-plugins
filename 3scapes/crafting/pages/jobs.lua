@@ -5,6 +5,7 @@
 -- redrawing while it's open, so this reads live even with no new GMCP frame).
 local pagelib = require("pagelib")
 local production = require("production")
+local recipe_inputs = require("recipe_inputs")
 local state = require("state")
 
 local C = pagelib.C
@@ -97,6 +98,7 @@ end
 function M.lines(width)
   width = pagelib.page_width(width)
   local s = state.get()
+  local stock = recipe_inputs.stock(s.materials)
   local lines, actions = {}, {}
   local function add(text) lines[#lines + 1] = text end
   local function action(label, command, detail)
@@ -106,13 +108,15 @@ function M.lines(width)
   if #s.ready > 0 then
     add(pagelib.header(width, "Ready to Collect"))
     action("Collect all", "ccollect", #s.ready .. " finished")
-    local rows = {}
+    local rows, details = {}, {}
     for _, item in ipairs(s.ready) do
       rows[#rows + 1] = { item.name or "item", item.quality or "-", pagelib.job_time(item.expires) }
+      details[#rows] = { hover = "A finished item in your crafting outbox. Collect it before its timer "
+        .. "runs out or the MUD reboots. You need room to carry it." }
     end
     pagelib.add_table(lines, width, {
       { title = "Item", w = "*" }, { title = "Quality", w = 10 }, { title = "Expires in", w = 13 },
-    }, rows)
+    }, rows, actions, details)
     add("")
   end
 
@@ -203,7 +207,8 @@ function M.lines(width)
     draw_queue(q)
     if q and (q.depth or 0) > 0 and building_arg then
       pagelib.action_row(lines, actions, width, {
-        { label = "Clear queue", menu = { title = name, items = {
+        { label = "Clear queue", hover = "Removes waiting jobs after confirmation. Work already started continues.",
+          menu = { title = name, items = {
           { label = "Keep queued items", value = false },
           { label = "Remove all pending items", value = "cmake cancel " .. building_arg },
         } } },
@@ -213,7 +218,7 @@ function M.lines(width)
     for _, row in ipairs(group.recipes) do
       local recipe = row.recipe
       local base = (recipe.time or 0) > 0 and (math.ceil(recipe.time / 60) .. " min") or "-"
-      local buttons, note = production.actions(s, recipe, q, tier, row.tier)
+      local buttons, note = production.actions(s, recipe, q, tier, row.tier, stock)
       recipe_buttons[#rows + 1] = buttons
       local name_cell = buttons and buttons.primary and C.bright_cyan .. recipe.name .. pagelib.RESET
         or recipe.name

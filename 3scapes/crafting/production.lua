@@ -76,10 +76,34 @@ function M.eligibility(recipe, tier, required, skill)
   end
 end
 
-function M.actions(s, recipe, queue, tier, required)
-  if not M.is_recipe(recipe) then return nil, "" end
+function M.recipe_hover(recipe, stock, blocked)
+  local details = {}
+  if recipe.materials and recipe.materials ~= "" then
+    details[#details + 1] = "Per craft: " .. recipe.materials .. "."
+    local inputs = recipe_inputs.parse(recipe.materials)
+    if inputs and stock then
+      local missing, needed = {}, {}
+      for _, input in ipairs(inputs) do
+        local key = input.name:lower()
+        needed[key] = { name = input.name, qty = input.qty + (needed[key] and needed[key].qty or 0) }
+      end
+      for key, input in pairs(needed) do
+        local short = input.qty - (stock[key] or 0)
+        if short > 0 then missing[#missing + 1] = short .. "x " .. input.name end
+      end
+      table.sort(missing)
+      if #missing > 0 then details[#details + 1] = "Missing from storage: " .. table.concat(missing, ", ") end
+    end
+  end
+  if blocked and blocked ~= "" then details[#details + 1] = blocked .. "." end
+  if #details > 0 then return table.concat(details, "\n") end
+end
+
+function M.actions(s, recipe, queue, tier, required, stock)
+  if not M.is_recipe(recipe) then return { hover = M.recipe_hover(recipe, stock) }, "" end
   local note = M.eligibility(recipe, tier, required, s.skills[recipe.skill])
-  if note then return nil, note end
+  local buttons = { hover = M.recipe_hover(recipe, stock, note) }
+  if note then return buttons, note end
 
   local building = pagelib.command_arg(recipe.building)
   local name = pagelib.command_arg(recipe.name)
@@ -87,18 +111,21 @@ function M.actions(s, recipe, queue, tier, required)
   local args = building .. " " .. name
   local command = "cmake " .. args
   local room = free_slots(s, queue)
-  local buttons = {}
   local single = room > 0 and (command .. " 1") or nil
   local auto = "cmake auto repeat " .. args
   if room > 0 then
-    buttons[#buttons + 1] = { label = "Queue 1", command = single, allow_repeat = true }
+    buttons[#buttons + 1] = { label = "Queue 1", command = single, allow_repeat = true,
+      hover = "Adds one item to the queue. The station spends the ingredients when work starts." }
   end
   if room > 1 then
     buttons[#buttons + 1] = { label = "More",
+      hover = "Choose how many to queue and preview the total ingredients and base time.",
       menu = function() return batch_menu(command, recipe, room) end }
   end
   if s.automation then
-    buttons[#buttons + 1] = { label = "Repeat", menu = function()
+    buttons[#buttons + 1] = { label = "Repeat",
+      hover = "Set this station's background recipe. Manual jobs go first and the material reserve applies.",
+      menu = function()
       local items = {}
       repeat_options(items, s, recipe, building, auto)
       return { title = recipe.name, items = items }

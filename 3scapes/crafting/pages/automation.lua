@@ -32,10 +32,13 @@ function M.lines(width)
     { "Auto-collect", recipient },
     { "Material reserve", (plan.reserve or 0) .. " of each input" },
   }, actions, {
-    { { label = running and "Pause" or "Start", command = running and "cmake auto off" or "cmake auto on" } },
+    { { label = running and "Pause" or "Start", command = running and "cmake auto off" or "cmake auto on",
+      hover = "Controls whether saved repeat recipes start. Pausing keeps the recipes and leaves manual jobs alone." } },
     { { label = collect and "Auto-collect on" or "Auto-collect off",
-      command = collect and "cmake auto collect off" or "cmake auto collect on" } },
-    { { label = "Reserve", menu = { title = "Keep this many of each input", items = items } } },
+      command = collect and "cmake auto collect off" or "cmake auto collect on",
+      hover = "Delivers finished items to the character who enabled it, while that character is online and can carry them." } },
+    { { label = "Reserve", menu = { title = "Keep this many of each input", items = items },
+      hover = "Repeat recipes leave at least this many of each ingredient in storage. Manual jobs can use the reserve." } },
   })
 
   add("")

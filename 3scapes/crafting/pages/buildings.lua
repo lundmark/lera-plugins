@@ -108,7 +108,8 @@ local function add_unbuilt(lines, actions, width, s, entries)
         rows[#rows + 1] = { label, cost, duration, blocker or "Available", "" }
         if menu then
           buttons[#rows] = {
-            { label = blocker and "Details" or "Build", menu = menu },
+            { label = blocker and "Details" or "Build", menu = menu,
+              hover = blocker or "Review the token cost and requirements before confirming construction." },
             primary = { key = plan.name, menu = menu, left_menu = true },
           }
         end

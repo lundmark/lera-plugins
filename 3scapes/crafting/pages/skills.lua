@@ -63,12 +63,14 @@ local function skill_buttons(name, skill)
   if not arg then return nil, nil end
   local train, auto
   if trainable(skill) then
-    train = { label = "Train", command = "ctrain " .. arg }
+    train = { label = "Train", command = "ctrain " .. arg,
+      hover = "Spend tokens to buy one rank you have earned enough XP for." }
   end
   if skill.autotrain ~= nil and (skill.unlocked == 1 or skill.autotrain == 1) then
     auto = {
       label = skill.autotrain == 1 and "Auto on" or "Auto off",
       command = "ctrain auto " .. arg,
+      hover = "Autotrain buys earned ranks when crafting XP is added and your tokens cover the cost.",
     }
   end
   return train, auto
@@ -81,7 +83,8 @@ end
 
 local function add_button_span(spans, button, col)
   if button then
-    spans[#spans + 1] = { first = col, last = col + #button.label + 2, command = button.command }
+    spans[#spans + 1] = { first = col, last = col + #button.label + 2,
+      command = button.command, hover = button.hover }
   end
 end
 

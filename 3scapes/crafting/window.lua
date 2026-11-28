@@ -146,6 +146,18 @@ local function render_tabbar(rect)
   return row + 1
 end
 
+local function hover_at(hits, column)
+  if not hits then return end
+  for _, hit in ipairs(hits) do
+    if hit.hover and column >= hit.first and column < hit.last then return hit.hover end
+  end
+  local primary = hits.primary
+  if primary and primary.hover and column >= primary.first and column < primary.last then
+    return primary.hover
+  end
+  return hits.hover
+end
+
 local function draw_hover(rect, first_row, selected_row, column, text)
   local width = math.min(56, rect:w())
   if width < 5 then return end
@@ -221,9 +233,9 @@ function window.render(rect, opts)
   end
   if local_render and hover_row and hover_row >= tab_rows
       and hover_row < tab_rows + last - first + 1 then
-    local target = actions and actions[first + hover_row - tab_rows]
-    if target and target.hover then
-      draw_hover(rect, tab_rows, hover_row, hover_column, target.hover)
+    local tip = hover_at(actions and actions[first + hover_row - tab_rows], hover_column)
+    if tip then
+      draw_hover(rect, tab_rows, hover_row, hover_column, tip)
     end
   end
 end
@@ -274,7 +286,7 @@ end
 function window.on_pointer(event)
   if event.kind == "move" then
     local hit = event.inside ~= false and body_hits[event.y]
-    local row = hit and hit.hover and event.y or nil
+    local row = hit and hover_at(hit, event.x) and event.y or nil
     local column = row and event.x or nil
     if row ~= hover_row or column ~= hover_column then
       hover_row, hover_column = row, column

@@ -119,7 +119,7 @@ function M.lines(width)
   local owned, queues, visible = {}, {}, 0
   for _, building in ipairs(s.buildings) do owned[building.name] = building.tier end
   for _, queue in ipairs(s.queues) do if queue.building then queues[queue.building] = queue end end
-  local stock = craftable_only and recipe_inputs.stock(s.materials)
+  local stock = recipe_inputs.stock(s.materials)
   for _, realm in ipairs(REALMS) do
     local key = realm:lower()
     local known, tiers = {}, {}
@@ -141,7 +141,7 @@ function M.lines(width)
       render_list(lines, width, known, actions, function(recipe)
         local building = recipe.building
         local required = tiers[building] and tiers[building][recipe.name]
-        return production.actions(s, recipe, queues[building], owned[building], required)
+        return production.actions(s, recipe, queues[building], owned[building], required, stock)
       end)
     end
   end

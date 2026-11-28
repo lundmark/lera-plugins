@@ -505,3 +505,54 @@ assert(#state.get().recipes_known.chaos == 1 and state.get().recipes_known.chaos
 assert(protocol.on_gmcp("Craft.Recipes", { recipe_chunk_counts = { "known_chaos|0" } }))
 assert(#state.get().recipes_known.chaos == 0 and #state.get().recipes_known.fantasy == 1)
 print("Crafting recipe refresh removes old chunks: PASS")
+
+state.reset()
+state.apply("Buildings", {
+  buildplans = { "Fleshworks|Chaos|||400|cracked|3600" },
+  refinery_skills = { "Fleshworks|butchery" },
+  refineries = {
+    "Fleshworks|1|Flesh Pulp|100|1|2|1",
+    "Fleshworks|2|Bone Lattice|0|1|2|12",
+    "Fleshworks|3|Blood Resin|0|1|2|23",
+  },
+})
+state.apply("Skills", { skills_0 = { butchery = { rank = 12, unlocked = 1 } } })
+window.set_page("refinery")
+render(106, 40)
+local plus_x, plus_y = button("[+5]")
+local before_hover = #sent
+window.on_pointer({ kind = "move", x = plus_x, y = plus_y, inside = true })
+render(106, 40)
+assert(visible("Bone Lattice: 0% to 5%."), "plus tooltip must show the amount applied")
+assert(visible("Moves 5 percentage points from stage 1."), "plus tooltip must explain where it comes from")
+assert(#sent == before_hover, "hover must not allocate anything")
+local minus_x, minus_y = button("[-5]")
+window.on_pointer({ kind = "move", x = minus_x, y = minus_y, inside = true })
+render(106, 40)
+assert(visible("Flesh Pulp: 100% to 95%."), "minus tooltip must show the amount applied")
+window.on_pointer({ kind = "move", x = 0, y = 0, inside = true })
+render(106, 40)
+local _, locked_y = button("Blood Resin")
+window.on_pointer({ kind = "move", x = 0, y = locked_y, inside = true })
+render(106, 40)
+assert(visible("Upgrade Fleshworks to tier 2"), "locked tooltip must show the required building tier")
+
+state.apply("State", { materials = { { name = "Bone Lattice", qty = 1, realm = "Chaos" } } })
+state.apply("Recipes", { known_chaos = {
+  { id = "prod-armour", name = "Bone Coat", material = "", materials = "2x Bone Lattice",
+    building = "Flesh Atelier" },
+} })
+window.set_page("inventory")
+render(106, 40)
+local _, mat_y = button("Bone Lattice")
+window.on_pointer({ kind = "move", x = 0, y = mat_y, inside = true })
+render(106, 40)
+assert(visible("Produced at Fleshworks stage 2.") and visible("Used by: Bone Coat."))
+recipes.search("")
+window.set_page("recipes")
+render(106, 40)
+local _, recipe_y = button("Bone Coat")
+window.on_pointer({ kind = "move", x = 0, y = recipe_y, inside = true })
+render(106, 40)
+assert(visible("Missing from storage: 1x Bone Lattice"), "recipe must show missing ingredients from actual stock")
+print("Crafting hotspot tooltips show control effects, blockers, and item sources: PASS")
