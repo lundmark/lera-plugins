@@ -100,6 +100,7 @@ check("legacy rows are never shown as locked", legacy_body:find("locked") == nil
 -- Allocation controls use the real page actions and the effective percentages.
 state.apply("Buildings", {
   buildplans = { "Rift Foundry|Chaos|||100|Cracked Chaos|600" },
+  refinery_skills = { "Rift Foundry|voidcraft" },
   refineries = {
     "Rift Foundry|1|Void Iron|100|1|2",
     "Rift Foundry|2|Entropy Shards|0|1|2",
@@ -117,6 +118,16 @@ local function commands_at(width)
   end
   return commands
 end
+check("controls wait for the current skill rank", not next(commands_at(90)))
+state.apply("Skills", { skills_0 = { voidcraft = { rank = 1 } } })
+local rank_locked = table.concat(refinery.lines(90), "\n")
+check("rank-locked stages explain what is missing",
+      rank_locked:find("Voidcraft: R1", 1, true) and rank_locked:find("Needs R12", 1, true))
+check("rank-locked stages have no plus action",
+      not commands_at(90)["crefine allocate chaos Entropy Shards 5"])
+check("a lower unlocked stage is still adjustable",
+      commands_at(90)["crefine allocate chaos Void Iron 95"])
+state.apply("Skills", { skills_0 = { voidcraft = { rank = 12 } } })
 for _, width in ipairs({ 42, 90 }) do
   local commands = commands_at(width)
   check("stage 1 can be lowered from default at width " .. width,
@@ -130,6 +141,7 @@ for _, width in ipairs({ 42, 90 }) do
 end
 
 state.apply("Buildings", {
+  refinery_skills = { "Rift Foundry|voidcraft" },
   refineries = {
     "Rift Foundry|1|Void Iron|3|1|2",
     "Rift Foundry|2|Entropy Shards|97|1|2",
