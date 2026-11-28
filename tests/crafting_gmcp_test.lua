@@ -435,4 +435,17 @@ assert(#sent == before, "hover sent a game command")
 window.on_pointer({ x = 0, y = 0, kind = "move", inside = true })
 render()
 assert(not visible("50 soul capacity"), "moving off the building left its tooltip behind")
+state.apply("Info", { upgrade_tiers = { "2|800|7200" } })
+state.apply("Buildings", {
+  buildplans = { "Fleshworks|Chaos|||400|cracked|3600" },
+  bldgs = { "Fleshworks|1" },
+  building_help = { "Fleshworks|refinery|Organic Chaos refinery" },
+  refineries = { "Fleshworks|3|Blood Resin|0|1|2|23" },
+})
+render()
+local _, refinery_row = button("Fleshworks")
+window.on_pointer({ x = 0, y = refinery_row, kind = "move", inside = true })
+render()
+assert(visible("Blood Resin (R23)") and visible("800 T2 tokens in Chaos"),
+  "next tier tooltip should show the newly available stage and quote")
 print("Unbuilt building catalogue and construction actions: PASS")
