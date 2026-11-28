@@ -48,22 +48,29 @@ local body_targets = nil
 local body_top = 0
 local body_offset = 0
 local body_drawn = 0
-local hover_rows, hover_row = {}, nil
+local hover_rows, hover_row, hover_column = {}, nil, nil
 local sort_key, descending = "cat", false
 local sort_hit
 
-local function draw_hover_tip(text, x, y, width, height, first_row, selected_row)
-  local tip_width = math.min(58, width)
-  local wrapped = P.wrap(text, math.max(1, tip_width - 2))
+local function draw_hover_tip(text, x, y, width, height, first_row, selected_row, column)
+  if width < 5 then return end
+  local max_width = math.min(56, width)
+  local wrapped = P.wrap(text, max_width - 4)
   local below, above = height - selected_row - 1, selected_row - first_row
-  local show_above = #wrapped > below and above > below
-  local count = math.min(#wrapped, show_above and above or below)
-  local top = show_above and selected_row - count or selected_row + 1
-  local content_width = 0
-  for i = 1, count do content_width = math.max(content_width, #wrapped[i] + 2) end
+  local show_above = #wrapped + 2 > below and above > below
+  local count = math.min(#wrapped, (show_above and above or below) - 2)
+  if count < 1 then return end
+  local box_width = 0
+  for i = 1, count do box_width = math.max(box_width, #wrapped[i] + 4) end
+  box_width = math.min(box_width, max_width)
+  local left = column + 1
+  if left + box_width > width then left = math.max(0, column - box_width) end
+  local top = show_above and selected_row - count - 2 or selected_row + 1
+  local box = ui.rect(x + left, y + top, box_width, count + 2)
+  ui.fill(box)
+  ui.box(box, "single")
   for i = 1, count do
-    ui.text_ansi(ui.rect(x, y + top + i - 1, tip_width, 1),
-      "\27[7m" .. P.pad(" " .. wrapped[i], math.min(tip_width, content_width)) .. P.RESET)
+    ui.text_ansi(ui.rect(x + left + 2, y + top + i, box_width - 4, 1), wrapped[i])
   end
 end
 
@@ -155,7 +162,7 @@ local function wrap()
     -- translated back through the CURRENT scroll offset to a line index.
     if lera.render_pass() ~= "remote" then
       local tip = visible_tips[hover_row]
-      if tip then draw_hover_tip(tip, x, y, w, h, used, hover_row) end
+      if tip then draw_hover_tip(tip, x, y, w, h, used, hover_row, hover_column) end
       body_targets = targets
       body_top = used
       body_offset = offset
@@ -177,8 +184,9 @@ local function wrap()
     if event and (event.kind == "move" or event.kind == "cancel") then
       local row = event.kind == "move" and event.inside ~= false and event.y or nil
       if not hover_rows[row] then row = nil end
-      if row ~= hover_row then
-        hover_row = row
+      local column = row and event.x or nil
+      if row ~= hover_row or column ~= hover_column then
+        hover_row, hover_column = row, column
         ui.dirty()
       end
       return false

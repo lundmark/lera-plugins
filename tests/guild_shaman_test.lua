@@ -34,6 +34,7 @@ end
 --   require("command").register/unregister   -- a MODULE, not a global
 local printed = {}
 local drawn_rects = {}
+local hover_box
 
 print = function(line) printed[#printed + 1] = tostring(line) end
 
@@ -47,6 +48,8 @@ buffer = {
 ui = {
   dirty = function() end,
   rect = function(x, y, w, h) return { x = x, y = y, w = w, h = h } end,
+  fill = function() end,
+  box = function(rect, style) hover_box = { rect = rect, style = style } end,
   text_ansi = function(rect, line)
     drawn_rects[#drawn_rects + 1] = rect
     printed[#printed + 1] = tostring(line)
@@ -443,8 +446,16 @@ do
   r.render({ x = 0, y = 0, w = 60, h = 30 })
   check("a blocked power still has an effect tooltip",
     table.concat(printed, "\n"):find("Frightens the target.", 1, true))
-  check("tooltip starts directly below the hovered row",
-    drawn_rects[#drawn_rects] and drawn_rects[#drawn_rects].y == hover_y + 1)
+  check("tooltip is a bordered box beside the pointer",
+    hover_box and hover_box.style == "single"
+    and hover_box.rect.x == 5 and hover_box.rect.y == hover_y + 1)
+  r.on_pointer({ kind = "move", x = 8, y = hover_y, inside = true })
+  r.render({ x = 0, y = 0, w = 60, h = 30 })
+  check("tooltip moves horizontally with the pointer on the same row",
+    hover_box.rect.x == 9)
+  r.on_pointer({ kind = "move", x = 59, y = hover_y, inside = true })
+  r.render({ x = 0, y = 0, w = 60, h = 30 })
+  check("tooltip flips at the right edge", hover_box.rect.x + hover_box.rect.w <= 59)
   r.on_pointer({ kind = "move", x = 0, y = 0, inside = true })
   printed = {}
   r.render({ x = 0, y = 0, w = 60, h = 30 })
