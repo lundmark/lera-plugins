@@ -110,6 +110,9 @@ function M.lines(width)
       local suffix = legacy and ""
         or string.format("  T%d  stages 1-%d", bldg_tier, max_tier or 0)
       add(pagelib.header(width, name .. suffix))
+      local skill_id = s.refinery_skills[name]
+      local skill = skill_id and s.skills[skill_id]
+      local rank = skill and tonumber(skill.rank)
 
       -- Total allocated, so an under- or over-committed refinery is obvious
       -- without adding the column up by eye.
@@ -124,21 +127,32 @@ function M.lines(width)
       elseif total < 100 then tcol = C.yellow end
       add(pagelib.trunc("  " .. tcol .. "allocated " .. total .. "%" .. pagelib.RESET
         .. "  " .. pagelib.meter(total, 100, 33, tcol), width))
+      if not legacy and skill_id ~= "" then
+        local label = skill_id and pagelib.title(skill_id) or "Refining skill"
+        local status = rank and ("R" .. rank) or "waiting for rank data"
+        add(pagelib.trunc("  " .. C.dim .. label .. ": " .. status .. pagelib.RESET, width))
+      end
 
       local trows, buttons = {}, {}
       for _, r in ipairs(rows) do
         local stage = r.tier or 0
-        local locked = (not legacy) and max_tier and stage > max_tier
+        local tier_locked = (not legacy) and max_tier and stage > max_tier
+        local rank_locked = rank and r.min_rank and rank < r.min_rank
+        local locked = tier_locked or rank_locked
         local pct = r.percent or 0
         local color = stage_color(locked, pct)
+        local know_rank = skill_id == "" or (rank and r.min_rank)
+        local status = tier_locked and "locked" or rank_locked and ("Needs R" .. r.min_rank)
+          or (not legacy and not know_rank and "Syncing")
+          or (pct > 0 and "allocated" or "available")
         trows[#trows + 1] = {
           "T" .. stage,
           color .. pagelib.title(r.material or "") .. pagelib.RESET,
           r.min_rank and ("R" .. r.min_rank) or "",
-          locked and "locked" or (pct > 0 and "allocated" or "available"),
-          locked and "-" or (pagelib.bar(14, pct, 100, color) .. " " .. pct .. "%"),
+          status,
+          tier_locked and "-" or (pagelib.bar(14, pct, 100, color) .. " " .. pct .. "%"),
         }
-        if not legacy and max_tier and stage >= 1 and not locked then
+        if not legacy and max_tier and stage >= 1 and not locked and know_rank then
           buttons[#trows] = allocation_buttons(realms[name], r, total, stage_one)
         end
       end
