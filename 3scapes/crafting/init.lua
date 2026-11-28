@@ -13,6 +13,7 @@ M.window_launcher = { label = "Crafting", compact_label = "Craft", order = 40 }
 local protocol = require("protocol")
 local state = require("state")
 local window = require("window")
+local scrolls = require("scrolls")
 
 local popup_open = false
 local timer_id = nil
@@ -156,7 +157,18 @@ local function show_status()
 end
 
 local CRAFT_USAGE = "/craft [overview | inventory | skills | buildings | refinery | production "
-  .. "| automation | recipes [search] | market | status]"
+  .. "| automation | recipes [search] | market | status | autoread [on|off]]"
+
+local function set_auto_read(value)
+  if value == "on" or value == "off" then
+    scrolls.set_auto_read(value == "on")
+    if popup_open then ui.dirty() end
+  elseif value ~= "" then
+    line("Usage: /craft autoread [on|off]")
+    return
+  end
+  line("[Crafting] Recipe scroll auto-read is " .. (scrolls.auto_read() and "on." or "off."))
+end
 
 local function dispatch(args)
   local word = tostring(args or ""):match("^%s*(%S*)"):lower()
@@ -168,6 +180,10 @@ local function dispatch(args)
   end
   if word == "status" then
     show_status()
+    return
+  end
+  if word == "autoread" then
+    set_auto_read(args:match("^%s*%S+%s*(.-)%s*$"):lower())
     return
   end
   for _, p in ipairs(window.PAGES) do
@@ -196,7 +212,8 @@ local function install_command()
     description = "Opens (or closes) the crafting window. A page name opens "
       .. "straight to that tab. Skills offers training, and Production shows "
       .. "buildings, queues, available recipes, and finished items. Automation "
-      .. "manages repeat recipes, material reserves, and automatic collection.",
+      .. "manages repeat recipes, material reserves, and automatic collection. "
+      .. "Use /craft autoread on to learn newly dropped recipe scrolls automatically.",
     accepts_args = true,
     handler = function(args) dispatch(args) end,
   })
@@ -214,29 +231,10 @@ local function uninstall_command()
   command_id = nil
 end
 
--- Recipe scroll drops are announced in plain output, not over GMCP, so they
--- are caught with a trigger. The server line (crafting_daemon.c's
--- check_recipe_drop) is:
---
---   Something glints among the remains -- a <Recipe Name> recipe scroll!
---
--- Re-announced here rather than merely echoed, so the notice reads the same as
--- the plugin's other output and is easy to spot in a busy combat scroll. The
--- original line is left alone (not gagged): gagging server text to replace it
--- with a near-identical line would only risk hiding the drop entirely if the
--- wording ever changes.
-local scroll_trigger_id
-
-local function on_scroll_drop(line, name)
-  buffer.color_print(nil, "FFFFFF",
-    "[Crafting] Recipe scroll dropped: " .. tostring(name or "unknown")
-    .. " -- pick it up.")
-end
+M.on_line = scrolls.on_line
 
 function M.on_load()
-  scroll_trigger_id = trigger.add(
-    "Something glints among the remains -- an? (.+) recipe scroll!",
-    function(line, c1) on_scroll_drop(line, c1) end)
+  scrolls.load()
 
   protocol.on_apply(function(sub, mirror)
     state.apply(sub, mirror)
@@ -256,11 +254,12 @@ function M.on_disconnect()
   -- mirrors would no longer be congruent with it.
   protocol.reset_connection()
   state.reset()
+  scrolls.reset()
   close_popup()
 end
 
 function M.on_unload()
-  if scroll_trigger_id then trigger.remove(scroll_trigger_id); scroll_trigger_id = nil end
+  scrolls.reset()
   if timer_id then timer.cancel(timer_id); timer_id = nil end
   close_popup()
   uninstall_command()
