@@ -618,6 +618,19 @@ check("skills show levels, costs, hall, ward training and requirements",
 handlers.on_gmcp("Guild.Skills", { guild = "shaman", can_train_here = 1 })
 check("hall-only delta preserves the skill rows and enables training",
   #S.skill_details == 2 and table.concat(pages.skills(72), "\n"):find("Ready", 1, true))
+handlers.on_gmcp("Guild.SkillHelp0", {
+  guild = "shaman", page = 1, pages = 2, rows = { "0|Vitare|Read the incoming " },
+})
+local _, _, partial_tips = pages.skills(72)
+check("a partial help snapshot does not replace a skill tooltip", not next(partial_tips))
+handlers.on_gmcp("Guild.SkillHelp0", {
+  guild = "shaman", page = 2, pages = 2, rows = { "0|Vitare|blow and dodge it." },
+})
+local _, _, skill_tips = pages.skills(72)
+local tip_text
+for _, tip in pairs(skill_tips) do tip_text = tip end
+check("the skill tooltip shows the reassembled shhelp description",
+  tip_text == "Vitare | Read the incoming blow and dodge it.")
 
 handlers.on_gmcp("Guild.Companions", {
   guild = "shaman", bond_cap = 2,

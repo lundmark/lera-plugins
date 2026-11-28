@@ -205,10 +205,9 @@ function M.powers(width)
       or (C.cyan .. (disable and "[Disable]" or "[Enable]") .. P.RESET)
     L[#L + 1] = string.format("  %s %s     %s           %s",
       P.pad(pretty(p.id), 27), mark, keep, action)
-    local detail = p.effect ~= "" and p.effect or nil
-    tips[#L] = pretty(p.id) .. " | " .. (blocked
-      or (p.maintained and "Auto-maintain enabled." or "Auto-maintain disabled."))
-      .. (detail and (" " .. detail) or "")
+    if p.effect and p.effect ~= "" then
+      tips[#L] = pretty(p.id) .. " | " .. p.effect
+    end
     if not blocked then targets[#L] = { id = p.id, label = label } end
   end
 
@@ -274,10 +273,13 @@ function M.skills(width)
     lines[#lines + 1] = "  " .. P.pad(skill.name, 28)
       .. P.pad(skill.level .. "/" .. skill.cap, 9)
       .. P.pad(maxed and "-" or tostring(skill.cost), 11) .. color .. status .. P.RESET
-    local tip = skill.name .. " | " .. status
-    if not maxed then
-      tip = tip .. " | " .. skill.cost .. " GXP for level " .. (skill.level + 1)
-      if skill.requirements ~= "" then tip = tip .. " | Requires " .. skill.requirements end
+    local key = skill.cat .. "|" .. skill.name
+    local tip
+    for _, group in pairs(S.skill_help) do
+      if group[key] then
+        tip = skill.name .. " | " .. group[key]
+        break
+      end
     end
     tips[#lines] = tip
     for _, requirement in ipairs(P.wrap(skill.requirements, math.max(1, width - 4))) do

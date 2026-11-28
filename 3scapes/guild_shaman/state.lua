@@ -32,6 +32,7 @@ M.S = {
   -- Each: { cat, gxp, last, skills, held, maxed, levels }.
   skillcats = {},
   skill_details = false,
+  skill_help = {},
   can_train_here = false,
   companions = false,
   bond_cap = 0,

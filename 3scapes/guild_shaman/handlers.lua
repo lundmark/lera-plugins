@@ -118,6 +118,18 @@ local function write_companions(d)
   S.companions = out
 end
 
+local function write_skill_help(d, suffix)
+  if type(d.rows) ~= "table" then return end
+  local out = {}
+  for _, row in ipairs(d.rows) do
+    local cat, name, text = str(row):match("^(%d+)|([^|]+)|(.*)$")
+    if not cat then return end
+    local key = cat .. "|" .. name
+    out[key] = (out[key] or "") .. text
+  end
+  S.skill_help[suffix] = out
+end
+
 -- ---------------------------------------------------------------------------
 -- Guild.Leyline
 -- ---------------------------------------------------------------------------
@@ -227,6 +239,7 @@ function M.on_gmcp(package, data)
   end
   local suffix = tostring(package):match("([^.]+)$")
   local fn = suffix and M.PANELS[suffix]
+  if suffix and suffix:match("^SkillHelp[0-7]$") then fn = write_skill_help end
   if not fn then return false end
 
   S.frames = S.frames + 1
@@ -235,7 +248,7 @@ function M.on_gmcp(package, data)
   -- Unpaged push (the common case): the frame IS the payload.
   if data.pages == nil and data.page == nil then
     runs[suffix] = nil
-    fn(data)
+    fn(data, suffix)
     return true
   end
 
@@ -262,7 +275,7 @@ function M.on_gmcp(package, data)
   if page < pages then return false end
 
   runs[suffix] = nil
-  fn(run.payload)
+  fn(run.payload, suffix)
   return true
 end
 
