@@ -19,7 +19,7 @@ local state = require("state")
 
 local C = pagelib.C
 local M = {}
-local REALMS = { chaos = true, fantasy = true, science = true }
+local REALM_ORDER = { chaos = 1, fantasy = 2, science = 3 }
 local STEP = 5
 
 local function stage_color(locked, pct)
@@ -31,7 +31,7 @@ end
 local function building_realms(s)
   local realms = {}
   for realm, recipes in pairs(s.recipes_catalogue) do
-    if REALMS[realm] then
+    if REALM_ORDER[realm] then
       for _, recipe in ipairs(recipes) do
         if recipe.building then realms[recipe.building] = realm end
       end
@@ -39,7 +39,7 @@ local function building_realms(s)
   end
   for _, plan in ipairs(s.build_plans) do
     local realm = plan.realm:lower()
-    if REALMS[realm] then realms[plan.name] = realm end
+    if REALM_ORDER[realm] then realms[plan.name] = realm end
   end
   return realms
 end
@@ -76,19 +76,29 @@ function M.lines(width)
     return lines
   end
 
-  -- Group the flat row list back into one block per refinery, preserving the
-  -- order the stages arrived in rather than re-sorting by name: the chain IS
-  -- an ordered progression and stage 1 must stay first.
+  -- Group stage rows by refinery, then order refineries by realm and name.
   local groups, order, realms = {}, {}, building_realms(s)
   for _, r in ipairs(s.refineries) do
     local k = r.building or "?"
     if not groups[k] then groups[k] = {}; order[#order + 1] = k end
     table.insert(groups[k], r)
   end
-  table.sort(order)
+  table.sort(order, function(a, b)
+    local ra = REALM_ORDER[realms[a]] or 4
+    local rb = REALM_ORDER[realms[b]] or 4
+    if ra ~= rb then return ra < rb end
+    return a < b
+  end)
 
-  local first = true
+  local last_realm
   for _, name in ipairs(order) do
+    local realm = realms[name] or "other"
+    if last_realm then add("") end
+    if realm ~= last_realm then
+      local label = pagelib.title(realm)
+      add(pagelib.header(width, label, pagelib.REALM_COLOR[label]))
+      last_realm = realm
+    end
     local rows = groups[name]
     table.sort(rows, function(a, b) return (a.tier or 0) < (b.tier or 0) end)
 
@@ -99,9 +109,6 @@ function M.lines(width)
     local bldg_tier = head.bldg_tier
     local max_tier = head.max_tier
     local legacy = (bldg_tier == nil)
-
-    if not first then add("") end
-    first = false
 
     if not legacy and bldg_tier < 1 then
       add(pagelib.header(width, name))
