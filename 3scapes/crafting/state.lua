@@ -60,7 +60,8 @@ function M.reset()
 
     skills = {},
 
-    buildings = {}, refineries = {}, build_plans = {},
+    buildings = {}, refineries = {}, build_plans = {}, building_help = {},
+    building_upgrade_quotes = {},
 
     builds = {}, pending_builds = {}, masterwork = {}, queues = {}, queue_total = 0, queue_cap = 0, ready = {},
     repeat_rules = {},
@@ -105,6 +106,17 @@ local function apply_info(m)
   rec.bonus_logistics = num(b.logistics)
   rec.bonus_soul_cap = num(b.soul_cap)
   rec.bonus_soul_gain = num(b.soul_gain)
+  rec.building_upgrade_quotes = {}
+  if type(m.upgrade_tiers) == "table" then
+    for _, row in ipairs(m.upgrade_tiers) do
+      local tier, cost, seconds = tostring(row):match("^(%d+)|(%d+)|(%d+)$")
+      if tier then
+        rec.building_upgrade_quotes[tonumber(tier)] = {
+          cost = tonumber(cost), seconds = tonumber(seconds),
+        }
+      end
+    end
+  end
 end
 
 -- Tokens arrive as 3 separate small per-realm keys ("tokens_chaos",
@@ -259,6 +271,11 @@ local function parse_refinery_row(s)
 end
 
 local function apply_buildings(m)
+  rec.building_help = {}
+  for _, row in ipairs(collect_rows(m, "building_help")) do
+    local name, kind, description = tostring(row):match("^([^|]+)|([^|]*)|(.*)$")
+    if name then rec.building_help[name] = { kind = kind, description = description } end
+  end
   rec.build_plans = {}
   for _, row in ipairs(collect_rows(m, "buildplans")) do
     local plan = parse_build_plan(row)

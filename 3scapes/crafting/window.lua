@@ -42,12 +42,14 @@ end
 
 local current_key = window.PAGES[1].key
 local body_hits = {}
+local hover_row
 local right_target
 local last_command, last_command_at
 local action_generation = 0
 
 function window.reset_actions()
   body_hits = {}
+  hover_row = nil
   right_target = nil
   last_command, last_command_at = nil, nil
   action_generation = action_generation + 1
@@ -73,6 +75,7 @@ function window.set_page(key)
   if key ~= current_key then countdown_pending = false end
   current_key = key
   body_hits = {}
+  hover_row = nil
   right_target = nil
   ui.dirty()
   return true
@@ -80,12 +83,14 @@ end
 
 function window.scroll(delta)
   body_hits = {}
+  hover_row = nil
   right_target = nil
   return scrollers[current_key].scroll(delta)
 end
 
 function window.scroll_to_bottom()
   body_hits = {}
+  hover_row = nil
   right_target = nil
   return scrollers[current_key].scroll_to_bottom()
 end
@@ -141,6 +146,26 @@ local function render_tabbar(rect)
   return row + 1
 end
 
+local function draw_hover(rect, top, height, text)
+  local row, width = 0, rect:w()
+  for part in text:gmatch("[^\n]+") do
+    local line = ""
+    for word in part:gmatch("%S+") do
+      if line ~= "" and pagelib.visible_width(line .. " " .. word) > width then
+        ui.text_ansi(ui.rect(rect:x(), top + row, width, 1),
+          pagelib.trunc(pagelib.C.bright_cyan .. line .. pagelib.RESET, width))
+        row, line = row + 1, ""
+        if row == height then return end
+      end
+      line = line == "" and word or (line .. " " .. word)
+    end
+    ui.text_ansi(ui.rect(rect:x(), top + row, width, 1),
+      pagelib.trunc(pagelib.C.bright_cyan .. line .. pagelib.RESET, width))
+    row = row + 1
+    if row == height then return end
+  end
+end
+
 function window.render(rect, opts)
   local w, h = rect:w(), rect:h()
   if w <= 0 or h <= 0 then return end
@@ -158,6 +183,8 @@ function window.render(rect, opts)
   pagelib.live_countdown = false
   local lines, actions = page.mod.lines(w)
   if pagelib.live_countdown then countdown_pending = true end
+  local details_h = page.key == "buildings" and math.min(5, math.max(0, body_h - 1)) or 0
+  body_h = body_h - details_h
 
   local sc = scrollers[current_key]
   if lera.render_pass() ~= "remote" then
@@ -176,6 +203,13 @@ function window.render(rect, opts)
     end
     ui.text_ansi(ui.rect(rect:x(), body_y + (i - first), w, 1),
       pagelib.trunc(lines[i], w))
+  end
+  if local_render and details_h > 0 and hover_row and hover_row >= tab_rows
+      and hover_row < tab_rows + last - first + 1 then
+    local target = actions and actions[first + hover_row - tab_rows]
+    if target and target.hover then
+      draw_hover(rect, body_y + body_h, details_h, target.hover)
+    end
   end
 end
 
@@ -223,8 +257,21 @@ local function on_right_click(event, target)
 end
 
 function window.on_pointer(event)
+  if event.kind == "move" then
+    local hit = event.inside ~= false and body_hits[event.y]
+    local row = hit and hit.hover and event.y or nil
+    if row ~= hover_row then
+      hover_row = row
+      ui.dirty()
+    end
+    return false
+  end
   if event.kind == "cancel" then
     right_target = nil
+    if hover_row then
+      hover_row = nil
+      ui.dirty()
+    end
     return false
   end
   local hits = body_hits[event.y] or {}

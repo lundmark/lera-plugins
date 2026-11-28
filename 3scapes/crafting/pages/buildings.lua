@@ -8,6 +8,47 @@ local state = require("state")
 local C = pagelib.C
 local M = {}
 local REALMS = { "Chaos", "Fantasy", "Science", "Global" }
+local TIER_EFFECTS = {
+  extractor = "Extracts raw materials. Higher tiers run faster when the gathering skill qualifies.",
+  transmuter = "Converts refined materials into essence. Tiers 1–3 unlock one essence grade each.",
+  enchanting = "Applies enchantments. Higher station tiers qualify for higher-tier recipes.",
+  masterwork = "Upgrades crafted items into masterworks. The station tier must meet the recipe's requirements.",
+  producer = "Makes finished items. Higher tiers unlock recipes and raise the speed and quality ceilings.",
+}
+
+local function building_hover(s, name, plan, current, target)
+  local help = s.building_help[name] or {}
+  local lines = { name }
+  if help.description and help.description ~= "" then lines[1] = name .. " | " .. help.description end
+  local tier = target or (current or 0) + 1
+  if name == "Logistics Depot" then
+    lines[#lines + 1] = "Each tier adds 150 base storage slots per material."
+  elseif name == "Soul Well" then
+    lines[#lines + 1] = "Each tier adds 50 soul capacity and unlocks the matching soul grade."
+  elseif help.kind == "refinery" then
+    local unlocked = {}
+    for _, row in ipairs(s.refineries) do
+      if row.building == name and row.tier > 2 * (tier - 1) and row.tier <= 2 * tier then
+        unlocked[#unlocked + 1] = row.material .. (row.min_rank and (" (R" .. row.min_rank .. ")") or "")
+      end
+    end
+    lines[#lines + 1] = tier <= 5 and ("Tier " .. tier .. " opens stages " .. (tier * 2 - 1)
+      .. "–" .. (tier * 2) .. (#unlocked > 0 and (" | " .. table.concat(unlocked, ", ")) or ""))
+      or "Refines raw materials through stages 1–10."
+  elseif TIER_EFFECTS[help.kind] then
+    lines[#lines + 1] = TIER_EFFECTS[help.kind]
+  end
+  local quote = s.building_upgrade_quotes[tier]
+  if tier == 1 and plan then
+    lines[#lines + 1] = "Tier 1 | " .. pagelib.fmt_num(plan.cost) .. " " .. plan.token
+      .. " | " .. math.ceil(plan.duration / 60) .. "m"
+  elseif quote and plan then
+    lines[#lines + 1] = "Tier " .. tier .. " | " .. pagelib.fmt_num(quote.cost)
+      .. " T" .. tier .. " tokens " .. (plan.realm == "Global" and "per realm" or "in " .. plan.realm)
+      .. " | " .. math.ceil(quote.seconds / 60) .. "m"
+  end
+  return table.concat(lines, "\n")
+end
 
 local function tier_color(t)
   if t >= 5 then return C.bright_green end
@@ -70,6 +111,8 @@ local function add_unbuilt(lines, actions, width, s, entries)
             primary = { key = plan.name, menu = menu, left_menu = true },
           }
         end
+        buttons[#rows] = buttons[#rows] or {}
+        buttons[#rows].hover = building_hover(s, plan.name, plan)
       end
       pagelib.add_table(lines, width, {
         { title = "Building", w = "*" }, { title = "T1 cost", w = 16 }, { title = "Build time", w = 10 },
@@ -104,7 +147,8 @@ function M.lines(width)
   for _, b in ipairs(s.builds) do entry(b.building or "?").build = b end
   table.sort(names)
 
-  local rows = {}
+  local rows, buttons, plans = {}, {}, {}
+  for _, plan in ipairs(s.build_plans) do plans[plan.name] = plan end
   for _, name in ipairs(names) do
     local b = entries[name]
     local current = b.tier and (tier_color(b.tier) .. "T" .. b.tier .. pagelib.RESET) or "-"
@@ -112,13 +156,14 @@ function M.lines(width)
     local status = b.build and "Under construction" or b.pending and "Awaiting funding" or "Built"
     local timer = b.build and pagelib.job_time(b.build.due, b.build.duration, s.jobs_clock) or "-"
     rows[#rows + 1] = { name, current, target and ("T" .. target) or "-", status, timer }
+    buttons[#rows] = { hover = building_hover(s, name, plans[name], b.tier, target) }
   end
   if #rows > 0 then
     add(pagelib.header(width, "Buildings"))
     pagelib.add_table(lines, width, {
       { title = "Building", w = "*" }, { title = "Tier", w = 6 }, { title = "Target", w = 7 },
       { title = "Status", w = 20 }, { title = "Completion", w = 29 },
-    }, rows)
+    }, rows, actions, buttons)
   end
   add_unbuilt(lines, actions, width, s, entries)
 

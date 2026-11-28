@@ -419,7 +419,20 @@ assert(not click(button("Weaver's Hall")))
 render(48, 50)
 assert(click(button("Soul Well")), "compact view lost construction menu")
 state.reset()
-state.apply("Buildings", { buildplans = { "Soul Well|Global|||400|each realm|3600" } })
+state.apply("Buildings", {
+  buildplans = { "Soul Well|Global|||400|each realm|3600" },
+  building_help_1 = { "Soul Well|infrastructure|Soul fuel storage for refineries" },
+})
 render()
 assert(visible("Unbuilt Buildings") and click(button("Soul Well")), "empty account could not build")
+local _, well_row = button("Soul Well")
+before = #sent
+window.on_pointer({ x = 0, y = well_row, kind = "move", inside = true })
+render()
+assert(visible("Soul fuel storage for refineries") and visible("50 soul capacity"),
+  "hover should show the building description and what its tier adds")
+assert(#sent == before, "hover sent a game command")
+window.on_pointer({ x = 0, y = 0, kind = "move", inside = true })
+render()
+assert(not visible("50 soul capacity"), "moving off the building left its tooltip behind")
 print("Unbuilt building catalogue and construction actions: PASS")
