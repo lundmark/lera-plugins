@@ -1,5 +1,6 @@
 -- Saved server settings and the repeat plan by realm.
 local pagelib = require("pagelib")
+local scrolls = require("scrolls")
 local state = require("state")
 
 local M = {}
@@ -12,9 +13,15 @@ function M.lines(width)
   local lines, actions = { pagelib.header(width, "Crafting Automation") }, {}
   local function add(text) lines[#lines + 1] = pagelib.trunc(text, width) end
 
+  pagelib.action_row(lines, actions, width, {
+    { label = scrolls.auto_read() and "x" or " ",
+      activate = function() scrolls.set_auto_read(not scrolls.auto_read()) end },
+  }, "Auto-read recipe scrolls")
+  add("")
+
   if not plan then
     add("Waiting for automation settings from Craft.Jobs.")
-    return lines
+    return lines, actions
   end
 
   local running, collect = plan.enabled == 1, plan.collect == 1

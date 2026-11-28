@@ -26,6 +26,7 @@ package.loaded.protocol = {
 package.loaded.wm = {}
 
 local crafting = require("init")
+local window = require("window")
 crafting.on_load()
 
 local function receive(text)
@@ -64,4 +65,37 @@ assert(#sent == 4, "persist setting across plugin reloads")
 dispatch("autoread off")
 receive(drop .. " " .. delivered)
 assert(#sent == 4 and saved.auto_read == false)
+
+local drawn
+lera = { render_pass = function() return "local" end }
+ui = {
+  dirty = function() end,
+  rect = function(_, y) return y end,
+  text_ansi = function(y, text) drawn[y] = text end,
+}
+local rect = {
+  w = function() return 90 end, h = function() return 20 end,
+  x = function() return 0 end, y = function() return 0 end,
+}
+local function checkbox_row(checked)
+  drawn = {}
+  window.render(rect)
+  for y, text in pairs(drawn) do
+    if text:find("Auto-read recipe scrolls", 1, true) then
+      assert(text:find(checked and "[x]" or "[ ]", 1, true), "checkbox state")
+      return y
+    end
+  end
+  error("missing Automation checkbox")
+end
+
+window.set_page("automation")
+local checkbox = checkbox_row(false)
+assert(window.on_pointer({ kind = "down", button = "left", x = 1, y = checkbox }))
+assert(saved.auto_read == true and #sent == 4, "click saves locally without a server command")
+checkbox_row(true)
+receive(drop .. " " .. delivered)
+assert(#sent == 5 and sent[5] == "read Ironwood Longbow scroll")
+dispatch("autoread off")
+checkbox_row(false)
 print("crafting_scroll_test: PASS")

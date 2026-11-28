@@ -13,11 +13,10 @@ M.window_launcher = { label = "Crafting", compact_label = "Craft", order = 40 }
 local protocol = require("protocol")
 local state = require("state")
 local window = require("window")
+local scrolls = require("scrolls")
 
 local popup_open = false
 local timer_id = nil
-local auto_read = false
-local scroll_notice
 
 local function open_popup()
   -- wm.popup.open() itself displaces whatever popup (anyone's) is currently
@@ -162,16 +161,13 @@ local CRAFT_USAGE = "/craft [overview | inventory | skills | buildings | refiner
 
 local function set_auto_read(value)
   if value == "on" or value == "off" then
-    auto_read = value == "on"
-    scroll_notice = nil
-    if not (store.set({ auto_read = auto_read }) and store.save()) then
-      line("[Crafting] Could not save the auto-read setting for next time.")
-    end
+    scrolls.set_auto_read(value == "on")
+    if popup_open then ui.dirty() end
   elseif value ~= "" then
     line("Usage: /craft autoread [on|off]")
     return
   end
-  line("[Crafting] Recipe scroll auto-read is " .. (auto_read and "on." or "off."))
+  line("[Crafting] Recipe scroll auto-read is " .. (scrolls.auto_read() and "on." or "off."))
 end
 
 local function dispatch(args)
@@ -235,51 +231,10 @@ local function uninstall_command()
   command_id = nil
 end
 
-local DROP_START = "Something glints among the remains --"
-local DROP_LEAD = "Something glints"
-local DROP_END = " recipe scroll! You tuck it away; it is bound to you."
-local DROP_LIMIT = 200
-
--- The server can wrap the notice through the recipe name or the delivery
--- confirmation. Wait for the complete notice before sending a targeted read.
-function M.on_line(raw)
-  if not scroll_notice and not raw:find(DROP_LEAD, 1, true) then return raw end
-
-  local plain = raw:gsub("\27%[[0-9;?]*[ -/]*[@-~]", ""):match("^%s*(.-)%s*$")
-  if plain:sub(1, #DROP_LEAD) == DROP_LEAD then
-    scroll_notice = plain
-  elseif scroll_notice and plain ~= "" then
-    scroll_notice = scroll_notice .. " " .. plain
-  else
-    scroll_notice = nil
-  end
-
-  if not scroll_notice then return raw end
-  if #scroll_notice > DROP_LIMIT then
-    scroll_notice = nil
-    return raw
-  end
-  if scroll_notice:sub(-#DROP_END) ~= DROP_END then return raw end
-
-  local name
-  if scroll_notice:sub(1, #DROP_START) == DROP_START then
-    name = scroll_notice:sub(#DROP_START + 1, -#DROP_END - 1):match("^ an? (.+)$")
-  end
-  scroll_notice = nil
-  if name and name:match("^[%w][%w .'&(),%-]*$") then
-    local command = "read " .. name .. " scroll"
-    if not auto_read or not mud.send(command) then
-      buffer.color_print(nil, "FFFFFF", "[Crafting] Recipe scroll dropped: " .. name
-        .. " (" .. command .. ")")
-    end
-  end
-  return raw
-end
+M.on_line = scrolls.on_line
 
 function M.on_load()
-  store.load()
-  local saved = store.get()
-  auto_read = type(saved) == "table" and saved.auto_read == true
+  scrolls.load()
 
   protocol.on_apply(function(sub, mirror)
     state.apply(sub, mirror)
@@ -299,12 +254,12 @@ function M.on_disconnect()
   -- mirrors would no longer be congruent with it.
   protocol.reset_connection()
   state.reset()
-  scroll_notice = nil
+  scrolls.reset()
   close_popup()
 end
 
 function M.on_unload()
-  scroll_notice = nil
+  scrolls.reset()
   if timer_id then timer.cancel(timer_id); timer_id = nil end
   close_popup()
   uninstall_command()
