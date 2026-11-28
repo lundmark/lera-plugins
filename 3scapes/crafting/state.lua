@@ -60,7 +60,7 @@ function M.reset()
 
     skills = {},
 
-    buildings = {}, refineries = {}, build_plans = {},
+    buildings = {}, refineries = {}, build_plans = {}, building_types = {},
 
     builds = {}, pending_builds = {}, masterwork = {}, queues = {}, queue_total = 0, queue_cap = 0, ready = {},
     repeat_rules = {},
@@ -259,6 +259,11 @@ local function parse_refinery_row(s)
 end
 
 local function apply_buildings(m)
+  rec.building_types = {}
+  for _, row in ipairs(collect_rows(m, "building_types")) do
+    local name, kind = tostring(row):match("^([^|]+)|(%a+)$")
+    if name then rec.building_types[name] = kind end
+  end
   rec.build_plans = {}
   for _, row in ipairs(collect_rows(m, "buildplans")) do
     local plan = parse_build_plan(row)

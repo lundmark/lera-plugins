@@ -455,3 +455,32 @@ assert(drawn[fantasy_pos]:find("Awaiting funding", 1, true))
 assert(drawn[global_pos]:find("Under construction", 1, true))
 assert(select(2, button("Bone Forge")) > unbuilt_pos)
 print("Built, pending, and active construction grouped by realm: PASS")
+
+assert(protocol.on_gmcp("Craft.Structures", { buildplans = {
+  "Blight Farms|Chaos|||400|cracked|3600", "Fleshworks|Chaos|||400|cracked|3600",
+  "Bone Forge|Chaos|||400|cracked|3600", "Ossuary Crucible|Chaos|||400|cracked|3600",
+}, bldgs = { "Fleshworks|1", "Blight Farms|1" } }))
+assert(protocol.on_gmcp("Craft.Structures", { building_types = {
+  "Blight Farms|extractor", "Fleshworks|refinery",
+} }))
+assert(protocol.on_gmcp("Craft.Structures", { building_types_1 = {
+  "Bone Forge|producer", "Ossuary Crucible|transmuter",
+} }))
+state.apply("Jobs", { builds = {{ building = "Fleshworks", tier = 2, due = 1100, duration = 60 }} })
+render(106, 55)
+local extractors = select(2, button("Extractors"))
+local refiners = select(2, button("Refineries"))
+local producers = select(2, button("Producers"))
+assert(extractors < select(2, button("Blight Farms")) and refiners < select(2, button("Fleshworks")))
+assert(producers < select(2, button("Bone Forge")) and visible("Transmuters"))
+assert(click(button("Bone Forge")), "subheading displaced the Build action")
+assert(menu.title:find("Bone Forge", 1, true))
+window.set_page("jobs")
+render(106, 55)
+assert(visible("Fleshworks (Refinery)"))
+state.apply("Recipes", { catalogue_chaos = {{ building = "Bone Forge", name = "Void Iron Axe" }} })
+recipes.search("")
+window.set_page("recipes")
+render(106, 55)
+assert(visible("Bone Forge (Producer)"))
+print("Building types render in Buildings, Production, and Recipes: PASS")

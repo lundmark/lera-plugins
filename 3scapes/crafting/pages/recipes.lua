@@ -50,7 +50,7 @@ local function building_groups(records)
   return names, groups
 end
 
-local function render_list(lines, width, records, actions, recipe_actions)
+local function render_list(lines, width, records, types, actions, recipe_actions)
   local names, groups = building_groups(records)
   local spec = recipe_actions and {
     { title = "Recipe", w = "*" }, { title = "Rank", w = 5 },
@@ -63,7 +63,7 @@ local function render_list(lines, width, records, actions, recipe_actions)
   for _, name in ipairs(names) do
     local group = groups[name]
     table.sort(group, function(a, b) return (a.name or a.id or "") < (b.name or b.id or "") end)
-    lines[#lines + 1] = pagelib.header(width, name, C.bright_cyan)
+    lines[#lines + 1] = pagelib.header(width, pagelib.building_label(name, types), C.bright_cyan)
     local rows, buttons = {}, {}
     for _, r in ipairs(group) do
       local recipe_name = r.name or r.id or "?"
@@ -138,7 +138,7 @@ function M.lines(width)
       visible = visible + #known
       lines[#lines + 1] = pagelib.header(width, realm .. " Known Recipes (" .. #known .. ")",
         pagelib.REALM_COLOR[realm])
-      render_list(lines, width, known, actions, function(recipe)
+      render_list(lines, width, known, s.building_types, actions, function(recipe)
         local building = recipe.building
         local required = tiers[building] and tiers[building][recipe.name]
         return production.actions(s, recipe, queues[building], owned[building], required)
@@ -160,7 +160,7 @@ function M.lines(width)
         end
         visible = visible + #catalogue
         lines[#lines + 1] = pagelib.header(width, realm, pagelib.REALM_COLOR[realm])
-        render_list(lines, width, catalogue)
+        render_list(lines, width, catalogue, s.building_types)
       end
     end
   end

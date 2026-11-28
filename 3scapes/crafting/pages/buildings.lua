@@ -9,6 +9,12 @@ local C = pagelib.C
 local M = {}
 local REALMS = { "Chaos", "Fantasy", "Science", "Global", "Other" }
 
+local function type_heading(rows, kind, previous)
+  if kind == previous then return end
+  local label = pagelib.building_type_label(kind, true) or "Other"
+  rows[#rows + 1] = { C.yellow .. label .. pagelib.RESET }
+end
+
 local function tier_color(t)
   if t >= 5 then return C.bright_green end
   if t >= 3 then return C.green end
@@ -52,10 +58,16 @@ local function add_unbuilt(lines, actions, width, s, entries)
         lines[#lines + 1] = pagelib.header(width, "Unbuilt Buildings")
         heading = true
       end
-      table.sort(plans, function(a, b) return a.name < b.name end)
+      table.sort(plans, function(a, b)
+        return pagelib.building_type_less(s.building_types, a.name, b.name)
+      end)
       lines[#lines + 1] = pagelib.header(width, realm, pagelib.REALM_COLOR[realm])
       local rows, buttons = {}, {}
+      local last_type
       for _, plan in ipairs(plans) do
+        local kind = s.building_types[plan.name]
+        type_heading(rows, kind, last_type)
+        last_type = kind
         local blocker = plan_blocker(plan, entries, s.skills)
         local cost = pagelib.fmt_num(plan.cost) .. " " .. plan.token
         local minutes = math.ceil(plan.duration / 60)
@@ -102,13 +114,18 @@ function M.lines(width)
   for _, b in ipairs(s.buildings) do entry(b.name or "?").tier = b.tier end
   for _, b in ipairs(s.pending_builds) do entry(b.building or "?").pending = b.tier end
   for _, b in ipairs(s.builds) do entry(b.building or "?").build = b end
-  table.sort(names)
+  table.sort(names, function(a, b) return pagelib.building_type_less(s.building_types, a, b) end)
 
-  local plans, groups = {}, { Chaos = {}, Fantasy = {}, Science = {}, Global = {}, Other = {} }
+  local plans, groups, last_types = {}, {}, {}
+  for _, realm in ipairs(REALMS) do groups[realm] = {} end
   for _, plan in ipairs(s.build_plans) do plans[plan.name] = plan end
   for _, name in ipairs(names) do
     local plan = plans[name]
-    local rows = (plan and groups[plan.realm]) or groups.Other
+    local realm = plan and groups[plan.realm] and plan.realm or "Other"
+    local rows = groups[realm]
+    local kind = s.building_types[name]
+    type_heading(rows, kind, last_types[realm])
+    last_types[realm] = kind
     local b = entries[name]
     local current = b.tier and (tier_color(b.tier) .. "T" .. b.tier .. pagelib.RESET) or "-"
     local target = b.build and b.build.tier or b.pending
