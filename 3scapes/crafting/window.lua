@@ -42,12 +42,14 @@ end
 
 local current_key = window.PAGES[1].key
 local body_hits = {}
+local hover_row, hover_column
 local right_target
 local last_command, last_command_at
 local action_generation = 0
 
 function window.reset_actions()
   body_hits = {}
+  hover_row = nil
   right_target = nil
   last_command, last_command_at = nil, nil
   action_generation = action_generation + 1
@@ -73,6 +75,7 @@ function window.set_page(key)
   if key ~= current_key then countdown_pending = false end
   current_key = key
   body_hits = {}
+  hover_row = nil
   right_target = nil
   ui.dirty()
   return true
@@ -80,12 +83,14 @@ end
 
 function window.scroll(delta)
   body_hits = {}
+  hover_row = nil
   right_target = nil
   return scrollers[current_key].scroll(delta)
 end
 
 function window.scroll_to_bottom()
   body_hits = {}
+  hover_row = nil
   right_target = nil
   return scrollers[current_key].scroll_to_bottom()
 end
@@ -141,6 +146,55 @@ local function render_tabbar(rect)
   return row + 1
 end
 
+local function hover_at(hits, column)
+  if not hits then return end
+  for _, hit in ipairs(hits) do
+    if hit.hover and column >= hit.first and column < hit.last then return hit.hover end
+  end
+  local primary = hits.primary
+  if primary and primary.hover and column >= primary.first and column < primary.last then
+    return primary.hover
+  end
+  return hits.hover
+end
+
+local function draw_hover(rect, first_row, selected_row, column, text)
+  local width = math.min(56, rect:w())
+  if width < 5 then return end
+  local lines = {}
+  for part in text:gmatch("[^\n]+") do
+    local line = ""
+    for word in part:gmatch("%S+") do
+      if line ~= "" and pagelib.visible_width(line .. " " .. word) > width - 4 then
+        lines[#lines + 1], line = line, ""
+      end
+      line = line == "" and word or (line .. " " .. word)
+    end
+    lines[#lines + 1] = line
+  end
+
+  local below, above = rect:h() - selected_row - 1, selected_row - first_row
+  local show_above = #lines + 2 > below and above > below
+  local count = math.min(#lines, (show_above and above or below) - 2)
+  if count < 1 then return end
+  local box_width = 0
+  for i = 1, count do
+    box_width = math.max(box_width, pagelib.visible_width(lines[i]) + 4)
+  end
+  box_width = math.min(box_width, width)
+  local left = column + 1
+  if left + box_width > rect:w() then left = math.max(0, column - box_width) end
+  local top = show_above and selected_row - count - 2 or selected_row + 1
+  local box = ui.rect(rect:x() + left, rect:y() + top, box_width, count + 2)
+  -- Older desktop builds require both palette indices.
+  ui.fill(box, " ", 0, 7)
+  ui.box(box, "single")
+  for i = 1, count do
+    ui.text_ansi(ui.rect(rect:x() + left + 2, rect:y() + top + i, box_width - 4, 1),
+      pagelib.trunc(lines[i], box_width - 4))
+  end
+end
+
 function window.render(rect, opts)
   local w, h = rect:w(), rect:h()
   if w <= 0 or h <= 0 then return end
@@ -176,6 +230,13 @@ function window.render(rect, opts)
     end
     ui.text_ansi(ui.rect(rect:x(), body_y + (i - first), w, 1),
       pagelib.trunc(lines[i], w))
+  end
+  if local_render and hover_row and hover_row >= tab_rows
+      and hover_row < tab_rows + last - first + 1 then
+    local tip = hover_at(actions and actions[first + hover_row - tab_rows], hover_column)
+    if tip then
+      draw_hover(rect, tab_rows, hover_row, hover_column, tip)
+    end
   end
 end
 
@@ -223,8 +284,22 @@ local function on_right_click(event, target)
 end
 
 function window.on_pointer(event)
+  if event.kind == "move" then
+    local hit = event.inside ~= false and body_hits[event.y]
+    local row = hit and hover_at(hit, event.x) and event.y or nil
+    local column = row and event.x or nil
+    if row ~= hover_row or column ~= hover_column then
+      hover_row, hover_column = row, column
+      ui.dirty()
+    end
+    return false
+  end
   if event.kind == "cancel" then
     right_target = nil
+    if hover_row then
+      hover_row = nil
+      ui.dirty()
+    end
     return false
   end
   local hits = body_hits[event.y] or {}

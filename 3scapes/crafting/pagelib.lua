@@ -279,8 +279,16 @@ local function mark_primary(actions, line, button, label, width)
   spans.primary = {
     first = 0, last = math.min(width, pagelib.visible_width(tostring(label))),
     key = button.key, command = button.command, allow_repeat = button.allow_repeat,
-    menu = button.menu, left_menu = button.left_menu,
+    menu = button.menu, left_menu = button.left_menu, hover = button.hover,
   }
+end
+
+local function mark_hover(actions, first, last, buttons)
+  if not buttons or not buttons.hover then return end
+  for line = first, last do
+    actions[line] = actions[line] or {}
+    actions[line].hover = buttons.hover
+  end
 end
 
 -- Append a table with row targets in the first column and buttons in the last.
@@ -293,6 +301,7 @@ function pagelib.add_table(lines, width, spec, rows, actions, buttons)
     local primary = flexible or 1
     lines[#lines + 1] = pagelib.trunc(pagelib.C.dim .. spec[primary].title .. pagelib.RESET, width)
     for i, row in ipairs(rows) do
+      local first_line = #lines + 1
       lines[#lines + 1] = pagelib.trunc(tostring(row[primary] or "-"), width)
       local row_buttons = buttons and buttons[i]
       mark_primary(actions, #lines, row_buttons and row_buttons.primary, row[primary], width)
@@ -309,6 +318,7 @@ function pagelib.add_table(lines, width, spec, rows, actions, buttons)
       if row_buttons and #row_buttons > 0 then
         pagelib.action_row(lines, actions, width, row_buttons)
       end
+      mark_hover(actions, first_line, #lines, row_buttons)
     end
     return
   end
@@ -344,6 +354,7 @@ function pagelib.add_table(lines, width, spec, rows, actions, buttons)
       end
     end
     mark_primary(actions, primary_line, row_buttons and row_buttons.primary, rows[i][1], widths[1])
+    mark_hover(actions, primary_line, #lines, row_buttons)
   end
 end
 
@@ -395,7 +406,7 @@ function pagelib.action_row(lines, actions, width, buttons, detail)
     row[#row + 1] = pagelib.C.bright_cyan .. label .. pagelib.RESET .. " "
     spans[#spans + 1] = { first = col, last = last, command = button.command,
       page = button.page, menu = button.menu, activate = button.activate,
-      allow_repeat = button.allow_repeat }
+      allow_repeat = button.allow_repeat, hover = button.hover }
     col = last + 1
   end
   lines[#lines + 1] = pagelib.trunc(table.concat(row) .. (detail or ""), width)

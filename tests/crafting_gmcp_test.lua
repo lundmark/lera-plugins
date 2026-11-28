@@ -50,7 +50,14 @@ local function rect(x, y, w, h)
     w = function() return w end, h = function() return h end }
 end
 local drawn = {}
-ui = { rect = rect, dirty = function() end, text_ansi = function(area, text)
+local hover_box
+ui = { rect = rect, dirty = function() end,
+  fill = function(_, char, bg, fg)
+    assert(char == " " and type(bg) == "number" and type(fg) == "number",
+      "desktop ui.fill requires explicit background and foreground palette indices")
+  end,
+  box = function(area, style) hover_box = { area = area, style = style } end,
+  text_ansi = function(area, text)
   drawn[area:y()] = text:gsub("\27%[[%d;]*m", "")
 end }
 
@@ -268,6 +275,7 @@ assert(mirror and mirror.orders[1].id == 1 and mirror.scroll_outbox[1] == "Mana 
   and #mirror.auctions == 0, "the complete Market batch is applied, unsent lists empty")
 print("Crafting Market batches: PASS")
 
+
 -- Every tab must fit both a desktop popup and a narrow pane.
 state.apply("State", {
   stock_used = 120, stock_cap = 200, souls = 30, soul_cap = 60,
@@ -419,7 +427,132 @@ assert(not click(button("Weaver's Hall")))
 render(48, 50)
 assert(click(button("Soul Well")), "compact view lost construction menu")
 state.reset()
-state.apply("Buildings", { buildplans = { "Soul Well|Global|||400|each realm|3600" } })
+state.apply("Buildings", {
+  buildplans = { "Soul Well|Global|||400|each realm|3600" },
+  building_help_1 = { "Soul Well|infrastructure|Soul fuel storage for refineries" },
+})
 render()
 assert(visible("Unbuilt Buildings") and click(button("Soul Well")), "empty account could not build")
+local _, well_row = button("Soul Well")
+before = #sent
+window.on_pointer({ x = 0, y = well_row, kind = "move", inside = true })
+render()
+assert(visible("Soul fuel storage for refineries") and visible("50 soul capacity"),
+  "hover should show the building description and what its tier adds")
+assert(hover_box.style == "single" and hover_box.area:x() == 1
+  and hover_box.area:y() == well_row + 1, "building tooltip is not beside the pointer")
+window.on_pointer({ x = 88, y = well_row, kind = "move", inside = true })
+render()
+assert(hover_box.area:x() + hover_box.area:w() == 88,
+  "building tooltip did not flip left at the right edge")
+assert(#sent == before, "hover sent a game command")
+window.on_pointer({ x = 0, y = 0, kind = "move", inside = true })
+render()
+assert(not visible("50 soul capacity"), "moving off the building left its tooltip behind")
+state.apply("Info", { upgrade_tiers = { "2|800|7200" } })
+state.apply("Buildings", {
+  buildplans = { "Fleshworks|Chaos|||400|cracked|3600" },
+  bldgs = { "Fleshworks|1" },
+  building_help = { "Fleshworks|refinery|Organic Chaos refinery" },
+  refineries = { "Fleshworks|3|Blood Resin|0|1|2|23" },
+})
+render()
+local _, refinery_row = button("Fleshworks")
+window.on_pointer({ x = 0, y = refinery_row, kind = "move", inside = true })
+render()
+assert(visible("Blood Resin (R23)") and visible("800 T2 tokens in Chaos"),
+  "next tier tooltip should show the newly available stage and quote")
 print("Unbuilt building catalogue and construction actions: PASS")
+
+state.reset()
+protocol.reset_connection()
+protocol.on_gmcp("Craft.Reference", {
+  reference_1_1_4_b = { "fleshworks|The Fleshworks refines organic " },
+})
+protocol.on_gmcp("Craft.Reference", {
+  reference_1_2_4_b = { "fleshworks|Chaos materials." },
+})
+protocol.on_gmcp("Craft.Reference", {
+  reference_1_3_4_s = { "woodwork|Sacred Groves give ancient timber and silver sap." },
+})
+assert(not next(state.get().building_reference), "partial help should stay unpublished")
+protocol.on_gmcp("Craft.Reference", { reference_1_4_4_l = {} })
+state.apply("Buildings", { buildplans = { "Fleshworks|Chaos|||400|cracked|3600" } })
+window.set_page("buildings")
+render()
+local _, help_building = button("Fleshworks")
+window.on_pointer({ x = 0, y = help_building, kind = "move", inside = true })
+render()
+assert(visible("The Fleshworks refines organic Chaos materials."))
+
+state.apply("Skills", { skills_0 = { woodwork = { rank = 2, unlocked = 1 } } })
+window.set_page("skills")
+render()
+local _, help_skill = button("Woodwork")
+window.on_pointer({ x = 0, y = help_skill, kind = "move", inside = true })
+render()
+assert(visible("Sacred Groves give ancient timber and silver sap."))
+print("Building and skill tooltips use chelp reference text: PASS")
+
+assert(protocol.on_gmcp("Craft.Recipes", { known_chaos = {{ name = "Old base" }} }))
+assert(protocol.on_gmcp("Craft.Recipes", { known_chaos_1 = {{ name = "Old tail" }} }))
+assert(protocol.on_gmcp("Craft.Recipes", { known_chaos = {{ name = "New base" }} }))
+assert(protocol.on_gmcp("Craft.Recipes", { known_fantasy = {{ name = "Fantasy recipe" }} }))
+assert(protocol.on_gmcp("Craft.Recipes", { recipe_chunk_counts = {
+  "known_chaos|1", "known_fantasy|1",
+} }))
+assert(#state.get().recipes_known.chaos == 1 and state.get().recipes_known.chaos[1].name == "New base")
+assert(protocol.on_gmcp("Craft.Recipes", { recipe_chunk_counts = { "known_chaos|0" } }))
+assert(#state.get().recipes_known.chaos == 0 and #state.get().recipes_known.fantasy == 1)
+print("Crafting recipe refresh removes old chunks: PASS")
+
+state.reset()
+state.apply("Buildings", {
+  buildplans = { "Fleshworks|Chaos|||400|cracked|3600" },
+  refinery_skills = { "Fleshworks|butchery" },
+  refineries = {
+    "Fleshworks|1|Flesh Pulp|100|1|2|1",
+    "Fleshworks|2|Bone Lattice|0|1|2|12",
+    "Fleshworks|3|Blood Resin|0|1|2|23",
+  },
+})
+state.apply("Skills", { skills_0 = { butchery = { rank = 12, unlocked = 1 } } })
+window.set_page("refinery")
+render(106, 40)
+local plus_x, plus_y = button("[+5]")
+local before_hover = #sent
+window.on_pointer({ kind = "move", x = plus_x, y = plus_y, inside = true })
+render(106, 40)
+assert(visible("Bone Lattice: 0% to 5%."), "plus tooltip must show the amount applied")
+assert(visible("Moves 5 percentage points from stage 1."), "plus tooltip must explain where it comes from")
+assert(#sent == before_hover, "hover must not allocate anything")
+local minus_x, minus_y = button("[-5]")
+window.on_pointer({ kind = "move", x = minus_x, y = minus_y, inside = true })
+render(106, 40)
+assert(visible("Flesh Pulp: 100% to 95%."), "minus tooltip must show the amount applied")
+window.on_pointer({ kind = "move", x = 0, y = 0, inside = true })
+render(106, 40)
+local _, locked_y = button("Blood Resin")
+window.on_pointer({ kind = "move", x = 0, y = locked_y, inside = true })
+render(106, 40)
+assert(visible("Upgrade Fleshworks to tier 2"), "locked tooltip must show the required building tier")
+
+state.apply("State", { materials = { { name = "Bone Lattice", qty = 1, realm = "Chaos" } } })
+state.apply("Recipes", { known_chaos = {
+  { id = "prod-armour", name = "Bone Coat", material = "", materials = "2x Bone Lattice",
+    building = "Flesh Atelier" },
+} })
+window.set_page("inventory")
+render(106, 40)
+local _, mat_y = button("Bone Lattice")
+window.on_pointer({ kind = "move", x = 0, y = mat_y, inside = true })
+render(106, 40)
+assert(visible("Produced at Fleshworks stage 2.") and visible("Used by: Bone Coat."))
+recipes.search("")
+window.set_page("recipes")
+render(106, 40)
+local _, recipe_y = button("Bone Coat")
+window.on_pointer({ kind = "move", x = 0, y = recipe_y, inside = true })
+render(106, 40)
+assert(visible("Missing from storage: 1x Bone Lattice"), "recipe must show missing ingredients from actual stock")
+print("Crafting hotspot tooltips show control effects, blockers, and item sources: PASS")

@@ -74,8 +74,8 @@ check("unbuilt refinery prints no stage rows",
 -- Over/under allocation is called out
 -- ---------------------------------------------------------------------------
 ingest({ "Rift Foundry|1|Void Iron|30|3|6" })
-check("under-allocation reported", refinery.lines(80)[2]:find("allocated 30%%") ~= nil,
-      refinery.lines(80)[2])
+check("under-allocation reported",
+      table.concat(refinery.lines(80), "\n"):find("allocated 30%%") ~= nil)
 
 ingest({ "Rift Foundry|1|Void Iron|70|3|6",
          "Rift Foundry|2|Entropy Shards|60|3|6" })
@@ -96,6 +96,81 @@ check("legacy rows still render their allocations",
 -- Without max_tier the lock state is unknown, so nothing may be greyed out as
 -- locked -- silently mislabelling every stage would be worse than omitting it.
 check("legacy rows are never shown as locked", legacy_body:find("locked") == nil)
+
+-- Allocation controls use the real page actions and the effective percentages.
+state.apply("Buildings", {
+  buildplans = { "Rift Foundry|Chaos|||100|Cracked Chaos|600" },
+  refinery_skills = { "Rift Foundry|voidcraft" },
+  refineries = {
+    "Rift Foundry|1|Void Iron|100|1|2",
+    "Rift Foundry|2|Entropy Shards|0|1|2",
+    "Rift Foundry|3|Warp Glass|0|1|2",
+    "Grove Mill|1|Ironwood Timber|0|0|0",
+  },
+})
+local function commands_at(width)
+  local _, actions = refinery.lines(width)
+  local commands = {}
+  for _, row in pairs(actions) do
+    for _, button in ipairs(row) do
+      commands[button.command] = true
+    end
+  end
+  return commands
+end
+check("controls wait for the current skill rank", not next(commands_at(90)))
+state.apply("Skills", { skills_0 = { voidcraft = { rank = 1 } } })
+local rank_locked = table.concat(refinery.lines(90), "\n")
+check("rank-locked stages explain what is missing",
+      rank_locked:find("Voidcraft: R1", 1, true) and rank_locked:find("Needs R12", 1, true))
+check("rank-locked stages have no plus action",
+      not commands_at(90)["crefine allocate chaos Entropy Shards +5"])
+check("a lower unlocked stage is still adjustable",
+      commands_at(90)["crefine allocate chaos Void Iron -5"])
+state.apply("Skills", { skills_0 = { voidcraft = { rank = 12 } } })
+for _, width in ipairs({ 42, 90 }) do
+  local commands = commands_at(width)
+  check("stage 1 can be lowered from default at width " .. width,
+        commands["crefine allocate chaos Void Iron -5"] == true)
+  check("stage 2 can draw five points from stage 1 at width " .. width,
+        commands["crefine allocate chaos Entropy Shards +5"] == true)
+  check("locked, unbuilt and capped stages expose no invalid actions",
+        not commands["crefine allocate chaos Warp Glass +5"]
+        and not commands["crefine allocate fantasy Ironwood Timber +5"]
+        and not commands["crefine allocate chaos Void Iron +5"])
+end
+
+state.apply("Buildings", {
+  refinery_skills = { "Rift Foundry|voidcraft" },
+  refineries = {
+    "Rift Foundry|1|Void Iron|3|1|2",
+    "Rift Foundry|2|Entropy Shards|97|1|2",
+  },
+})
+state.apply("Recipes", { catalogue_chaos = { { building = "Rift Foundry", name = "Void Iron" } } })
+local commands = commands_at(90)
+check("plus and minus clamp at the available share",
+      commands["crefine allocate chaos Void Iron -3"] == true
+      and commands["crefine allocate chaos Entropy Shards +3"] == true
+      and not commands["crefine allocate chaos Void Iron +5"])
+
+state.apply("Buildings", {
+  buildplans = { "Fleshworks|Chaos|||100|Cracked Chaos|600",
+    "Crystal Refinery|Fantasy|||100|Cracked Fantasy|600",
+    "Alloy Works|Science|||100|Cracked Science|600" },
+  refineries = { "Alloy Works|1|Smart Alloy|100|1|2",
+    "Crystal Refinery|1|Mana Crystal|0|0|0", "Fleshworks|1|Flesh Pulp|100|1|2",
+    "Rift Foundry|1|Void Iron|0|0|0", "Unknown Refinery|1|Material|0|0|0" },
+})
+local grouped = table.concat(refinery.lines(90), "\n")
+local pos = 0
+for _, label in ipairs({ "Chaos", "Fleshworks", "Rift Foundry", "Fantasy",
+  "Crystal Refinery", "Science", "Alloy Works", "Other", "Unknown Refinery" }) do
+  local next_pos = grouped:find(label, pos + 1, true)
+  check("refinery group order: " .. label, next_pos ~= nil)
+  pos = next_pos or pos
+end
+state.apply("Recipes", {})
 
 -- ---------------------------------------------------------------------------
 -- Empty state

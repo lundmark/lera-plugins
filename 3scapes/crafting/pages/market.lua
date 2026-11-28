@@ -50,7 +50,8 @@ function M.lines(width)
   if #s.scroll_outbox > 0 then
     lines[#lines + 1] = pagelib.header(width, "Scrolls Ready to Collect")
     pagelib.action_row(lines, actions, width, {
-      { label = "Collect scrolls", command = "cmarket scroll collect" },
+      { label = "Collect scrolls", command = "cmarket scroll collect",
+        hover = "Claim purchased or returned recipe scrolls. Read the scrolls to learn their recipes." },
     }, #s.scroll_outbox .. " waiting")
     for _, name in ipairs(s.scroll_outbox) do
       lines[#lines + 1] = pagelib.trunc("  " .. pagelib.title(tostring(name)), width)

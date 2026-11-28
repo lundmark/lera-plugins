@@ -59,8 +59,10 @@ function M.reset()
     stock_used = 0, stock_cap = 0,
 
     skills = {},
+    skill_reference = {}, building_reference = {},
 
-    buildings = {}, refineries = {}, build_plans = {},
+    buildings = {}, refineries = {}, build_plans = {}, building_help = {},
+    building_upgrade_quotes = {}, refinery_skills = {},
 
     builds = {}, pending_builds = {}, masterwork = {}, queues = {}, queue_total = 0, queue_cap = 0, ready = {},
     repeat_rules = {},
@@ -105,6 +107,17 @@ local function apply_info(m)
   rec.bonus_logistics = num(b.logistics)
   rec.bonus_soul_cap = num(b.soul_cap)
   rec.bonus_soul_gain = num(b.soul_gain)
+  rec.building_upgrade_quotes = {}
+  if type(m.upgrade_tiers) == "table" then
+    for _, row in ipairs(m.upgrade_tiers) do
+      local tier, cost, seconds = tostring(row):match("^(%d+)|(%d+)|(%d+)$")
+      if tier then
+        rec.building_upgrade_quotes[tonumber(tier)] = {
+          cost = tonumber(cost), seconds = tonumber(seconds),
+        }
+      end
+    end
+  end
 end
 
 -- Tokens arrive as 3 separate small per-realm keys ("tokens_chaos",
@@ -259,6 +272,16 @@ local function parse_refinery_row(s)
 end
 
 local function apply_buildings(m)
+  rec.building_help = {}
+  for _, row in ipairs(collect_rows(m, "building_help")) do
+    local name, kind, description = tostring(row):match("^([^|]+)|([^|]*)|(.*)$")
+    if name then rec.building_help[name] = { kind = kind, description = description } end
+  end
+  rec.refinery_skills = {}
+  for _, row in ipairs(collect_rows(m, "refinery_skills")) do
+    local name, skill = tostring(row):match("^([^|]+)|([^|]*)$")
+    if name then rec.refinery_skills[name] = skill end
+  end
   rec.build_plans = {}
   for _, row in ipairs(collect_rows(m, "buildplans")) do
     local plan = parse_build_plan(row)
@@ -320,7 +343,22 @@ local function apply_market(m)
   rec.scroll_outbox = m.scroll_outbox or {}
 end
 
+local function reference_text(rows)
+  local text = {}
+  for _, row in ipairs(rows or {}) do
+    local slug, segment = tostring(row):match("^([^|]+)|(.*)$")
+    if slug then text[slug] = (text[slug] or "") .. segment end
+  end
+  return text
+end
+
+local function apply_reference(m)
+  if type(m.skills) == "table" then rec.skill_reference = reference_text(m.skills) end
+  if type(m.buildings) == "table" then rec.building_reference = reference_text(m.buildings) end
+end
+
 local APPLY = {
+  Reference = apply_reference,
   Info = apply_info, State = apply_state, Skills = apply_skills,
   Buildings = apply_buildings, Jobs = apply_jobs, Recipes = apply_recipes,
   Market = apply_market,
