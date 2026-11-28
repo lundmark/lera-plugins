@@ -124,20 +124,20 @@ local rank_locked = table.concat(refinery.lines(90), "\n")
 check("rank-locked stages explain what is missing",
       rank_locked:find("Voidcraft: R1", 1, true) and rank_locked:find("Needs R12", 1, true))
 check("rank-locked stages have no plus action",
-      not commands_at(90)["crefine allocate chaos Entropy Shards 5"])
+      not commands_at(90)["crefine allocate chaos Entropy Shards +5"])
 check("a lower unlocked stage is still adjustable",
-      commands_at(90)["crefine allocate chaos Void Iron 95"])
+      commands_at(90)["crefine allocate chaos Void Iron -5"])
 state.apply("Skills", { skills_0 = { voidcraft = { rank = 12 } } })
 for _, width in ipairs({ 42, 90 }) do
   local commands = commands_at(width)
   check("stage 1 can be lowered from default at width " .. width,
-        commands["crefine allocate chaos Void Iron 95"] == true)
+        commands["crefine allocate chaos Void Iron -5"] == true)
   check("stage 2 can draw five points from stage 1 at width " .. width,
-        commands["crefine allocate chaos Entropy Shards 5"] == true)
+        commands["crefine allocate chaos Entropy Shards +5"] == true)
   check("locked, unbuilt and capped stages expose no invalid actions",
-        not commands["crefine allocate chaos Warp Glass 5"]
-        and not commands["crefine allocate fantasy Ironwood Timber 5"]
-        and not commands["crefine allocate chaos Void Iron 105"])
+        not commands["crefine allocate chaos Warp Glass +5"]
+        and not commands["crefine allocate fantasy Ironwood Timber +5"]
+        and not commands["crefine allocate chaos Void Iron +5"])
 end
 
 state.apply("Buildings", {
@@ -150,9 +150,9 @@ state.apply("Buildings", {
 state.apply("Recipes", { catalogue_chaos = { { building = "Rift Foundry", name = "Void Iron" } } })
 local commands = commands_at(90)
 check("plus and minus clamp at the available share",
-      commands["crefine allocate chaos Void Iron 0"] == true
-      and commands["crefine allocate chaos Entropy Shards 100"] == true
-      and not commands["crefine allocate chaos Void Iron 8"])
+      commands["crefine allocate chaos Void Iron -3"] == true
+      and commands["crefine allocate chaos Entropy Shards +3"] == true
+      and not commands["crefine allocate chaos Void Iron +5"])
 state.apply("Recipes", {})
 
 -- ---------------------------------------------------------------------------

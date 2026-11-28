@@ -56,10 +56,10 @@ local function allocation_buttons(realm, row, total, stage_one)
   local add = math.min(STEP, room, 100 - pct)
   local buttons = {}
   if trim > 0 and room + trim >= 0 then
-    buttons[#buttons + 1] = { label = "-" .. trim, command = command .. (pct - trim) }
+    buttons[#buttons + 1] = { label = "-" .. trim, command = command .. "-" .. trim, allow_repeat = true }
   end
   if add > 0 then
-    buttons[#buttons + 1] = { label = "+" .. add, command = command .. (pct + add) }
+    buttons[#buttons + 1] = { label = "+" .. add, command = command .. "+" .. add, allow_repeat = true }
   end
   return buttons
 end
