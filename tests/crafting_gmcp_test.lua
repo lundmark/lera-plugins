@@ -51,7 +51,11 @@ local function rect(x, y, w, h)
 end
 local drawn = {}
 local hover_box
-ui = { rect = rect, dirty = function() end, fill = function() end,
+ui = { rect = rect, dirty = function() end,
+  fill = function(_, char, bg, fg)
+    assert(char == " " and type(bg) == "number" and type(fg) == "number",
+      "desktop ui.fill requires explicit background and foreground palette indices")
+  end,
   box = function(area, style) hover_box = { area = area, style = style } end,
   text_ansi = function(area, text)
   drawn[area:y()] = text:gsub("\27%[[%d;]*m", "")
