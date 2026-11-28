@@ -97,6 +97,52 @@ check("legacy rows still render their allocations",
 -- locked -- silently mislabelling every stage would be worse than omitting it.
 check("legacy rows are never shown as locked", legacy_body:find("locked") == nil)
 
+-- Allocation controls use the real page actions and the effective percentages.
+state.apply("Buildings", {
+  buildplans = { "Rift Foundry|Chaos|||100|Cracked Chaos|600" },
+  refineries = {
+    "Rift Foundry|1|Void Iron|100|1|2",
+    "Rift Foundry|2|Entropy Shards|0|1|2",
+    "Rift Foundry|3|Warp Glass|0|1|2",
+    "Grove Mill|1|Ironwood Timber|0|0|0",
+  },
+})
+local function commands_at(width)
+  local _, actions = refinery.lines(width)
+  local commands = {}
+  for _, row in pairs(actions) do
+    for _, button in ipairs(row) do
+      commands[button.command] = true
+    end
+  end
+  return commands
+end
+for _, width in ipairs({ 42, 90 }) do
+  local commands = commands_at(width)
+  check("stage 1 can be lowered from default at width " .. width,
+        commands["crefine allocate chaos Void Iron 95"] == true)
+  check("stage 2 can draw five points from stage 1 at width " .. width,
+        commands["crefine allocate chaos Entropy Shards 5"] == true)
+  check("locked, unbuilt and capped stages expose no invalid actions",
+        not commands["crefine allocate chaos Warp Glass 5"]
+        and not commands["crefine allocate fantasy Ironwood Timber 5"]
+        and not commands["crefine allocate chaos Void Iron 105"])
+end
+
+state.apply("Buildings", {
+  refineries = {
+    "Rift Foundry|1|Void Iron|3|1|2",
+    "Rift Foundry|2|Entropy Shards|97|1|2",
+  },
+})
+state.apply("Recipes", { catalogue_chaos = { { building = "Rift Foundry", name = "Void Iron" } } })
+local commands = commands_at(90)
+check("plus and minus clamp at the available share",
+      commands["crefine allocate chaos Void Iron 0"] == true
+      and commands["crefine allocate chaos Entropy Shards 100"] == true
+      and not commands["crefine allocate chaos Void Iron 8"])
+state.apply("Recipes", {})
+
 -- ---------------------------------------------------------------------------
 -- Empty state
 -- ---------------------------------------------------------------------------

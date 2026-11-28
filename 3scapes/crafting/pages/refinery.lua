@@ -19,6 +19,8 @@ local state = require("state")
 
 local C = pagelib.C
 local M = {}
+local REALMS = { chaos = true, fantasy = true, science = true }
+local STEP = 5
 
 local function stage_color(locked, pct)
   if locked then return C.dim end
@@ -26,10 +28,46 @@ local function stage_color(locked, pct)
   return C.white
 end
 
+local function building_realms(s)
+  local realms = {}
+  for realm, recipes in pairs(s.recipes_catalogue) do
+    if REALMS[realm] then
+      for _, recipe in ipairs(recipes) do
+        if recipe.building then realms[recipe.building] = realm end
+      end
+    end
+  end
+  for _, plan in ipairs(s.build_plans) do
+    local realm = plan.realm:lower()
+    if REALMS[realm] then realms[plan.name] = realm end
+  end
+  return realms
+end
+
+local function allocation_buttons(realm, row, total, stage_one)
+  local material = pagelib.command_arg(row.material)
+  if not realm or not material then return nil end
+
+  local command = "crefine allocate " .. realm .. " " .. material .. " "
+  local pct = row.percent
+  -- The server takes the difference from stage 1 if the total would exceed 100.
+  local room = 100 - total + (row.tier > 1 and stage_one or 0)
+  local trim = math.min(math.max(STEP, total - 100), pct)
+  local add = math.min(STEP, room, 100 - pct)
+  local buttons = {}
+  if trim > 0 and room + trim >= 0 then
+    buttons[#buttons + 1] = { label = "-" .. trim, command = command .. (pct - trim) }
+  end
+  if add > 0 then
+    buttons[#buttons + 1] = { label = "+" .. add, command = command .. (pct + add) }
+  end
+  return buttons
+end
+
 function M.lines(width)
   width = pagelib.page_width(width)
   local s = state.get()
-  local lines = {}
+  local lines, actions = {}, {}
   local function add(text) lines[#lines + 1] = text end
 
   if #s.refineries == 0 then
@@ -41,7 +79,7 @@ function M.lines(width)
   -- Group the flat row list back into one block per refinery, preserving the
   -- order the stages arrived in rather than re-sorting by name: the chain IS
   -- an ordered progression and stage 1 must stay first.
-  local groups, order = {}, {}
+  local groups, order, realms = {}, {}, building_realms(s)
   for _, r in ipairs(s.refineries) do
     local k = r.building or "?"
     if not groups[k] then groups[k] = {}; order[#order + 1] = k end
@@ -75,8 +113,11 @@ function M.lines(width)
 
       -- Total allocated, so an under- or over-committed refinery is obvious
       -- without adding the column up by eye.
-      local total = 0
-      for _, r in ipairs(rows) do total = total + (r.percent or 0) end
+      local total, stage_one = 0, 0
+      for _, r in ipairs(rows) do
+        total = total + r.percent
+        if r.tier == 1 then stage_one = r.percent end
+      end
       local tcol = C.bright_green
       if total == 0 then tcol = C.dim
       elseif total > 100 then tcol = C.bright_red
@@ -84,7 +125,7 @@ function M.lines(width)
       add(pagelib.trunc("  " .. tcol .. "allocated " .. total .. "%" .. pagelib.RESET
         .. "  " .. pagelib.meter(total, 100, 33, tcol), width))
 
-      local trows = {}
+      local trows, buttons = {}, {}
       for _, r in ipairs(rows) do
         local stage = r.tier or 0
         local locked = (not legacy) and max_tier and stage > max_tier
@@ -97,6 +138,9 @@ function M.lines(width)
           locked and "locked" or (pct > 0 and "allocated" or "available"),
           locked and "-" or (pagelib.bar(14, pct, 100, color) .. " " .. pct .. "%"),
         }
+        if not legacy and max_tier and stage >= 1 and not locked then
+          buttons[#trows] = allocation_buttons(realms[name], r, total, stage_one)
+        end
       end
 
       pagelib.add_table(lines, width, {
@@ -105,7 +149,8 @@ function M.lines(width)
         { title = "Rank",     w = 6 },
         { title = "Status",   w = 11 },
         { title = "Allocation", w = 20 },
-      }, trows)
+        { title = "Adjust", w = 10 },
+      }, trows, actions, buttons)
     end
   end
 
@@ -114,7 +159,7 @@ function M.lines(width)
     .. "crefine allocate <realm> <material> <percent>  |  crefine reset <realm>"
     .. pagelib.RESET, width))
 
-  return lines
+  return lines, actions
 end
 
 return M
