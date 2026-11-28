@@ -57,7 +57,7 @@ local function write_skills(d)
     out[#out + 1] = {
       cat = num(r.cat), gxp = num(r.gxp), last = num(r.last),
       skills = num(r.skills), held = num(r.held),
-      maxed = num(r.maxed), levels = num(r.levels),
+      maxed = num(r.maxed), levels = num(r.levels), level_cap = num(r.level_cap),
     }
   end
   S.skillcats = out
@@ -80,7 +80,7 @@ local function write_powers(d)
     out[#out + 1] = {
       id = str(r.id), kind = num(r.k),
       on = num(r.on) == 1, maintained = num(r.m) == 1,
-      needs_bond = needs_bond,
+      needs_bond = needs_bond, effect = str(r.effect),
     }
   end
   S.powers = out

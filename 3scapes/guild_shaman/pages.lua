@@ -45,9 +45,24 @@ end
 -- ---------------------------------------------------------------------------
 -- Status
 -- ---------------------------------------------------------------------------
-function M.status(width)
+local STATUS_COLUMNS = {
+  { key = "cat", title = "Category", width = 22 },
+  { key = "gxp", title = "GXP", width = 9 },
+  { key = "held", title = "Known", width = 7 },
+  { key = "maxed", title = "Maxed", width = 7 },
+  { key = "levels", title = "Levels", width = 9 },
+  { key = "progress", title = "Progress" },
+}
+
+local function completion(cat)
+  if cat.level_cap > 0 then return cat.levels / cat.level_cap end
+  return cat.skills > 0 and cat.maxed / cat.skills or 0
+end
+
+function M.status(width, sort_key, descending)
   width = width or 60
-  local L = {}
+  local L, tips = {}, {}
+  local sort_header
 
   L[#L + 1] = P.header(width, "Shaman")
   local who = S.title ~= "" and S.title or S.rank
@@ -81,18 +96,53 @@ function M.status(width)
   if #S.skillcats > 0 then
     L[#L + 1] = ""
     L[#L + 1] = P.header(width, "Spirit experience")
-    for _, c in ipairs(S.skillcats) do
+    local categories = {}
+    sort_key = sort_key or "cat"
+    for _, category in ipairs(S.skillcats) do categories[#categories + 1] = category end
+    table.sort(categories, function(a, b)
+      local av = sort_key == "progress" and completion(a) or a[sort_key]
+      local bv = sort_key == "progress" and completion(b) or b[sort_key]
+      if av == bv then return a.cat < b.cat end
+      if descending then return av > bv end
+      return av < bv
+    end)
+    local compact = width < 66
+    local bar_width = compact and 8 or math.min(14, width - 62)
+    local columns = "%-22s %9s %7s %7s %9s  %s"
+    if not compact then
+      local labels, spans, start = {}, {}, 0
+      for i, column in ipairs(STATUS_COLUMNS) do
+        local label = column.title
+        if sort_key == column.key then label = label .. (descending and " v" or " ^") end
+        labels[i] = label
+        local size = column.width or width - start
+        spans[i] = { key = column.key, first = start, last = start + size }
+        start = start + size + (column.key == "levels" and 2 or 1)
+      end
+      L[#L + 1] = C.cyan .. string.format(columns, unpack(labels)) .. P.RESET
+      sort_header = { line = #L, spans = spans }
+    end
+    for _, c in ipairs(categories) do
       local name = CAT_NAMES[c.cat] or ("Category " .. c.cat)
-      local gain = c.last > 0 and (C.bright_green .. " +" .. c.last .. P.RESET) or ""
-      L[#L + 1] = string.format("%s %s%s",
-        P.pad(C.dim .. name .. P.RESET, 22),
-        P.pad(string.format("%d gxp", c.gxp), 12),
-        string.format("%s%d/%d held  %d/%d maxed  %d levels%s%s",
-          C.dim, c.held, c.skills, c.maxed, c.skills, c.levels, P.RESET, gain))
+      local cap = c.level_cap
+      local progress = cap > 0 and P.bar(bar_width, c.levels, cap, P.pct_color(c.levels, cap))
+        or P.bar(bar_width, c.maxed, c.skills, P.pct_color(c.maxed, c.skills))
+      local levels = cap > 0 and string.format("%d/%d", c.levels, cap) or tostring(c.levels)
+      local detail = name .. " | " .. c.gxp .. " GXP. Last round +" .. c.last .. " GXP."
+      if compact then
+        L[#L + 1] = name .. "  " .. progress
+        tips[#L] = detail
+        L[#L + 1] = string.format("  %d GXP  %d/%d maxed  %s levels",
+          c.gxp, c.maxed, c.skills, levels)
+      else
+        L[#L + 1] = string.format(columns, name, c.gxp,
+          c.held .. "/" .. c.skills, c.maxed .. "/" .. c.skills, levels, progress)
+      end
+      tips[#L] = detail
     end
   end
 
-  return L
+  return L, nil, tips, sort_header
 end
 
 -- ---------------------------------------------------------------------------
@@ -119,12 +169,12 @@ local POWER_SECTIONS = {
 -- `/sham powers print` without them interfering.
 function M.powers(width)
   width = width or 60
-  local L, targets = {}, {}
+  local L, targets, tips = {}, {}, {}
 
   L[#L + 1] = P.header(width, "Maintained powers")
   if #S.powers == 0 then
     L[#L + 1] = C.dim .. "  (no powers available yet)" .. P.RESET
-    return L, targets
+    return L, targets, tips
   end
 
   -- Bucket once, preserving arrival order within a kind; the server emits
@@ -155,6 +205,10 @@ function M.powers(width)
       or (C.cyan .. (disable and "[Disable]" or "[Enable]") .. P.RESET)
     L[#L + 1] = string.format("  %s %s     %s           %s",
       P.pad(pretty(p.id), 27), mark, keep, action)
+    local detail = p.effect ~= "" and p.effect or nil
+    tips[#L] = pretty(p.id) .. " | " .. (blocked
+      or (p.maintained and "Auto-maintain enabled." or "Auto-maintain disabled."))
+      .. (detail and (" " .. detail) or "")
     if not blocked then targets[#L] = { id = p.id, label = label } end
   end
 
@@ -180,7 +234,7 @@ function M.powers(width)
   if S.party == 1 then
     L[#L + 1] = C.bright_cyan .. "  De Societate party is active" .. P.RESET
   end
-  return L, targets
+  return L, targets, tips
 end
 
 function M.skills(width)
@@ -189,7 +243,7 @@ function M.skills(width)
 
   local pools = {}
   for _, cat in ipairs(S.skillcats) do pools[cat.cat] = cat.gxp end
-  local lines, category = {}, nil
+  local lines, tips, category = {}, {}, nil
   for _, skill in ipairs(S.skill_details) do
     local pool = pools[skill.cat]
     if category ~= skill.cat then
@@ -220,21 +274,19 @@ function M.skills(width)
     lines[#lines + 1] = "  " .. P.pad(skill.name, 28)
       .. P.pad(skill.level .. "/" .. skill.cap, 9)
       .. P.pad(maxed and "-" or tostring(skill.cost), 11) .. color .. status .. P.RESET
-    if skill.requirements ~= "" then
-      local line = "    "
-      for word in skill.requirements:gmatch("%S+") do
-        if #line > 4 and #line + #word + 1 > width then
-          lines[#lines + 1] = C.dim .. line .. P.RESET
-          line = "    "
-        end
-        if #line > 4 then line = line .. " " end
-        line = line .. word
-      end
-      lines[#lines + 1] = C.dim .. line .. P.RESET
+    local tip = skill.name .. " | " .. status
+    if not maxed then
+      tip = tip .. " | " .. skill.cost .. " GXP for level " .. (skill.level + 1)
+      if skill.requirements ~= "" then tip = tip .. " | Requires " .. skill.requirements end
+    end
+    tips[#lines] = tip
+    for _, requirement in ipairs(P.wrap(skill.requirements, math.max(1, width - 4))) do
+      lines[#lines + 1] = C.dim .. "    " .. requirement .. P.RESET
+      tips[#lines] = tip
     end
   end
   if #lines == 0 then lines[1] = "No skills available." end
-  return lines
+  return lines, nil, tips
 end
 
 function M.companions(width)
@@ -246,6 +298,7 @@ function M.companions(width)
     if spirit.bonded then bonded = bonded + 1 end
   end
   local lines = { P.header(width, string.format("Manifestations bonded %d/%d", bonded, S.bond_cap)) }
+  local tips = {}
   for _, group in ipairs({ "earth", "sky" }) do
     lines[#lines + 1] = C.bright_cyan .. pretty(group) .. P.RESET
     local start = #lines
@@ -253,6 +306,9 @@ function M.companions(width)
       if spirit.category == group then
         lines[#lines + 1] = "  " .. P.pad(spirit.name, 36)
           .. (spirit.bonded and (C.bright_green .. "Bonded") or (C.dim .. "Learned")) .. P.RESET
+        tips[#lines] = spirit.name .. " | " .. pretty(group) .. " slot. "
+          .. (spirit.bonded and "The bond enables this spirit's pet powers."
+            or "Bond this spirit in its room to use its pet powers. One bond per slot.")
       end
     end
     if #lines == start then lines[#lines + 1] = C.dim .. "  None learned" .. P.RESET end
@@ -261,7 +317,7 @@ function M.companions(width)
     lines[#lines + 1] = ""
     lines[#lines + 1] = "Use 'bond manifestation' in the manifestation's room."
   end
-  return lines
+  return lines, nil, tips
 end
 
 -- ---------------------------------------------------------------------------

@@ -37,6 +37,18 @@ function P.pad(s, width)
   return s .. string.rep(" ", n)
 end
 
+function P.wrap(text, width)
+  local lines, line = {}, ""
+  for word in text:gmatch("%S+") do
+    if line ~= "" and #line + #word + 1 > width then
+      lines[#lines + 1], line = line, ""
+    end
+    line = line == "" and word or (line .. " " .. word)
+  end
+  if line ~= "" then lines[#lines + 1] = line end
+  return lines
+end
+
 function P.header(width, text)
   local body = text .. " "
   local fill = width - P.visible_width(body)

@@ -178,7 +178,8 @@ check("State delta: absent keys preserved",
 -- Guild.Skills
 -- ===========================================================================
 frame("Guild.Skills", { cats = {
-  { cat = 0, gxp = 500, last = 2, skills = 8, held = 8, maxed = 1, levels = 240 },
+  { cat = 0, gxp = 500, last = 2, skills = 8, held = 8, maxed = 1, levels = 240,
+    level_cap = 800 },
   { cat = 1, gxp = 900, last = 12, skills = 21, held = 10, maxed = 0, levels = 310 },
 } })
 check("Skills: both categories stored", #S.skillcats == 2, #S.skillcats)
@@ -273,8 +274,11 @@ check("status page is pure (stable output)", a == b)
 check("status page mutates no state", S.frames == before)
 check("status page renders combat duration and skill progress",
       a:find("In combat", 1, true) ~= nil
-      and a:find("held", 1, true) ~= nil
-      and a:find("levels", 1, true) ~= nil)
+      and a:find("240/800", 1, true) ~= nil
+      and a:find("Progress", 1, true) ~= nil)
+local sorted = table.concat(pages.status(72, "gxp", true), "\n")
+check("status supports descending GXP sort",
+  sorted:find("Comes Spiritualis", 1, true) < sorted:find("De Bello Spirituali", 1, true))
 
 -- ===========================================================================
 -- Command surface
@@ -336,6 +340,13 @@ do
   -- A body click (below the bar) is likewise not a tab hit.
   local body = r.on_pointer({ kind = "down", button = "left", x = 0, y = 5 })
   check("a click below the tab bar is not treated as a tab", body == false)
+  r.render({ x = 0, y = 0, w = 72, h = 30 })
+  local _, _, _, sort_header = pages.status(72)
+  check("clicking the GXP column changes the progress table sort",
+    r.on_pointer({ kind = "down", button = "left", x = 27, y = sort_header.line }))
+  printed = {}
+  r.render({ x = 0, y = 0, w = 72, h = 30 })
+  check("the popup displays the selected sort", table.concat(printed, "\n"):find("GXP v", 1, true))
 
   -- ---- category headers and click-to-toggle --------------------------------
   -- The powers page groups rows under the same Latin headings shmaintain
@@ -349,7 +360,7 @@ do
       { id = "vitare",           k = 0, on = 0, m = 0 },
       { id = "flumen_vitae",     k = 1, on = 1, m = 1 },
       { id = "duritia_ursi",     k = 3, on = 0, m = 1 },
-      { id = "ulula",            k = 3, on = 0, m = 0, b = 0 },
+      { id = "ulula",            k = 3, on = 0, m = 0, b = 0, effect = "Frightens the target." },
       { id = "damnum_repellere", k = 2, on = 0, m = 1 },
     },
   })
@@ -405,6 +416,21 @@ do
     if sent[1] == "shmaintain ulula" then unbonded_clicked = true end
   end
   check("unbonded pet opener does not send a command", not unbonded_clicked)
+  for row, line in ipairs(lines) do
+    if line:find("Ulula", 1, true) then
+      r.on_pointer({ kind = "move", x = 4, y = row, inside = true })
+      break
+    end
+  end
+  printed = {}
+  r.render({ x = 0, y = 0, w = 60, h = 30 })
+  check("a blocked power still has an effect tooltip",
+    table.concat(printed, "\n"):find("Frightens the target.", 1, true))
+  r.on_pointer({ kind = "move", x = 0, y = 0, inside = true })
+  printed = {}
+  r.render({ x = 0, y = 0, w = 60, h = 30 })
+  check("moving to a tab clears details",
+    not table.concat(printed, "\n"):find("Frightens the target.", 1, true))
   check("exactly one body row toggles a given power", #hits == 1,
         table.concat(hits, ","))
   sent = {}
