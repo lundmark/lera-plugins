@@ -67,7 +67,8 @@ local function draw_hover_tip(text, x, y, width, height, first_row, selected_row
   if left + box_width > width then left = math.max(0, column - box_width) end
   local top = show_above and selected_row - count - 2 or selected_row + 1
   local box = ui.rect(x + left, y + top, box_width, count + 2)
-  ui.fill(box)
+  -- Older desktop builds require both palette indices.
+  ui.fill(box, " ", 0, 7)
   ui.box(box, "single")
   for i = 1, count do
     ui.text_ansi(ui.rect(x + left + 2, y + top + i, box_width - 4, 1), wrapped[i])

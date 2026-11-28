@@ -48,7 +48,10 @@ buffer = {
 ui = {
   dirty = function() end,
   rect = function(x, y, w, h) return { x = x, y = y, w = w, h = h } end,
-  fill = function() end,
+  fill = function(_, char, bg, fg)
+    assert(char == " " and type(bg) == "number" and type(fg) == "number",
+      "desktop ui.fill requires explicit background and foreground palette indices")
+  end,
   box = function(rect, style) hover_box = { rect = rect, style = style } end,
   text_ansi = function(rect, line)
     drawn_rects[#drawn_rects + 1] = rect
