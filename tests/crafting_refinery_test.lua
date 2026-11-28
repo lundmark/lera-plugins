@@ -74,8 +74,8 @@ check("unbuilt refinery prints no stage rows",
 -- Over/under allocation is called out
 -- ---------------------------------------------------------------------------
 ingest({ "Rift Foundry|1|Void Iron|30|3|6" })
-check("under-allocation reported", refinery.lines(80)[2]:find("allocated 30%%") ~= nil,
-      refinery.lines(80)[2])
+check("under-allocation reported",
+      table.concat(refinery.lines(80), "\n"):find("allocated 30%%") ~= nil)
 
 ingest({ "Rift Foundry|1|Void Iron|70|3|6",
          "Rift Foundry|2|Entropy Shards|60|3|6" })
@@ -153,6 +153,23 @@ check("plus and minus clamp at the available share",
       commands["crefine allocate chaos Void Iron -3"] == true
       and commands["crefine allocate chaos Entropy Shards +3"] == true
       and not commands["crefine allocate chaos Void Iron +5"])
+
+state.apply("Buildings", {
+  buildplans = { "Fleshworks|Chaos|||100|Cracked Chaos|600",
+    "Crystal Refinery|Fantasy|||100|Cracked Fantasy|600",
+    "Alloy Works|Science|||100|Cracked Science|600" },
+  refineries = { "Alloy Works|1|Smart Alloy|100|1|2",
+    "Crystal Refinery|1|Mana Crystal|0|0|0", "Fleshworks|1|Flesh Pulp|100|1|2",
+    "Rift Foundry|1|Void Iron|0|0|0", "Unknown Refinery|1|Material|0|0|0" },
+})
+local grouped = table.concat(refinery.lines(90), "\n")
+local pos = 0
+for _, label in ipairs({ "Chaos", "Fleshworks", "Rift Foundry", "Fantasy",
+  "Crystal Refinery", "Science", "Alloy Works", "Other", "Unknown Refinery" }) do
+  local next_pos = grouped:find(label, pos + 1, true)
+  check("refinery group order: " .. label, next_pos ~= nil)
+  pos = next_pos or pos
+end
 state.apply("Recipes", {})
 
 -- ---------------------------------------------------------------------------
