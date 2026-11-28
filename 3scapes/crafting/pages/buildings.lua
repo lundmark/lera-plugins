@@ -7,7 +7,13 @@ local state = require("state")
 
 local C = pagelib.C
 local M = {}
-local REALMS = { "Chaos", "Fantasy", "Science", "Global" }
+local REALMS = { "Chaos", "Fantasy", "Science", "Global", "Other" }
+
+local function type_heading(rows, kind, previous)
+  if kind == previous then return end
+  local label = pagelib.building_type_label(kind, true) or "Other"
+  rows[#rows + 1] = { C.yellow .. label .. pagelib.RESET }
+end
 
 local function tier_color(t)
   if t >= 5 then return C.bright_green end
@@ -46,16 +52,22 @@ local function add_unbuilt(lines, actions, width, s, entries)
   local heading = false
   for _, realm in ipairs(REALMS) do
     local plans = groups[realm]
-    if #plans > 0 then
+    if plans and #plans > 0 then
       if not heading then
         lines[#lines + 1] = ""
         lines[#lines + 1] = pagelib.header(width, "Unbuilt Buildings")
         heading = true
       end
-      table.sort(plans, function(a, b) return a.name < b.name end)
+      table.sort(plans, function(a, b)
+        return pagelib.building_type_less(s.building_types, a.name, b.name)
+      end)
       lines[#lines + 1] = pagelib.header(width, realm, pagelib.REALM_COLOR[realm])
       local rows, buttons = {}, {}
+      local last_type
       for _, plan in ipairs(plans) do
+        local kind = s.building_types[plan.name]
+        type_heading(rows, kind, last_type)
+        last_type = kind
         local blocker = plan_blocker(plan, entries, s.skills)
         local cost = pagelib.fmt_num(plan.cost) .. " " .. plan.token
         local minutes = math.ceil(plan.duration / 60)
@@ -102,10 +114,18 @@ function M.lines(width)
   for _, b in ipairs(s.buildings) do entry(b.name or "?").tier = b.tier end
   for _, b in ipairs(s.pending_builds) do entry(b.building or "?").pending = b.tier end
   for _, b in ipairs(s.builds) do entry(b.building or "?").build = b end
-  table.sort(names)
+  table.sort(names, function(a, b) return pagelib.building_type_less(s.building_types, a, b) end)
 
-  local rows = {}
+  local plans, groups, last_types = {}, {}, {}
+  for _, realm in ipairs(REALMS) do groups[realm] = {} end
+  for _, plan in ipairs(s.build_plans) do plans[plan.name] = plan end
   for _, name in ipairs(names) do
+    local plan = plans[name]
+    local realm = plan and groups[plan.realm] and plan.realm or "Other"
+    local rows = groups[realm]
+    local kind = s.building_types[name]
+    type_heading(rows, kind, last_types[realm])
+    last_types[realm] = kind
     local b = entries[name]
     local current = b.tier and (tier_color(b.tier) .. "T" .. b.tier .. pagelib.RESET) or "-"
     local target = b.build and b.build.tier or b.pending
@@ -113,12 +133,18 @@ function M.lines(width)
     local timer = b.build and pagelib.job_time(b.build.due, b.build.duration, s.jobs_clock) or "-"
     rows[#rows + 1] = { name, current, target and ("T" .. target) or "-", status, timer }
   end
-  if #rows > 0 then
+  if #names > 0 then
     add(pagelib.header(width, "Buildings"))
-    pagelib.add_table(lines, width, {
-      { title = "Building", w = "*" }, { title = "Tier", w = 6 }, { title = "Target", w = 7 },
-      { title = "Status", w = 20 }, { title = "Completion", w = 29 },
-    }, rows)
+    for _, realm in ipairs(REALMS) do
+      local rows = groups[realm]
+      if #rows > 0 then
+        add(pagelib.header(width, realm, pagelib.REALM_COLOR[realm]))
+        pagelib.add_table(lines, width, {
+          { title = "Building", w = "*" }, { title = "Tier", w = 6 }, { title = "Target", w = 7 },
+          { title = "Status", w = 20 }, { title = "Completion", w = 29 },
+        }, rows)
+      end
+    end
   end
   add_unbuilt(lines, actions, width, s, entries)
 

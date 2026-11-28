@@ -423,3 +423,64 @@ state.apply("Buildings", { buildplans = { "Soul Well|Global|||400|each realm|360
 render()
 assert(visible("Unbuilt Buildings") and click(button("Soul Well")), "empty account could not build")
 print("Unbuilt building catalogue and construction actions: PASS")
+
+state.reset()
+state.apply("Buildings", {
+  bldgs = { "Blight Farms|1", "Crystal Mines|2", "Biolabs|1", "Unknown Station|1" },
+  buildplans = {
+    "Soul Well|Global|||400|each realm|3600",
+    "Crystal Mines|Fantasy|||400|worn|3600",
+    "Biolabs|Science|||400|cracked|3600",
+    "Blight Farms|Chaos|||400|cracked|3600",
+    "Bone Forge|Chaos|||400|cracked|3600",
+  },
+})
+state.apply("Jobs", {
+  pending_builds = { { building = "Crystal Mines", tier = 3 } },
+  builds = { { building = "Soul Well", tier = 1, due = 1100, duration = 60 } },
+})
+render(106, 55)
+local chaos_pos = select(2, button("Blight Farms"))
+local fantasy_pos = select(2, button("Crystal Mines"))
+local science_pos = select(2, button("Biolabs"))
+local global_pos = select(2, button("Soul Well"))
+local other_pos = select(2, button("Unknown Station"))
+local unbuilt_pos = select(2, button("Unbuilt Buildings"))
+assert(chaos_pos < fantasy_pos and fantasy_pos < science_pos and science_pos < global_pos
+  and global_pos < other_pos and other_pos < unbuilt_pos, "building realm order is wrong")
+assert(drawn[chaos_pos - 2]:match("^Chaos ") and drawn[fantasy_pos - 2]:match("^Fantasy ")
+  and drawn[science_pos - 2]:match("^Science ") and drawn[global_pos - 2]:match("^Global ")
+  and drawn[other_pos - 2]:match("^Other "), "each group needs its realm heading")
+assert(drawn[fantasy_pos]:find("Awaiting funding", 1, true))
+assert(drawn[global_pos]:find("Under construction", 1, true))
+assert(select(2, button("Bone Forge")) > unbuilt_pos)
+print("Built, pending, and active construction grouped by realm: PASS")
+
+assert(protocol.on_gmcp("Craft.Structures", { buildplans = {
+  "Blight Farms|Chaos|||400|cracked|3600", "Fleshworks|Chaos|||400|cracked|3600",
+  "Bone Forge|Chaos|||400|cracked|3600", "Ossuary Crucible|Chaos|||400|cracked|3600",
+}, bldgs = { "Fleshworks|1", "Blight Farms|1" } }))
+assert(protocol.on_gmcp("Craft.Structures", { building_types = {
+  "Blight Farms|extractor", "Fleshworks|refinery",
+} }))
+assert(protocol.on_gmcp("Craft.Structures", { building_types_1 = {
+  "Bone Forge|producer", "Ossuary Crucible|transmuter",
+} }))
+state.apply("Jobs", { builds = {{ building = "Fleshworks", tier = 2, due = 1100, duration = 60 }} })
+render(106, 55)
+local extractors = select(2, button("Extractors"))
+local refiners = select(2, button("Refineries"))
+local producers = select(2, button("Producers"))
+assert(extractors < select(2, button("Blight Farms")) and refiners < select(2, button("Fleshworks")))
+assert(producers < select(2, button("Bone Forge")) and visible("Transmuters"))
+assert(click(button("Bone Forge")), "subheading displaced the Build action")
+assert(menu.title:find("Bone Forge", 1, true))
+window.set_page("jobs")
+render(106, 55)
+assert(visible("Fleshworks (Refinery)"))
+state.apply("Recipes", { catalogue_chaos = {{ building = "Bone Forge", name = "Void Iron Axe" }} })
+recipes.search("")
+window.set_page("recipes")
+render(106, 55)
+assert(visible("Bone Forge (Producer)"))
+print("Building types render in Buildings, Production, and Recipes: PASS")

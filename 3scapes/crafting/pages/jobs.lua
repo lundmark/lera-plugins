@@ -132,7 +132,8 @@ function M.lines(width)
     add(pagelib.header(width, "Under Construction"))
     local rows = {}
     for _, b in ipairs(sorted) do
-      rows[#rows + 1] = { b.building or "?", b.tier or "-", pagelib.job_time(b.due, b.duration, s.jobs_clock) }
+      rows[#rows + 1] = { pagelib.building_label(b.building or "?", s.building_types),
+        b.tier or "-", pagelib.job_time(b.due, b.duration, s.jobs_clock) }
     end
     pagelib.add_table(lines, width, {
       { title = "Building", w = "*" }, { title = "Target tier", w = 12 }, { title = "Completion", w = 32 },
@@ -153,7 +154,8 @@ function M.lines(width)
       else
         need_desc = pagelib.fmt_num(b.need or 0) .. " " .. (b.token or "") .. " " .. (b.realm or "") .. " tokens"
       end
-      rows[#rows + 1] = { b.building or "?", b.tier or "-", need_desc }
+      rows[#rows + 1] = { pagelib.building_label(b.building or "?", s.building_types),
+        b.tier or "-", need_desc }
     end
     pagelib.add_table(lines, width, {
       { title = "Building", w = "*" }, { title = "Target tier", w = 12 }, { title = "Still needed", w = 36 },

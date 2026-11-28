@@ -25,6 +25,30 @@ pagelib.REALM_COLOR = {
   Chaos = pagelib.C.red, Fantasy = pagelib.C.magenta, Science = pagelib.C.cyan,
 }
 
+local BUILDING_TYPES = {
+  extractor = { 1, "Extractors", "Extractor" }, refinery = { 2, "Refineries", "Refinery" },
+  producer = { 3, "Producers", "Producer" }, transmuter = { 4, "Transmuters", "Transmuter" },
+  enchanting = { 5, "Enchanting", "Enchanting" }, masterwork = { 6, "Masterwork", "Masterwork" },
+  infrastructure = { 7, "Infrastructure", "Infrastructure" },
+}
+
+function pagelib.building_type_label(kind, plural)
+  local entry = BUILDING_TYPES[kind]
+  return entry and entry[plural and 2 or 3]
+end
+
+function pagelib.building_label(name, types)
+  local kind = pagelib.building_type_label(types[name])
+  return kind and (name .. " (" .. kind .. ")") or name
+end
+
+function pagelib.building_type_less(types, a, b)
+  local ka, kb = BUILDING_TYPES[types[a]], BUILDING_TYPES[types[b]]
+  local ra, rb = ka and ka[1] or 8, kb and kb[1] or 8
+  if ra ~= rb then return ra < rb end
+  return a < b
+end
+
 function pagelib.page_width(width)
   return math.min(width or 106, 106)
 end
