@@ -275,6 +275,7 @@ assert(mirror and mirror.orders[1].id == 1 and mirror.scroll_outbox[1] == "Mana 
   and #mirror.auctions == 0, "the complete Market batch is applied, unsent lists empty")
 print("Crafting Market batches: PASS")
 
+
 -- Every tab must fit both a desktop popup and a narrow pane.
 state.apply("State", {
   stock_used = 120, stock_cap = 200, souls = 30, soul_cap = 60,
@@ -492,3 +493,15 @@ window.on_pointer({ x = 0, y = help_skill, kind = "move", inside = true })
 render()
 assert(visible("Sacred Groves give ancient timber and silver sap."))
 print("Building and skill tooltips use chelp reference text: PASS")
+
+assert(protocol.on_gmcp("Craft.Recipes", { known_chaos = {{ name = "Old base" }} }))
+assert(protocol.on_gmcp("Craft.Recipes", { known_chaos_1 = {{ name = "Old tail" }} }))
+assert(protocol.on_gmcp("Craft.Recipes", { known_chaos = {{ name = "New base" }} }))
+assert(protocol.on_gmcp("Craft.Recipes", { known_fantasy = {{ name = "Fantasy recipe" }} }))
+assert(protocol.on_gmcp("Craft.Recipes", { recipe_chunk_counts = {
+  "known_chaos|1", "known_fantasy|1",
+} }))
+assert(#state.get().recipes_known.chaos == 1 and state.get().recipes_known.chaos[1].name == "New base")
+assert(protocol.on_gmcp("Craft.Recipes", { recipe_chunk_counts = { "known_chaos|0" } }))
+assert(#state.get().recipes_known.chaos == 0 and #state.get().recipes_known.fantasy == 1)
+print("Crafting recipe refresh removes old chunks: PASS")

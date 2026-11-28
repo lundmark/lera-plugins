@@ -291,6 +291,27 @@ local function applied(sub)
   return true
 end
 
+-- The completed recipe push gives the final size of each numbered list.
+local function prune_recipe_chunks(mirror, counts)
+  if type(counts) ~= "table" then return end
+  local limits = {}
+  for _, row in ipairs(counts) do
+    local base, count = tostring(row):match("^(%a+_%a+)|(%d+)$")
+    if base then
+      local family, realm = base:match("^(%a+)_(%a+)$")
+      if (family == "known" or family == "catalogue")
+          and (realm == "chaos" or realm == "fantasy" or realm == "science") then
+        limits[base] = tonumber(count)
+      end
+    end
+  end
+  for key in pairs(mirror) do
+    local base, index = key:match("^(%a+_%a+)_(%d+)$")
+    local count = limits[base or key]
+    if count and (tonumber(index) or 0) >= count then mirror[key] = nil end
+  end
+end
+
 function M.on_gmcp(pkg, data)
   counters.frames = counters.frames + 1
 
@@ -351,6 +372,7 @@ function M.on_gmcp(pkg, data)
   end
 
   if sub == "State" then handle_materials(keys) end
+  if sub == "Recipes" then prune_recipe_chunks(mirrors[sub], keys.recipe_chunk_counts) end
 
   return applied(sub)
 end
