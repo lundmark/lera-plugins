@@ -34,6 +34,7 @@ end
 --   require("command").register/unregister   -- a MODULE, not a global
 local printed = {}
 local drawn_rects = {}
+local hover_box
 
 print = function(line) printed[#printed + 1] = tostring(line) end
 
@@ -47,6 +48,11 @@ buffer = {
 ui = {
   dirty = function() end,
   rect = function(x, y, w, h) return { x = x, y = y, w = w, h = h } end,
+  fill = function(_, char, bg, fg)
+    assert(char == " " and type(bg) == "number" and type(fg) == "number",
+      "desktop ui.fill requires explicit background and foreground palette indices")
+  end,
+  box = function(rect, style) hover_box = { rect = rect, style = style } end,
   text_ansi = function(rect, line)
     drawn_rects[#drawn_rects + 1] = rect
     printed[#printed + 1] = tostring(line)
@@ -64,9 +70,12 @@ lera = {
 }
 
 local gmcp_subs = {}
+local gmcp_sent = {}
 gmcp = {
   on = function(pkg, fn) gmcp_subs[#gmcp_subs + 1] = { pkg = pkg, fn = fn }; return #gmcp_subs end,
   remove = function() end,
+  enabled = function() return true end,
+  send = function(pkg, data) gmcp_sent[#gmcp_sent + 1] = { pkg = pkg, data = data } end,
 }
 
 local registered
@@ -178,7 +187,8 @@ check("State delta: absent keys preserved",
 -- Guild.Skills
 -- ===========================================================================
 frame("Guild.Skills", { cats = {
-  { cat = 0, gxp = 500, last = 2, skills = 8, held = 8, maxed = 1, levels = 240 },
+  { cat = 0, gxp = 500, last = 2, skills = 8, held = 8, maxed = 1, levels = 240,
+    level_cap = 800 },
   { cat = 1, gxp = 900, last = 12, skills = 21, held = 10, maxed = 0, levels = 310 },
 } })
 check("Skills: both categories stored", #S.skillcats == 2, #S.skillcats)
@@ -248,6 +258,20 @@ check("Leyline: sorted hottest first",
 frame("Guild.Leyline", { regions = {} })
 check("Leyline: empty region list is applied, not ignored", #S.ley_regions == 0)
 
+handlers.on_gmcp("Guild.Leyline", {
+  guild = "shaman", here_label = "The Dragon Realms", here_discord = 273,
+  realms = { { realm = "fantasy", d = 273 } },
+  regions = { { r = "The Dragon Realms", d = 273, realm = "fantasy" } },
+})
+local ley_lines, _, ley_tips = pages.discord(74)
+local ley_text = table.concat(ley_lines, "\n"):gsub("\27%[[%d;]*m", "")
+check("Discord uses the leyline scale and shows all three title-cased realms",
+  ley_text:find("[|-----------------------]", 1, true)
+  and ley_text:find("The Dragon Realms (Fantasy)", 1, true)
+  and ley_text:find("Chaos", 1, true) and ley_text:find("Science", 1, true))
+check("the current area hover explains when emergency cleansing opens",
+  ley_tips[2]:find("25,000", 1, true))
+
 -- ===========================================================================
 -- Pages render without error and produce content
 -- ===========================================================================
@@ -273,8 +297,11 @@ check("status page is pure (stable output)", a == b)
 check("status page mutates no state", S.frames == before)
 check("status page renders combat duration and skill progress",
       a:find("In combat", 1, true) ~= nil
-      and a:find("held", 1, true) ~= nil
-      and a:find("levels", 1, true) ~= nil)
+      and a:find("240/800", 1, true) ~= nil
+      and a:find("Progress", 1, true) ~= nil)
+local sorted = table.concat(pages.status(72, "gxp", true), "\n")
+check("status supports descending GXP sort",
+  sorted:find("Comes Spiritualis", 1, true) < sorted:find("De Bello Spirituali", 1, true))
 
 -- ===========================================================================
 -- Command surface
@@ -282,6 +309,9 @@ check("status page renders combat duration and skill progress",
 init.on_load()
 check("on_load subscribed to Guild", #gmcp_subs == 1 and gmcp_subs[1].pkg == "Guild",
       gmcp_subs[1] and gmcp_subs[1].pkg)
+check("on_load requests a fresh snapshot on an existing connection",
+  #gmcp_sent == 1 and gmcp_sent[1].pkg == "Core.Supports.Add"
+    and gmcp_sent[1].data[1] == "Guild 1")
 check("on_load registered /sham", registered ~= nil and registered.name == "/sham",
       registered and registered.name)
 init.on_setup()
@@ -336,6 +366,13 @@ do
   -- A body click (below the bar) is likewise not a tab hit.
   local body = r.on_pointer({ kind = "down", button = "left", x = 0, y = 5 })
   check("a click below the tab bar is not treated as a tab", body == false)
+  r.render({ x = 0, y = 0, w = 72, h = 30 })
+  local _, _, _, sort_header = pages.status(72)
+  check("clicking the GXP column changes the progress table sort",
+    r.on_pointer({ kind = "down", button = "left", x = 27, y = sort_header.line }))
+  printed = {}
+  r.render({ x = 0, y = 0, w = 72, h = 30 })
+  check("the popup displays the selected sort", table.concat(printed, "\n"):find("GXP v", 1, true))
 
   -- ---- category headers and click-to-toggle --------------------------------
   -- The powers page groups rows under the same Latin headings shmaintain
@@ -349,6 +386,7 @@ do
       { id = "vitare",           k = 0, on = 0, m = 0 },
       { id = "flumen_vitae",     k = 1, on = 1, m = 1 },
       { id = "duritia_ursi",     k = 3, on = 0, m = 1 },
+      { id = "ulula",            k = 3, on = 0, m = 0, b = 0, effect = "Frightens the target." },
       { id = "damnum_repellere", k = 2, on = 0, m = 1 },
     },
   })
@@ -379,31 +417,59 @@ do
           not t.label:find("_", 1, true))
     if t.label == "duritia ursi" then saw_pet = true end
   end
-  check("every power row is clickable", n == 5, n)
+  check("every available power row is clickable", n == 5, n)
   check("a pet opener is clickable too", saw_pet)
+  check("unbonded pet opener explains why it is blocked", has_line("Needs bond"))
+  check("running and auto-maintain have separate labels", has_line("Running Auto-maintain"))
 
   -- Now click one, through the real pointer path.
   local sent = {}
   mud = { send = function(cmd) sent[#sent + 1] = cmd end }
   r.render({ x = 0, y = 0, w = 60, h = 30 })
 
-  -- Find the drawn row for a known power and click it.
-  local want_row
-  for idx, t in pairs(targets) do
-    if t.label == "scutum spiritale" then want_row = idx end
-  end
   -- Scan the body for the row that maps to this power rather than assuming
   -- the tab bar height and scroll offset: the mapping under test is
   -- line-index -> screen-row, and asserting exactly ONE screen row produces
   -- the command verifies it far better than hardcoding the arithmetic.
   local hits = {}
-  for probe_y = 0, 29 do
+  local unbonded_clicked = false
+  for probe_y = 1, 29 do
     sent = {}
     if r.on_pointer({ kind = "down", button = "left", x = 4, y = probe_y })
        and sent[1] == "shmaintain scutum spiritale" then
       hits[#hits + 1] = probe_y
     end
+    if sent[1] == "shmaintain ulula" then unbonded_clicked = true end
   end
+  check("unbonded pet opener does not send a command", not unbonded_clicked)
+  local hover_y
+  for row, line in ipairs(lines) do
+    if line:find("Ulula", 1, true) then
+      r.on_pointer({ kind = "move", x = 4, y = row, inside = true })
+      hover_y = row
+      break
+    end
+  end
+  printed = {}
+  drawn_rects = {}
+  r.render({ x = 0, y = 0, w = 60, h = 30 })
+  check("a blocked power still has an effect tooltip",
+    table.concat(printed, "\n"):find("Frightens the target.", 1, true))
+  check("tooltip is a bordered box beside the pointer",
+    hover_box and hover_box.style == "single"
+    and hover_box.rect.x == 5 and hover_box.rect.y == hover_y + 1)
+  r.on_pointer({ kind = "move", x = 8, y = hover_y, inside = true })
+  r.render({ x = 0, y = 0, w = 60, h = 30 })
+  check("tooltip moves horizontally with the pointer on the same row",
+    hover_box.rect.x == 9)
+  r.on_pointer({ kind = "move", x = 59, y = hover_y, inside = true })
+  r.render({ x = 0, y = 0, w = 60, h = 30 })
+  check("tooltip flips at the right edge", hover_box.rect.x + hover_box.rect.w <= 59)
+  r.on_pointer({ kind = "move", x = 0, y = 0, inside = true })
+  printed = {}
+  r.render({ x = 0, y = 0, w = 60, h = 30 })
+  check("moving to a tab clears details",
+    not table.concat(printed, "\n"):find("Frightens the target.", 1, true))
   check("exactly one body row toggles a given power", #hits == 1,
         table.concat(hits, ","))
   sent = {}
@@ -526,6 +592,64 @@ handlers.on_gmcp("Guild.Powers", {
   powers = { { id = "vitare", k = 0, on = 1, m = 1 } },
 })
 check("an unpaged push replaces, not appends", #S.powers == 1, #S.powers)
+
+local function skill_page(page, total, rows)
+  return handlers.on_gmcp("Guild.SkillDetail", {
+    guild = "shaman", page = page, pages = total, rows = rows,
+  })
+end
+
+local weapon_row = "0|20|100|125|1|Vitare|"
+local ward_row = "5|1|100|50|1|Scientia Ignis|"
+local ward_requirement = "|Scutum Spiritale 2"
+check("an orphaned last page is ignored", not skill_page(2, 2, { ward_row }))
+skill_page(1, 3, { weapon_row })
+check("a skipped middle page invalidates the run", not skill_page(3, 3, { ward_row }))
+check("an incomplete run leaves the previous detail untouched", S.skill_details == false)
+skill_page(1, 2, { weapon_row })
+init.on_disconnect()
+check("a disconnect discards the pending run", not skill_page(2, 2, { ward_row }))
+local first_slice = { weapon_row, ward_row }
+skill_page(1, 2, first_slice)
+check("a fresh ordered run publishes both skill rows", skill_page(2, 2, { ward_requirement })
+  and #S.skill_details == 2)
+check("reassembly leaves the original first page alone", #first_slice == 2)
+handlers.on_gmcp("Guild.Skills", { guild = "shaman", cats = { { cat = 0, gxp = 250 } } })
+local training = table.concat(pages.skills(72), "\n")
+check("skills show levels, costs, hall, ward training and requirements",
+  training:find("20/100", 1, true) and training:find("125", 1, true)
+  and training:find("At Memoria Maiorum", 1, true)
+  and training:find("De Praesidiis", 1, true) and training:find("Automatic", 1, true)
+  and training:find("Scutum Spiritale 2", 1, true))
+handlers.on_gmcp("Guild.Skills", { guild = "shaman", can_train_here = 1 })
+check("hall-only delta preserves the skill rows and enables training",
+  #S.skill_details == 2 and table.concat(pages.skills(72), "\n"):find("Ready", 1, true))
+handlers.on_gmcp("Guild.SkillHelp0", {
+  guild = "shaman", page = 1, pages = 2, rows = { "0|Vitare|Read the incoming " },
+})
+local _, _, partial_tips = pages.skills(72)
+check("a partial help snapshot does not replace a skill tooltip", not next(partial_tips))
+handlers.on_gmcp("Guild.SkillHelp0", {
+  guild = "shaman", page = 2, pages = 2, rows = { "0|Vitare|blow and dodge it." },
+})
+local _, _, skill_tips = pages.skills(72)
+local tip_text
+for _, tip in pairs(skill_tips) do tip_text = tip end
+check("the skill tooltip shows the reassembled shhelp description",
+  tip_text == "Vitare | Read the incoming blow and dodge it.")
+
+handlers.on_gmcp("Guild.Companions", {
+  guild = "shaman", bond_cap = 2,
+  spirits = {
+    { n = "Ursus Avitus", c = "earth", b = 1 },
+    { n = "Aquila Avita", c = "sky", b = 0 },
+  },
+})
+local companions = table.concat(pages.companions(72), "\n")
+check("companions show names, learned and bonded status and slot capacity",
+  companions:find("Manifestations bonded 1/2", 1, true)
+  and companions:find("Ursus Avitus", 1, true) and companions:find("Bonded", 1, true)
+  and companions:find("Aquila Avita", 1, true) and companions:find("Learned", 1, true))
 
 -- ===========================================================================
 -- stats_window integration

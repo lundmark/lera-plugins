@@ -31,10 +31,14 @@ M.S = {
   -- One entry per skill category, keyed by the server's numeric category id.
   -- Each: { cat, gxp, last, skills, held, maxed, levels }.
   skillcats = {},
+  skill_details = false,
+  skill_help = {},
+  can_train_here = false,
+  companions = false,
+  bond_cap = 0,
 
   -- ---- Guild.Powers -----------------------------------------------------
-  -- Flat list of every toggleable power, each { id, k, on, m } where k is
-  -- 0 = combat power, 1 = maintained spell, 2 = De Societate power.
+  -- Runtime state and the player's auto-maintain setting are independent.
   powers = {},
   party = 0,
 
@@ -45,7 +49,7 @@ M.S = {
   -- There are no penalty/visus fields: the server stopped sending the shaman's
   -- own backlash on this panel deliberately, and holding slots for it here
   -- would invite something to fill them again.
-  ley_here_label = "", ley_here_discord = 0,
+  ley_ready = false, ley_here_label = "", ley_here_discord = 0,
   ley_realms = {}, ley_regions = {},
 
   -- Ingestion bookkeeping, for the status line.

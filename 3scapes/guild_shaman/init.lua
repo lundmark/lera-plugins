@@ -1,18 +1,14 @@
 -- Guild Shaman plugin for lera.
 --
--- Consumes the four Guild.* GMCP panels the shaman gobj pushes
--- (players/shaman/obj/include/gmcp.h): State, Skills, Powers and Leyline.
--- Everything here is read-only -- this plugin renders what the server reports
--- and sends no commands of its own, so there is no automation surface to
--- govern and nothing for the deadmans plugin to gate.
+-- Renders the shaman gobj's Guild.* GMCP panels. Power toggles send
+-- shmaintain on click.
 --
 -- Layout, mirroring guild_viking's separation of concerns at a much smaller
--- scale (four panels rather than thirty, so no window.lua/page_opts machinery
--- is warranted):
+-- scale:
 --   state.lua    the shared S table
 --   handlers.lua one writer per GMCP panel
 --   pagelib.lua  formatting helpers
---   pages.lua    pure page builders (Status / Powers / Discord)
+--   pages.lua    pure page builders
 --   init.lua     registration, the /sham command, stats_window integration
 local S = require("state").S
 local state = require("state")
@@ -49,6 +45,8 @@ end
 -- fixed value costs decoration fidelity on very wide or narrow terminals and
 -- nothing else.
 local PAGE_WIDTH = 72
+local USAGE = "/sham [status | powers | skills | companions | discord | close | ingest]"
+  .. " | /sham <page> print"
 
 local function print_page(key)
   local page = pages.PAGES[key]
@@ -98,13 +96,18 @@ local function sham_command(rest)
       S.last_frame_at > 0
         and (os.time() - S.last_frame_at) .. "s ago"
         or "never"))
+    local help_count = 0
+    for _, group in pairs(S.skill_help) do
+      for _ in pairs(group) do help_count = help_count + 1 end
+    end
     note("808080", string.format(
-      "[Shaman] powers %d | skill categories %d | disturbed regions %d",
-      #S.powers, #S.skillcats, #S.ley_regions))
+      "[Shaman] powers %d | skills %s | skill descriptions %d | companions %s | disturbed regions %d",
+      #S.powers, S.skill_details and #S.skill_details or "waiting",
+      help_count, S.companions and #S.companions or "waiting", #S.ley_regions))
     return
   end
 
-  note("FF0000", "[Shaman] usage: /sham [status | powers | discord | close | ingest] | /sham <page> print")
+  note("FF0000", "[Shaman] usage: " .. USAGE)
 end
 
 -- ---------------------------------------------------------------------------
@@ -184,15 +187,22 @@ function M.on_load()
       if ui and ui.dirty then ui.dirty() end
     end
   end)
+  -- Another plugin may already hold the Guild subscription. In that case
+  -- registering our handler does not re-advertise it, so the MUD's delta
+  -- cache still thinks this newly loaded plugin has the static descriptions.
+  if gmcp_id and gmcp.enabled and gmcp.send and gmcp.enabled() then
+    gmcp.send("Core.Supports.Add", { "Guild 1" })
+  end
 
   local id, err = command.register({
     name = "/sham",
-    usage = "/sham [status | powers | discord | close | ingest] | /sham <page> print",
-    summary = "Shaman guild status, maintained powers and leyline discord",
+    usage = USAGE,
+    summary = "Shaman guild status, powers, skills, companions and leyline discord",
     description = "Opens the shaman guild panels fed by GMCP as a scrollable "
       .. "popup window (a second call to the same page closes it): status "
       .. "(rank, Vis pools, combat resources, spirit experience), powers "
-      .. "(every toggleable power and whether it is running), and discord "
+      .. "(running effects and auto-maintain toggles), skills (levels, GXP "
+      .. "and requirements), companions (known manifestations and bonds), and discord "
       .. "(local leyline strain plus the disturbed realms and areas). 'ingest' "
       .. "reports "
       .. "whether GMCP frames are arriving, and '<page> print' dumps a page "
@@ -223,6 +233,7 @@ end
 -- Guild data is preserved across a disconnect (see state.reset_connection);
 -- only the per-connection ingestion counters reset.
 function M.on_disconnect()
+  handlers.reset_connection()
   state.reset_connection()
 end
 
