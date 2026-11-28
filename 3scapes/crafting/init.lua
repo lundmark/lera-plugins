@@ -13,6 +13,7 @@ M.window_launcher = { label = "Crafting", compact_label = "Craft", order = 40 }
 local protocol = require("protocol")
 local state = require("state")
 local window = require("window")
+local pagelib = require("pagelib")
 
 local popup_open = false
 local timer_id = nil
@@ -23,7 +24,7 @@ local function open_popup()
   local wm = require("wm")
   wm.popup.open(window, {
     title = "Crafting",
-    width = 0.7,
+    width = pagelib.page_width() + 2, -- One border cell on each side.
     height = 0.65,
     on_close = function()
       popup_open = false
