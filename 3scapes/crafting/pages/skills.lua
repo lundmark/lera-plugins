@@ -85,6 +85,10 @@ local function add_button_span(spans, button, col)
   end
 end
 
+local function skill_help(name)
+  return state.get().skill_reference[name:lower():gsub(" ", "_")]
+end
+
 local function render_columns(lines, actions, width, names, skills)
   local show_ceiling = width >= 100
   local progress_width = math.min(26, width - (show_ceiling and 81 or 73))
@@ -118,7 +122,7 @@ local function render_columns(lines, actions, width, names, skills)
       table.insert(cells, 3, skill.unlocked == 1 and skill.xp_rank and tostring(skill.xp_rank) or "-")
     end
     rows[#rows + 1] = cells
-    buttons[#buttons + 1] = { train, auto }
+    buttons[#buttons + 1] = { train, auto, hover = skill_help(name) }
   end
 
   local table_lines, widths = pagelib.columns(width, spec, rows)
@@ -129,7 +133,7 @@ local function render_columns(lines, actions, width, names, skills)
   lines[#lines + 1] = table_lines[1]
   for i, entry in ipairs(buttons) do
     lines[#lines + 1] = table_lines[i + 1]
-    local spans = {}
+    local spans = { hover = entry.hover }
     add_button_span(spans, entry[1], train_col)
     add_button_span(spans, entry[2], auto_col)
     actions[#lines] = spans
@@ -138,6 +142,7 @@ end
 
 local function render_compact(lines, actions, width, names, skills)
   for _, name in ipairs(names) do
+    local first = #lines + 1
     local skill = skills[name]
     local status = training_status(skill)
     local rank = skill.unlocked == 1 and (" R" .. tostring(skill.rank or 0)) or ""
@@ -153,6 +158,13 @@ local function render_compact(lines, actions, width, names, skills)
     if train then buttons[#buttons + 1] = train end
     if auto then buttons[#buttons + 1] = auto end
     if #buttons > 0 then pagelib.action_row(lines, actions, width, buttons) end
+    local tip = skill_help(name)
+    if tip then
+      for row = first, #lines do
+        actions[row] = actions[row] or {}
+        actions[row].hover = tip
+      end
+    end
   end
 end
 

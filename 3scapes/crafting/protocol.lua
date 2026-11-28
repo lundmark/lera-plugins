@@ -22,6 +22,7 @@ local PACKAGES = {
   infodata = "Info", statedata = "State", skills = "Skills",
   structures = "Buildings", jobs = "Jobs", recipes = "Recipes",
   market = "Market",
+  reference = "Reference",
 }
 
 local ENVELOPE = { full = true, page = true, pages = true }
@@ -242,6 +243,8 @@ local BATCHES = {
       return true
     end },
   Market = { prefix = "mkt", lists = MARKET_LISTS,
+    close = function() return true end },
+  Reference = { prefix = "reference", lists = { b = "buildings", s = "skills" },
     close = function() return true end },
 }
 

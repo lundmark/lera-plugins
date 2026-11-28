@@ -18,8 +18,9 @@ local TIER_EFFECTS = {
 
 local function building_hover(s, name, plan, current, target)
   local help = s.building_help[name] or {}
+  local body = s.building_reference[name:lower():gsub(" ", "_")] or help.description
   local lines = { name }
-  if help.description and help.description ~= "" then lines[1] = name .. " | " .. help.description end
+  if body and body ~= "" then lines[1] = body end
   local tier = target or (current or 0) + 1
   if name == "Logistics Depot" then
     lines[#lines + 1] = "Each tier adds 150 base storage slots per material."

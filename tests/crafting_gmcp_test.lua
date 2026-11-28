@@ -462,3 +462,33 @@ render()
 assert(visible("Blood Resin (R23)") and visible("800 T2 tokens in Chaos"),
   "next tier tooltip should show the newly available stage and quote")
 print("Unbuilt building catalogue and construction actions: PASS")
+
+state.reset()
+protocol.reset_connection()
+protocol.on_gmcp("Craft.Reference", {
+  reference_1_1_4_b = { "fleshworks|The Fleshworks refines organic " },
+})
+protocol.on_gmcp("Craft.Reference", {
+  reference_1_2_4_b = { "fleshworks|Chaos materials." },
+})
+protocol.on_gmcp("Craft.Reference", {
+  reference_1_3_4_s = { "woodwork|Sacred Groves give ancient timber and silver sap." },
+})
+assert(not next(state.get().building_reference), "partial help should stay unpublished")
+protocol.on_gmcp("Craft.Reference", { reference_1_4_4_l = {} })
+state.apply("Buildings", { buildplans = { "Fleshworks|Chaos|||400|cracked|3600" } })
+window.set_page("buildings")
+render()
+local _, help_building = button("Fleshworks")
+window.on_pointer({ x = 0, y = help_building, kind = "move", inside = true })
+render()
+assert(visible("The Fleshworks refines organic Chaos materials."))
+
+state.apply("Skills", { skills_0 = { woodwork = { rank = 2, unlocked = 1 } } })
+window.set_page("skills")
+render()
+local _, help_skill = button("Woodwork")
+window.on_pointer({ x = 0, y = help_skill, kind = "move", inside = true })
+render()
+assert(visible("Sacred Groves give ancient timber and silver sap."))
+print("Building and skill tooltips use chelp reference text: PASS")

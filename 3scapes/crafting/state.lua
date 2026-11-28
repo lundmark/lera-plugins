@@ -59,6 +59,7 @@ function M.reset()
     stock_used = 0, stock_cap = 0,
 
     skills = {},
+    skill_reference = {}, building_reference = {},
 
     buildings = {}, refineries = {}, build_plans = {}, building_help = {},
     building_upgrade_quotes = {},
@@ -337,7 +338,22 @@ local function apply_market(m)
   rec.scroll_outbox = m.scroll_outbox or {}
 end
 
+local function reference_text(rows)
+  local text = {}
+  for _, row in ipairs(rows or {}) do
+    local slug, segment = tostring(row):match("^([^|]+)|(.*)$")
+    if slug then text[slug] = (text[slug] or "") .. segment end
+  end
+  return text
+end
+
+local function apply_reference(m)
+  if type(m.skills) == "table" then rec.skill_reference = reference_text(m.skills) end
+  if type(m.buildings) == "table" then rec.building_reference = reference_text(m.buildings) end
+end
+
 local APPLY = {
+  Reference = apply_reference,
   Info = apply_info, State = apply_state, Skills = apply_skills,
   Buildings = apply_buildings, Jobs = apply_jobs, Recipes = apply_recipes,
   Market = apply_market,
