@@ -383,19 +383,27 @@ local frozen = table.concat(jobs.lines(106), "\n")
 assert(frozen:find("50%", 1, true), "paused job bar advanced")
 print("All crafting tabs fit and timed job progress uses original duration: PASS")
 
--- Structures plans arrive as separate chunks alongside, not in place of, owned tiers.
+-- Structures chunks can span multiple codec pages under the same key.
 protocol.reset_connection()
 assert(protocol.on_gmcp("Craft.Structures", { bldgs = { "Grand Forge|2" } }))
-assert(protocol.on_gmcp("Craft.Structures", { buildplans = {
+assert(protocol.on_gmcp("Craft.Structures", { full = 1, page = 1, pages = 2, buildplans = {
+  "Rift Drills|Chaos|||400|cracked|3600",
+} }))
+assert(#state.get().build_plans == 0, "partial Structures run was shown")
+assert(protocol.on_gmcp("Craft.Structures", { full = 1, page = 2, pages = 2, buildplans = {
   "Grand Forge|Fantasy|||400|worn|3600",
   "Soul Well|Global|||400|each realm|3600",
   "Bone Forge|Chaos|Boneworks|soulsmithing|400|cracked|3600",
+  "Rift Foundry|Chaos|Rift Drills||400|cracked|3600",
 } }))
 assert(protocol.on_gmcp("Craft.Structures", { buildplans_1 = {
   "Gem Atelier|Fantasy|||400|worn|3600",
   "Weaver's Hall|Fantasy|||400|worn|3600",
 } }))
-assert(#state.get().buildings == 1 and #state.get().build_plans == 5)
+assert(#state.get().buildings == 1 and #state.get().build_plans == 7)
+assert(protocol.on_gmcp("Craft.Structures", { page = 1, pages = 3, buildplans = {} }))
+assert(protocol.on_gmcp("Craft.Structures", { page = 3, pages = 3, buildplans = {} }))
+assert(#state.get().build_plans == 7, "incomplete refresh replaced the building plans")
 state.apply("Jobs", {
   pending_builds = { { building = "Gem Atelier", tier = 1 } },
   builds = { { building = "Weaver's Hall", tier = 1, due = 1100, duration = 60 } },
@@ -404,6 +412,10 @@ window.set_page("buildings")
 render(106, 44)
 assert(visible("Under construction") and visible("Awaiting funding"))
 assert(visible("Build Boneworks first") and visible("400 each realm"))
+assert(visible("Build Rift Drills first"))
+assert(click(button("Rift Drills")))
+choose("Queue Tier 1 construction")
+assert(sent[#sent] == "cbuild construct Rift Drills confirm")
 before = #sent
 assert(click(button("Soul Well")))
 assert(#sent == before, "clicking a building spent tokens before confirmation")
@@ -413,7 +425,9 @@ assert(sent[#sent] == "cbuild construct Soul Well confirm")
 assert(click(button("Bone Forge")) and #menu.items == 1)
 choose("View cost and requirements")
 assert(sent[#sent] == "cbuild construct Bone Forge")
-assert(not click(button("Grand Forge")))
+assert(click(button("Grand Forge")) and #menu.items == 1)
+choose("View cost and token breakdown")
+assert(sent[#sent] == "cbuild build Grand Forge")
 assert(not click(button("Gem Atelier")))
 assert(not click(button("Weaver's Hall")))
 render(48, 50)
@@ -423,3 +437,55 @@ state.apply("Buildings", { buildplans = { "Soul Well|Global|||400|each realm|360
 render()
 assert(visible("Unbuilt Buildings") and click(button("Soul Well")), "empty account could not build")
 print("Unbuilt building catalogue and construction actions: PASS")
+
+protocol.reset_connection()
+local first = { building = "Grand Forge", name = "Star Silver Axe", production = 1 }
+local second = { building = "Grand Forge", name = "Star Silver Sword", production = 1 }
+assert(protocol.on_gmcp("Craft.Recipes", { full = 1, page = 1, pages = 2,
+  catalogue_fantasy = { first }, known_fantasy = { first } }))
+assert(protocol.on_gmcp("Craft.Structures", { full = 1, page = 1, pages = 2,
+  bldgs = { "Grand Forge|2" } }))
+assert(protocol.on_gmcp("Craft.Recipes", { full = 1, page = 2, pages = 2,
+  catalogue_fantasy = { second } }))
+assert(protocol.on_gmcp("Craft.Structures", { full = 1, page = 2, pages = 2,
+  bldgs = { "Bone Forge|1" } }))
+assert(#state.get().recipes_catalogue.fantasy == 2 and #state.get().recipes_known.fantasy == 1)
+assert(#state.get().buildings == 2, "interleaved pages lost building rows")
+
+state.apply("Jobs", { pending_builds = {
+  { building = "Bone Forge", tier = 1, token = "cracked", need = 400, shortfall = 27 },
+  { building = "Soul Well", tier = 1, global = 1, need = 400, shortfall = 720 },
+  { building = "Logistics Depot", tier = 1, global = 1, need = 400 },
+  { building = "Grand Forge", tier = 2, token = "weathered", need = 800, shortfall = 0 },
+} })
+local funding = table.concat(jobs.lines(106), "\n")
+assert(funding:find("27 cracked tokens left", 1, true))
+assert(funding:find("720 tokens left across realms", 1, true))
+assert(funding:find("Base cost: 400 tokens per realm", 1, true))
+assert(funding:find("Funded, waiting to start", 1, true))
+print("Paged recipes and pending construction funding: PASS")
+
+state.reset()
+state.apply("Info", { upgrade_tiers = { "2|760|7200", "3|1520|14400" } })
+state.apply("Buildings", {
+  bldgs = { "Grand Forge|2", "Soul Well|1", "Rift Drills|5", "Bone Forge|1" },
+  buildplans = {
+    "Grand Forge|Fantasy|||380|worn|3600",
+    "Soul Well|Global|||380|each realm|3600",
+    "Rift Drills|Chaos|||380|cracked|3600",
+    "Bone Forge|Chaos|||380|cracked|3600",
+  },
+})
+state.apply("Jobs", { pending_builds = { { building = "Bone Forge", tier = 2 } } })
+window.set_page("buildings")
+render(106, 44)
+before = #sent
+assert(click(button("Grand Forge")) and #sent == before)
+assert(menu.title:find("1,520 T3 tokens (Fantasy) | 4h 00m", 1, true))
+choose("Queue Tier 3 upgrade")
+assert(sent[#sent] == "cbuild upgrade-to 3 Grand Forge confirm")
+assert(click(button("Soul Well")))
+assert(menu.title:find("760 T2 tokens per realm", 1, true))
+assert(not click(button("Rift Drills")), "maxed building offered an upgrade")
+assert(not click(button("Bone Forge")), "pending building offered an upgrade")
+print("Owned-building upgrade menus and targeted confirmation: PASS")

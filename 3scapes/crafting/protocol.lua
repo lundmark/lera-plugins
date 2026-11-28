@@ -50,8 +50,10 @@ local ENVELOPE = { full = true, page = true, pages = true }
 -- fixes were all real bugs worth having fixed, but none of them were ever
 -- going to matter while this file discarded every earlier chunk on arrival.
 local ALWAYS_MERGE = { Skills = true, Recipes = true, State = true, Buildings = true }
+local PAGED_LISTS = { Buildings = true, Recipes = true }
 
 local mirrors, seen, counters, wire_names
+local page_runs
 -- Batched snapshots being assembled, per package (Jobs, Market).
 local batch_stage = {}
 local apply_cb, handler_id
@@ -67,6 +69,7 @@ local function blank_materials_stage()
 end
 
 function M.reset_connection()
+  page_runs = {}
   batch_stage = {}
   mirrors = {}
   seen = {}
@@ -118,6 +121,41 @@ local function accepted(data)
     if not ENVELOPE[k] then out[k] = v end
   end
   return out
+end
+
+-- The namespace codec can split a single list across several
+-- pages under the same key. Assemble that run before merging the numbered
+-- crafting chunks into the mirror.
+local function paged_keys(sub, data, keys)
+  local page, pages = tonumber(data.page), tonumber(data.pages)
+  if not page or not pages or pages <= 1 then
+    page_runs[sub] = nil
+    return keys
+  end
+  if page == 1 then
+    page_runs[sub] = { pages = pages, next_page = 1, keys = {} }
+  end
+  local run = page_runs[sub]
+  if not run or page ~= run.next_page or pages ~= run.pages then
+    page_runs[sub] = nil
+    return nil
+  end
+
+  for key, value in pairs(keys) do
+    if type(value) == "table" then
+      local rows = run.keys[key]
+      if type(rows) ~= "table" then rows = {} end
+      for _, row in ipairs(value) do rows[#rows + 1] = row end
+      run.keys[key] = rows
+    else
+      run.keys[key] = value
+    end
+  end
+  if page == pages then
+    page_runs[sub] = nil
+    return run.keys
+  end
+  run.next_page = page + 1
 end
 
 -- Chunk keys are "materials_g<gen>c<idx>" now, not "materials"/"materials_N"
@@ -309,6 +347,10 @@ function M.on_gmcp(pkg, data)
   end
 
   local keys = accepted(data)
+  if PAGED_LISTS[sub] then
+    keys = paged_keys(sub, data, keys)
+    if not keys then return true end
+  end
   if BATCHES[sub] then
     for key, value in pairs(keys) do
       local is_batch, snapshot = accept_batch(sub, key, value)

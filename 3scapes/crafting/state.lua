@@ -60,7 +60,7 @@ function M.reset()
 
     skills = {},
 
-    buildings = {}, refineries = {}, build_plans = {},
+    buildings = {}, refineries = {}, build_plans = {}, upgrade_tiers = {},
 
     builds = {}, pending_builds = {}, masterwork = {}, queues = {}, queue_total = 0, queue_cap = 0, ready = {},
     repeat_rules = {},
@@ -105,6 +105,16 @@ local function apply_info(m)
   rec.bonus_logistics = num(b.logistics)
   rec.bonus_soul_cap = num(b.soul_cap)
   rec.bonus_soul_gain = num(b.soul_gain)
+  rec.upgrade_tiers = {}
+  if type(m.upgrade_tiers) ~= "table" then return end
+  for _, row in ipairs(m.upgrade_tiers) do
+    if type(row) == "string" then
+      local tier, cost, duration = row:match("^(%d+)|(%d+)|(%d+)$")
+      if tier then
+        rec.upgrade_tiers[tonumber(tier)] = { cost = tonumber(cost), duration = tonumber(duration) }
+      end
+    end
+  end
 end
 
 -- Tokens arrive as 3 separate small per-realm keys ("tokens_chaos",
